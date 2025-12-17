@@ -47,13 +47,27 @@ class KernelService:
 
         return result
 
-    async def start_kernel(self, kernel_name: str = "python3") -> str:
-        """Start a new kernel session"""
+    async def start_kernel(self, kernel_name: str = "python3", cwd: str = None) -> str:
+        """Start a new kernel session with optional working directory
+
+        Args:
+            kernel_name: The kernel to start (e.g., 'python3')
+            cwd: Working directory for the kernel process
+        """
+        from pathlib import Path
+
         session_id = str(uuid.uuid4())
 
         # Create kernel manager
         km = KernelManager(kernel_name=kernel_name)
-        km.start_kernel()
+
+        # Prepare start_kernel kwargs
+        start_kwargs = {}
+        if cwd:
+            expanded_cwd = str(Path(cwd).expanduser().resolve())
+            start_kwargs['cwd'] = expanded_cwd
+
+        km.start_kernel(**start_kwargs)
 
         # Get async client
         client = km.client()

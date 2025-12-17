@@ -27,6 +27,7 @@ from python_discovery import python_discovery
 
 class StartKernelRequest(BaseModel):
     kernel_name: str = "python3"
+    cwd: Optional[str] = None  # Working directory for the kernel
 
 
 class ExecuteCodeRequest(BaseModel):
@@ -122,7 +123,10 @@ async def list_kernels():
 async def start_kernel(request: StartKernelRequest):
     """Start a new kernel session"""
     try:
-        session_id = await kernel_service.start_kernel(request.kernel_name)
+        session_id = await kernel_service.start_kernel(
+            kernel_name=request.kernel_name,
+            cwd=request.cwd
+        )
         return {"session_id": session_id, "kernel_name": request.kernel_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
