@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nebula Notebook</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Plotly.js for interactive widgets -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+      /* Custom scrollbar for a cleaner look */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+      }
+      .cm-editor { font-family: 'Fira Code', monospace; }
+
+      /* Pandas Dataframe Styling */
+      .dataframe {
+        font-size: 0.85rem;
+        border-collapse: collapse;
+        border: 1px solid #e2e8f0;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: auto;
+        display: block;
+      }
+      .dataframe th {
+        background-color: #f8fafc;
+        font-weight: 600;
+        text-align: left;
+        padding: 0.5rem;
+        border-bottom: 2px solid #e2e8f0;
+        color: #475569;
+      }
+      .dataframe td {
+        padding: 0.5rem;
+        border-bottom: 1px solid #e2e8f0;
+        color: #334155;
+      }
+      .dataframe tr:nth-child(even) {
+        background-color: #fcfcfc;
+      }
+      .dataframe tr:hover {
+        background-color: #f1f5f9;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "lucide-react": "https://esm.sh/lucide-react@^0.561.0",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react-virtuoso": "https://esm.sh/react-virtuoso@4.10.4?deps=react@19.2.3,react-dom@19.2.3"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-slate-50 text-slate-900 antialiased">
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

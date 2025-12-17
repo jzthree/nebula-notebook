@@ -1,0 +1,36 @@
+/* Custom styles for Nebula Notebook */
+/* Tailwind is loaded via CDN in index.html */
+
+/* Ensure smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Animation for slide-in effect */
+@keyframes slideInFromTop {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-in.slide-in-from-top-2 {
+  animation: slideInFromTop 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-in.fade-in {
+  animation: fadeIn 0.2s ease-out;
+}

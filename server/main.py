@@ -1,0 +1,370 @@
+"""
+Nebula Notebook Backend Server
+FastAPI server for Jupyter kernel management, LLM, and filesystem operations
+"""
+import os
+import asyncio
+import json
+from contextlib import asynccontextmanager
+from typing import Optional, List, Dict, Any
+from pathlib import Path
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+from kernel_service import kernel_service
+from llm_service import llm_service, LLMConfig
+from fs_service import fs_service
+
+
+# --- Pydantic Models ---
+
+class StartKernelRequest(BaseModel):
+    kernel_name: str = "python3"
+
+
+class ExecuteCodeRequest(BaseModel):
+    session_id: str
+    code: str
+
+
+class GenerateRequest(BaseModel):
+    prompt: str
+    system_prompt: str
+    provider: str = "google"
+    model: str = "gemini-2.5-flash"
+    temperature: float = 0.2
+    images: Optional[List[Dict[str, str]]] = None
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: List[Dict[str, str]]
+    system_prompt: str
+    provider: str = "google"
+    model: str = "gemini-2.5-flash"
+    temperature: float = 0.2
+    images: Optional[List[Dict[str, str]]] = None
+
+
+class WriteFileRequest(BaseModel):
+    path: str
+    content: Any
+    file_type: str = "text"
+
+
+class CreateFileRequest(BaseModel):
+    path: str
+    is_directory: bool = False
+
+
+class RenameFileRequest(BaseModel):
+    old_path: str
+    new_path: str
+
+
+class SaveNotebookRequest(BaseModel):
+    path: str
+    cells: List[Dict[str, Any]]
+
+
+# --- Lifespan ---
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    print("Starting Nebula Notebook Backend...")
+    yield
+    # Shutdown
+    print("Shutting down... Cleaning up kernels...")
+    await kernel_service.cleanup()
+
+
+# --- App ---
+
+app = FastAPI(
+    title="Nebula Notebook API",
+    description="Backend API for Nebula Notebook",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify exact origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# --- Kernel Endpoints ---
+
+@app.get("/api/kernels")
+async def list_kernels():
+    """List available kernelspecs"""
+    return {"kernels": kernel_service.get_available_kernels()}
+
+
+@app.post("/api/kernels/start")
+async def start_kernel(request: StartKernelRequest):
+    """Start a new kernel session"""
+    try:
+        session_id = await kernel_service.start_kernel(request.kernel_name)
+        return {"session_id": session_id, "kernel_name": request.kernel_name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/kernels/{session_id}")
+async def stop_kernel(session_id: str):
+    """Stop a kernel session"""
+    success = await kernel_service.stop_kernel(session_id)
+    if success:
+        return {"status": "ok"}
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+@app.post("/api/kernels/{session_id}/interrupt")
+async def interrupt_kernel(session_id: str):
+    """Interrupt kernel execution"""
+    success = await kernel_service.interrupt_kernel(session_id)
+    if success:
+        return {"status": "ok"}
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+@app.post("/api/kernels/{session_id}/restart")
+async def restart_kernel(session_id: str):
+    """Restart a kernel"""
+    success = await kernel_service.restart_kernel(session_id)
+    if success:
+        return {"status": "ok"}
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+@app.get("/api/kernels/{session_id}/status")
+async def get_kernel_status(session_id: str):
+    """Get kernel session status"""
+    status = kernel_service.get_session_status(session_id)
+    if status:
+        return status
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+@app.websocket("/api/kernels/{session_id}/ws")
+async def kernel_websocket(websocket: WebSocket, session_id: str):
+    """
+    WebSocket endpoint for code execution with streaming output
+
+    Client sends: {"type": "execute", "code": "..."}
+    Server sends:
+        - {"type": "output", "output": {...}} for each output
+        - {"type": "status", "status": "busy"|"idle"}
+        - {"type": "result", "result": {...}} when execution completes
+    """
+    await websocket.accept()
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+
+            if data.get("type") == "execute":
+                code = data.get("code", "")
+
+                # Send busy status
+                await websocket.send_json({"type": "status", "status": "busy"})
+
+                async def send_output(output: dict):
+                    await websocket.send_json({"type": "output", "output": output})
+
+                # Execute code
+                result = await kernel_service.execute_code(
+                    session_id, code, send_output
+                )
+
+                # Send result and idle status
+                await websocket.send_json({"type": "result", "result": result})
+                await websocket.send_json({"type": "status", "status": "idle"})
+
+    except WebSocketDisconnect:
+        print(f"WebSocket disconnected for session {session_id}")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        try:
+            await websocket.send_json({"type": "error", "error": str(e)})
+        except:
+            pass
+
+
+# --- LLM Endpoints ---
+
+@app.get("/api/llm/providers")
+async def list_providers():
+    """List available LLM providers and models"""
+    return {"providers": llm_service.get_available_providers()}
+
+
+@app.post("/api/llm/generate")
+async def generate(request: GenerateRequest):
+    """Generate text/code from LLM"""
+    try:
+        config = LLMConfig(
+            provider=request.provider,
+            model=request.model,
+            temperature=request.temperature
+        )
+        response = await llm_service.generate(
+            prompt=request.prompt,
+            system_prompt=request.system_prompt,
+            config=config,
+            images=request.images
+        )
+        return {"response": response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/llm/chat")
+async def chat(request: ChatRequest):
+    """Chat with LLM including history"""
+    try:
+        config = LLMConfig(
+            provider=request.provider,
+            model=request.model,
+            temperature=request.temperature
+        )
+        response = await llm_service.chat(
+            message=request.message,
+            history=request.history,
+            system_prompt=request.system_prompt,
+            config=config,
+            images=request.images
+        )
+        return {"response": response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Filesystem Endpoints ---
+
+@app.get("/api/fs/list")
+async def list_directory(path: str = Query(default="~")):
+    """List directory contents"""
+    try:
+        return fs_service.list_directory(path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/fs/read")
+async def read_file(path: str):
+    """Read file contents"""
+    try:
+        return fs_service.read_file(path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except IsADirectoryError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/fs/write")
+async def write_file(request: WriteFileRequest):
+    """Write content to a file"""
+    try:
+        fs_service.write_file(request.path, request.content, request.file_type)
+        return {"status": "ok", "path": request.path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/fs/create")
+async def create_file(request: CreateFileRequest):
+    """Create a new file or directory"""
+    try:
+        info = fs_service.create_file(request.path, request.is_directory)
+        return {"status": "ok", "file": info}
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/fs/delete")
+async def delete_file(path: str):
+    """Delete a file or directory"""
+    try:
+        fs_service.delete_file(path)
+        return {"status": "ok"}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/fs/rename")
+async def rename_file(request: RenameFileRequest):
+    """Rename/move a file or directory"""
+    try:
+        info = fs_service.rename_file(request.old_path, request.new_path)
+        return {"status": "ok", "file": info}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Notebook-specific Endpoints ---
+
+@app.get("/api/notebook/cells")
+async def get_notebook_cells(path: str):
+    """Read a notebook file and return cells in internal format"""
+    try:
+        cells = fs_service.get_notebook_cells(path)
+        return {"path": path, "cells": cells}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notebook/save")
+async def save_notebook(request: SaveNotebookRequest):
+    """Save cells to a notebook file"""
+    try:
+        fs_service.save_notebook_cells(request.path, request.cells)
+        return {"status": "ok", "path": request.path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Health Check ---
+
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "kernels_available": len(kernel_service.get_available_kernels()) > 0,
+        "llm_providers": list(llm_service.get_available_providers().keys())
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

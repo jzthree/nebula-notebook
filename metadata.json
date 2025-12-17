@@ -1,0 +1,5 @@
+{
+  "name": "Nebula Notebook",
+  "description": "A high-performance, barebones Jupyter alternative running Python in the browser via Pyodide, featuring deep Gemini AI integration for cell-level code generation and analysis.",
+  "requestFramePermissions": []
+}
