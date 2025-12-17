@@ -75,11 +75,6 @@ export const NotebookEditor: React.FC<NotebookEditorProps> = ({
   const [executionQueue, setExecutionQueue] = useState<string[]>(state.executionQueue || []);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
 
-  // Sync cells with parent state
-  useEffect(() => {
-    onStateChange({ cells });
-  }, [cells, onStateChange]);
-
   // Autosave hook
   const performSaveToFile = useCallback(async (fileId: string, cellsToSave: Cell[]) => {
     await saveFileContent(fileId, cellsToSave);
@@ -385,7 +380,8 @@ export const NotebookEditor: React.FC<NotebookEditorProps> = ({
     };
 
     processNext();
-  }, [executionQueue, isProcessingQueue, state.kernelSessionId, state.kernelStatus, cells, setCells, onStateChange]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [executionQueue, isProcessingQueue, state.kernelSessionId, state.kernelStatus]);
 
   const getKernelDisplayName = () => {
     const kernel = availableKernels.find(k => k.name === state.kernelName);

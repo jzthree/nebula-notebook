@@ -25,6 +25,9 @@ export const NotebookContainer: React.FC = () => {
   // Per-notebook state storage
   const notebookStates = useRef<Map<string, NotebookState>>(new Map());
 
+  // Force re-render counter (needed because ref updates don't trigger re-renders)
+  const [stateVersion, setStateVersion] = useState(0);
+
   // Sidebar state (shared across all tabs)
   const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -89,10 +92,11 @@ export const NotebookContainer: React.FC = () => {
         executionQueue: []
       });
 
-      // Mark loading complete
+      // Mark loading complete and force re-render
       setTabs(prev => prev.map(t =>
         t.id === tabId ? { ...t, isLoading: false } : t
       ));
+      setStateVersion(v => v + 1);
 
       // Save as active file
       saveActiveFileId(fileId);
@@ -149,6 +153,10 @@ export const NotebookContainer: React.FC = () => {
     const current = notebookStates.current.get(tabId);
     if (current) {
       notebookStates.current.set(tabId, { ...current, ...updates });
+      // Force re-render for state updates that affect rendering
+      if (updates.kernelStatus || updates.kernelSessionId) {
+        setStateVersion(v => v + 1);
+      }
     }
 
     // Update dirty flag in tab if cells changed
@@ -167,9 +175,22 @@ export const NotebookContainer: React.FC = () => {
   }, []);
 
   // Handle new tab button
-  const handleNewTab = () => {
+  const handleNewTab = useCallback(() => {
     setIsFileBrowserOpen(true);
-  };
+  }, []);
+
+  // Memoized callbacks for NotebookEditor to prevent infinite loops
+  const handleStateChange = useCallback((updates: Partial<NotebookState>) => {
+    if (activeTabId) {
+      updateNotebookState(activeTabId, updates);
+    }
+  }, [activeTabId, updateNotebookState]);
+
+  const handleMarkClean = useCallback(() => {
+    if (activeTabId) {
+      markClean(activeTabId);
+    }
+  }, [activeTabId, markClean]);
 
   return (
     <div className="flex min-h-screen bg-slate-50 relative overflow-hidden">
@@ -199,8 +220,8 @@ export const NotebookContainer: React.FC = () => {
           <NotebookEditor
             key={activeTabId}
             state={currentState}
-            onStateChange={(updates) => updateNotebookState(activeTabId!, updates)}
-            onMarkClean={() => markClean(activeTabId!)}
+            onStateChange={handleStateChange}
+            onMarkClean={handleMarkClean}
             isFileBrowserOpen={isFileBrowserOpen}
             setIsFileBrowserOpen={setIsFileBrowserOpen}
             isChatOpen={isChatOpen}
