@@ -95,10 +95,57 @@ class PythonDiscoveryService:
             return False
 
     def _find_conda_envs(self) -> List[Dict]:
-        """Find conda environments"""
+        """Find conda environments using conda command + directory scanning"""
         envs = []
+        seen_paths = set()
 
-        # Common conda locations
+        # First, try to use conda env list command (most reliable)
+        conda_paths = [
+            "/opt/anaconda3/bin/conda",
+            "/opt/miniconda3/bin/conda",
+            "/opt/homebrew/bin/conda",
+            "/opt/homebrew/anaconda3/bin/conda",
+            str(Path.home() / "anaconda3" / "bin" / "conda"),
+            str(Path.home() / "miniconda3" / "bin" / "conda"),
+            str(Path.home() / "miniforge3" / "bin" / "conda"),
+            str(Path.home() / "mambaforge" / "bin" / "conda"),
+            "/usr/local/anaconda3/bin/conda",
+            "/usr/local/miniconda3/bin/conda",
+        ]
+
+        for conda_path in conda_paths:
+            if not Path(conda_path).exists():
+                continue
+
+            try:
+                result = subprocess.run(
+                    [conda_path, 'env', 'list', '--json'],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode == 0:
+                    import json
+                    data = json.loads(result.stdout)
+                    for env_path in data.get('envs', []):
+                        python = Path(env_path) / "bin" / "python"
+                        if python.exists() and str(python) not in seen_paths:
+                            seen_paths.add(str(python))
+                            # Determine env name
+                            env_name = Path(env_path).name
+                            if env_path == data.get('root_prefix') or 'envs' not in env_path:
+                                env_name = 'base'
+                            envs.append({
+                                'path': str(python),
+                                'env_type': 'conda',
+                                'env_name': env_name,
+                                'base': env_path
+                            })
+                    # Found envs via conda command, but continue to check other conda installations
+            except Exception as e:
+                print(f"Error running conda env list: {e}")
+
+        # Also scan common conda locations for any we might have missed
         conda_bases = [
             Path.home() / "anaconda3",
             Path.home() / "miniconda3",
@@ -106,6 +153,7 @@ class PythonDiscoveryService:
             Path.home() / "mambaforge",
             Path("/opt/anaconda3"),
             Path("/opt/miniconda3"),
+            Path("/opt/homebrew/anaconda3"),
             Path("/usr/local/anaconda3"),
             Path("/usr/local/miniconda3"),
         ]
@@ -116,7 +164,8 @@ class PythonDiscoveryService:
 
             # Base environment
             base_python = base / "bin" / "python"
-            if base_python.exists():
+            if base_python.exists() and str(base_python) not in seen_paths:
+                seen_paths.add(str(base_python))
                 envs.append({
                     'path': str(base_python),
                     'env_type': 'conda',
@@ -130,7 +179,8 @@ class PythonDiscoveryService:
                 for env_path in envs_dir.iterdir():
                     if env_path.is_dir():
                         python = env_path / "bin" / "python"
-                        if python.exists():
+                        if python.exists() and str(python) not in seen_paths:
+                            seen_paths.add(str(python))
                             envs.append({
                                 'path': str(python),
                                 'env_type': 'conda',
