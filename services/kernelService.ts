@@ -1,5 +1,6 @@
 /**
  * Kernel Service - Frontend client for Jupyter kernel management
+ * Supports multiple concurrent kernel sessions
  */
 import { CellOutput } from '../types';
 
@@ -40,14 +41,20 @@ export interface PythonEnvironmentsResponse {
   };
 }
 
-class KernelService {
-  private ws: WebSocket | null = null;
-  private currentSessionId: string | null = null;
-  private messageQueue: Array<{
+// Internal session state for each kernel session
+interface SessionState {
+  sessionId: string;
+  ws: WebSocket | null;
+  messageQueue: Array<{
     resolve: (value: any) => void;
     reject: (error: any) => void;
     onOutput: (output: CellOutput) => void;
-  }> = [];
+  }>;
+}
+
+class KernelService {
+  // Multi-session state: sessionId -> SessionState
+  private sessions: Map<string, SessionState> = new Map();
 
   /**
    * Get list of available kernels on the system
@@ -63,12 +70,20 @@ class KernelService {
 
   /**
    * Start a new kernel session
+   * @param kernelName - The kernel to start (e.g., 'python3')
+   * @param cwd - Optional working directory for the kernel
+   * @returns The session ID
    */
-  async startKernel(kernelName: string = 'python3'): Promise<string> {
+  async startKernel(kernelName: string = 'python3', cwd?: string): Promise<string> {
+    const body: { kernel_name: string; cwd?: string } = { kernel_name: kernelName };
+    if (cwd) {
+      body.cwd = cwd;
+    }
+
     const response = await fetch(`${API_BASE}/kernels/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kernel_name: kernelName })
+      body: JSON.stringify(body)
     });
 
     if (!response.ok) {
@@ -77,51 +92,69 @@ class KernelService {
     }
 
     const data = await response.json();
-    this.currentSessionId = data.session_id;
+    const sessionId = data.session_id;
+
+    // Initialize session state
+    this.sessions.set(sessionId, {
+      sessionId,
+      ws: null,
+      messageQueue: []
+    });
 
     // Connect WebSocket
-    await this.connectWebSocket(data.session_id);
+    await this.connectWebSocket(sessionId);
 
-    return data.session_id;
+    return sessionId;
   }
 
   /**
-   * Connect WebSocket for streaming output
+   * Connect WebSocket for a specific session
    */
   private async connectWebSocket(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
     return new Promise((resolve, reject) => {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${window.location.host}${API_BASE}/kernels/${sessionId}/ws`;
 
-      this.ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(wsUrl);
 
-      this.ws.onopen = () => {
+      ws.onopen = () => {
         console.log('Kernel WebSocket connected');
+        session.ws = ws;
         resolve();
       };
 
-      this.ws.onerror = (error) => {
+      ws.onerror = (error) => {
         console.error('WebSocket error:', error);
         reject(error);
       };
 
-      this.ws.onclose = () => {
+      ws.onclose = () => {
         console.log('Kernel WebSocket closed');
-        this.ws = null;
+        if (session.ws === ws) {
+          session.ws = null;
+        }
       };
 
-      this.ws.onmessage = (event) => {
+      ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        this.handleMessage(data);
+        this.handleMessage(sessionId, data);
       };
     });
   }
 
   /**
-   * Handle incoming WebSocket messages
+   * Handle incoming WebSocket messages for a session
    */
-  private handleMessage(data: any) {
-    const handler = this.messageQueue[0];
+  private handleMessage(sessionId: string, data: any) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    const handler = session.messageQueue[0];
     if (!handler) return;
 
     switch (data.type) {
@@ -138,12 +171,12 @@ class KernelService {
 
       case 'result':
         // Execution complete
-        this.messageQueue.shift();
+        session.messageQueue.shift();
         handler.resolve(data.result);
         break;
 
       case 'error':
-        this.messageQueue.shift();
+        session.messageQueue.shift();
         handler.reject(new Error(data.error));
         break;
 
@@ -154,20 +187,29 @@ class KernelService {
   }
 
   /**
-   * Execute code in the kernel
+   * Execute code in a specific kernel session
+   * @param sessionId - The session to execute in
+   * @param code - The code to execute
+   * @param onOutput - Callback for streaming output
    */
   async executeCode(
+    sessionId: string,
     code: string,
     onOutput: (output: CellOutput) => void
   ): Promise<void> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    if (!session.ws || session.ws.readyState !== WebSocket.OPEN) {
       throw new Error('Kernel not connected');
     }
 
     return new Promise((resolve, reject) => {
-      this.messageQueue.push({ resolve, reject, onOutput });
+      session.messageQueue.push({ resolve, reject, onOutput });
 
-      this.ws!.send(JSON.stringify({
+      session.ws!.send(JSON.stringify({
         type: 'execute',
         code: code
       }));
@@ -175,71 +217,83 @@ class KernelService {
   }
 
   /**
-   * Stop the current kernel
+   * Stop a specific kernel session
+   * @param sessionId - The session to stop
    */
-  async stopKernel(): Promise<void> {
-    if (!this.currentSessionId) return;
+  async stopKernel(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
 
     // Close WebSocket
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    if (session.ws) {
+      session.ws.close();
     }
 
+    // Remove from sessions map
+    this.sessions.delete(sessionId);
+
     // Stop kernel on server
-    await fetch(`${API_BASE}/kernels/${this.currentSessionId}`, {
+    await fetch(`${API_BASE}/kernels/${sessionId}`, {
       method: 'DELETE'
     });
-
-    this.currentSessionId = null;
   }
 
   /**
-   * Interrupt kernel execution
+   * Interrupt kernel execution for a specific session
    */
-  async interruptKernel(): Promise<void> {
-    if (!this.currentSessionId) return;
+  async interruptKernel(sessionId: string): Promise<void> {
+    if (!this.sessions.has(sessionId)) return;
 
-    await fetch(`${API_BASE}/kernels/${this.currentSessionId}/interrupt`, {
+    await fetch(`${API_BASE}/kernels/${sessionId}/interrupt`, {
       method: 'POST'
     });
   }
 
   /**
-   * Restart the kernel
+   * Restart a specific kernel
    */
-  async restartKernel(): Promise<void> {
-    if (!this.currentSessionId) return;
+  async restartKernel(sessionId: string): Promise<void> {
+    if (!this.sessions.has(sessionId)) return;
 
-    await fetch(`${API_BASE}/kernels/${this.currentSessionId}/restart`, {
+    await fetch(`${API_BASE}/kernels/${sessionId}/restart`, {
       method: 'POST'
     });
   }
 
   /**
-   * Get kernel status
+   * Get kernel status for a specific session
    */
-  async getStatus(): Promise<KernelSession | null> {
-    if (!this.currentSessionId) return null;
+  async getStatus(sessionId: string): Promise<KernelSession | null> {
+    if (!this.sessions.has(sessionId)) return null;
 
-    const response = await fetch(`${API_BASE}/kernels/${this.currentSessionId}/status`);
+    const response = await fetch(`${API_BASE}/kernels/${sessionId}/status`);
     if (!response.ok) return null;
 
     return response.json();
   }
 
   /**
-   * Check if kernel is connected
+   * Check if a specific session is connected
    */
-  isConnected(): boolean {
-    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  isConnected(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    return session.ws !== null && session.ws.readyState === WebSocket.OPEN;
   }
 
   /**
-   * Get current session ID
+   * Clear all sessions (for testing)
+   * @internal
    */
-  getSessionId(): string | null {
-    return this.currentSessionId;
+  _clearAllSessions(): void {
+    this.sessions.clear();
+  }
+
+  /**
+   * Get all active session IDs
+   */
+  getActiveSessions(): string[] {
+    return Array.from(this.sessions.keys());
   }
 
   /**
@@ -293,14 +347,21 @@ class KernelService {
 // Export singleton instance
 export const kernelService = new KernelService();
 
-// Also export for initialization
+// Legacy helper functions for backwards compatibility
+// These use a "default" session concept - the first/only session
+
+let defaultSessionId: string | null = null;
+
 export const initializeKernel = async (kernelName: string = 'python3'): Promise<void> => {
-  await kernelService.startKernel(kernelName);
+  defaultSessionId = await kernelService.startKernel(kernelName);
 };
 
 export const runPythonCode = async (
   code: string,
   onOutput: (output: CellOutput) => void
 ): Promise<void> => {
-  await kernelService.executeCode(code, onOutput);
+  if (!defaultSessionId) {
+    throw new Error('No default kernel session. Call initializeKernel first.');
+  }
+  await kernelService.executeCode(defaultSessionId, code, onOutput);
 };
