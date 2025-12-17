@@ -20,6 +20,7 @@ load_dotenv()
 from kernel_service import kernel_service
 from llm_service import llm_service, LLMConfig
 from fs_service import fs_service
+from python_discovery import python_discovery
 
 
 # --- Pydantic Models ---
@@ -71,6 +72,11 @@ class RenameFileRequest(BaseModel):
 class SaveNotebookRequest(BaseModel):
     path: str
     cells: List[Dict[str, Any]]
+
+
+class InstallKernelRequest(BaseModel):
+    python_path: str
+    kernel_name: Optional[str] = None
 
 
 # --- Lifespan ---
@@ -201,6 +207,63 @@ async def kernel_websocket(websocket: WebSocket, session_id: str):
             await websocket.send_json({"type": "error", "error": str(e)})
         except:
             pass
+
+
+# --- Python Discovery Endpoints ---
+
+@app.get("/api/python/environments")
+async def list_python_environments(refresh: bool = False):
+    """
+    List all discovered Python environments
+    Returns both Jupyter kernelspecs and discovered Python interpreters
+    """
+    from dataclasses import asdict
+
+    # Get Jupyter kernelspecs
+    kernelspecs = kernel_service.get_available_kernels()
+    kernelspec_names = {k['name'] for k in kernelspecs}
+
+    # Get discovered Python environments
+    environments = python_discovery.discover(force_refresh=refresh)
+
+    # Match discovered environments with existing kernelspecs
+    for env in environments:
+        # Check if this Python is associated with a registered kernel
+        if env.kernel_name and env.kernel_name in kernelspec_names:
+            env.kernel_name = env.kernel_name
+
+    return {
+        "kernelspecs": kernelspecs,
+        "environments": [asdict(env) for env in environments],
+        "cache_info": python_discovery.get_cache_info()
+    }
+
+
+@app.post("/api/python/install-kernel")
+async def install_python_kernel(request: InstallKernelRequest):
+    """Install ipykernel and register a Python environment as a Jupyter kernel"""
+    try:
+        result = python_discovery.install_kernel(
+            python_path=request.python_path,
+            kernel_name=request.kernel_name
+        )
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/python/refresh")
+async def refresh_python_environments():
+    """Force refresh the Python environment cache"""
+    environments = python_discovery.discover(force_refresh=True)
+    return {
+        "count": len(environments),
+        "cache_info": python_discovery.get_cache_info()
+    }
 
 
 # --- LLM Endpoints ---

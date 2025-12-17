@@ -19,6 +19,27 @@ export interface KernelSession {
   execution_count: number;
 }
 
+export interface PythonEnvironment {
+  path: string;
+  version: string;
+  display_name: string;
+  env_type: 'system' | 'conda' | 'pyenv' | 'venv' | 'homebrew';
+  env_name: string | null;
+  has_ipykernel: boolean;
+  kernel_name: string | null;
+}
+
+export interface PythonEnvironmentsResponse {
+  kernelspecs: KernelSpec[];
+  environments: PythonEnvironment[];
+  cache_info: {
+    cached_count: number;
+    cache_age_hours: number | null;
+    cache_valid: boolean;
+    cache_file: string;
+  };
+}
+
 class KernelService {
   private ws: WebSocket | null = null;
   private currentSessionId: string | null = null;
@@ -219,6 +240,53 @@ class KernelService {
    */
   getSessionId(): string | null {
     return this.currentSessionId;
+  }
+
+  /**
+   * Get all Python environments (kernelspecs + discovered)
+   */
+  async getPythonEnvironments(refresh: boolean = false): Promise<PythonEnvironmentsResponse> {
+    const response = await fetch(`${API_BASE}/python/environments?refresh=${refresh}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch Python environments');
+    }
+    return response.json();
+  }
+
+  /**
+   * Install ipykernel and register a Python environment as a kernel
+   */
+  async installKernel(pythonPath: string, kernelName?: string): Promise<{ kernel_name: string; message: string }> {
+    const response = await fetch(`${API_BASE}/python/install-kernel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        python_path: pythonPath,
+        kernel_name: kernelName
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to install kernel');
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Force refresh Python environment discovery cache
+   */
+  async refreshPythonEnvironments(): Promise<{ count: number }> {
+    const response = await fetch(`${API_BASE}/python/refresh`, {
+      method: 'POST'
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to refresh Python environments');
+    }
+
+    return response.json();
   }
 }
 

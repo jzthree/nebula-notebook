@@ -2,9 +2,9 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
-import { kernelService, KernelSpec, initializeKernel, runPythonCode } from '../services/kernelService';
+import { kernelService, KernelSpec, PythonEnvironment, initializeKernel, runPythonCode } from '../services/kernelService';
 import { getSettings, saveSettings } from '../services/llmService';
-import { Plus, Play, Trash, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle } from 'lucide-react';
+import { Plus, Play, Trash, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -42,8 +42,11 @@ export const Notebook: React.FC = () => {
   // Kernel State
   const [isKernelMenuOpen, setIsKernelMenuOpen] = useState(false);
   const [availableKernels, setAvailableKernels] = useState<KernelSpec[]>([]);
+  const [pythonEnvironments, setPythonEnvironments] = useState<PythonEnvironment[]>([]);
   const [currentKernel, setCurrentKernel] = useState<string>('python3');
   const [kernelStatus, setKernelStatus] = useState<'idle' | 'busy' | 'starting' | 'disconnected'>('disconnected');
+  const [isDiscoveringPythons, setIsDiscoveringPythons] = useState(false);
+  const [isInstallingKernel, setIsInstallingKernel] = useState<string | null>(null);
 
   // Undo/Redo & State Management
   const {
@@ -84,9 +87,45 @@ export const Notebook: React.FC = () => {
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
 
   // Fetch available kernels and initialize
+  // Load Python environments (separate from kernel init for faster startup)
+  const loadPythonEnvironments = useCallback(async (refresh: boolean = false) => {
+    try {
+      setIsDiscoveringPythons(true);
+      const data = await kernelService.getPythonEnvironments(refresh);
+      setAvailableKernels(data.kernelspecs);
+      setPythonEnvironments(data.environments);
+    } catch (error) {
+      console.error('Failed to load Python environments:', error);
+    } finally {
+      setIsDiscoveringPythons(false);
+    }
+  }, []);
+
+  // Install kernel for a Python environment
+  const installKernelForPython = useCallback(async (pythonPath: string) => {
+    try {
+      setIsInstallingKernel(pythonPath);
+      const result = await kernelService.installKernel(pythonPath);
+
+      // Refresh the environments list to show the new kernel
+      await loadPythonEnvironments(true);
+
+      // Optionally switch to the new kernel
+      if (result.kernel_name) {
+        await switchKernel(result.kernel_name);
+      }
+    } catch (error) {
+      console.error('Failed to install kernel:', error);
+      alert(`Failed to install kernel: ${error}`);
+    } finally {
+      setIsInstallingKernel(null);
+    }
+  }, [loadPythonEnvironments]);
+
   useEffect(() => {
     const initKernels = async () => {
       try {
+        // First, get kernelspecs quickly for startup
         const kernels = await kernelService.getAvailableKernels();
         setAvailableKernels(kernels);
 
@@ -107,6 +146,9 @@ export const Notebook: React.FC = () => {
 
         // Save the kernel choice
         saveSettings({ lastKernel: kernelToStart });
+
+        // Load Python environments in background (uses cache)
+        loadPythonEnvironments(false);
       } catch (error) {
         console.error('Failed to initialize kernel:', error);
         setKernelStatus('disconnected');
@@ -566,16 +608,29 @@ export const Notebook: React.FC = () => {
 
                       {isKernelMenuOpen && (
                         <div
-                          className="absolute top-full left-0 mt-1 w-64 bg-white rounded-lg shadow-xl border border-slate-200 py-1 z-50"
+                          className="absolute top-full left-0 mt-1 w-80 bg-white rounded-lg shadow-xl border border-slate-200 py-1 z-50 max-h-[70vh] overflow-hidden flex flex-col"
                           onMouseLeave={() => setIsKernelMenuOpen(false)}
                         >
-                          <div className="px-3 py-2 border-b border-slate-100 mb-1">
-                             <div className="text-xs font-semibold text-slate-900">Active Kernel</div>
-                             <div className="text-[10px] text-slate-500">{getKernelDisplayName()} ({kernelStatus})</div>
+                          <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between">
+                             <div>
+                               <div className="text-xs font-semibold text-slate-900">Active Kernel</div>
+                               <div className="text-[10px] text-slate-500">{getKernelDisplayName()} ({kernelStatus})</div>
+                             </div>
+                             <button
+                               onClick={(e) => { e.stopPropagation(); loadPythonEnvironments(true); }}
+                               disabled={isDiscoveringPythons}
+                               className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
+                               title="Refresh Python environments"
+                             >
+                               <RefreshCw className={`w-3.5 h-3.5 ${isDiscoveringPythons ? 'animate-spin' : ''}`} />
+                             </button>
                           </div>
 
-                          {/* Kernel List */}
-                          <div className="max-h-48 overflow-y-auto">
+                          <div className="overflow-y-auto flex-1">
+                            {/* Registered Kernels */}
+                            <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50">
+                              Jupyter Kernels
+                            </div>
                             {availableKernels.map(kernel => (
                               <button
                                 key={kernel.name}
@@ -584,10 +639,46 @@ export const Notebook: React.FC = () => {
                                   kernel.name === currentKernel ? 'bg-blue-50 text-blue-700' : 'text-slate-700'
                                 }`}
                               >
-                                <span className={`w-2 h-2 rounded-full ${kernel.name === currentKernel ? 'bg-blue-500' : 'bg-slate-300'}`}></span>
-                                {kernel.display_name}
+                                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${kernel.name === currentKernel ? 'bg-blue-500' : 'bg-green-500'}`}></span>
+                                <span className="truncate flex-1">{kernel.display_name}</span>
+                                <span className="text-[10px] text-slate-400">{kernel.language}</span>
                               </button>
                             ))}
+
+                            {/* Discovered Python Environments */}
+                            {pythonEnvironments.length > 0 && (
+                              <>
+                                <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50 mt-1 flex items-center justify-between">
+                                  <span>Python Environments</span>
+                                  {isDiscoveringPythons && <Loader2 className="w-3 h-3 animate-spin" />}
+                                </div>
+                                {pythonEnvironments.filter(env => !env.has_ipykernel).map(env => (
+                                  <div
+                                    key={env.path}
+                                    className="w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 text-slate-600"
+                                  >
+                                    <span className="w-2 h-2 rounded-full flex-shrink-0 bg-slate-300"></span>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="truncate">{env.display_name}</div>
+                                      <div className="text-[10px] text-slate-400 truncate">{env.path}</div>
+                                    </div>
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); installKernelForPython(env.path); }}
+                                      disabled={isInstallingKernel === env.path}
+                                      className="flex items-center gap-1 px-2 py-1 text-[10px] bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition-colors flex-shrink-0"
+                                      title="Install ipykernel and register"
+                                    >
+                                      {isInstallingKernel === env.path ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <Download className="w-3 h-3" />
+                                      )}
+                                      <span>{isInstallingKernel === env.path ? 'Installing...' : 'Install'}</span>
+                                    </button>
+                                  </div>
+                                ))}
+                              </>
+                            )}
                           </div>
 
                           <div className="border-t border-slate-100 mt-1 pt-1">
