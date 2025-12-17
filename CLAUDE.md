@@ -26,16 +26,19 @@ npm run preview                # Preview production build
 ## Architecture
 
 **Frontend (React 19 + TypeScript + Vite)**
-- `components/Notebook.tsx` - Main orchestrator: cell state management, kernel lifecycle, autosave coordination
+- `components/NotebookContainer.tsx` - Multi-tab orchestrator: tab management, per-notebook kernel sessions
+- `components/NotebookEditor.tsx` - Single notebook editor: cell state, execution queue, autosave
+- `components/TabBar.tsx` - Tab UI for switching between open notebooks
 - `components/Cell.tsx` - Individual cell editor with execution controls
 - `components/VirtualCellList.tsx` - React Virtuoso for large notebook performance
-- `components/AIChatSidebar.tsx` - AI chat interface for code generation and analysis
-- `services/kernelService.ts` - Kernel management, WebSocket handling, Python environment discovery
+- `components/AIChatSidebar.tsx` - AI chat interface (per-notebook instance)
+- `components/ErrorBoundary.tsx` - React error boundary for graceful error handling
+- `services/kernelService.ts` - Multi-session kernel management, WebSocket handling
 - `services/llmService.ts` - Multi-provider LLM client (Gemini, OpenAI, Anthropic)
 - `services/fileService.ts` - Filesystem operations
 - `hooks/useAutosave.ts` - Debounced autosave (1s) with localStorage crash recovery
 - `hooks/useUndoRedo.ts` - Cell state history management
-- `types.ts` - Core types: `Cell`, `CellOutput`, `NotebookMetadata`
+- `types.ts` - Core types: `Cell`, `Tab`, `NotebookState`, `KernelStatus`
 
 **Backend (Python + FastAPI)**
 - `server/main.py` - API endpoints and WebSocket handlers
@@ -106,3 +109,23 @@ cd server && pytest   # Run backend tests
 - Make commits periodically after completing logical units of work
 - Each commit should have passing tests
 - Use conventional commit messages: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`
+
+## Keyboard Shortcuts
+
+### Cell Execution
+| Shortcut | Action |
+|----------|--------|
+| `Shift+Enter` | Run cell and advance to next (creates new cell if at end) |
+| `Ctrl/Cmd+Enter` | Run current cell only |
+
+### Cell Navigation
+| Shortcut | Action |
+|----------|--------|
+| `Arrow Up/Down` | Navigate between cells (when not editing) |
+| `dd` | Delete active cell (vim-style, press 'd' twice quickly) |
+
+### Global
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl/Cmd+Z` | Undo |
+| `Ctrl/Cmd+Shift+Z` or `Ctrl/Cmd+Y` | Redo |

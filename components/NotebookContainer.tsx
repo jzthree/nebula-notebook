@@ -1,3 +1,12 @@
+/**
+ * NotebookContainer - Main container component for multi-notebook tab management
+ *
+ * Manages:
+ * - Tab lifecycle (create, switch, close)
+ * - Per-notebook state storage
+ * - Kernel session management per notebook
+ * - Sidebar state (file browser, chat, settings)
+ */
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Tab, NotebookState, Cell } from '../types';
 import { TabBar } from './TabBar';
@@ -8,6 +17,7 @@ import { kernelService } from '../services/kernelService';
 import { getFileContent, getFiles, saveActiveFileId } from '../services/fileService';
 import { FolderOpen } from 'lucide-react';
 
+/** Default cell content for new/empty notebooks */
 const INITIAL_CELL: Cell = {
   id: 'init-cell',
   type: 'code',
@@ -36,7 +46,10 @@ export const NotebookContainer: React.FC = () => {
   // Get current notebook state
   const currentState = activeTabId ? notebookStates.current.get(activeTabId) : null;
 
-  // Refresh file list
+  /**
+   * Refreshes the file list from the server
+   * Called on mount and after file operations
+   */
   const refreshFileList = useCallback(async () => {
     const updatedFiles = await getFiles();
     setFiles(updatedFiles);
@@ -47,7 +60,12 @@ export const NotebookContainer: React.FC = () => {
     refreshFileList();
   }, [refreshFileList]);
 
-  // Open a notebook (from file browser)
+  /**
+   * Opens a notebook from the file browser
+   * - If already open, switches to that tab
+   * - Otherwise creates a new tab, loads content, and starts a kernel
+   * @param fileId - Path to the notebook file
+   */
   const openNotebook = useCallback(async (fileId: string) => {
     // Check if already open
     const existingTab = tabs.find(t => t.fileId === fileId);
@@ -109,7 +127,14 @@ export const NotebookContainer: React.FC = () => {
     }
   }, [tabs, activeTabId]);
 
-  // Close a tab
+  /**
+   * Closes a tab and cleans up its resources
+   * - Prompts for confirmation if there are unsaved changes
+   * - Stops the kernel session
+   * - Removes the notebook state
+   * - Selects adjacent tab if closing active tab
+   * @param tabId - ID of the tab to close
+   */
   const closeTab = useCallback(async (tabId: string) => {
     const state = notebookStates.current.get(tabId);
     const tab = tabs.find(t => t.id === tabId);
@@ -147,7 +172,12 @@ export const NotebookContainer: React.FC = () => {
     }
   }, [tabs, activeTabId]);
 
-  // Update notebook state (called by NotebookEditor)
+  /**
+   * Updates notebook state for a specific tab
+   * Called by NotebookEditor when cells change, kernel status updates, etc.
+   * @param tabId - ID of the tab to update
+   * @param updates - Partial state updates to apply
+   */
   const updateNotebookState = useCallback((tabId: string, updates: Partial<NotebookState>) => {
     const current = notebookStates.current.get(tabId);
     if (current) {
@@ -166,7 +196,11 @@ export const NotebookContainer: React.FC = () => {
     }
   }, []);
 
-  // Mark tab as clean (after save)
+  /**
+   * Marks a tab as clean (no unsaved changes)
+   * Called after successful save operations
+   * @param tabId - ID of the tab to mark clean
+   */
   const markClean = useCallback((tabId: string) => {
     setTabs(prev => prev.map(t =>
       t.id === tabId ? { ...t, isDirty: false } : t
