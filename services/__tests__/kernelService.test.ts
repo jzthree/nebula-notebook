@@ -10,11 +10,13 @@ global.fetch = mockFetch;
 // Mock WebSocket
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
+  static OPEN = 1;
+  static CLOSED = 3;
   onopen: (() => void) | null = null;
   onclose: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onerror: ((error: any) => void) | null = null;
-  readyState = WebSocket.OPEN;
+  readyState: number = 1; // OPEN
 
   constructor(public url: string) {
     MockWebSocket.instances.push(this);
@@ -24,7 +26,7 @@ class MockWebSocket {
 
   send = vi.fn();
   close = vi.fn(() => {
-    this.readyState = WebSocket.CLOSED;
+    this.readyState = 3; // CLOSED
     this.onclose?.();
   });
 
