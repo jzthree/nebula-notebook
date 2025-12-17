@@ -2,7 +2,6 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Tab, NotebookState, Cell } from '../types';
 import { TabBar } from './TabBar';
 import { FileBrowser } from './FileBrowser';
-import { AIChatSidebar } from './AIChatSidebar';
 import { SettingsModal } from './SettingsModal';
 import { NotebookEditor } from './NotebookEditor';
 import { kernelService } from '../services/kernelService';
@@ -233,15 +232,6 @@ export const NotebookContainer: React.FC = () => {
         )}
       </div>
 
-      {/* AI Chat Sidebar */}
-      <AIChatSidebar
-        isOpen={isChatOpen}
-        onClose={() => setIsChatOpen(false)}
-        cells={currentState?.cells || []}
-        onInsertCode={() => {}}
-        onEditCell={() => {}}
-        onDeleteCell={() => {}}
-      />
 
       {/* Settings Modal */}
       <SettingsModal

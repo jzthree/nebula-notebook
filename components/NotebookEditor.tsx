@@ -20,6 +20,7 @@ import {
 import { VirtuosoHandle } from 'react-virtuoso';
 import { saveFileContent, updateNotebookMetadata } from '../services/fileService';
 import { VirtualCellList } from './VirtualCellList';
+import { AIChatSidebar } from './AIChatSidebar';
 import { useUndoRedo } from '../hooks/useUndoRedo';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
 
@@ -67,6 +68,12 @@ export const NotebookEditor: React.FC<NotebookEditorProps> = ({
   // Recovery state
   const [showRecoveryBanner, setShowRecoveryBanner] = useState(false);
   const [recoveryData, setRecoveryData] = useState<{ cells: Cell[]; timestamp: number } | null>(null);
+
+  // Track 'd' key press for vim-style 'dd' delete
+  const lastKeyRef = useRef<{ key: string; time: number } | null>(null);
+
+  // Ref for deleteCell to avoid circular dependency in useEffect
+  const deleteCellRef = useRef<(id: string) => void>(() => {});
 
   // Virtuoso Handle for programmatic scrolling
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -159,21 +166,62 @@ export const NotebookEditor: React.FC<NotebookEditorProps> = ({
       const target = e.target as HTMLElement;
       const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
-      if (isInput) return;
-
+      // Undo/Redo work even in input fields with modifier keys
       if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
         undo();
+        return;
       }
       if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
         e.preventDefault();
         redo();
+        return;
       }
+
+      // The following shortcuts only work when not in an input field
+      if (isInput) return;
+
+      // Arrow key navigation between cells
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const currentIndex = state.activeCellId
+          ? cells.findIndex(c => c.id === state.activeCellId)
+          : -1;
+
+        if (e.key === 'ArrowUp' && currentIndex > 0) {
+          onStateChange({ activeCellId: cells[currentIndex - 1].id });
+        } else if (e.key === 'ArrowDown' && currentIndex < cells.length - 1) {
+          onStateChange({ activeCellId: cells[currentIndex + 1].id });
+        } else if (currentIndex === -1 && cells.length > 0) {
+          // No cell selected, select first or last based on direction
+          onStateChange({ activeCellId: e.key === 'ArrowDown' ? cells[0].id : cells[cells.length - 1].id });
+        }
+        return;
+      }
+
+      // Vim-style 'dd' to delete cell
+      if (e.key === 'd') {
+        const now = Date.now();
+        if (lastKeyRef.current?.key === 'd' && now - lastKeyRef.current.time < 500) {
+          // Double 'd' pressed within 500ms - delete active cell
+          if (state.activeCellId) {
+            e.preventDefault();
+            deleteCellRef.current(state.activeCellId);
+          }
+          lastKeyRef.current = null;
+        } else {
+          lastKeyRef.current = { key: 'd', time: now };
+        }
+        return;
+      }
+
+      // Reset 'd' tracking on any other key
+      lastKeyRef.current = null;
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo]);
+  }, [undo, redo, cells, state.activeCellId, onStateChange]);
 
   // Handle recovery actions
   const handleRecoverChanges = () => {
@@ -289,24 +337,29 @@ export const NotebookEditor: React.FC<NotebookEditorProps> = ({
     setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
   };
 
-  const forceUpdateCell = (id: string, content: string) => {
+  const forceUpdateCell = useCallback((id: string, content: string) => {
     const newCells = cells.map(c => c.id === id ? { ...c, content } : c);
     pushState(newCells);
-  };
+  }, [cells, pushState]);
 
   const changeCellType = (id: string, type: CellType) => {
     const newCells = cells.map(c => c.id === id ? { ...c, type } : c);
     pushState(newCells);
   };
 
-  const deleteCell = (id: string) => {
+  const deleteCell = useCallback((id: string) => {
     if (cells.length > 1) {
       const newCells = cells.filter(c => c.id !== id);
       pushState(newCells);
     } else {
       forceUpdateCell(id, '');
     }
-  };
+  }, [cells, pushState, forceUpdateCell]);
+
+  // Keep ref updated for keyboard shortcut handler
+  useEffect(() => {
+    deleteCellRef.current = deleteCell;
+  }, [deleteCell]);
 
   const moveCell = (id: string, direction: 'up' | 'down') => {
     const idx = cells.findIndex(c => c.id === id);
@@ -324,6 +377,18 @@ export const NotebookEditor: React.FC<NotebookEditorProps> = ({
   const queueExecution = (id: string) => {
     saveCheckpoint();
     setExecutionQueue(prev => [...prev, id]);
+  };
+
+  const runAndAdvance = (id: string) => {
+    queueExecution(id);
+    const currentIndex = cells.findIndex(c => c.id === id);
+    if (currentIndex < cells.length - 1) {
+      // Move to next cell
+      onStateChange({ activeCellId: cells[currentIndex + 1].id });
+    } else {
+      // Create new cell at the end
+      addCell('code', '', currentIndex);
+    }
   };
 
   const handleReset = () => {
@@ -653,6 +718,7 @@ export const NotebookEditor: React.FC<NotebookEditorProps> = ({
               allCells={cells}
               onUpdate={handleUpdateCell}
               onRun={queueExecution}
+              onRunAndAdvance={runAndAdvance}
               onDelete={deleteCell}
               onMove={moveCell}
               onChangeType={changeCellType}
@@ -676,6 +742,28 @@ export const NotebookEditor: React.FC<NotebookEditorProps> = ({
           <Plus className="w-4 h-4" /> Text
         </button>
       </div>
+
+      {/* AI Chat Sidebar - per-notebook instance */}
+      <AIChatSidebar
+        isOpen={isChatOpen}
+        onClose={() => setIsChatOpen(false)}
+        cells={cells}
+        onInsertCode={(code, targetIndex) => {
+          addCell('code', code, targetIndex);
+        }}
+        onEditCell={(index, code) => {
+          const cell = cells[index];
+          if (cell) {
+            forceUpdateCell(cell.id, code);
+          }
+        }}
+        onDeleteCell={(index) => {
+          const cell = cells[index];
+          if (cell) {
+            deleteCell(cell.id);
+          }
+        }}
+      />
     </>
   );
 };

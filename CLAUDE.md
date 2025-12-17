@@ -72,12 +72,37 @@ npm run preview                # Preview production build
 - Commit after each logical unit of work
 - Use conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`
 
-### TDD (Test-Driven Development)
-1. Write failing tests first
-2. Implement minimum code to pass
-3. Refactor while keeping tests green
-4. Commit when tests pass
+### TDD (Test-Driven Development) - REQUIRED
+
+**IMPORTANT:** Always follow TDD when making changes that alter or add functionality. This is non-negotiable for maintaining code quality.
+
+**TDD Workflow:**
+1. **Write failing tests first** - Before writing any implementation code, write tests that define the expected behavior
+2. **Run tests to confirm they fail** - Verify the tests fail for the right reason (not due to syntax errors)
+3. **Implement minimum code to pass** - Write only enough code to make the tests pass
+4. **Run tests to confirm they pass** - All tests (new and existing) must be green
+5. **Refactor while keeping tests green** - Clean up the code while ensuring tests continue to pass
+6. **Commit when tests pass** - Make atomic commits with passing tests
+
+**When to Write Tests:**
+- Adding new features or components
+- Fixing bugs (write a test that reproduces the bug first)
+- Modifying existing behavior
+- Integrating components together
+- Adding new props, handlers, or callbacks
+
+**Test Commands:**
+```bash
+npm test              # Run all frontend tests (vitest)
+npm test -- --watch   # Watch mode for TDD
+cd server && pytest   # Run backend tests
+```
 
 ### Test Locations
 - Backend: `server/tests/` (pytest)
 - Frontend: `__tests__/` directories alongside components (vitest)
+
+### Git Commits
+- Make commits periodically after completing logical units of work
+- Each commit should have passing tests
+- Use conventional commit messages: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`
