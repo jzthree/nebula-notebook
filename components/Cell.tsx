@@ -11,6 +11,7 @@ interface Props {
   allCells: ICell[];
   onUpdate: (id: string, content: string) => void;
   onRun: (id: string) => void;
+  onRunAndAdvance: (id: string) => void;
   onDelete: (id: string) => void;
   onMove: (id: string, direction: 'up' | 'down') => void;
   onChangeType: (id: string, type: CellType) => void;
@@ -24,6 +25,7 @@ export const Cell: React.FC<Props> = ({
   allCells,
   onUpdate,
   onRun,
+  onRunAndAdvance,
   onDelete,
   onMove,
   onChangeType,
@@ -79,9 +81,17 @@ export const Cell: React.FC<Props> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      onRun(cell.id);
+    if (e.key === 'Enter') {
+      // Shift+Enter: run and advance to next cell
+      if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        onRunAndAdvance(cell.id);
+      }
+      // Ctrl/Cmd+Enter: run current cell only
+      else if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
+        e.preventDefault();
+        onRun(cell.id);
+      }
     }
   };
 
@@ -102,7 +112,7 @@ export const Cell: React.FC<Props> = ({
             {cell.executionCount !== undefined && <span className="text-green-600">[{cell.executionCount}]</span>}
         </div>
         
-        <button onClick={(e) => { e.stopPropagation(); onRun(cell.id); }} className="p-1.5 text-slate-500 hover:text-green-600 hover:bg-green-50 rounded" title="Run Cell (Ctrl+Enter)">
+        <button onClick={(e) => { e.stopPropagation(); onRun(cell.id); }} className="p-1.5 text-slate-500 hover:text-green-600 hover:bg-green-50 rounded" title="Run Cell (Shift+Enter or Ctrl+Enter)">
           {cell.isExecuting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
         </button>
         
