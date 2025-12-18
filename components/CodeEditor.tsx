@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo } from 'react';
-import CodeMirror from '@uiw/react-codemirror';
+import React, { useCallback, useMemo, useRef, useEffect } from 'react';
+import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, keymap } from '@codemirror/view';
@@ -27,6 +27,7 @@ interface Props {
   readOnly?: boolean;
   searchHighlight?: SearchHighlight | null;
   cellId?: string;
+  shouldFocus?: boolean; // When true, focus the editor
 }
 
 // Light theme that matches our existing style
@@ -154,7 +155,17 @@ export const CodeEditor: React.FC<Props> = ({
   readOnly = false,
   searchHighlight,
   cellId,
+  shouldFocus = false,
 }) => {
+  const editorRef = useRef<ReactCodeMirrorRef>(null);
+
+  // Focus editor when shouldFocus becomes true
+  useEffect(() => {
+    if (shouldFocus && editorRef.current?.view) {
+      editorRef.current.view.focus();
+    }
+  }, [shouldFocus]);
+
   // Extract stable values from searchHighlight to avoid recreating extensions
   // when currentMatch changes for a DIFFERENT cell
   const searchQuery = searchHighlight?.query;
@@ -205,6 +216,7 @@ export const CodeEditor: React.FC<Props> = ({
 
   return (
     <CodeMirror
+      ref={editorRef}
       value={value}
       onChange={handleChange}
       extensions={extensions}

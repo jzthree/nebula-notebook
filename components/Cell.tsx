@@ -222,6 +222,7 @@ const CellComponent: React.FC<Props> = ({
             placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
             searchHighlight={searchHighlight}
             cellId={cell.id}
+            shouldFocus={isActive}
           />
         </div>
 
