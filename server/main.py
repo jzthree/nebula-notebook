@@ -21,6 +21,7 @@ from kernel_service import kernel_service
 from llm_service import llm_service, LLMConfig
 from fs_service import fs_service
 from python_discovery import python_discovery
+from session_store import session_store
 
 
 # --- Pydantic Models ---
@@ -92,6 +93,16 @@ class InstallKernelRequest(BaseModel):
 async def lifespan(app: FastAPI):
     # Startup - respond to requests immediately, initialize in background
     print("Starting Nebula Notebook Backend...")
+
+    # Mark any previously active sessions as orphaned (from crashed server)
+    orphaned_count = session_store.mark_all_orphaned()
+    if orphaned_count > 0:
+        print(f"Marked {orphaned_count} sessions as orphaned from previous run")
+
+    # Clean up old orphaned/terminated sessions (older than 24 hours)
+    cleaned_count = session_store.cleanup_old_sessions(max_age_hours=24.0)
+    if cleaned_count > 0:
+        print(f"Cleaned up {cleaned_count} old sessions")
 
     # Start background initialization (don't await - let it run in background)
     asyncio.create_task(kernel_service.initialize_async())
