@@ -163,28 +163,22 @@ class KernelService:
 
         # Normalize path for consistent lookup
         normalized_path = self._normalize_path(file_path)
-        print(f"[kernel] get_or_create_kernel: input={file_path}, normalized={normalized_path}")
-        print(f"[kernel] existing mappings: {list(self.file_to_session.keys())}")
 
         # Hold lock for the entire operation to prevent race conditions
         # where two concurrent requests both create kernels for the same file
         async with self._lock:
             existing_session_id = self.file_to_session.get(normalized_path)
-            print(f"[kernel] lookup result: session_id={existing_session_id}")
             if existing_session_id and existing_session_id in self.sessions:
                 session = self.sessions[existing_session_id]
                 # Verify kernel is still alive
                 if session.manager.is_alive():
-                    print(f"[kernel] REUSING existing kernel {existing_session_id}")
                     return existing_session_id
                 else:
                     # Kernel died, clean up and create new
-                    print(f"[kernel] kernel died, cleaning up")
                     del self.file_to_session[normalized_path]
                     del self.sessions[existing_session_id]
 
             # Create new kernel with notebook's directory as cwd (inside lock)
-            print(f"[kernel] CREATING new kernel for {normalized_path}")
             cwd = str(Path(normalized_path).parent)
             return await self._start_kernel_internal(kernel_name=kernel_name, cwd=cwd, file_path=normalized_path)
 
