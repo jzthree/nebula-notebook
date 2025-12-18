@@ -154,6 +154,14 @@ export const CodeEditor: React.FC<Props> = ({
   searchHighlight,
   cellId,
 }) => {
+  // Extract stable values from searchHighlight to avoid recreating extensions
+  // when currentMatch changes for a DIFFERENT cell
+  const searchQuery = searchHighlight?.query;
+  const searchCaseSensitive = searchHighlight?.caseSensitive;
+  const isCurrentMatchInThisCell = searchHighlight?.currentMatch?.cellId === cellId;
+  const currentMatchStart = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.startIndex : undefined;
+  const currentMatchEnd = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.endIndex : undefined;
+
   const extensions = useMemo(() => {
     const exts = [
       lightTheme,
@@ -173,22 +181,17 @@ export const CodeEditor: React.FC<Props> = ({
     }
 
     // Add search highlighting if active
-    if (searchHighlight?.query) {
-      // Check if current match is in this cell
-      const isCurrentMatchInThisCell = searchHighlight.currentMatch?.cellId === cellId;
-      const currentMatchStart = isCurrentMatchInThisCell ? searchHighlight.currentMatch?.startIndex : undefined;
-      const currentMatchEnd = isCurrentMatchInThisCell ? searchHighlight.currentMatch?.endIndex : undefined;
-
+    if (searchQuery) {
       exts.push(createSearchHighlightExtension(
-        searchHighlight.query,
-        searchHighlight.caseSensitive,
+        searchQuery,
+        searchCaseSensitive ?? false,
         currentMatchStart,
         currentMatchEnd
       ));
     }
 
     return exts;
-  }, [language, onKeyDown, searchHighlight, cellId]);
+  }, [language, onKeyDown, searchQuery, searchCaseSensitive, currentMatchStart, currentMatchEnd]);
 
   const handleChange = useCallback(
     (val: string) => {

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, memo, useRef, useEffect } from 'react';
 import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
 import { CodeEditor } from './CodeEditor';
@@ -27,7 +27,7 @@ interface Props {
   searchHighlight?: SearchHighlight | null;
 }
 
-export const Cell: React.FC<Props> = ({
+const CellComponent: React.FC<Props> = ({
   cell,
   index,
   isActive,
@@ -46,6 +46,13 @@ export const Cell: React.FC<Props> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [isFixing, setIsFixing] = useState(false);
+
+  // Use ref for allCells to avoid re-renders when other cells change
+  // (allCells is only used for AI generation, not rendering)
+  const allCellsRef = useRef(allCells);
+  useEffect(() => {
+    allCellsRef.current = allCells;
+  }, [allCells]);
 
   // Handle keyboard shortcuts in the editor
   const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
@@ -79,7 +86,7 @@ export const Cell: React.FC<Props> = ({
     try {
       const settings = getSettings();
       const config = { provider: settings.llmProvider, model: settings.llmModel };
-      const newContent = await generateCellContent(aiPrompt, allCells, cell.id, config);
+      const newContent = await generateCellContent(aiPrompt, allCellsRef.current, cell.id, config);
       onUpdate(cell.id, newContent);
       setIsAiOpen(false);
       setAiPrompt('');
@@ -98,7 +105,7 @@ export const Cell: React.FC<Props> = ({
     try {
       const settings = getSettings();
       const config = { provider: settings.llmProvider, model: settings.llmModel };
-      const fixedCode = await fixCellError(cell.content, errorOutput.content, allCells, config);
+      const fixedCode = await fixCellError(cell.content, errorOutput.content, allCellsRef.current, config);
       onUpdate(cell.id, fixedCode);
     } catch (e) {
       console.error(e);
@@ -217,3 +224,24 @@ export const Cell: React.FC<Props> = ({
     </div>
   );
 };
+
+// Memoize Cell to prevent re-renders when only allCells changes
+// (allCells is stored in a ref, so we can safely ignore it in comparison)
+export const Cell = memo(CellComponent, (prevProps, nextProps) => {
+  // Return true if props are equal (skip re-render)
+  // Ignore allCells since we use a ref for it
+  return (
+    prevProps.cell === nextProps.cell &&
+    prevProps.index === nextProps.index &&
+    prevProps.isActive === nextProps.isActive &&
+    prevProps.onUpdate === nextProps.onUpdate &&
+    prevProps.onRun === nextProps.onRun &&
+    prevProps.onRunAndAdvance === nextProps.onRunAndAdvance &&
+    prevProps.onDelete === nextProps.onDelete &&
+    prevProps.onMove === nextProps.onMove &&
+    prevProps.onChangeType === nextProps.onChangeType &&
+    prevProps.onClick === nextProps.onClick &&
+    prevProps.onSave === nextProps.onSave &&
+    prevProps.searchHighlight === nextProps.searchHighlight
+  );
+});
