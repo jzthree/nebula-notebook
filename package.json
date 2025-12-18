@@ -10,7 +10,7 @@
     "server": "cd server && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000",
     "setup": "node setup.cjs",
     "prestart": "node setup.cjs",
-    "start": "concurrently \"npm run server\" \"npm run dev\"",
+    "start": "concurrently --kill-others \"npm run server\" \"npm run dev\"",
     "test": "vitest",
     "test:run": "vitest run"
   },
