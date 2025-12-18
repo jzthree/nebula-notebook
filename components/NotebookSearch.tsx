@@ -46,6 +46,9 @@ export const NotebookSearch: React.FC<Props> = ({
 
   // Notify parent of search query changes for highlighting
   useEffect(() => {
+    // Only notify when search is open
+    if (!isOpen) return;
+
     const currentMatch = matches.length > 0 ? {
       cellId: matches[currentMatchIndex]?.cellId,
       startIndex: matches[currentMatchIndex]?.startIndex,
@@ -53,7 +56,7 @@ export const NotebookSearch: React.FC<Props> = ({
     } : null;
     onSearchChange?.(query, caseSensitive, currentMatch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, caseSensitive, currentMatchIndex, matches]); // Intentionally exclude onSearchChange to prevent infinite loops
+  }, [isOpen, query, caseSensitive, currentMatchIndex, matches]); // Intentionally exclude onSearchChange to prevent infinite loops
 
   // Track previous query to detect query changes vs cell content changes
   const prevQueryRef = useRef(query);
@@ -61,6 +64,9 @@ export const NotebookSearch: React.FC<Props> = ({
 
   // Search through cells
   useEffect(() => {
+    // Don't search when closed
+    if (!isOpen) return;
+
     if (!query.trim()) {
       setMatches([]);
       setCurrentMatchIndex(0);
@@ -103,7 +109,7 @@ export const NotebookSearch: React.FC<Props> = ({
 
     prevQueryRef.current = query;
     prevCaseSensitiveRef.current = caseSensitive;
-  }, [query, cells, caseSensitive, onNavigateToCell]);
+  }, [isOpen, query, cells, caseSensitive, onNavigateToCell]);
 
   const goToMatch = useCallback((index: number) => {
     if (matches.length === 0) return;
