@@ -51,3 +51,6 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Nebula config (user-specific)
+.nebula-config.json

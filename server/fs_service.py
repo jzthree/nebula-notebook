@@ -21,15 +21,34 @@ class FileInfo:
     extension: str
 
 
+def load_nebula_config() -> Optional[str]:
+    """Load root directory from .nebula-config.json if it exists"""
+    config_path = Path(__file__).parent.parent / '.nebula-config.json'
+    try:
+        if config_path.exists():
+            with open(config_path) as f:
+                config = json.load(f)
+                return config.get('rootDirectory')
+    except Exception:
+        pass
+    return None
+
+
 class FilesystemService:
     """Service for real filesystem operations"""
 
     def __init__(self, default_root: Optional[str] = None):
-        self.default_root = default_root or str(Path.home())
+        # Priority: explicit arg > config file > home directory
+        self.default_root = default_root or load_nebula_config() or str(Path.home())
 
     def _normalize_path(self, path: str) -> str:
         """Normalize and expand path"""
-        if path.startswith("~"):
+        # Use configured root directory for ~ instead of actual home
+        if path == "~" or path == "":
+            return self.default_root
+        if path.startswith("~/"):
+            path = os.path.join(self.default_root, path[2:])
+        elif path.startswith("~"):
             path = os.path.expanduser(path)
         return os.path.abspath(path)
 
