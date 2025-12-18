@@ -21,6 +21,7 @@ import { VirtualCellList } from './VirtualCellList';
 import { useUndoRedo } from '../hooks/useUndoRedo';
 import { SettingsModal } from './SettingsModal';
 import { KernelManager } from './KernelManager';
+import { NotebookSearch } from './NotebookSearch';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
 
 // Helper to extract filename from path
@@ -38,6 +39,7 @@ export const Notebook: React.FC = () => {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isKernelManagerOpen, setIsKernelManagerOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
 
   // Notebook rename state
   const [isRenamingNotebook, setIsRenamingNotebook] = useState(false);
@@ -214,6 +216,13 @@ export const Notebook: React.FC = () => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
         saveNowRef.current();
+        return;
+      }
+
+      // Ctrl+F: Search (works everywhere)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setIsSearchOpen(true);
         return;
       }
 
@@ -587,6 +596,16 @@ export const Notebook: React.FC = () => {
       addCell('code', '', currentIndex);
     }
   };
+
+  // Navigate to a specific cell (used by search)
+  const navigateToCell = useCallback((cellIndex: number, cellId: string) => {
+    setActiveCellId(cellId);
+    virtuosoRef.current?.scrollToIndex({
+      index: cellIndex,
+      align: 'center',
+      behavior: 'smooth'
+    });
+  }, []);
 
   const handleReset = () => {
     if (confirm("Resetting will clear all cells in this notebook. Continue?")) {
@@ -1019,6 +1038,14 @@ export const Notebook: React.FC = () => {
             setKernelStatus('disconnected');
           }
         }}
+      />
+
+      {/* Notebook Search */}
+      <NotebookSearch
+        cells={cells}
+        isOpen={isSearchOpen}
+        onClose={() => setIsSearchOpen(false)}
+        onNavigateToCell={navigateToCell}
       />
     </div>
   );
