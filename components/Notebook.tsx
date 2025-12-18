@@ -1133,6 +1133,7 @@ export const Notebook: React.FC = () => {
                   onMove={moveCell}
                   onChangeType={changeCellType}
                   onClick={setActiveCellId}
+                  onAddCell={(afterIndex) => addCell('code', '', afterIndex)}
                   onSave={saveNow}
                   searchHighlight={searchQuery}
                   queuePosition={executionQueue.indexOf(cell.id)}

@@ -2,7 +2,7 @@ import React, { useState, useCallback, memo, useRef, useEffect } from 'react';
 import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
 import { CodeEditor } from './CodeEditor';
-import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Sparkles } from 'lucide-react';
+import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Sparkles, Plus } from 'lucide-react';
 import { generateCellContent, fixCellError, getSettings } from '../services/llmService';
 import { useNotification } from './NotificationSystem';
 import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
@@ -25,6 +25,7 @@ interface Props {
   onMove: (id: string, direction: 'up' | 'down') => void;
   onChangeType: (id: string, type: CellType) => void;
   onClick: (id: string) => void;
+  onAddCell: (afterIndex: number) => void;
   onSave?: () => void;
   searchHighlight?: SearchHighlight | null;
   queuePosition?: number; // Position in execution queue (-1 or undefined = not queued)
@@ -44,6 +45,7 @@ const CellComponent: React.FC<Props> = ({
   onMove,
   onChangeType,
   onClick,
+  onAddCell,
   onSave,
   searchHighlight,
   queuePosition,
@@ -192,6 +194,13 @@ const CellComponent: React.FC<Props> = ({
             title="Delete Cell"
           >
             <Trash2 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onAddCell(index); }}
+            className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Add Cell Below"
+          >
+            <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
 
