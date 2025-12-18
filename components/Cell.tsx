@@ -140,8 +140,8 @@ const CellComponent: React.FC<Props> = ({
     >
       {/* Top Toolbar */}
       <div className="flex items-center gap-1 px-2 py-1 bg-slate-50 border-b border-slate-100 rounded-t-lg">
-        {/* Left: Cell info and Run button */}
-        <div className="flex items-center gap-1">
+        {/* Left: Cell info, Run button, and action buttons */}
+        <div className="flex items-center gap-0.5">
           <span className="text-[10px] font-mono font-bold text-slate-400 min-w-[24px]">
             #{index + 1}
           </span>
@@ -161,44 +161,8 @@ const CellComponent: React.FC<Props> = ({
           >
             {cell.isExecuting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
           </button>
-        </div>
 
-        {/* Center: Error fix button */}
-        <div className="flex-1 flex justify-center">
-          {hasError && (
-            <button
-              onClick={(e) => { e.stopPropagation(); handleAiFix(); }}
-              disabled={isFixing}
-              className="flex items-center gap-1 text-[10px] px-2 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
-            >
-              <Sparkles className="w-3 h-3" />
-              {isFixing ? 'Fixing...' : 'Fix with AI'}
-            </button>
-          )}
-        </div>
-
-        {/* Right: Cell type toggle and action buttons */}
-        <div className="flex items-center gap-1">
-          {/* Cell type toggle */}
-          <div className="flex gap-0.5 mr-1">
-            <button
-              onClick={(e) => { e.stopPropagation(); onChangeType(cell.id, 'code'); }}
-              className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${cell.type === 'code' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              <CodeIcon className="w-3 h-3" /> Code
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); onChangeType(cell.id, 'markdown'); }}
-              className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${cell.type === 'markdown' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              <FileText className="w-3 h-3" /> Text
-            </button>
-          </div>
-
-          {/* Divider */}
-          <div className="w-px h-4 bg-slate-200" />
-
-          {/* Action buttons */}
+          {/* Action buttons after Run */}
           <button
             onClick={(e) => { e.stopPropagation(); setIsAiOpen(!isAiOpen); }}
             className={`p-1 rounded transition-colors ${isAiOpen ? 'text-purple-600 bg-purple-50' : 'text-slate-400 hover:text-purple-600 hover:bg-purple-50'}`}
@@ -226,6 +190,36 @@ const CellComponent: React.FC<Props> = ({
             title="Delete Cell"
           >
             <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* Center: Error fix button */}
+        <div className="flex-1 flex justify-center">
+          {hasError && (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleAiFix(); }}
+              disabled={isFixing}
+              className="flex items-center gap-1 text-[10px] px-2 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
+            >
+              <Sparkles className="w-3 h-3" />
+              {isFixing ? 'Fixing...' : 'Fix with AI'}
+            </button>
+          )}
+        </div>
+
+        {/* Right: Cell type toggle */}
+        <div className="flex gap-0.5">
+          <button
+            onClick={(e) => { e.stopPropagation(); onChangeType(cell.id, 'code'); }}
+            className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${cell.type === 'code' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-400 hover:text-slate-600'}`}
+          >
+            <CodeIcon className="w-3 h-3" /> Code
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onChangeType(cell.id, 'markdown'); }}
+            className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${cell.type === 'markdown' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-400 hover:text-slate-600'}`}
+          >
+            <FileText className="w-3 h-3" /> Text
           </button>
         </div>
       </div>
