@@ -775,36 +775,12 @@ export const Notebook: React.FC = () => {
                       <span className="text-xs font-normal text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
                         .ipynb
                       </span>
-                      {/* Save Status Indicator */}
-                      <span className="flex items-center gap-1 text-xs font-normal ml-1">
-                        {autosaveStatus.status === 'saving' && (
-                          <span className="flex items-center gap-1 text-blue-600">
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                            <span className="hidden sm:inline">Saving...</span>
-                          </span>
-                        )}
-                        {autosaveStatus.status === 'saved' && (
-                          <span className="flex items-center gap-1 text-green-600" title={autosaveStatus.lastSaved ? `Last saved ${formatLastSaved(autosaveStatus.lastSaved)}` : ''}>
-                            <Check className="w-3 h-3" />
-                            <span className="hidden sm:inline text-slate-400">{formatLastSaved(autosaveStatus.lastSaved)}</span>
-                          </span>
-                        )}
-                        {autosaveStatus.status === 'unsaved' && (
-                          <span className="flex items-center gap-1 text-amber-600" title="Unsaved changes">
-                            <Cloud className="w-3 h-3" />
-                          </span>
-                        )}
-                        {autosaveStatus.status === 'error' && (
-                          <span className="flex items-center gap-1 text-red-600" title="Save failed">
-                            <AlertCircle className="w-3 h-3" />
-                            <span className="hidden sm:inline">Save failed</span>
-                          </span>
-                        )}
-                      </span>
                     </h1>
 
-                    {/* Kernel Selector */}
-                    <div className="relative">
+                    {/* Second row: Kernel Selector + Save Status */}
+                    <div className="flex items-center gap-3">
+                      {/* Kernel Selector */}
+                      <div className="relative">
                       <button
                         onClick={() => setIsKernelMenuOpen(!isKernelMenuOpen)}
                         className="flex items-center gap-1.5 text-xs text-slate-600 hover:bg-slate-200/50 px-1.5 py-0.5 rounded -ml-1.5 transition-colors"
@@ -931,6 +907,35 @@ export const Notebook: React.FC = () => {
                           </div>
                         </div>
                       )}
+                      </div>
+
+                      {/* Save Status Indicator */}
+                      <span className="flex items-center gap-1 text-xs">
+                        {autosaveStatus.status === 'saving' && (
+                          <span className="flex items-center gap-1 text-blue-600">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            <span>Saving...</span>
+                          </span>
+                        )}
+                        {autosaveStatus.status === 'saved' && (
+                          <span className="flex items-center gap-1 text-green-600" title={autosaveStatus.lastSaved ? `Last saved ${formatLastSaved(autosaveStatus.lastSaved)}` : ''}>
+                            <Check className="w-3 h-3" />
+                            <span className="text-slate-400">{formatLastSaved(autosaveStatus.lastSaved)}</span>
+                          </span>
+                        )}
+                        {autosaveStatus.status === 'unsaved' && (
+                          <span className="flex items-center gap-1 text-amber-600" title="Unsaved changes">
+                            <Cloud className="w-3 h-3" />
+                            <span className="text-slate-400">Unsaved</span>
+                          </span>
+                        )}
+                        {autosaveStatus.status === 'error' && (
+                          <span className="flex items-center gap-1 text-red-600" title="Save failed">
+                            <AlertCircle className="w-3 h-3" />
+                            <span>Save failed</span>
+                          </span>
+                        )}
+                      </span>
                     </div>
 
                  </div>
