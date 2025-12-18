@@ -47,38 +47,45 @@ const CellComponent: React.FC<Props> = ({
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [isFixing, setIsFixing] = useState(false);
 
-  // Use ref for allCells to avoid re-renders when other cells change
-  // (allCells is only used for AI generation, not rendering)
+  // Use refs for callbacks to avoid recreating handleEditorKeyDown on every render
+  // This prevents CodeMirror extensions from being recreated on every keystroke
   const allCellsRef = useRef(allCells);
+  const onRunRef = useRef(onRun);
+  const onRunAndAdvanceRef = useRef(onRunAndAdvance);
+  const onSaveRef = useRef(onSave);
+
   useEffect(() => {
     allCellsRef.current = allCells;
-  }, [allCells]);
+    onRunRef.current = onRun;
+    onRunAndAdvanceRef.current = onRunAndAdvance;
+    onSaveRef.current = onSave;
+  });
 
-  // Handle keyboard shortcuts in the editor
+  // Handle keyboard shortcuts in the editor - uses refs so callback is stable
   const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
     // Cmd/Ctrl+S: Save
     if ((event.metaKey || event.ctrlKey) && event.key === 's') {
       event.preventDefault();
-      onSave?.();
+      onSaveRef.current?.();
       return true;
     }
 
     // Shift+Enter: run and advance to next cell
     if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
-      onRunAndAdvance(cell.id);
+      onRunAndAdvanceRef.current(cell.id);
       return true;
     }
 
     // Ctrl/Cmd+Enter: run current cell only
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
       event.preventDefault();
-      onRun(cell.id);
+      onRunRef.current(cell.id);
       return true;
     }
 
     return false; // Let CodeMirror handle other keys
-  }, [cell.id, onRun, onRunAndAdvance, onSave]);
+  }, [cell.id]); // Only depends on cell.id now
 
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim()) return;
@@ -226,22 +233,18 @@ const CellComponent: React.FC<Props> = ({
 };
 
 // Memoize Cell to prevent re-renders when only allCells changes
-// (allCells is stored in a ref, so we can safely ignore it in comparison)
+// Only compare props that affect rendering - NOT callback functions.
+// Callbacks change frequently due to useUndoRedo's pushState dependency on present,
+// but cells only need to re-render when their actual data changes.
 export const Cell = memo(CellComponent, (prevProps, nextProps) => {
   // Return true if props are equal (skip re-render)
-  // Ignore allCells since we use a ref for it
+  // Only check: cell data, index, active state, and search highlighting
+  // Don't check callbacks - they change on every parent render but
+  // don't affect what the cell displays
   return (
     prevProps.cell === nextProps.cell &&
     prevProps.index === nextProps.index &&
     prevProps.isActive === nextProps.isActive &&
-    prevProps.onUpdate === nextProps.onUpdate &&
-    prevProps.onRun === nextProps.onRun &&
-    prevProps.onRunAndAdvance === nextProps.onRunAndAdvance &&
-    prevProps.onDelete === nextProps.onDelete &&
-    prevProps.onMove === nextProps.onMove &&
-    prevProps.onChangeType === nextProps.onChangeType &&
-    prevProps.onClick === nextProps.onClick &&
-    prevProps.onSave === nextProps.onSave &&
     prevProps.searchHighlight === nextProps.searchHighlight
   );
 });

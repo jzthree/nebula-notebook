@@ -30,10 +30,22 @@ function getFilenameFromPath(filePath: string): string {
   return parts[parts.length - 1] || 'Untitled';
 }
 
+// Get initial file ID synchronously to avoid "Untitled" flash
+function getInitialFileId(): string | null {
+  // Check URL parameter first
+  const url = new URL(window.location.href);
+  const fileParam = url.searchParams.get('file');
+  if (fileParam) return fileParam;
+
+  // Fall back to saved active file
+  return getActiveFileId();
+}
+
 export const Notebook: React.FC = () => {
   // File System State
   const [files, setFiles] = useState<NotebookMetadata[]>([]);
-  const [currentFileId, setCurrentFileId] = useState<string | null>(null);
+  const [currentFileId, setCurrentFileId] = useState<string | null>(getInitialFileId);
+  const [isLoadingFile, setIsLoadingFile] = useState(!!getInitialFileId());
   const [currentFileMetadata, setCurrentFileMetadata] = useState<NotebookMetadata | null>(null);
   const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -168,28 +180,15 @@ export const Notebook: React.FC = () => {
     // The kernel stays running on the server until explicitly stopped
   }, []);
 
-  // Single initialization effect - priority: URL param > saved activeId > nothing
+  // Load the initial file (currentFileId is already set synchronously from URL/localStorage)
   useEffect(() => {
-    const init = async () => {
-      // Check URL parameter first
-      const url = new URL(window.location.href);
-      const fileParam = url.searchParams.get('file');
-
-      if (fileParam) {
-        // Load from URL parameter
-        loadFile(fileParam);
-      } else {
-        // Check saved active file
-        const activeId = getActiveFileId();
-        if (activeId) {
-          loadFile(activeId);
-        }
-        // Otherwise: no notebook loaded, show empty state
-      }
-    };
-
-    init();
-  }, []);
+    if (currentFileId) {
+      loadFile(currentFileId);
+    } else {
+      setIsLoadingFile(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount
 
   // Update browser tab title and URL when file changes
   useEffect(() => {
@@ -377,6 +376,7 @@ export const Notebook: React.FC = () => {
     setCurrentFileId(id);
     saveActiveFileId(id);
     setActiveCellId(content.length > 0 ? content[0].id : null);
+    setIsLoadingFile(false);
 
     const meta = files.find(f => f.id === id);
     if (meta) setCurrentFileMetadata(meta);
@@ -529,9 +529,9 @@ export const Notebook: React.FC = () => {
     addCell('code', code, indexToInsert);
   };
 
-  const handleUpdateCell = (id: string, content: string) => {
+  const handleUpdateCell = useCallback((id: string, content: string) => {
     setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
-  };
+  }, [setCells]);
 
   const forceUpdateCell = (id: string, content: string) => {
     const newCells = cells.map(c => c.id === id ? { ...c, content } : c);
@@ -758,6 +758,11 @@ export const Notebook: React.FC = () => {
                           className="text-lg font-bold bg-white border border-blue-400 rounded px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-[200px]"
                           autoFocus
                         />
+                      ) : isLoadingFile ? (
+                        <span className="flex items-center gap-2 text-slate-400">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Loading...
+                        </span>
                       ) : (
                         <span
                           onClick={startRenameNotebook}

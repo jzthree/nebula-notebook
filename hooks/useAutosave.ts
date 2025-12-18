@@ -169,33 +169,52 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
     }
   }, [fileId, cells, enabled, onSave, serializeCells, saveBackup, clearBackup, status.lastSaved]);
 
-  // Debounced save effect with dynamic delay based on notebook size
+  // Track cells reference to detect changes without expensive serialization
+  const cellsRef = useRef(cells);
+  const checkTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Debounced save effect - defer expensive comparison to avoid blocking typing
   useEffect(() => {
     if (!fileId || !enabled) return;
 
-    const currentContent = serializeCells(cells);
-    if (currentContent === lastSavedContentRef.current) {
-      return; // No changes
+    // Quick reference check - if cells array reference hasn't changed, skip
+    if (cells === cellsRef.current) return;
+    cellsRef.current = cells;
+
+    // Mark as unsaved immediately (cheap operation)
+    setStatus(prev => prev.status === 'unsaved' ? prev : { ...prev, status: 'unsaved' });
+
+    // Clear existing timeouts
+    if (checkTimeoutRef.current) {
+      clearTimeout(checkTimeoutRef.current);
     }
-
-    // Mark as unsaved
-    setStatus(prev => ({ ...prev, status: 'unsaved' }));
-
-    // Clear existing timeout
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
 
-    // Dynamic delay based on actual content size
-    const contentSize = new Blob([currentContent]).size;
-    const delay = getAutosaveDelay(contentSize);
+    // Defer expensive comparison check - don't block typing
+    checkTimeoutRef.current = setTimeout(() => {
+      const currentContent = serializeCells(cells);
+      if (currentContent === lastSavedContentRef.current) {
+        // No actual changes, reset status
+        setStatus(prev => ({ ...prev, status: 'saved' }));
+        return;
+      }
 
-    // Set new timeout for debounced save
-    saveTimeoutRef.current = setTimeout(() => {
-      performSave();
-    }, delay);
+      // Calculate delay based on content size
+      const contentSize = new Blob([currentContent]).size;
+      const delay = getAutosaveDelay(contentSize);
+
+      // Schedule the actual save
+      saveTimeoutRef.current = setTimeout(() => {
+        performSave();
+      }, delay);
+    }, 300); // 300ms debounce before even checking for changes
 
     return () => {
+      if (checkTimeoutRef.current) {
+        clearTimeout(checkTimeoutRef.current);
+      }
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
