@@ -531,6 +531,16 @@ export const Notebook: React.FC = () => {
 
     undoableInsertCell(insertIndex, newCell);
     setActiveCellId(newCell.id);
+
+    // Scroll to the new cell
+    requestAnimationFrame(() => {
+      virtuosoRef.current?.scrollToIndex({
+        index: insertIndex,
+        align: 'start',
+        behavior: 'auto',
+        offset: -80
+      });
+    });
   };
 
   const handleAddCell = (type: CellType) => {
@@ -595,7 +605,26 @@ export const Notebook: React.FC = () => {
     if (idx === -1) return;
 
     if (cells.length > 1) {
+      // Determine which cell to select after deletion
+      const nextIdx = idx < cells.length - 1 ? idx : idx - 1;
+      const nextCellId = cells[nextIdx === idx ? idx + 1 : nextIdx]?.id;
+
       undoableDeleteCell(idx);
+
+      // Select and scroll to the next cell (keeps cursor in same position for rapid deletion)
+      if (nextCellId) {
+        setActiveCellId(nextCellId);
+        // The cell index shifts after deletion, so use the same index for scroll
+        const scrollIdx = idx < cells.length - 1 ? idx : idx - 1;
+        requestAnimationFrame(() => {
+          virtuosoRef.current?.scrollToIndex({
+            index: Math.max(0, scrollIdx),
+            align: 'start',
+            behavior: 'auto',
+            offset: -80
+          });
+        });
+      }
     } else {
       // Can't delete last cell, just clear it
       forceUpdateCell(id, '');
@@ -612,6 +641,16 @@ export const Notebook: React.FC = () => {
 
     const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
     undoableMoveCell(idx, targetIdx);
+
+    // Scroll to follow the moved cell
+    requestAnimationFrame(() => {
+      virtuosoRef.current?.scrollToIndex({
+        index: targetIdx,
+        align: 'start',
+        behavior: 'auto',
+        offset: -80
+      });
+    });
   };
 
   const updateCellOutputs = (id: string, newOutputs: any[], isExec: boolean) => {
@@ -627,10 +666,19 @@ export const Notebook: React.FC = () => {
     queueExecution(id);
     const currentIndex = cells.findIndex(c => c.id === id);
     if (currentIndex < cells.length - 1) {
-      // Move to next cell
-      setActiveCellId(cells[currentIndex + 1].id);
+      // Move to next cell and scroll to it
+      const nextIndex = currentIndex + 1;
+      setActiveCellId(cells[nextIndex].id);
+      requestAnimationFrame(() => {
+        virtuosoRef.current?.scrollToIndex({
+          index: nextIndex,
+          align: 'start',
+          behavior: 'auto',
+          offset: -80
+        });
+      });
     } else {
-      // Create new cell at the end
+      // Create new cell at the end (addCell already handles scrolling via setActiveCellId)
       addCell('code', '', currentIndex);
     }
   };
