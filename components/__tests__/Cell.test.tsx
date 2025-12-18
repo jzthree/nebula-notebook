@@ -115,4 +115,31 @@ describe('Cell', () => {
       expect(runButton).toBeInTheDocument();
     });
   });
+
+  describe('command/edit mode visual distinction', () => {
+    it('shows command mode (green) border when active but not editing', () => {
+      const { container } = render(<Cell {...defaultProps} isActive={true} />);
+      const cellDiv = container.firstChild as HTMLElement;
+      expect(cellDiv.className).toContain('border-green');
+    });
+
+    it('shows edit mode (blue) border when editing', () => {
+      const { container } = render(<Cell {...defaultProps} isActive={true} />);
+      const cellDiv = container.firstChild as HTMLElement;
+
+      // Focus the CodeMirror editor to enter edit mode
+      const cmContent = container.querySelector('.cm-content') as HTMLElement;
+      fireEvent.focus(cmContent);
+
+      // Should now have blue border for edit mode
+      expect(cellDiv.className).toContain('border-blue');
+    });
+
+    it('shows mode indicator in gutter', () => {
+      const { container, rerender } = render(<Cell {...defaultProps} isActive={true} />);
+
+      // Should show command mode indicator
+      expect(screen.getByText('Cmd')).toBeInTheDocument();
+    });
+  });
 });

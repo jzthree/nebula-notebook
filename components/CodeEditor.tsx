@@ -22,6 +22,8 @@ interface Props {
   onChange: (value: string) => void;
   language: 'python' | 'markdown';
   onKeyDown?: (event: KeyboardEvent) => boolean; // Return true to prevent default
+  onFocus?: () => void;
+  onBlur?: () => void;
   placeholder?: string;
   readOnly?: boolean;
   searchHighlight?: SearchHighlight | null;
@@ -149,6 +151,8 @@ export const CodeEditor: React.FC<Props> = ({
   onChange,
   language,
   onKeyDown,
+  onFocus,
+  onBlur,
   placeholder,
   readOnly = false,
   searchHighlight,
@@ -182,6 +186,22 @@ export const CodeEditor: React.FC<Props> = ({
       );
     }
 
+    // Add focus/blur handlers for edit mode tracking
+    if (onFocus || onBlur) {
+      exts.push(
+        EditorView.domEventHandlers({
+          focus: () => {
+            onFocus?.();
+            return false;
+          },
+          blur: () => {
+            onBlur?.();
+            return false;
+          },
+        })
+      );
+    }
+
     // Add search highlighting if active
     if (searchQuery) {
       exts.push(createSearchHighlightExtension(
@@ -193,7 +213,7 @@ export const CodeEditor: React.FC<Props> = ({
     }
 
     return exts;
-  }, [language, onKeyDown, searchQuery, searchCaseSensitive, currentMatchStart, currentMatchEnd]);
+  }, [language, onKeyDown, onFocus, onBlur, searchQuery, searchCaseSensitive, currentMatchStart, currentMatchEnd]);
 
   const handleChange = useCallback(
     (val: string) => {

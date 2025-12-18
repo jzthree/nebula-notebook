@@ -46,6 +46,7 @@ const CellComponent: React.FC<Props> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [isFixing, setIsFixing] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
   // Use refs for callbacks to avoid recreating handleEditorKeyDown on every render
   // This prevents CodeMirror extensions from being recreated on every keystroke
@@ -60,6 +61,15 @@ const CellComponent: React.FC<Props> = ({
     onRunAndAdvanceRef.current = onRunAndAdvance;
     onSaveRef.current = onSave;
   });
+
+  // Handle focus/blur to track edit mode
+  const handleEditorFocus = useCallback(() => {
+    setIsEditing(true);
+  }, []);
+
+  const handleEditorBlur = useCallback(() => {
+    setIsEditing(false);
+  }, []);
 
   // Handle keyboard shortcuts in the editor - uses refs so callback is stable
   const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
@@ -133,12 +143,24 @@ const CellComponent: React.FC<Props> = ({
 
   const hasError = cell.outputs.some(o => o.type === 'error');
 
+  // Determine border style based on mode:
+  // - Error: red
+  // - Active + Editing: blue (edit mode)
+  // - Active + Not Editing: green (command mode)
+  // - Not Active: slate
+  const getBorderClass = () => {
+    if (hasError) return 'border-red-200';
+    if (isActive && isEditing) return 'border-blue-400 ring-1 ring-blue-100';
+    if (isActive) return 'border-green-500 ring-1 ring-green-100';
+    return 'border-slate-200 hover:border-slate-300';
+  };
+
   return (
     <div
       data-cell-id={cell.id}
       onClick={() => onClick(cell.id)}
       className={`group relative mb-3 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md min-h-[220px]
-        ${hasError ? 'border-red-200' : isActive ? 'border-blue-400 ring-1 ring-blue-100' : 'border-slate-200 hover:border-slate-300'}
+        ${getBorderClass()}
       `}
     >
       
@@ -148,6 +170,12 @@ const CellComponent: React.FC<Props> = ({
             <span>#{index + 1}</span>
             {cell.executionCount !== undefined && <span className="text-green-600">[{cell.executionCount}]</span>}
         </div>
+        {/* Mode indicator */}
+        {isActive && (
+          <span className={`text-[8px] font-mono font-bold px-1 rounded ${isEditing ? 'text-blue-600 bg-blue-50' : 'text-green-600 bg-green-50'}`}>
+            {isEditing ? 'Edit' : 'Cmd'}
+          </span>
+        )}
         
         <button onClick={(e) => { e.stopPropagation(); onRun(cell.id); }} className="p-1.5 text-slate-500 hover:text-green-600 hover:bg-green-50 rounded" title="Run Cell (Shift+Enter or Ctrl+Enter)">
           {cell.isExecuting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
@@ -227,6 +255,8 @@ const CellComponent: React.FC<Props> = ({
             onChange={(value) => onUpdate(cell.id, value)}
             language={cell.type === 'code' ? 'python' : 'markdown'}
             onKeyDown={handleEditorKeyDown}
+            onFocus={handleEditorFocus}
+            onBlur={handleEditorBlur}
             placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
             searchHighlight={searchHighlight}
             cellId={cell.id}
