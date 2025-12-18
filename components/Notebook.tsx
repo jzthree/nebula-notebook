@@ -661,15 +661,10 @@ export const Notebook: React.FC = () => {
     const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
     undoableMoveCell(idx, targetIdx);
 
-    // Scroll to follow the moved cell
-    requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollToIndex({
-        index: targetIdx,
-        align: 'start',
-        behavior: 'auto',
-        offset: -80
-      });
-    });
+    // Don't auto-scroll for move operations - the cell only moves by one position
+    // and typically stays visible. Auto-scrolling causes flickering due to
+    // race conditions between state updates and scroll calculations.
+    // User can manually scroll if needed.
   };
 
   const updateCellOutputs = (id: string, newOutputs: any[], isExec: boolean) => {
