@@ -143,14 +143,19 @@ class KernelService:
         This implements "one notebook = one kernel" - multiple browser tabs
         opening the same notebook will share the same kernel.
 
+        If the requested kernel_name differs from the existing kernel, the old
+        kernel is stopped and a new one is started with the requested kernel.
+
         Args:
             file_path: The notebook file path
-            kernel_name: The kernel to start if creating new
+            kernel_name: The kernel to start if creating new (or switch to)
 
         Returns:
             session_id of existing or new kernel
         """
         from pathlib import Path
+
+        session_to_stop = None
 
         # Check if kernel already exists for this file
         async with self._lock:
@@ -159,11 +164,22 @@ class KernelService:
                 session = self.sessions[existing_session_id]
                 # Verify kernel is still alive
                 if session.manager.is_alive():
-                    return existing_session_id
+                    # Check if kernel type matches what was requested
+                    if session.kernel_name == kernel_name:
+                        return existing_session_id
+                    else:
+                        # Kernel type changed - need to stop old and start new
+                        print(f"Switching kernel for {file_path}: {session.kernel_name} -> {kernel_name}")
+                        # Mark for stopping outside the lock
+                        session_to_stop = existing_session_id
                 else:
-                    # Kernel died, clean up and create new
+                    # Kernel died, clean up
                     del self.file_to_session[file_path]
                     del self.sessions[existing_session_id]
+
+        # Stop old kernel outside of lock if needed
+        if session_to_stop:
+            await self.stop_kernel(session_to_stop)
 
         # Create new kernel with notebook's directory as cwd
         cwd = str(Path(file_path).parent) if file_path else None

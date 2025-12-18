@@ -526,15 +526,19 @@ export const Notebook: React.FC = () => {
     setIsKernelReady(false);
 
     try {
-      // Stop current kernel
-      if (kernelSessionId) {
-        await kernelService.stopKernel(kernelSessionId);
+      // Use getOrCreateKernelForFile which handles kernel switching on the backend
+      // (it will stop the old kernel if kernel type differs)
+      if (currentFileId) {
+        const newSessionId = await kernelService.getOrCreateKernelForFile(currentFileId, kernelName);
+        setKernelSessionId(newSessionId);
+      } else {
+        // No file open, just start a standalone kernel
+        if (kernelSessionId) {
+          await kernelService.stopKernel(kernelSessionId);
+        }
+        const newSessionId = await kernelService.startKernel(kernelName);
+        setKernelSessionId(newSessionId);
       }
-
-      // Start new kernel with notebook's directory as cwd
-      const cwd = currentFileId ? currentFileId.substring(0, currentFileId.lastIndexOf('/')) : undefined;
-      const newSessionId = await kernelService.startKernel(kernelName, cwd);
-      setKernelSessionId(newSessionId);
       setCurrentKernel(kernelName);
       setIsKernelReady(true);
       setKernelStatus('idle');
