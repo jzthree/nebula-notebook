@@ -4,7 +4,7 @@ Jupyter Kernel Service - Manages real Jupyter kernels
 import asyncio
 import uuid
 import base64
-from typing import Dict, Optional, Any, Callable
+from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field
 from jupyter_client import KernelManager, kernelspec
 from jupyter_client.asynchronous import AsyncKernelClient
@@ -30,9 +30,18 @@ class KernelService:
         # Map from file_path to session_id for "one notebook = one kernel"
         self.file_to_session: Dict[str, str] = {}
         self._lock = asyncio.Lock()
+        # Cached kernel specs (lazy loaded)
+        self._kernels_cache: Optional[list[dict]] = None
+        self._kernels_loading: bool = False
+        self._ready: bool = False
 
-    def get_available_kernels(self) -> list[dict]:
-        """List all available kernelspecs on the system"""
+    @property
+    def is_ready(self) -> bool:
+        """Check if kernel service has completed initial discovery"""
+        return self._ready
+
+    def _discover_kernels_sync(self) -> list[dict]:
+        """Synchronously discover available kernels (can be slow)"""
         specs = kernelspec.find_kernel_specs()
         result = []
 
@@ -49,6 +58,38 @@ class KernelService:
                 print(f"Error loading kernelspec {name}: {e}")
 
         return result
+
+    async def initialize_async(self):
+        """Background initialization - call after server starts"""
+        if self._kernels_loading or self._ready:
+            return
+
+        self._kernels_loading = True
+        print("Discovering Jupyter kernels in background...")
+
+        # Run kernel discovery in thread pool to not block
+        loop = asyncio.get_event_loop()
+        self._kernels_cache = await loop.run_in_executor(
+            None, self._discover_kernels_sync
+        )
+
+        self._kernels_loading = False
+        self._ready = True
+        print(f"Found {len(self._kernels_cache)} kernels")
+
+    def get_available_kernels(self) -> list[dict]:
+        """List all available kernelspecs on the system"""
+        # Return cache if available
+        if self._kernels_cache is not None:
+            return self._kernels_cache
+
+        # Fallback to sync discovery if not initialized yet
+        # (shouldn't happen after initialize_async is called)
+        if not self._kernels_loading:
+            self._kernels_cache = self._discover_kernels_sync()
+            self._ready = True
+
+        return self._kernels_cache or []
 
     async def start_kernel(self, kernel_name: str = "python3", cwd: str = None, file_path: str = None) -> str:
         """Start a new kernel session with optional working directory

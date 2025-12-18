@@ -90,8 +90,12 @@ class InstallKernelRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup - respond to requests immediately, initialize in background
     print("Starting Nebula Notebook Backend...")
+
+    # Start background initialization (don't await - let it run in background)
+    asyncio.create_task(kernel_service.initialize_async())
+
     yield
     # Shutdown
     print("Shutting down... Cleaning up kernels...")
@@ -466,13 +470,24 @@ async def save_notebook(request: SaveNotebookRequest):
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint - responds immediately even during initialization"""
     return {
         "status": "ok",
         "version": "1.0.0",
-        "kernels_available": len(kernel_service.get_available_kernels()) > 0,
+        "ready": kernel_service.is_ready,  # True once kernel discovery completes
         "llm_providers": list(llm_service.get_available_providers().keys())
     }
+
+
+@app.get("/api/ready")
+async def ready_check():
+    """Readiness check - returns 503 if not fully initialized"""
+    if not kernel_service.is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Service initializing, kernel discovery in progress"
+        )
+    return {"status": "ready"}
 
 
 if __name__ == "__main__":
