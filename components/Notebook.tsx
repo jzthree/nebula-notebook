@@ -84,11 +84,15 @@ export const Notebook: React.FC = () => {
   const [isDiscoveringPythons, setIsDiscoveringPythons] = useState(false);
   const [isInstallingKernel, setIsInstallingKernel] = useState<string | null>(null);
 
-  // Undo/Redo & State Management
+  // Undo/Redo & State Management (operation-based)
   const {
     cells,
     setCells,
-    pushState,
+    insertCell: undoableInsertCell,
+    deleteCell: undoableDeleteCell,
+    moveCell: undoableMoveCell,
+    updateContent,
+    changeType,
     saveCheckpoint,
     undo,
     redo,
@@ -520,14 +524,12 @@ export const Notebook: React.FC = () => {
       isExecuting: false
     };
 
-    const newCells = [...cells];
-    if (afterIndex !== undefined && afterIndex >= 0 && afterIndex < cells.length) {
-      newCells.splice(afterIndex + 1, 0, newCell);
-    } else {
-      newCells.push(newCell);
-    }
+    // Calculate insertion index
+    const insertIndex = (afterIndex !== undefined && afterIndex >= 0 && afterIndex < cells.length)
+      ? afterIndex + 1
+      : cells.length;
 
-    pushState(newCells);
+    undoableInsertCell(insertIndex, newCell);
     setActiveCellId(newCell.id);
   };
 
@@ -553,13 +555,15 @@ export const Notebook: React.FC = () => {
     addCell('code', code, indexToInsert);
   };
 
+  // Text edits - not individually undoable (too many operations)
+  // Use setCells directly for per-keystroke updates
   const handleUpdateCell = useCallback((id: string, content: string) => {
     setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
   }, [setCells]);
 
+  // Force update with undo tracking - for AI edits, etc.
   const forceUpdateCell = (id: string, content: string) => {
-    const newCells = cells.map(c => c.id === id ? { ...c, content } : c);
-    pushState(newCells);
+    updateContent(id, content);
   };
 
   const handleEditCell = (index: number, newContent: string) => {
@@ -583,15 +587,17 @@ export const Notebook: React.FC = () => {
   };
 
   const changeCellType = (id: string, type: CellType) => {
-    const newCells = cells.map(c => c.id === id ? { ...c, type } : c);
-    pushState(newCells);
+    changeType(id, type);
   };
 
   const deleteCell = (id: string) => {
+    const idx = cells.findIndex(c => c.id === id);
+    if (idx === -1) return;
+
     if (cells.length > 1) {
-      const newCells = cells.filter(c => c.id !== id);
-      pushState(newCells);
+      undoableDeleteCell(idx);
     } else {
+      // Can't delete last cell, just clear it
       forceUpdateCell(id, '');
     }
   };
@@ -604,11 +610,8 @@ export const Notebook: React.FC = () => {
     if (direction === 'up' && idx === 0) return;
     if (direction === 'down' && idx === cells.length - 1) return;
 
-    const newCells = [...cells];
     const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
-    [newCells[idx], newCells[targetIdx]] = [newCells[targetIdx], newCells[idx]];
-
-    pushState(newCells);
+    undoableMoveCell(idx, targetIdx);
   };
 
   const updateCellOutputs = (id: string, newOutputs: any[], isExec: boolean) => {
@@ -673,7 +676,8 @@ export const Notebook: React.FC = () => {
         outputs: [],
         isExecuting: false,
       };
-      pushState([newCell]);
+      // Reset clears history - not undoable (user confirmed)
+      resetHistory([newCell]);
       setActiveCellId(newCell.id);
     }
   };
