@@ -603,8 +603,9 @@ export const Notebook: React.FC = () => {
     setActiveCellId(cellId);
     virtuosoRef.current?.scrollToIndex({
       index: cellIndex,
-      align: 'center',
-      behavior: 'smooth'
+      align: 'start',    // Start alignment ensures code editor (at top of cell) is visible
+      behavior: 'auto',  // Instant scroll for fast search navigation
+      offset: -80        // Small offset so cell isn't flush with top (accounts for header)
     });
   }, []);
 
