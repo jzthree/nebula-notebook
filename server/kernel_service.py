@@ -4,10 +4,13 @@ Jupyter Kernel Service - Manages real Jupyter kernels
 import asyncio
 import uuid
 import base64
+from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field
 from jupyter_client import KernelManager, kernelspec
 from jupyter_client.asynchronous import AsyncKernelClient
+
+from session_store import session_store, PersistedSession
 
 
 @dataclass
@@ -34,6 +37,10 @@ class KernelService:
         self._kernels_cache: Optional[list[dict]] = None
         self._kernels_loading: bool = False
         self._ready: bool = False
+        # Heartbeat monitoring callbacks
+        self._status_callbacks: List[Callable[[str, str], None]] = []
+        # Session persistence store
+        self._session_store = session_store
 
     @property
     def is_ready(self) -> bool:
@@ -135,6 +142,30 @@ class KernelService:
             if file_path:
                 self.file_to_session[file_path] = session_id
 
+        # Persist session to database
+        now = datetime.now().timestamp()
+        # Get kernel PID - newer jupyter_client uses provisioner
+        kernel_pid = None
+        try:
+            if hasattr(km, 'provisioner') and km.provisioner:
+                kernel_pid = km.provisioner.process.pid
+            elif hasattr(km, 'kernel') and km.kernel:
+                kernel_pid = km.kernel.pid
+        except (AttributeError, TypeError):
+            pass
+
+        persisted = PersistedSession(
+            session_id=session_id,
+            kernel_name=kernel_name,
+            file_path=file_path,
+            kernel_pid=kernel_pid,
+            status='active',
+            created_at=now,
+            last_heartbeat=now,
+            connection_file=km.connection_file
+        )
+        self._session_store.save_session(persisted)
+
         return session_id
 
     async def get_or_create_kernel(self, file_path: str, kernel_name: str = "python3") -> str:
@@ -221,6 +252,8 @@ class KernelService:
             try:
                 session.client.stop_channels()
                 session.manager.shutdown_kernel(now=True)
+                # Delete from persistence store
+                self._session_store.delete_session(session_id)
                 return True
             except Exception as e:
                 print(f"Error stopping kernel: {e}")

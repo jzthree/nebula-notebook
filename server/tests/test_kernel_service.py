@@ -1,10 +1,11 @@
 """
-Tests for kernel_service - working directory support
+Tests for kernel_service - working directory support and session persistence
 """
 import pytest
 import asyncio
 import os
 import tempfile
+import uuid
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -12,12 +13,28 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from kernel_service import KernelService
+from session_store import SessionStore, PersistedSession
 
 
 @pytest.fixture
-def kernel_service_instance():
-    """Create a fresh KernelService instance for each test"""
-    return KernelService()
+def temp_session_store():
+    """Create a temporary session store for testing"""
+    temp_path = Path(tempfile.gettempdir()) / f"test_kernel_{uuid.uuid4().hex}.db"
+    store = SessionStore(db_path=temp_path)
+    yield store
+    # Cleanup
+    if hasattr(store._local, 'conn') and store._local.conn:
+        store._local.conn.close()
+        store._local.conn = None
+    temp_path.unlink(missing_ok=True)
+
+
+@pytest.fixture
+def kernel_service_instance(temp_session_store):
+    """Create a fresh KernelService instance with temp session store"""
+    service = KernelService()
+    service._session_store = temp_session_store
+    return service
 
 
 @pytest.fixture
@@ -135,3 +152,67 @@ class TestMultipleSessions:
             # Cleanup
             await kernel_service_instance.stop_kernel(session1)
             await kernel_service_instance.stop_kernel(session2)
+
+
+class TestSessionPersistence:
+    """Test session persistence in kernel service"""
+
+    @pytest.mark.asyncio
+    async def test_start_kernel_persists_session(self, kernel_service_instance, temp_session_store):
+        """Test that starting a kernel saves session to store"""
+        session_id = await kernel_service_instance.start_kernel(kernel_name="python3")
+
+        # Verify session is persisted
+        persisted = temp_session_store.get_session(session_id)
+        assert persisted is not None
+        assert persisted.session_id == session_id
+        assert persisted.kernel_name == "python3"
+        assert persisted.status == "active"
+        assert persisted.kernel_pid is not None
+
+        # Cleanup
+        await kernel_service_instance.stop_kernel(session_id)
+
+    @pytest.mark.asyncio
+    async def test_start_kernel_persists_file_path(self, kernel_service_instance, temp_session_store):
+        """Test that file_path is persisted when provided"""
+        file_path = "/path/to/test/notebook.ipynb"
+        session_id = await kernel_service_instance.start_kernel(
+            kernel_name="python3",
+            file_path=file_path
+        )
+
+        # Verify file_path is persisted
+        persisted = temp_session_store.get_session(session_id)
+        assert persisted is not None
+        assert persisted.file_path == file_path
+
+        # Cleanup
+        await kernel_service_instance.stop_kernel(session_id)
+
+    @pytest.mark.asyncio
+    async def test_stop_kernel_deletes_session(self, kernel_service_instance, temp_session_store):
+        """Test that stopping a kernel deletes session from store"""
+        session_id = await kernel_service_instance.start_kernel(kernel_name="python3")
+
+        # Verify session exists
+        assert temp_session_store.get_session(session_id) is not None
+
+        # Stop kernel
+        result = await kernel_service_instance.stop_kernel(session_id)
+        assert result is True
+
+        # Verify session is deleted
+        assert temp_session_store.get_session(session_id) is None
+
+    @pytest.mark.asyncio
+    async def test_session_has_connection_file(self, kernel_service_instance, temp_session_store):
+        """Test that connection_file is persisted for reconnection"""
+        session_id = await kernel_service_instance.start_kernel(kernel_name="python3")
+
+        persisted = temp_session_store.get_session(session_id)
+        assert persisted.connection_file is not None
+        assert len(persisted.connection_file) > 0
+
+        # Cleanup
+        await kernel_service_instance.stop_kernel(session_id)

@@ -54,3 +54,6 @@ Thumbs.db
 
 # Nebula config (user-specific)
 .nebula-config.json
+
+# SQLite session database
+server/sessions.db
