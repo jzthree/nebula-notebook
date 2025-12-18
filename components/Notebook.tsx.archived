@@ -649,34 +649,52 @@ export const Notebook: React.FC = () => {
                             {pythonEnvironments.length > 0 && (
                               <>
                                 <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50 mt-1 flex items-center justify-between">
-                                  <span>Python Environments</span>
+                                  <span>Python Environments ({pythonEnvironments.length})</span>
                                   {isDiscoveringPythons && <Loader2 className="w-3 h-3 animate-spin" />}
                                 </div>
-                                {pythonEnvironments.filter(env => !env.has_ipykernel).map(env => (
-                                  <div
-                                    key={env.path}
-                                    className="w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 text-slate-600"
-                                  >
-                                    <span className="w-2 h-2 rounded-full flex-shrink-0 bg-slate-300"></span>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="truncate">{env.display_name}</div>
-                                      <div className="text-[10px] text-slate-400 truncate">{env.path}</div>
-                                    </div>
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); installKernelForPython(env.path); }}
-                                      disabled={isInstallingKernel === env.path}
-                                      className="flex items-center gap-1 px-2 py-1 text-[10px] bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition-colors flex-shrink-0"
-                                      title="Install ipykernel and register"
+                                {pythonEnvironments.map(env => {
+                                  // Check if this env is already a registered kernel
+                                  const isRegistered = availableKernels.some(k =>
+                                    k.path?.includes(env.path.replace('/bin/python', '')) ||
+                                    env.kernel_name === k.name
+                                  );
+
+                                  return (
+                                    <div
+                                      key={env.path}
+                                      className="w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 text-slate-600"
                                     >
-                                      {isInstallingKernel === env.path ? (
-                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                        isRegistered ? 'bg-green-500' : env.has_ipykernel ? 'bg-amber-400' : 'bg-slate-300'
+                                      }`}></span>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="truncate">{env.display_name}</div>
+                                        <div className="text-[10px] text-slate-400 truncate">{env.path}</div>
+                                      </div>
+                                      {isRegistered ? (
+                                        <span className="text-[10px] text-green-600 flex-shrink-0">Registered</span>
                                       ) : (
-                                        <Download className="w-3 h-3" />
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); installKernelForPython(env.path); }}
+                                          disabled={isInstallingKernel === env.path}
+                                          className={`flex items-center gap-1 px-2 py-1 text-[10px] rounded transition-colors flex-shrink-0 ${
+                                            env.has_ipykernel
+                                              ? 'bg-amber-50 text-amber-600 hover:bg-amber-100'
+                                              : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                                          }`}
+                                          title={env.has_ipykernel ? "Register as Jupyter kernel" : "Install ipykernel and register"}
+                                        >
+                                          {isInstallingKernel === env.path ? (
+                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                          ) : (
+                                            <Download className="w-3 h-3" />
+                                          )}
+                                          <span>{isInstallingKernel === env.path ? 'Installing...' : env.has_ipykernel ? 'Register' : 'Install'}</span>
+                                        </button>
                                       )}
-                                      <span>{isInstallingKernel === env.path ? 'Installing...' : 'Install'}</span>
-                                    </button>
-                                  </div>
-                                ))}
+                                    </div>
+                                  );
+                                })}
                               </>
                             )}
                           </div>
