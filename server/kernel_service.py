@@ -104,10 +104,15 @@ class KernelService:
             cwd: Working directory for the kernel process
             file_path: The notebook file path (for "one notebook = one kernel")
         """
-        session_id = str(uuid.uuid4())
-
         # Normalize file path for consistent lookup
         normalized_file_path = self._normalize_path(file_path) if file_path else None
+
+        async with self._lock:
+            return await self._start_kernel_internal(kernel_name, cwd, normalized_file_path)
+
+    async def _start_kernel_internal(self, kernel_name: str = "python3", cwd: str = None, file_path: str = None) -> str:
+        """Internal kernel start - caller must hold self._lock"""
+        session_id = str(uuid.uuid4())
 
         # Create kernel manager
         km = KernelManager(kernel_name=kernel_name)
@@ -131,14 +136,13 @@ class KernelService:
             kernel_name=kernel_name,
             manager=km,
             client=client,
-            file_path=normalized_file_path,
+            file_path=file_path,
             status="idle"
         )
 
-        async with self._lock:
-            self.sessions[session_id] = session
-            if normalized_file_path:
-                self.file_to_session[normalized_file_path] = session_id
+        self.sessions[session_id] = session
+        if file_path:
+            self.file_to_session[file_path] = session_id
 
         return session_id
 
@@ -162,7 +166,8 @@ class KernelService:
         print(f"[kernel] get_or_create_kernel: input={file_path}, normalized={normalized_path}")
         print(f"[kernel] existing mappings: {list(self.file_to_session.keys())}")
 
-        # Check if kernel already exists for this file
+        # Hold lock for the entire operation to prevent race conditions
+        # where two concurrent requests both create kernels for the same file
         async with self._lock:
             existing_session_id = self.file_to_session.get(normalized_path)
             print(f"[kernel] lookup result: session_id={existing_session_id}")
@@ -178,10 +183,10 @@ class KernelService:
                     del self.file_to_session[normalized_path]
                     del self.sessions[existing_session_id]
 
-        # Create new kernel with notebook's directory as cwd
-        print(f"[kernel] CREATING new kernel for {normalized_path}")
-        cwd = str(Path(normalized_path).parent)
-        return await self.start_kernel(kernel_name=kernel_name, cwd=cwd, file_path=normalized_path)
+            # Create new kernel with notebook's directory as cwd (inside lock)
+            print(f"[kernel] CREATING new kernel for {normalized_path}")
+            cwd = str(Path(normalized_path).parent)
+            return await self._start_kernel_internal(kernel_name=kernel_name, cwd=cwd, file_path=normalized_path)
 
     def get_kernel_for_file(self, file_path: str) -> Optional[str]:
         """Get the session_id for a notebook file if one exists"""
