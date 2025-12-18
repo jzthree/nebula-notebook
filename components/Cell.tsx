@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
 import { PythonHighlighter } from './PythonHighlighter';
@@ -41,13 +41,14 @@ export const Cell: React.FC<Props> = ({
   const [isEditing, setIsEditing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-resize textarea
-  useEffect(() => {
+  // Auto-resize textarea (also trigger when entering edit mode)
+  // useLayoutEffect ensures this runs after DOM update but before paint
+  useLayoutEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
     }
-  }, [cell.content]);
+  }, [cell.content, isEditing]);
 
   // Auto-focus textarea when cell becomes active or enters edit mode
   useEffect(() => {
