@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, X, ChevronUp, ChevronDown } from 'lucide-react';
+import { Search, X, ChevronUp, ChevronDown, Replace, ReplaceAll } from 'lucide-react';
 import { Cell } from '../types';
 
 interface SearchMatch {
@@ -21,6 +21,9 @@ interface Props {
   onClose: () => void;
   onNavigateToCell: (cellIndex: number, cellId: string) => void;
   onSearchChange?: (query: string, caseSensitive: boolean, currentMatch: CurrentMatch | null) => void;
+  onReplace?: (cellId: string, startIndex: number, endIndex: number, replacement: string) => void;
+  onReplaceAllInCell?: (cellId: string, query: string, replacement: string, caseSensitive: boolean) => void;
+  onReplaceAllInNotebook?: (query: string, replacement: string, caseSensitive: boolean) => void;
 }
 
 export const NotebookSearch: React.FC<Props> = ({
@@ -29,20 +32,41 @@ export const NotebookSearch: React.FC<Props> = ({
   onClose,
   onNavigateToCell,
   onSearchChange,
+  onReplace,
+  onReplaceAllInCell,
+  onReplaceAllInNotebook,
 }) => {
   const [query, setQuery] = useState('');
+  const [replaceText, setReplaceText] = useState('');
   const [matches, setMatches] = useState<SearchMatch[]>([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [caseSensitive, setCaseSensitive] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [showReplace, setShowReplace] = useState(false);
+  const [showReplaceAllMenu, setShowReplaceAllMenu] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+  const replaceAllMenuRef = useRef<HTMLDivElement>(null);
 
   // Focus input when opened
   useEffect(() => {
-    if (isOpen && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
+    if (isOpen && searchInputRef.current) {
+      searchInputRef.current.focus();
+      searchInputRef.current.select();
     }
   }, [isOpen]);
+
+  // Close replace all menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (replaceAllMenuRef.current && !replaceAllMenuRef.current.contains(e.target as Node)) {
+        setShowReplaceAllMenu(false);
+      }
+    };
+    if (showReplaceAllMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showReplaceAllMenu]);
 
   // Notify parent of search query changes for highlighting
   useEffect(() => {
@@ -106,7 +130,7 @@ export const NotebookSearch: React.FC<Props> = ({
         onNavigateToCell(newMatches[0].cellIndex, newMatches[0].cellId);
         // Re-focus search input after navigation to prevent cell from stealing focus
         requestAnimationFrame(() => {
-          inputRef.current?.focus();
+          searchInputRef.current?.focus();
         });
       }
     }
@@ -126,7 +150,7 @@ export const NotebookSearch: React.FC<Props> = ({
 
     // Re-focus search input after navigation
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
+      searchInputRef.current?.focus();
     });
   }, [matches, onNavigateToCell]);
 
@@ -138,78 +162,194 @@ export const NotebookSearch: React.FC<Props> = ({
     goToMatch(currentMatchIndex - 1);
   }, [currentMatchIndex, goToMatch]);
 
+  // Replace current match
+  const handleReplace = useCallback(() => {
+    if (matches.length === 0 || !onReplace) return;
+
+    const match = matches[currentMatchIndex];
+    onReplace(match.cellId, match.startIndex, match.endIndex, replaceText);
+
+    // Re-focus search input after replace
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+    });
+  }, [matches, currentMatchIndex, replaceText, onReplace]);
+
+  // Replace all in current cell
+  const handleReplaceAllInCell = useCallback(() => {
+    if (matches.length === 0 || !onReplaceAllInCell) return;
+
+    const currentCellId = matches[currentMatchIndex]?.cellId;
+    if (currentCellId) {
+      onReplaceAllInCell(currentCellId, query, replaceText, caseSensitive);
+    }
+    setShowReplaceAllMenu(false);
+
+    // Re-focus search input
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+    });
+  }, [matches, currentMatchIndex, query, replaceText, caseSensitive, onReplaceAllInCell]);
+
+  // Replace all in notebook
+  const handleReplaceAllInNotebook = useCallback(() => {
+    if (!query || !onReplaceAllInNotebook) return;
+
+    onReplaceAllInNotebook(query, replaceText, caseSensitive);
+    setShowReplaceAllMenu(false);
+
+    // Re-focus search input
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+    });
+  }, [query, replaceText, caseSensitive, onReplaceAllInNotebook]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
       onClose();
-    } else if (e.key === 'Enter') {
+    } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
       if (e.shiftKey) {
         goToPrevMatch();
       } else {
         goToNextMatch();
       }
+    } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      // Ctrl/Cmd+Enter to replace
+      e.preventDefault();
+      handleReplace();
     }
   };
+
+  // Get count of matches in current cell
+  const currentCellMatchCount = matches.filter(m => m.cellId === matches[currentMatchIndex]?.cellId).length;
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed top-16 right-4 z-50 bg-white rounded-lg shadow-xl border border-slate-200 p-2 flex items-center gap-2">
-      <Search className="w-4 h-4 text-slate-400" />
-      <input
-        ref={inputRef}
-        type="text"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder="Search in notebook..."
-        className="w-48 px-2 py-1 text-sm border-none outline-none bg-transparent"
-        autoFocus
-      />
+    <div className="fixed top-16 right-4 z-50 bg-white rounded-lg shadow-xl border border-slate-200 p-2 flex flex-col gap-2">
+      {/* Search row */}
+      <div className="flex items-center gap-2">
+        <Search className="w-4 h-4 text-slate-400 flex-shrink-0" />
+        <input
+          ref={searchInputRef}
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Search in notebook..."
+          className="w-48 px-2 py-1 text-sm border-none outline-none bg-transparent"
+          autoFocus
+        />
 
-      {query && (
-        <span className="text-xs text-slate-500 min-w-[60px]">
-          {matches.length > 0
-            ? `${currentMatchIndex + 1} of ${matches.length}`
-            : 'No matches'}
-        </span>
-      )}
+        {query && (
+          <span className="text-xs text-slate-500 min-w-[60px]">
+            {matches.length > 0
+              ? `${currentMatchIndex + 1} of ${matches.length}`
+              : 'No matches'}
+          </span>
+        )}
 
-      <div className="flex items-center border-l border-slate-200 pl-2 gap-1">
+        <div className="flex items-center border-l border-slate-200 pl-2 gap-1">
+          <button
+            onClick={goToPrevMatch}
+            disabled={matches.length === 0}
+            className="p-1 hover:bg-slate-100 rounded disabled:opacity-30"
+            title="Previous (Shift+Enter)"
+          >
+            <ChevronUp className="w-4 h-4" />
+          </button>
+          <button
+            onClick={goToNextMatch}
+            disabled={matches.length === 0}
+            className="p-1 hover:bg-slate-100 rounded disabled:opacity-30"
+            title="Next (Enter)"
+          >
+            <ChevronDown className="w-4 h-4" />
+          </button>
+        </div>
+
         <button
-          onClick={goToPrevMatch}
-          disabled={matches.length === 0}
-          className="p-1 hover:bg-slate-100 rounded disabled:opacity-30"
-          title="Previous (Shift+Enter)"
+          onClick={() => setCaseSensitive(!caseSensitive)}
+          className={`px-1.5 py-0.5 text-xs font-mono rounded ${
+            caseSensitive ? 'bg-blue-100 text-blue-700' : 'text-slate-400 hover:bg-slate-100'
+          }`}
+          title="Case sensitive"
         >
-          <ChevronUp className="w-4 h-4" />
+          Aa
         </button>
+
         <button
-          onClick={goToNextMatch}
-          disabled={matches.length === 0}
-          className="p-1 hover:bg-slate-100 rounded disabled:opacity-30"
-          title="Next (Enter)"
+          onClick={() => setShowReplace(!showReplace)}
+          className={`p-1 rounded ${showReplace ? 'bg-blue-100 text-blue-700' : 'text-slate-400 hover:bg-slate-100'}`}
+          title="Toggle replace"
         >
-          <ChevronDown className="w-4 h-4" />
+          <Replace className="w-4 h-4" />
+        </button>
+
+        <button
+          onClick={onClose}
+          className="p-1 hover:bg-slate-100 rounded"
+          title="Close (Esc)"
+        >
+          <X className="w-4 h-4 text-slate-400" />
         </button>
       </div>
 
-      <button
-        onClick={() => setCaseSensitive(!caseSensitive)}
-        className={`px-1.5 py-0.5 text-xs font-mono rounded ${
-          caseSensitive ? 'bg-blue-100 text-blue-700' : 'text-slate-400 hover:bg-slate-100'
-        }`}
-        title="Case sensitive"
-      >
-        Aa
-      </button>
+      {/* Replace row */}
+      {showReplace && (
+        <div className="flex items-center gap-2 pl-6">
+          <input
+            ref={replaceInputRef}
+            type="text"
+            value={replaceText}
+            onChange={(e) => setReplaceText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Replace with..."
+            className="w-48 px-2 py-1 text-sm border border-slate-200 rounded outline-none focus:border-blue-400"
+          />
 
-      <button
-        onClick={onClose}
-        className="p-1 hover:bg-slate-100 rounded"
-        title="Close (Esc)"
-      >
-        <X className="w-4 h-4 text-slate-400" />
-      </button>
+          <button
+            onClick={handleReplace}
+            disabled={matches.length === 0}
+            className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded disabled:opacity-30"
+            title="Replace (Ctrl+Enter)"
+          >
+            Replace
+          </button>
+
+          <div className="relative" ref={replaceAllMenuRef}>
+            <button
+              onClick={() => setShowReplaceAllMenu(!showReplaceAllMenu)}
+              disabled={matches.length === 0}
+              className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded disabled:opacity-30 flex items-center gap-1"
+              title="Replace all options"
+            >
+              <ReplaceAll className="w-3 h-3" />
+              Replace All
+              <ChevronDown className="w-3 h-3" />
+            </button>
+
+            {showReplaceAllMenu && (
+              <div className="absolute top-full left-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[160px] z-10">
+                <button
+                  onClick={handleReplaceAllInCell}
+                  className="w-full px-3 py-1.5 text-xs text-left hover:bg-slate-100 flex items-center justify-between"
+                >
+                  <span>In this cell</span>
+                  <span className="text-slate-400">({currentCellMatchCount})</span>
+                </button>
+                <button
+                  onClick={handleReplaceAllInNotebook}
+                  className="w-full px-3 py-1.5 text-xs text-left hover:bg-slate-100 flex items-center justify-between"
+                >
+                  <span>In all cells</span>
+                  <span className="text-slate-400">({matches.length})</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

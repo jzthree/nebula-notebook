@@ -557,7 +557,7 @@ export const Notebook: React.FC = () => {
         virtuosoRef.current?.scrollToIndex({
           index: insertIndex,
           align: 'start',
-          behavior: 'auto',
+          behavior: 'smooth',
           offset: -80
         });
       });
@@ -681,7 +681,7 @@ export const Notebook: React.FC = () => {
         virtuosoRef.current?.scrollToIndex({
           index: nextIndex,
           align: 'start',
-          behavior: 'auto',
+          behavior: 'smooth',
           offset: -80
         });
       });
@@ -697,7 +697,7 @@ export const Notebook: React.FC = () => {
     virtuosoRef.current?.scrollToIndex({
       index: cellIndex,
       align: 'start',    // Start alignment ensures code editor (at top of cell) is visible
-      behavior: 'auto',  // Instant scroll for fast search navigation
+      behavior: 'smooth',
       offset: -80        // Small offset so cell isn't flush with top (accounts for header)
     });
   }, []);
@@ -716,6 +716,48 @@ export const Notebook: React.FC = () => {
     setIsSearchOpen(false);
     setSearchQuery(null);
   }, []);
+
+  // Replace a single match in a cell
+  const handleReplace = useCallback((cellId: string, startIndex: number, endIndex: number, replacement: string) => {
+    const cell = cells.find(c => c.id === cellId);
+    if (!cell) return;
+
+    const newContent = cell.content.slice(0, startIndex) + replacement + cell.content.slice(endIndex);
+    updateContent(cellId, newContent);
+  }, [cells, updateContent]);
+
+  // Replace all matches in a specific cell
+  const handleReplaceAllInCell = useCallback((cellId: string, query: string, replacement: string, caseSensitive: boolean) => {
+    const cell = cells.find(c => c.id === cellId);
+    if (!cell) return;
+
+    let newContent: string;
+    if (caseSensitive) {
+      newContent = cell.content.split(query).join(replacement);
+    } else {
+      // Case-insensitive replace
+      const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      newContent = cell.content.replace(regex, replacement);
+    }
+
+    if (newContent !== cell.content) {
+      updateContent(cellId, newContent);
+    }
+  }, [cells, updateContent]);
+
+  // Replace all matches in the entire notebook
+  const handleReplaceAllInNotebook = useCallback((query: string, replacement: string, caseSensitive: boolean) => {
+    saveCheckpoint(); // Save undo state before bulk replace
+
+    const regex = caseSensitive
+      ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')
+      : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+
+    setCells(prev => prev.map(cell => {
+      const newContent = cell.content.replace(regex, replacement);
+      return newContent !== cell.content ? { ...cell, content: newContent } : cell;
+    }));
+  }, [saveCheckpoint, setCells]);
 
   const handleReset = async () => {
     const confirmed = await confirm({
@@ -1193,6 +1235,9 @@ export const Notebook: React.FC = () => {
         onClose={handleSearchClose}
         onNavigateToCell={navigateToCell}
         onSearchChange={handleSearchChange}
+        onReplace={handleReplace}
+        onReplaceAllInCell={handleReplaceAllInCell}
+        onReplaceAllInNotebook={handleReplaceAllInNotebook}
       />
     </div>
   );
