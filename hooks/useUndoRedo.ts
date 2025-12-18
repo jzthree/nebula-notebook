@@ -17,12 +17,12 @@ interface UseUndoRedoResult {
   resetHistory: (initialCells: Cell[]) => void;
 }
 
-// Helper to strip heavy outputs to save memory
+// Helper to clean cells for history storage
+// We preserve outputs now since losing them on undo is confusing
 const cleanForHistory = (cells: Cell[]): Cell[] => {
   return cells.map(c => ({
     ...c,
-    outputs: [], // We do not store outputs in history to keep it lightweight
-    isExecuting: false
+    isExecuting: false  // Only strip execution state, keep outputs
   }));
 };
 
