@@ -4,7 +4,8 @@ Multi-Provider LLM Service - Supports Gemini, OpenAI, and Anthropic
 import os
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from openai import OpenAI
 from anthropic import Anthropic
 
@@ -34,14 +35,13 @@ class LLMService:
         self._openai_client = None
         self._anthropic_client = None
 
-    def _get_google_client(self):
+    def _get_google_client(self) -> genai.Client:
         """Get or create Google GenAI client"""
         if self._google_client is None:
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key:
                 raise ValueError("GEMINI_API_KEY not found in environment")
-            genai.configure(api_key=api_key)
-            self._google_client = genai
+            self._google_client = genai.Client(api_key=api_key)
         return self._google_client
 
     def _get_openai_client(self) -> OpenAI:
@@ -114,27 +114,26 @@ class LLMService:
     ) -> str:
         """Generate using Google Gemini"""
         client = self._get_google_client()
-        model = client.GenerativeModel(
-            model_name=config.model,
-            system_instruction=system_prompt
-        )
 
         # Build content parts
-        parts = [prompt]
+        contents = [prompt]
 
         if images:
+            import base64
             for img in images:
-                parts.append({
-                    "mime_type": img.get("mime_type", "image/png"),
-                    "data": img["data"]
-                })
+                contents.append(types.Part.from_bytes(
+                    data=base64.b64decode(img["data"]),
+                    mime_type=img.get("mime_type", "image/png")
+                ))
 
-        response = model.generate_content(
-            parts,
-            generation_config={
-                "temperature": config.temperature,
-                "max_output_tokens": config.max_tokens
-            }
+        response = client.models.generate_content(
+            model=config.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=config.temperature,
+                max_output_tokens=config.max_tokens
+            )
         )
 
         return response.text
@@ -252,42 +251,39 @@ class LLMService:
     ) -> str:
         """Chat using Google Gemini"""
         client = self._get_google_client()
-        model = client.GenerativeModel(
-            model_name=config.model,
-            system_instruction=system_prompt
-        )
 
         # Convert history to Gemini format
         contents = []
         for msg in history:
             role = "user" if msg["role"] == "user" else "model"
-            contents.append({
-                "role": role,
-                "parts": [{"text": msg["content"]}]
-            })
+            contents.append(types.Content(
+                role=role,
+                parts=[types.Part.from_text(msg["content"])]
+            ))
 
         # Add current message with images
-        current_parts = [{"text": message}]
+        current_parts = [types.Part.from_text(message)]
         if images:
+            import base64
             for img in images:
-                current_parts.append({
-                    "inline_data": {
-                        "mime_type": img.get("mime_type", "image/png"),
-                        "data": img["data"]
-                    }
-                })
+                current_parts.append(types.Part.from_bytes(
+                    data=base64.b64decode(img["data"]),
+                    mime_type=img.get("mime_type", "image/png")
+                ))
 
-        contents.append({
-            "role": "user",
-            "parts": current_parts
-        })
+        contents.append(types.Content(
+            role="user",
+            parts=current_parts
+        ))
 
-        response = model.generate_content(
-            contents,
-            generation_config={
-                "temperature": config.temperature,
-                "max_output_tokens": config.max_tokens
-            }
+        response = client.models.generate_content(
+            model=config.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=config.temperature,
+                max_output_tokens=config.max_tokens
+            )
         )
 
         return response.text
