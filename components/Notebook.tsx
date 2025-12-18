@@ -608,6 +608,17 @@ export const Notebook: React.FC = () => {
     });
   }, []);
 
+  // Handle search query changes for highlighting
+  const handleSearchChange = useCallback((query: string, caseSensitive: boolean) => {
+    setSearchQuery(query ? { query, caseSensitive } : null);
+  }, []);
+
+  // Handle search close
+  const handleSearchClose = useCallback(() => {
+    setIsSearchOpen(false);
+    setSearchQuery(null);
+  }, []);
+
   const handleReset = () => {
     if (confirm("Resetting will clear all cells in this notebook. Continue?")) {
       pushState([INITIAL_CELL]);
@@ -1046,14 +1057,9 @@ export const Notebook: React.FC = () => {
       <NotebookSearch
         cells={cells}
         isOpen={isSearchOpen}
-        onClose={() => {
-          setIsSearchOpen(false);
-          setSearchQuery(null);
-        }}
+        onClose={handleSearchClose}
         onNavigateToCell={navigateToCell}
-        onSearchChange={(query, caseSensitive) => {
-          setSearchQuery(query ? { query, caseSensitive } : null);
-        }}
+        onSearchChange={handleSearchChange}
       />
     </div>
   );

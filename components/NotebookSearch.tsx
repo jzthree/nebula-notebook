@@ -41,7 +41,8 @@ export const NotebookSearch: React.FC<Props> = ({
   // Notify parent of search query changes for highlighting
   useEffect(() => {
     onSearchChange?.(query, caseSensitive);
-  }, [query, caseSensitive, onSearchChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, caseSensitive]); // Intentionally exclude onSearchChange to prevent infinite loops
 
   // Search through cells
   useEffect(() => {
