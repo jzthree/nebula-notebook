@@ -17,12 +17,24 @@ interface UseUndoRedoResult {
   resetHistory: (initialCells: Cell[]) => void;
 }
 
-// Helper to clean cells for history storage
-// We preserve outputs now since losing them on undo is confusing
+// Helper to strip outputs for history storage (saves memory for infinite undo)
 const cleanForHistory = (cells: Cell[]): Cell[] => {
   return cells.map(c => ({
     ...c,
-    isExecuting: false  // Only strip execution state, keep outputs
+    outputs: [],
+    isExecuting: false
+  }));
+};
+
+// Helper to merge outputs from current state into restored state
+// This preserves outputs for cells that still exist after undo/redo
+const mergeOutputs = (restoredCells: Cell[], currentCells: Cell[]): Cell[] => {
+  const outputMap = new Map<string, Cell['outputs']>();
+  currentCells.forEach(c => outputMap.set(c.id, c.outputs));
+
+  return restoredCells.map(c => ({
+    ...c,
+    outputs: outputMap.get(c.id) || c.outputs || []
   }));
 };
 
@@ -61,9 +73,13 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     // Push current "present" to future
     const cleanPresent = cleanForHistory(present);
 
+    // Merge outputs from current state into restored state
+    // This preserves outputs for cells that still exist
+    const restoredWithOutputs = mergeOutputs(previous, present);
+
     setPast(newPast);
     setFuture([cleanPresent, ...future]);
-    setPresent(previous); // Previous state from history (already clean)
+    setPresent(restoredWithOutputs);
   }, [past, present, future]);
 
   // 2. Redo
@@ -75,9 +91,12 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
 
     const cleanPresent = cleanForHistory(present);
 
+    // Merge outputs from current state into restored state
+    const restoredWithOutputs = mergeOutputs(next, present);
+
     setPast([...past, cleanPresent]);
     setFuture(newFuture);
-    setPresent(next);
+    setPresent(restoredWithOutputs);
   }, [past, present, future]);
 
   // 3. Set Cells (No History) - used for typing characters
