@@ -213,7 +213,7 @@ const CellComponent: React.FC<Props> = ({
         </div>
 
         {/* Editor Area */}
-        <div className="p-0" onClick={(e) => e.stopPropagation()}>
+        <div className="p-0" onClick={(e) => { e.stopPropagation(); onClick(cell.id); }}>
           <CodeEditor
             value={cell.content}
             onChange={(value) => onUpdate(cell.id, value)}

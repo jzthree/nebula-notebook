@@ -161,8 +161,17 @@ export const CodeEditor: React.FC<Props> = ({
 
   // Focus editor when shouldFocus becomes true
   useEffect(() => {
-    if (shouldFocus && editorRef.current?.view) {
-      editorRef.current.view.focus();
+    if (shouldFocus) {
+      // Use requestAnimationFrame to ensure the editor is fully rendered
+      const focusEditor = () => {
+        if (editorRef.current?.view) {
+          editorRef.current.view.focus();
+        } else {
+          // Editor not ready yet, try again next frame
+          requestAnimationFrame(focusEditor);
+        }
+      };
+      requestAnimationFrame(focusEditor);
     }
   }, [shouldFocus]);
 
