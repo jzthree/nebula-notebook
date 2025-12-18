@@ -2,8 +2,8 @@ import React, { useCallback, useMemo } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { markdown } from '@codemirror/lang-markdown';
-import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate } from '@codemirror/view';
-import { RangeSetBuilder } from '@codemirror/state';
+import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, keymap } from '@codemirror/view';
+import { RangeSetBuilder, Prec } from '@codemirror/state';
 
 interface CurrentMatch {
   cellId: string;
@@ -169,14 +169,16 @@ export const CodeEditor: React.FC<Props> = ({
       language === 'python' ? python() : markdown(),
     ];
 
-    // Add keyboard handler if provided
+    // Add keyboard handler if provided - use Prec.highest to override default keymaps
     if (onKeyDown) {
       exts.push(
-        EditorView.domEventHandlers({
-          keydown: (event) => {
-            return onKeyDown(event);
-          },
-        })
+        Prec.highest(
+          EditorView.domEventHandlers({
+            keydown: (event) => {
+              return onKeyDown(event);
+            },
+          })
+        )
       );
     }
 

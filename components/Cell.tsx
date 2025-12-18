@@ -63,6 +63,13 @@ const CellComponent: React.FC<Props> = ({
 
   // Handle keyboard shortcuts in the editor - uses refs so callback is stable
   const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
+    // Escape: Exit edit mode (blur the editor)
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      (event.target as HTMLElement)?.blur();
+      return true;
+    }
+
     // Cmd/Ctrl+S: Save
     if ((event.metaKey || event.ctrlKey) && event.key === 's') {
       event.preventDefault();
@@ -73,6 +80,8 @@ const CellComponent: React.FC<Props> = ({
     // Shift+Enter: run and advance to next cell
     if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
+      // Blur current editor so focus can move to next cell
+      (event.target as HTMLElement)?.blur();
       onRunAndAdvanceRef.current(cell.id);
       return true;
     }
@@ -126,6 +135,7 @@ const CellComponent: React.FC<Props> = ({
 
   return (
     <div
+      data-cell-id={cell.id}
       onClick={() => onClick(cell.id)}
       className={`group relative mb-3 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md min-h-[220px]
         ${hasError ? 'border-red-200' : isActive ? 'border-blue-400 ring-1 ring-blue-100' : 'border-slate-200 hover:border-slate-300'}

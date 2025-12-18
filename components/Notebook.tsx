@@ -24,6 +24,15 @@ import { KernelManager } from './KernelManager';
 import { NotebookSearch } from './NotebookSearch';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
 
+// Initial cell for reset
+const INITIAL_CELL: Cell = {
+  id: crypto.randomUUID(),
+  type: 'code',
+  content: '',
+  outputs: [],
+  isExecuting: false
+};
+
 // Helper to extract filename from path
 function getFilenameFromPath(filePath: string): string {
   const parts = filePath.split('/');
@@ -88,6 +97,9 @@ export const Notebook: React.FC = () => {
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [showRecoveryBanner, setShowRecoveryBanner] = useState(false);
   const [recoveryData, setRecoveryData] = useState<{ cells: Cell[]; timestamp: number } | null>(null);
+
+  // Clipboard for cut/copy/paste cells
+  const [cellClipboard, setCellClipboard] = useState<{ cell: Cell; isCut: boolean } | null>(null);
 
   // Virtuoso Handle for programmatic scrolling
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -281,11 +293,89 @@ export const Notebook: React.FC = () => {
 
       // Reset 'd' tracking on any other key
       lastKeyRef.current = null;
+
+      // Jupyter-style shortcuts (command mode only - not in input fields)
+      const currentIndex = activeCellId ? cells.findIndex(c => c.id === activeCellId) : -1;
+
+      // A - Insert cell above
+      if (e.key === 'a') {
+        e.preventDefault();
+        const idx = currentIndex !== -1 ? currentIndex : 0;
+        addCell('code', '', idx, 'above');
+        return;
+      }
+
+      // B - Insert cell below
+      if (e.key === 'b') {
+        e.preventDefault();
+        const idx = currentIndex !== -1 ? currentIndex : cells.length - 1;
+        addCell('code', '', idx, 'below');
+        return;
+      }
+
+      // M - Convert cell to Markdown
+      if (e.key === 'm' && activeCellId) {
+        e.preventDefault();
+        changeCellType(activeCellId, 'markdown');
+        return;
+      }
+
+      // Y - Convert cell to Code
+      if (e.key === 'y' && activeCellId) {
+        e.preventDefault();
+        changeCellType(activeCellId, 'code');
+        return;
+      }
+
+      // X - Cut cell
+      if (e.key === 'x' && activeCellId) {
+        e.preventDefault();
+        const cellToCut = cells.find(c => c.id === activeCellId);
+        if (cellToCut) {
+          setCellClipboard({ cell: { ...cellToCut }, isCut: true });
+          deleteCell(activeCellId);
+        }
+        return;
+      }
+
+      // C - Copy cell
+      if (e.key === 'c' && activeCellId) {
+        e.preventDefault();
+        const cellToCopy = cells.find(c => c.id === activeCellId);
+        if (cellToCopy) {
+          setCellClipboard({ cell: { ...cellToCopy }, isCut: false });
+        }
+        return;
+      }
+
+      // V - Paste cell below, Shift+V - Paste cell above
+      if (e.key === 'v' && cellClipboard) {
+        e.preventDefault();
+        const position = e.shiftKey ? 'above' : 'below';
+        const idx = currentIndex !== -1 ? currentIndex : cells.length - 1;
+        addCell(cellClipboard.cell.type, cellClipboard.cell.content, idx, position);
+        // Clear clipboard if it was a cut operation
+        if (cellClipboard.isCut) {
+          setCellClipboard(null);
+        }
+        return;
+      }
+
+      // Enter - Focus active cell editor (enter edit mode)
+      if (e.key === 'Enter' && activeCellId) {
+        e.preventDefault();
+        // Find and focus the CodeMirror editor for the active cell
+        const cellElement = document.querySelector(`[data-cell-id="${activeCellId}"] .cm-content`);
+        if (cellElement instanceof HTMLElement) {
+          cellElement.focus();
+        }
+        return;
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, cells, activeCellId]);
+  }, [undo, redo, cells, activeCellId, cellClipboard]);
 
   const refreshFileList = async () => {
     const updatedFiles = await getFiles();
@@ -487,7 +577,7 @@ export const Notebook: React.FC = () => {
 
   // --- CELL OPERATIONS ---
 
-  const addCell = (type: CellType = 'code', content: string = '', afterIndex?: number) => {
+  const addCell = (type: CellType = 'code', content: string = '', atIndex?: number, position: 'above' | 'below' = 'below') => {
     const newCell: Cell = {
       id: crypto.randomUUID(),
       type,
@@ -497,8 +587,9 @@ export const Notebook: React.FC = () => {
     };
 
     const newCells = [...cells];
-    if (afterIndex !== undefined && afterIndex >= 0 && afterIndex < cells.length) {
-      newCells.splice(afterIndex + 1, 0, newCell);
+    if (atIndex !== undefined && atIndex >= 0 && atIndex < cells.length) {
+      const insertIndex = position === 'above' ? atIndex : atIndex + 1;
+      newCells.splice(insertIndex, 0, newCell);
     } else {
       newCells.push(newCell);
     }

@@ -26,10 +26,9 @@ npm run preview                # Preview production build
 ## Architecture
 
 **Frontend (React 19 + TypeScript + Vite)**
-- `components/NotebookContainer.tsx` - Multi-tab orchestrator: tab management, per-notebook kernel sessions
-- `components/NotebookEditor.tsx` - Single notebook editor: cell state, execution queue, autosave
-- `components/TabBar.tsx` - Tab UI for switching between open notebooks
-- `components/Cell.tsx` - Individual cell editor with execution controls
+- `components/Notebook.tsx` - Main notebook component: file management, kernel sessions, cell state, execution queue, autosave
+- `components/Cell.tsx` - Individual cell editor with execution controls and keyboard shortcuts
+- `components/CodeEditor.tsx` - CodeMirror 6 editor with syntax highlighting
 - `components/VirtualCellList.tsx` - React Virtuoso for large notebook performance
 - `components/AIChatSidebar.tsx` - AI chat interface (per-notebook instance)
 - `components/ErrorBoundary.tsx` - React error boundary for graceful error handling
@@ -112,20 +111,37 @@ cd server && pytest   # Run backend tests
 
 ## Keyboard Shortcuts
 
-### Cell Execution
+The notebook supports Jupyter-style keyboard shortcuts with two modes:
+- **Edit Mode**: When editing a cell (cursor in editor)
+- **Command Mode**: When not editing (click outside cell or press Escape)
+
+### Cell Execution (Edit Mode)
 | Shortcut | Action |
 |----------|--------|
 | `Shift+Enter` | Run cell and advance to next (creates new cell if at end) |
 | `Ctrl/Cmd+Enter` | Run current cell only |
+| `Escape` | Exit edit mode (enter command mode) |
 
-### Cell Navigation
+### Command Mode (when not editing)
 | Shortcut | Action |
 |----------|--------|
-| `Arrow Up/Down` | Navigate between cells (when not editing) |
+| `Enter` | Enter edit mode (focus cell editor) |
+| `A` | Insert new cell above current |
+| `B` | Insert new cell below current |
+| `M` | Convert cell to Markdown |
+| `Y` | Convert cell to Code |
+| `X` | Cut cell |
+| `C` | Copy cell |
+| `V` | Paste cell below |
+| `Shift+V` | Paste cell above |
 | `dd` | Delete active cell (vim-style, press 'd' twice quickly) |
+| `Arrow Up/Down` | Navigate between cells |
 
-### Global
+### Global (works in both modes)
 | Shortcut | Action |
 |----------|--------|
+| `Ctrl/Cmd+S` | Save notebook |
+| `Ctrl/Cmd+F` | Open search |
 | `Ctrl/Cmd+Z` | Undo |
 | `Ctrl/Cmd+Shift+Z` or `Ctrl/Cmd+Y` | Redo |
+- don't run my server in the background for me as it becomes hard to troubleshoot. let me restart it myself.
