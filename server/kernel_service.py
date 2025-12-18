@@ -35,6 +35,11 @@ class KernelService:
         self._kernels_loading: bool = False
         self._ready: bool = False
 
+    def _normalize_path(self, path: str) -> str:
+        """Normalize a file path for consistent lookup"""
+        from pathlib import Path
+        return str(Path(path).expanduser().resolve())
+
     @property
     def is_ready(self) -> bool:
         """Check if kernel service has completed initial discovery"""
@@ -99,9 +104,10 @@ class KernelService:
             cwd: Working directory for the kernel process
             file_path: The notebook file path (for "one notebook = one kernel")
         """
-        from pathlib import Path
-
         session_id = str(uuid.uuid4())
+
+        # Normalize file path for consistent lookup
+        normalized_file_path = self._normalize_path(file_path) if file_path else None
 
         # Create kernel manager
         km = KernelManager(kernel_name=kernel_name)
@@ -109,8 +115,7 @@ class KernelService:
         # Prepare start_kernel kwargs
         start_kwargs = {}
         if cwd:
-            expanded_cwd = str(Path(cwd).expanduser().resolve())
-            start_kwargs['cwd'] = expanded_cwd
+            start_kwargs['cwd'] = self._normalize_path(cwd)
 
         km.start_kernel(**start_kwargs)
 
@@ -126,14 +131,14 @@ class KernelService:
             kernel_name=kernel_name,
             manager=km,
             client=client,
-            file_path=file_path,
+            file_path=normalized_file_path,
             status="idle"
         )
 
         async with self._lock:
             self.sessions[session_id] = session
-            if file_path:
-                self.file_to_session[file_path] = session_id
+            if normalized_file_path:
+                self.file_to_session[normalized_file_path] = session_id
 
         return session_id
 
@@ -152,9 +157,12 @@ class KernelService:
         """
         from pathlib import Path
 
+        # Normalize path for consistent lookup
+        normalized_path = self._normalize_path(file_path)
+
         # Check if kernel already exists for this file
         async with self._lock:
-            existing_session_id = self.file_to_session.get(file_path)
+            existing_session_id = self.file_to_session.get(normalized_path)
             if existing_session_id and existing_session_id in self.sessions:
                 session = self.sessions[existing_session_id]
                 # Verify kernel is still alive
@@ -162,16 +170,17 @@ class KernelService:
                     return existing_session_id
                 else:
                     # Kernel died, clean up and create new
-                    del self.file_to_session[file_path]
+                    del self.file_to_session[normalized_path]
                     del self.sessions[existing_session_id]
 
         # Create new kernel with notebook's directory as cwd
-        cwd = str(Path(file_path).parent) if file_path else None
-        return await self.start_kernel(kernel_name=kernel_name, cwd=cwd, file_path=file_path)
+        cwd = str(Path(normalized_path).parent)
+        return await self.start_kernel(kernel_name=kernel_name, cwd=cwd, file_path=normalized_path)
 
     def get_kernel_for_file(self, file_path: str) -> Optional[str]:
         """Get the session_id for a notebook file if one exists"""
-        session_id = self.file_to_session.get(file_path)
+        normalized_path = self._normalize_path(file_path)
+        session_id = self.file_to_session.get(normalized_path)
         if session_id and session_id in self.sessions:
             if self.sessions[session_id].manager.is_alive():
                 return session_id
