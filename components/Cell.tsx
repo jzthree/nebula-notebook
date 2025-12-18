@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
-import { PythonHighlighter } from './PythonHighlighter';
+import { CodeEditor } from './CodeEditor';
 import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Sparkles } from 'lucide-react';
 import { generateCellContent, fixCellError, getSettings } from '../services/llmService';
 
@@ -38,24 +38,32 @@ export const Cell: React.FC<Props> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [isFixing, setIsFixing] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-resize textarea (also trigger when entering edit mode)
-  // useLayoutEffect ensures this runs after DOM update but before paint
-  useLayoutEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
+  // Handle keyboard shortcuts in the editor
+  const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
+    // Cmd/Ctrl+S: Save
+    if ((event.metaKey || event.ctrlKey) && event.key === 's') {
+      event.preventDefault();
+      onSave?.();
+      return true;
     }
-  }, [cell.content, isEditing]);
 
-  // Auto-focus textarea when cell becomes active or enters edit mode
-  useEffect(() => {
-    if ((isActive || isEditing) && textareaRef.current) {
-      textareaRef.current.focus();
+    // Shift+Enter: run and advance to next cell
+    if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      onRunAndAdvance(cell.id);
+      return true;
     }
-  }, [isActive, isEditing]);
+
+    // Ctrl/Cmd+Enter: run current cell only
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
+      event.preventDefault();
+      onRun(cell.id);
+      return true;
+    }
+
+    return false; // Let CodeMirror handle other keys
+  }, [cell.id, onRun, onRunAndAdvance, onSave]);
 
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim()) return;
@@ -89,28 +97,6 @@ export const Cell: React.FC<Props> = ({
       alert('Could not fix code automatically.');
     } finally {
       setIsFixing(false);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Cmd/Ctrl+S: Save
-    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-      e.preventDefault();
-      onSave?.();
-      return;
-    }
-
-    if (e.key === 'Enter') {
-      // Shift+Enter: run and advance to next cell
-      if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault();
-        onRunAndAdvance(cell.id);
-      }
-      // Ctrl/Cmd+Enter: run current cell only
-      else if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
-        e.preventDefault();
-        onRun(cell.id);
-      }
     }
   };
 
@@ -203,29 +189,14 @@ export const Cell: React.FC<Props> = ({
         </div>
 
         {/* Editor Area */}
-        <div className="p-0">
-          {cell.type === 'code' && !isEditing && cell.content ? (
-            // Highlighted view (click to edit)
-            <div
-              onClick={() => setIsEditing(true)}
-              className="w-full min-h-[4rem] p-4 cursor-text"
-            >
-              <PythonHighlighter code={cell.content} />
-            </div>
-          ) : (
-            // Edit mode (textarea)
-            <textarea
-              ref={textareaRef}
-              value={cell.content}
-              onChange={(e) => onUpdate(cell.id, e.target.value)}
-              onKeyDown={handleKeyDown}
-              onFocus={() => setIsEditing(true)}
-              onBlur={() => setIsEditing(false)}
-              placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
-              className={`w-full min-h-[4rem] p-4 bg-transparent outline-none resize-none font-mono text-sm leading-6 ${cell.type === 'code' ? 'text-slate-800' : 'text-slate-600 font-sans'}`}
-              spellCheck={false}
-            />
-          )}
+        <div className="p-0" onClick={(e) => e.stopPropagation()}>
+          <CodeEditor
+            value={cell.content}
+            onChange={(value) => onUpdate(cell.id, value)}
+            language={cell.type === 'code' ? 'python' : 'markdown'}
+            onKeyDown={handleEditorKeyDown}
+            placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
+          />
         </div>
 
         {/* Output Area */}
