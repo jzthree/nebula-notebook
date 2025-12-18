@@ -1,9 +1,39 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Cell } from '../types';
 
-const AUTOSAVE_DELAY = 1000; // 1 second debounce
+// Dynamic autosave delay based on notebook file size
+const MIN_AUTOSAVE_DELAY = 1000;   // 1 second minimum
+const MAX_AUTOSAVE_DELAY = 60000;  // 60 seconds maximum
+
 const BACKUP_KEY_PREFIX = 'nebula-backup-';
 const BACKUP_TIMESTAMP_KEY = 'nebula-backup-timestamp-';
+
+// Calculate autosave delay based on serialized content size
+// Small notebooks (<100KB): 1-2 seconds
+// Medium notebooks (100KB-1MB): 2-5 seconds
+// Large notebooks (1MB-10MB): 5-15 seconds
+// Very large notebooks (10MB-100MB): 15-60 seconds
+function getAutosaveDelay(sizeInBytes: number): number {
+  const sizeInKB = sizeInBytes / 1024;
+  const sizeInMB = sizeInKB / 1024;
+
+  if (sizeInMB >= 100) {
+    // 100MB+ : don't autosave, only manual save
+    return MAX_AUTOSAVE_DELAY;
+  } else if (sizeInMB >= 10) {
+    // 10-100MB: 15-60 seconds (scale linearly)
+    return Math.min(15000 + (sizeInMB - 10) * 500, MAX_AUTOSAVE_DELAY);
+  } else if (sizeInMB >= 1) {
+    // 1-10MB: 5-15 seconds
+    return 5000 + (sizeInMB - 1) * 1111;
+  } else if (sizeInKB >= 100) {
+    // 100KB-1MB: 2-5 seconds
+    return 2000 + (sizeInKB - 100) * 3.33;
+  } else {
+    // <100KB: 1-2 seconds
+    return MIN_AUTOSAVE_DELAY + sizeInKB * 10;
+  }
+}
 
 export interface AutosaveStatus {
   status: 'saved' | 'saving' | 'unsaved' | 'error';
@@ -26,14 +56,20 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedContentRef = useRef<string>('');
   const isSavingRef = useRef(false);
+  const pendingSaveRef = useRef(false);  // Track if save needed after current save completes
 
-  // Serialize cells for comparison
+  // Serialize cells for comparison (includes outputs to trigger save after execution)
   const serializeCells = useCallback((cells: Cell[]) => {
     return JSON.stringify(cells.map(c => ({
       id: c.id,
       type: c.type,
       content: c.content,
-      // Don't include outputs/execution state in comparison
+      // Include outputs so autosave triggers after cell execution
+      outputs: c.outputs?.map(o => ({
+        id: o.id,
+        type: o.type,
+        content: o.content,
+      })),
     })));
   }, []);
 
@@ -87,7 +123,13 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
 
   // Perform the actual save
   const performSave = useCallback(async () => {
-    if (!fileId || !enabled || isSavingRef.current) return;
+    if (!fileId || !enabled) return;
+
+    // If already saving, mark that we need another save after current completes
+    if (isSavingRef.current) {
+      pendingSaveRef.current = true;
+      return;
+    }
 
     const currentContent = serializeCells(cells);
     if (currentContent === lastSavedContentRef.current) {
@@ -95,6 +137,7 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
     }
 
     isSavingRef.current = true;
+    pendingSaveRef.current = false;
     setStatus({ status: 'saving', lastSaved: status.lastSaved });
 
     try {
@@ -116,10 +159,17 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
       setStatus({ status: 'error', lastSaved: status.lastSaved });
     } finally {
       isSavingRef.current = false;
+
+      // If changes occurred during save, trigger another save
+      if (pendingSaveRef.current) {
+        pendingSaveRef.current = false;
+        // Use a shorter delay for pending saves since we just finished one
+        setTimeout(() => performSave(), MIN_AUTOSAVE_DELAY);
+      }
     }
   }, [fileId, cells, enabled, onSave, serializeCells, saveBackup, clearBackup, status.lastSaved]);
 
-  // Debounced save effect
+  // Debounced save effect with dynamic delay based on notebook size
   useEffect(() => {
     if (!fileId || !enabled) return;
 
@@ -136,10 +186,14 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
       clearTimeout(saveTimeoutRef.current);
     }
 
+    // Dynamic delay based on actual content size
+    const contentSize = new Blob([currentContent]).size;
+    const delay = getAutosaveDelay(contentSize);
+
     // Set new timeout for debounced save
     saveTimeoutRef.current = setTimeout(() => {
       performSave();
-    }, AUTOSAVE_DELAY);
+    }, delay);
 
     return () => {
       if (saveTimeoutRef.current) {

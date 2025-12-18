@@ -11,12 +11,15 @@ interface Props {
 
 // Custom Scroller to ensure layout matches previous design (Max width centered)
 const ListContainer = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>((props, ref) => (
-  <div 
-    {...props} 
-    ref={ref} 
-    className="max-w-5xl mx-auto px-4 py-8 pb-32"
+  <div
+    {...props}
+    ref={ref}
+    className="max-w-5xl mx-auto px-4 pt-4"
   />
 ));
+
+// Footer component to add bottom padding so last cell isn't cut off
+const Footer = () => <div className="h-32" />;
 
 export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRef, className }) => {
   return (
@@ -24,14 +27,14 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
       ref={virtuosoRef}
       className={className}
       data={cells}
-      useWindowScroll={false} // We are using a flex container
+      useWindowScroll={false}
       totalCount={cells.length}
       itemContent={(index, cell) => renderCell(cell, index)}
-      overscan={500} // Pre-render more content to reduce white flashes
+      overscan={500}
       components={{
-        List: ListContainer
+        List: ListContainer,
+        Footer
       }}
-      // Ensure smooth scrolling behaviors
       followOutput={false}
       alignToBottom={false}
     />

@@ -28,6 +28,12 @@ from python_discovery import python_discovery
 class StartKernelRequest(BaseModel):
     kernel_name: str = "python3"
     cwd: Optional[str] = None  # Working directory for the kernel
+    file_path: Optional[str] = None  # Notebook file path for "one notebook = one kernel"
+
+
+class GetOrCreateKernelRequest(BaseModel):
+    file_path: str  # The notebook file path
+    kernel_name: str = "python3"
 
 
 class ExecuteCodeRequest(BaseModel):
@@ -125,11 +131,42 @@ async def start_kernel(request: StartKernelRequest):
     try:
         session_id = await kernel_service.start_kernel(
             kernel_name=request.kernel_name,
-            cwd=request.cwd
+            cwd=request.cwd,
+            file_path=request.file_path
         )
         return {"session_id": session_id, "kernel_name": request.kernel_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/kernels/for-file")
+async def get_or_create_kernel_for_file(request: GetOrCreateKernelRequest):
+    """Get existing kernel for a notebook file, or create a new one.
+
+    This implements "one notebook = one kernel" - multiple browser tabs
+    opening the same notebook will share the same kernel.
+    """
+    try:
+        session_id = await kernel_service.get_or_create_kernel(
+            file_path=request.file_path,
+            kernel_name=request.kernel_name
+        )
+        return {
+            "session_id": session_id,
+            "kernel_name": request.kernel_name,
+            "file_path": request.file_path
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/kernels/for-file")
+async def get_kernel_for_file(file_path: str):
+    """Check if a kernel exists for a notebook file"""
+    session_id = kernel_service.get_kernel_for_file(file_path)
+    if session_id:
+        return {"session_id": session_id, "exists": True}
+    return {"session_id": None, "exists": False}
 
 
 @app.delete("/api/kernels/{session_id}")

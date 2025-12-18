@@ -17,6 +17,7 @@ class KernelSession:
     kernel_name: str
     manager: KernelManager
     client: AsyncKernelClient
+    file_path: Optional[str] = None  # The notebook file this kernel is for
     status: str = "idle"
     execution_count: int = 0
 
@@ -26,6 +27,8 @@ class KernelService:
 
     def __init__(self):
         self.sessions: Dict[str, KernelSession] = {}
+        # Map from file_path to session_id for "one notebook = one kernel"
+        self.file_to_session: Dict[str, str] = {}
         self._lock = asyncio.Lock()
 
     def get_available_kernels(self) -> list[dict]:
@@ -47,12 +50,13 @@ class KernelService:
 
         return result
 
-    async def start_kernel(self, kernel_name: str = "python3", cwd: str = None) -> str:
+    async def start_kernel(self, kernel_name: str = "python3", cwd: str = None, file_path: str = None) -> str:
         """Start a new kernel session with optional working directory
 
         Args:
             kernel_name: The kernel to start (e.g., 'python3')
             cwd: Working directory for the kernel process
+            file_path: The notebook file path (for "one notebook = one kernel")
         """
         from pathlib import Path
 
@@ -81,13 +85,56 @@ class KernelService:
             kernel_name=kernel_name,
             manager=km,
             client=client,
+            file_path=file_path,
             status="idle"
         )
 
         async with self._lock:
             self.sessions[session_id] = session
+            if file_path:
+                self.file_to_session[file_path] = session_id
 
         return session_id
+
+    async def get_or_create_kernel(self, file_path: str, kernel_name: str = "python3") -> str:
+        """Get existing kernel for a notebook file, or create a new one.
+
+        This implements "one notebook = one kernel" - multiple browser tabs
+        opening the same notebook will share the same kernel.
+
+        Args:
+            file_path: The notebook file path
+            kernel_name: The kernel to start if creating new
+
+        Returns:
+            session_id of existing or new kernel
+        """
+        from pathlib import Path
+
+        # Check if kernel already exists for this file
+        async with self._lock:
+            existing_session_id = self.file_to_session.get(file_path)
+            if existing_session_id and existing_session_id in self.sessions:
+                session = self.sessions[existing_session_id]
+                # Verify kernel is still alive
+                if session.manager.is_alive():
+                    return existing_session_id
+                else:
+                    # Kernel died, clean up and create new
+                    del self.file_to_session[file_path]
+                    del self.sessions[existing_session_id]
+
+        # Create new kernel with notebook's directory as cwd
+        cwd = str(Path(file_path).parent) if file_path else None
+        return await self.start_kernel(kernel_name=kernel_name, cwd=cwd, file_path=file_path)
+
+    def get_kernel_for_file(self, file_path: str) -> Optional[str]:
+        """Get the session_id for a notebook file if one exists"""
+        session_id = self.file_to_session.get(file_path)
+        if session_id and session_id in self.sessions:
+            if self.sessions[session_id].manager.is_alive():
+                return session_id
+        return None
 
     async def _wait_for_ready(self, client: AsyncKernelClient, timeout: float = 30.0):
         """Wait for kernel to be ready"""
@@ -109,6 +156,9 @@ class KernelService:
         """Stop a kernel session"""
         async with self._lock:
             session = self.sessions.pop(session_id, None)
+            # Also remove from file_to_session mapping
+            if session and session.file_path:
+                self.file_to_session.pop(session.file_path, None)
 
         if session:
             try:

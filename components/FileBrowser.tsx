@@ -16,7 +16,8 @@ import {
   Home,
   Folder,
   ArrowUp,
-  RefreshCw
+  RefreshCw,
+  ExternalLink
 } from 'lucide-react';
 import {
   listDirectory,
@@ -370,6 +371,23 @@ export const FileBrowser: React.FC<Props> = ({
               {!item.isDirectory && editingId !== item.id && (
                 <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                   <div className="flex bg-white shadow-sm rounded border border-slate-200">
+                    {item.extension === '.ipynb' && (
+                      <>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            // Don't encode slashes for readable URLs
+                            const baseUrl = window.location.pathname;
+                            window.open(`${baseUrl}?file=${item.path}`, '_blank');
+                          }}
+                          className="p-1 text-slate-400 hover:text-green-600 hover:bg-green-50"
+                          title="Open in new tab"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                        <div className="w-[1px] bg-slate-200"></div>
+                      </>
+                    )}
                     <button
                       onClick={(e) => startEdit(e, item)}
                       className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50"

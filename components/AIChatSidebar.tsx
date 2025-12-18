@@ -16,10 +16,35 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   cells: Cell[];
+  fileId: string | null;  // Current notebook file ID for per-notebook chat
   onInsertCode: (code: string, targetIndex?: number) => void;
   onEditCell: (index: number, code: string) => void;
   onDeleteCell: (index: number) => void;
 }
+
+const CHAT_STORAGE_PREFIX = 'nebula-chat-';
+
+// Get chat history for a specific notebook
+const getChatHistory = (fileId: string): ChatMessage[] => {
+  try {
+    const stored = localStorage.getItem(CHAT_STORAGE_PREFIX + fileId);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (e) {
+    console.warn('Failed to load chat history:', e);
+  }
+  return [{ role: 'assistant', content: 'Hello! I am Nebula AI. I can generate code, edit cells, or manage your notebook. Try "Edit cell 1 to print hello" or "Delete cell 2".' }];
+};
+
+// Save chat history for a specific notebook
+const saveChatHistory = (fileId: string, messages: ChatMessage[]) => {
+  try {
+    localStorage.setItem(CHAT_STORAGE_PREFIX + fileId, JSON.stringify(messages));
+  } catch (e) {
+    console.warn('Failed to save chat history:', e);
+  }
+};
 
 // Helper to apply a search/replace patch
 const applyPatch = (original: string, patchCode: string): string | null => {
@@ -41,19 +66,43 @@ const applyPatch = (original: string, patchCode: string): string | null => {
   return null;
 };
 
-export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, onInsertCode, onEditCell, onDeleteCell }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'assistant', content: 'Hello! I am Nebula AI. I can generate code, edit cells, or manage your notebook. Try "Edit cell 1 to print hello" or "Delete cell 2".' }
-  ]);
+export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId, onInsertCode, onEditCell, onDeleteCell }) => {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [providers, setProviders] = useState<Record<string, string[]>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lastFileIdRef = useRef<string | null>(null);
 
   // LLM Settings
   const [currentProvider, setCurrentProvider] = useState<LLMProvider>('anthropic');
   const [currentModel, setCurrentModel] = useState<string>('claude-sonnet-4-5-20250929');
+
+  // Load/save chat history when notebook changes
+  useEffect(() => {
+    // Save previous notebook's chat history
+    if (lastFileIdRef.current && lastFileIdRef.current !== fileId) {
+      saveChatHistory(lastFileIdRef.current, messages);
+    }
+
+    // Load new notebook's chat history
+    if (fileId) {
+      const history = getChatHistory(fileId);
+      setMessages(history);
+    } else {
+      setMessages([{ role: 'assistant', content: 'Hello! I am Nebula AI. Open a notebook to start chatting.' }]);
+    }
+
+    lastFileIdRef.current = fileId;
+  }, [fileId]);
+
+  // Save chat history when messages change
+  useEffect(() => {
+    if (fileId && messages.length > 0) {
+      saveChatHistory(fileId, messages);
+    }
+  }, [messages, fileId]);
 
   useEffect(() => {
     // Load settings

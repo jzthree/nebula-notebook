@@ -373,10 +373,17 @@ class FilesystemService:
                 output_type = output.get("type", "")
 
                 if output_type in ["stdout", "stderr"]:
+                    # Preserve newlines in stream output
+                    text_content = output.get("content", "")
+                    if text_content:
+                        text_lines = text_content.split("\n")
+                        text = [line + "\n" for line in text_lines[:-1]] + [text_lines[-1]] if text_lines else []
+                    else:
+                        text = []
                     outputs.append({
                         "output_type": "stream",
                         "name": output_type,
-                        "text": output.get("content", "").split("\n")
+                        "text": text
                     })
                 elif output_type == "image":
                     outputs.append({
@@ -395,16 +402,32 @@ class FilesystemService:
                         "metadata": {}
                     })
                 elif output_type == "error":
+                    # Preserve newlines in traceback
+                    tb_content = output.get("content", "")
+                    if tb_content:
+                        tb_lines = tb_content.split("\n")
+                        traceback = [line + "\n" for line in tb_lines[:-1]] + [tb_lines[-1]] if tb_lines else []
+                    else:
+                        traceback = []
                     outputs.append({
                         "output_type": "error",
                         "ename": "Error",
                         "evalue": "",
-                        "traceback": output.get("content", "").split("\n")
+                        "traceback": traceback
                     })
+
+            # Jupyter format: source is list of strings, each ending with \n except last
+            content = cell.get("content", "")
+            if content:
+                lines = content.split("\n")
+                # Add \n back to all lines except the last
+                source = [line + "\n" for line in lines[:-1]] + [lines[-1]] if lines else []
+            else:
+                source = []
 
             nb_cell = {
                 "cell_type": cell_type,
-                "source": cell.get("content", "").split("\n"),
+                "source": source,
                 "metadata": {}
             }
 

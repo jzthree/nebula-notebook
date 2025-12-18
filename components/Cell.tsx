@@ -45,6 +45,13 @@ export const Cell: React.FC<Props> = ({
     }
   }, [cell.content]);
 
+  // Auto-focus textarea when cell becomes active
+  useEffect(() => {
+    if (isActive && textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, [isActive]);
+
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim()) return;
     setIsAiGenerating(true);
@@ -98,9 +105,9 @@ export const Cell: React.FC<Props> = ({
   const hasError = cell.outputs.some(o => o.type === 'error');
 
   return (
-    <div 
+    <div
       onClick={() => onClick(cell.id)}
-      className={`group relative mb-6 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md 
+      className={`group relative mb-3 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md min-h-[220px]
         ${hasError ? 'border-red-200' : isActive ? 'border-blue-400 ring-1 ring-blue-100' : 'border-slate-200 hover:border-slate-300'}
       `}
     >

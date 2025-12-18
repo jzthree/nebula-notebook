@@ -72,12 +72,16 @@ class KernelService {
    * Start a new kernel session
    * @param kernelName - The kernel to start (e.g., 'python3')
    * @param cwd - Optional working directory for the kernel
+   * @param filePath - Optional file path for "one notebook = one kernel"
    * @returns The session ID
    */
-  async startKernel(kernelName: string = 'python3', cwd?: string): Promise<string> {
-    const body: { kernel_name: string; cwd?: string } = { kernel_name: kernelName };
+  async startKernel(kernelName: string = 'python3', cwd?: string, filePath?: string): Promise<string> {
+    const body: { kernel_name: string; cwd?: string; file_path?: string } = { kernel_name: kernelName };
     if (cwd) {
       body.cwd = cwd;
+    }
+    if (filePath) {
+      body.file_path = filePath;
     }
 
     const response = await fetch(`${API_BASE}/kernels/start`, {
@@ -103,6 +107,49 @@ class KernelService {
 
     // Connect WebSocket
     await this.connectWebSocket(sessionId);
+
+    return sessionId;
+  }
+
+  /**
+   * Get or create a kernel for a notebook file
+   * Implements "one notebook = one kernel" - multiple tabs share the same kernel
+   * @param filePath - The notebook file path
+   * @param kernelName - The kernel to start if creating new
+   * @returns The session ID
+   */
+  async getOrCreateKernelForFile(filePath: string, kernelName: string = 'python3'): Promise<string> {
+    const response = await fetch(`${API_BASE}/kernels/for-file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        file_path: filePath,
+        kernel_name: kernelName
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to get/create kernel');
+    }
+
+    const data = await response.json();
+    const sessionId = data.session_id;
+
+    // Initialize session state if not already connected
+    if (!this.sessions.has(sessionId)) {
+      this.sessions.set(sessionId, {
+        sessionId,
+        ws: null,
+        messageQueue: []
+      });
+
+      // Connect WebSocket
+      await this.connectWebSocket(sessionId);
+    } else if (!this.isConnected(sessionId)) {
+      // Reconnect if disconnected
+      await this.connectWebSocket(sessionId);
+    }
 
     return sessionId;
   }
