@@ -160,11 +160,13 @@ async def get_or_create_kernel_for_file(request: GetOrCreateKernelRequest):
     This implements "one notebook = one kernel" - multiple browser tabs
     opening the same notebook will share the same kernel.
     """
+    print(f"[API] /api/kernels/for-file called with file_path={request.file_path}, kernel_name={request.kernel_name}")
     try:
         session_id = await kernel_service.get_or_create_kernel(
             file_path=request.file_path,
             kernel_name=request.kernel_name
         )
+        print(f"[API] returning session_id={session_id}")
         return {
             "session_id": session_id,
             "kernel_name": request.kernel_name,
