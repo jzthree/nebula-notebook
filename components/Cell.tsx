@@ -5,6 +5,11 @@ import { CodeEditor } from './CodeEditor';
 import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Sparkles } from 'lucide-react';
 import { generateCellContent, fixCellError, getSettings } from '../services/llmService';
 
+interface SearchHighlight {
+  query: string;
+  caseSensitive: boolean;
+}
+
 interface Props {
   cell: ICell;
   index: number;
@@ -18,6 +23,7 @@ interface Props {
   onChangeType: (id: string, type: CellType) => void;
   onClick: (id: string) => void;
   onSave?: () => void;
+  searchHighlight?: SearchHighlight | null;
 }
 
 export const Cell: React.FC<Props> = ({
@@ -33,6 +39,7 @@ export const Cell: React.FC<Props> = ({
   onChangeType,
   onClick,
   onSave,
+  searchHighlight,
 }) => {
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -196,6 +203,7 @@ export const Cell: React.FC<Props> = ({
             language={cell.type === 'code' ? 'python' : 'markdown'}
             onKeyDown={handleEditorKeyDown}
             placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
+            searchHighlight={searchHighlight}
           />
         </div>
 

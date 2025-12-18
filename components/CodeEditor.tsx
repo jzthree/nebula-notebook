@@ -2,7 +2,13 @@ import React, { useCallback, useMemo } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { markdown } from '@codemirror/lang-markdown';
-import { EditorView } from '@codemirror/view';
+import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate } from '@codemirror/view';
+import { RangeSetBuilder } from '@codemirror/state';
+
+interface SearchHighlight {
+  query: string;
+  caseSensitive: boolean;
+}
 
 interface Props {
   value: string;
@@ -11,6 +17,7 @@ interface Props {
   onKeyDown?: (event: KeyboardEvent) => boolean; // Return true to prevent default
   placeholder?: string;
   readOnly?: boolean;
+  searchHighlight?: SearchHighlight | null;
 }
 
 // Light theme that matches our existing style
@@ -61,7 +68,56 @@ const lightTheme = EditorView.theme({
   '.cm-cursor': {
     borderLeftColor: '#1e293b',
   },
+  // Search match highlighting
+  '.cm-searchMatch': {
+    backgroundColor: '#fef08a', // yellow-200
+    borderRadius: '2px',
+  },
 });
+
+// Create search highlight decoration
+const searchHighlightMark = Decoration.mark({ class: 'cm-searchMatch' });
+
+// Create extension for search highlighting
+function createSearchHighlightExtension(query: string, caseSensitive: boolean) {
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+
+      constructor(view: EditorView) {
+        this.decorations = this.buildDecorations(view);
+      }
+
+      update(update: ViewUpdate) {
+        if (update.docChanged || update.viewportChanged) {
+          this.decorations = this.buildDecorations(update.view);
+        }
+      }
+
+      buildDecorations(view: EditorView): DecorationSet {
+        const builder = new RangeSetBuilder<Decoration>();
+
+        if (!query) return builder.finish();
+
+        const doc = view.state.doc.toString();
+        const searchStr = caseSensitive ? query : query.toLowerCase();
+        const searchIn = caseSensitive ? doc : doc.toLowerCase();
+
+        let pos = 0;
+        while (pos < searchIn.length) {
+          const idx = searchIn.indexOf(searchStr, pos);
+          if (idx === -1) break;
+
+          builder.add(idx, idx + query.length, searchHighlightMark);
+          pos = idx + 1;
+        }
+
+        return builder.finish();
+      }
+    },
+    { decorations: (v) => v.decorations }
+  );
+}
 
 export const CodeEditor: React.FC<Props> = ({
   value,
@@ -70,6 +126,7 @@ export const CodeEditor: React.FC<Props> = ({
   onKeyDown,
   placeholder,
   readOnly = false,
+  searchHighlight,
 }) => {
   const extensions = useMemo(() => {
     const exts = [
@@ -89,8 +146,13 @@ export const CodeEditor: React.FC<Props> = ({
       );
     }
 
+    // Add search highlighting if active
+    if (searchHighlight?.query) {
+      exts.push(createSearchHighlightExtension(searchHighlight.query, searchHighlight.caseSensitive));
+    }
+
     return exts;
-  }, [language, onKeyDown]);
+  }, [language, onKeyDown, searchHighlight]);
 
   const handleChange = useCallback(
     (val: string) => {

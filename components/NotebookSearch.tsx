@@ -14,6 +14,7 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   onNavigateToCell: (cellIndex: number, cellId: string) => void;
+  onSearchChange?: (query: string, caseSensitive: boolean) => void;
 }
 
 export const NotebookSearch: React.FC<Props> = ({
@@ -21,6 +22,7 @@ export const NotebookSearch: React.FC<Props> = ({
   isOpen,
   onClose,
   onNavigateToCell,
+  onSearchChange,
 }) => {
   const [query, setQuery] = useState('');
   const [matches, setMatches] = useState<SearchMatch[]>([]);
@@ -35,6 +37,11 @@ export const NotebookSearch: React.FC<Props> = ({
       inputRef.current.select();
     }
   }, [isOpen]);
+
+  // Notify parent of search query changes for highlighting
+  useEffect(() => {
+    onSearchChange?.(query, caseSensitive);
+  }, [query, caseSensitive, onSearchChange]);
 
   // Search through cells
   useEffect(() => {

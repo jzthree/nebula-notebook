@@ -40,6 +40,7 @@ export const Notebook: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isKernelManagerOpen, setIsKernelManagerOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState<{ query: string; caseSensitive: boolean } | null>(null);
 
   // Notebook rename state
   const [isRenamingNotebook, setIsRenamingNotebook] = useState(false);
@@ -986,6 +987,7 @@ export const Notebook: React.FC = () => {
                   onChangeType={changeCellType}
                   onClick={setActiveCellId}
                   onSave={saveNow}
+                  searchHighlight={searchQuery}
                 />
               )}
             />
@@ -1044,8 +1046,14 @@ export const Notebook: React.FC = () => {
       <NotebookSearch
         cells={cells}
         isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
+        onClose={() => {
+          setIsSearchOpen(false);
+          setSearchQuery(null);
+        }}
         onNavigateToCell={navigateToCell}
+        onSearchChange={(query, caseSensitive) => {
+          setSearchQuery(query ? { query, caseSensitive } : null);
+        }}
       />
     </div>
   );
