@@ -14,8 +14,8 @@ const OutputItem: React.FC<{ output: ICellOutput }> = ({ output }) => {
       return <div className="font-mono text-sm text-red-600 bg-red-50 p-2 rounded mb-1 whitespace-pre-wrap">{output.content}</div>;
     case 'error':
       return (
-        <div className="font-mono text-sm text-red-700 bg-red-100 border-l-4 border-red-500 p-2 mb-2 rounded-r overflow-x-auto">
-          <strong>Error:</strong> {output.content}
+        <div className="font-mono text-sm text-red-700 bg-red-100 border-l-4 border-red-500 p-2 mb-2 rounded-r overflow-x-auto whitespace-pre-wrap">
+          {output.content}
         </div>
       );
     case 'image':
