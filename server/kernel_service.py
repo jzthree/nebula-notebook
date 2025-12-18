@@ -279,14 +279,16 @@ class KernelService:
             # Execute the code
             msg_id = session.client.execute(code, store_history=True)
 
-            # Process iopub messages for output
+            # Process iopub messages for output (no timeout - cells can run indefinitely)
             while True:
                 try:
                     msg = await asyncio.get_event_loop().run_in_executor(
                         None,
-                        lambda: session.client.get_iopub_msg(timeout=30)
+                        lambda: session.client.get_iopub_msg(timeout=None)
                     )
-                except:
+                except Exception as e:
+                    # Only break on actual errors, not timeouts
+                    print(f"Error getting iopub message: {e}")
                     break
 
                 msg_type = msg.get('msg_type', '')
