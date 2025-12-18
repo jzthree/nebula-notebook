@@ -240,8 +240,18 @@ class KernelService:
                 client.kernel_info()
                 await asyncio.sleep(0.1)
 
-    async def stop_kernel(self, session_id: str) -> bool:
-        """Stop a kernel session"""
+    async def stop_kernel(self, session_id: str, timeout: float = 5.0) -> bool:
+        """Stop a kernel session with graceful shutdown
+
+        Args:
+            session_id: The kernel session ID
+            timeout: Seconds to wait for graceful shutdown before forcing (default 5.0)
+
+        Returns:
+            True if kernel was stopped successfully
+        """
+        import signal
+
         async with self._lock:
             session = self.sessions.pop(session_id, None)
             # Also remove from file_to_session mapping
@@ -251,7 +261,28 @@ class KernelService:
         if session:
             try:
                 session.client.stop_channels()
-                session.manager.shutdown_kernel(now=True)
+
+                # Graceful shutdown: try SIGTERM first, then force if needed
+                if session.manager.is_alive():
+                    try:
+                        # Try graceful shutdown (SIGTERM)
+                        session.manager.shutdown_kernel(now=False)
+
+                        # Wait for kernel to terminate gracefully
+                        loop = asyncio.get_event_loop()
+                        start_time = loop.time()
+                        while session.manager.is_alive() and (loop.time() - start_time) < timeout:
+                            await asyncio.sleep(0.1)
+
+                        # If still alive after timeout, force kill (SIGKILL)
+                        if session.manager.is_alive():
+                            print(f"Kernel {session_id} did not stop gracefully, forcing shutdown")
+                            session.manager.shutdown_kernel(now=True)
+                    except Exception as e:
+                        # If graceful fails, force it
+                        print(f"Graceful shutdown failed for {session_id}: {e}")
+                        session.manager.shutdown_kernel(now=True)
+
                 # Delete from persistence store
                 self._session_store.delete_session(session_id)
                 return True

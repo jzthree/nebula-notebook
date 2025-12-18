@@ -216,3 +216,39 @@ class TestSessionPersistence:
 
         # Cleanup
         await kernel_service_instance.stop_kernel(session_id)
+
+
+class TestGracefulShutdown:
+    """Test graceful kernel shutdown"""
+
+    @pytest.mark.asyncio
+    async def test_stop_kernel_graceful(self, kernel_service_instance):
+        """Test that stop_kernel shuts down gracefully"""
+        session_id = await kernel_service_instance.start_kernel(kernel_name="python3")
+
+        # Verify kernel is running
+        session = kernel_service_instance.sessions.get(session_id)
+        assert session is not None
+        assert session.manager.is_alive()
+
+        # Stop kernel - should complete successfully
+        result = await kernel_service_instance.stop_kernel(session_id)
+        assert result is True
+
+        # Verify kernel is no longer in sessions
+        assert session_id not in kernel_service_instance.sessions
+
+    @pytest.mark.asyncio
+    async def test_stop_kernel_with_timeout(self, kernel_service_instance):
+        """Test that stop_kernel respects timeout parameter"""
+        session_id = await kernel_service_instance.start_kernel(kernel_name="python3")
+
+        # Stop kernel with explicit timeout
+        result = await kernel_service_instance.stop_kernel(session_id, timeout=2.0)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_stop_kernel_not_found(self, kernel_service_instance):
+        """Test that stop_kernel returns False for non-existent session"""
+        result = await kernel_service_instance.stop_kernel("nonexistent-session-id")
+        assert result is False
