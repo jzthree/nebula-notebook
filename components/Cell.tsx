@@ -4,6 +4,7 @@ import { CellOutput } from './CellOutput';
 import { CodeEditor } from './CodeEditor';
 import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Sparkles } from 'lucide-react';
 import { generateCellContent, fixCellError, getSettings } from '../services/llmService';
+import { useNotification } from './NotificationSystem';
 
 interface SearchHighlight {
   query: string;
@@ -42,6 +43,7 @@ const CellComponent: React.FC<Props> = ({
   onSave,
   searchHighlight,
 }) => {
+  const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
@@ -98,7 +100,7 @@ const CellComponent: React.FC<Props> = ({
       setIsAiOpen(false);
       setAiPrompt('');
     } catch (e) {
-      alert('Failed to generate AI content. See console.');
+      toast('Failed to generate AI content. Check console for details.', 'error');
     } finally {
       setIsAiGenerating(false);
     }
@@ -116,7 +118,7 @@ const CellComponent: React.FC<Props> = ({
       onUpdate(cell.id, fixedCode);
     } catch (e) {
       console.error(e);
-      alert('Could not fix code automatically.');
+      toast('Could not fix code automatically.', 'error');
     } finally {
       setIsFixing(false);
     }

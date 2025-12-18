@@ -30,6 +30,7 @@ import {
   DirectoryListing
 } from '../services/fileService';
 import { getSettings, saveSettings } from '../services/llmService';
+import { useNotification } from './NotificationSystem';
 
 interface Props {
   files: NotebookMetadata[];
@@ -48,6 +49,7 @@ export const FileBrowser: React.FC<Props> = ({
   isOpen,
   onClose
 }) => {
+  const { toast, confirm } = useNotification();
   const [currentPath, setCurrentPath] = useState<string>('~');
   const [items, setItems] = useState<FileItem[]>([]);
   const [parentPath, setParentPath] = useState<string | null>(null);
@@ -114,20 +116,26 @@ export const FileBrowser: React.FC<Props> = ({
         loadDirectory(currentPath);
         onRefresh();
       } catch (err: any) {
-        alert(err.message || 'Failed to create notebook');
+        toast(err.message || 'Failed to create notebook', 'error');
       }
     }
   };
 
   const handleDelete = async (e: React.MouseEvent, item: FileItem) => {
     e.stopPropagation();
-    if (confirm(`Are you sure you want to delete "${item.name}"?`)) {
+    const confirmed = await confirm({
+      title: 'Delete File',
+      message: `Are you sure you want to delete "${item.name}"?`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
+    if (confirmed) {
       try {
         await deleteFile(item.path);
         loadDirectory(currentPath);
         onRefresh();
       } catch (err: any) {
-        alert(err.message || 'Failed to delete file');
+        toast(err.message || 'Failed to delete file', 'error');
       }
     }
   };
@@ -149,7 +157,7 @@ export const FileBrowser: React.FC<Props> = ({
           loadDirectory(currentPath);
           onRefresh();
         } catch (err: any) {
-          alert(err.message || 'Failed to rename file');
+          toast(err.message || 'Failed to rename file', 'error');
         }
       }
       setEditingId(null);
@@ -168,7 +176,7 @@ export const FileBrowser: React.FC<Props> = ({
       onSelect(item.path);
       if (window.innerWidth < 1024) onClose();
     } else {
-      alert(`Preview for ${item.extension} files is not implemented yet.`);
+      toast(`Preview for ${item.extension} files is not implemented yet.`, 'info');
     }
   };
 

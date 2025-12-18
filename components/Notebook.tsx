@@ -23,6 +23,7 @@ import { SettingsModal } from './SettingsModal';
 import { KernelManager } from './KernelManager';
 import { NotebookSearch } from './NotebookSearch';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
+import { useNotification } from './NotificationSystem';
 
 // Helper to extract filename from path
 function getFilenameFromPath(filePath: string): string {
@@ -41,7 +42,18 @@ function getInitialFileId(): string | null {
   return getActiveFileId();
 }
 
+// Default cell for reset
+const INITIAL_CELL: Cell = {
+  id: crypto.randomUUID(),
+  type: 'code',
+  content: '',
+  outputs: [],
+  isExecuting: false,
+};
+
 export const Notebook: React.FC = () => {
+  const { toast, confirm } = useNotification();
+
   // File System State
   const [files, setFiles] = useState<NotebookMetadata[]>([]);
   const [currentFileId, setCurrentFileId] = useState<string | null>(getInitialFileId);
@@ -146,7 +158,7 @@ export const Notebook: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to install kernel:', error);
-      alert(`Failed to install kernel: ${error}`);
+      toast(`Failed to install kernel: ${error}`, 'error');
     } finally {
       setIsInstallingKernel(null);
     }
@@ -332,7 +344,7 @@ export const Notebook: React.FC = () => {
       saveActiveFileId(newPath);
       setIsRenamingNotebook(false);
     } catch (err: any) {
-      alert(err.message || 'Failed to rename notebook');
+      toast(err.message || 'Failed to rename notebook', 'error');
     }
   };
 
@@ -417,9 +429,21 @@ export const Notebook: React.FC = () => {
   };
 
   const loadFile = async (id: string) => {
-    const content = await getFileContent(id);
-    if (content) {
-      loadFileAsync(id, content);
+    try {
+      const content = await getFileContent(id);
+      if (content) {
+        loadFileAsync(id, content);
+      } else {
+        // File doesn't exist or is empty
+        setIsLoadingFile(false);
+        setCurrentFileId(null);
+        saveActiveFileId('');
+      }
+    } catch (error) {
+      console.error('Failed to load file:', error);
+      setIsLoadingFile(false);
+      setCurrentFileId(null);
+      saveActiveFileId('');
     }
   };
 
@@ -544,9 +568,15 @@ export const Notebook: React.FC = () => {
     }
   };
 
-  const handleDeleteCellByIndex = (index: number) => {
+  const handleDeleteCellByIndex = async (index: number) => {
     if (index >= 0 && index < cells.length) {
-      if (confirm(`Are you sure you want to delete Cell #${index + 1}?`)) {
+      const confirmed = await confirm({
+        title: 'Delete Cell',
+        message: `Are you sure you want to delete Cell #${index + 1}?`,
+        confirmLabel: 'Delete',
+        variant: 'danger',
+      });
+      if (confirmed) {
         deleteCell(cells[index].id);
       }
     }
@@ -628,10 +658,23 @@ export const Notebook: React.FC = () => {
     setSearchQuery(null);
   }, []);
 
-  const handleReset = () => {
-    if (confirm("Resetting will clear all cells in this notebook. Continue?")) {
-      pushState([INITIAL_CELL]);
-      setActiveCellId(INITIAL_CELL.id);
+  const handleReset = async () => {
+    const confirmed = await confirm({
+      title: 'Reset Notebook',
+      message: 'This will clear all cells in this notebook. This action cannot be undone.',
+      confirmLabel: 'Reset',
+      variant: 'danger',
+    });
+    if (confirmed) {
+      const newCell: Cell = {
+        id: crypto.randomUUID(),
+        type: 'code',
+        content: '',
+        outputs: [],
+        isExecuting: false,
+      };
+      pushState([newCell]);
+      setActiveCellId(newCell.id);
     }
   };
 
