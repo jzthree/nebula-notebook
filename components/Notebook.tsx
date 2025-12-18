@@ -534,7 +534,7 @@ export const Notebook: React.FC = () => {
 
   // --- CELL OPERATIONS ---
 
-  const addCell = (type: CellType = 'code', content: string = '', afterIndex?: number) => {
+  const addCell = (type: CellType = 'code', content: string = '', afterIndex?: number, noScroll?: boolean) => {
     const newCell: Cell = {
       id: crypto.randomUUID(),
       type,
@@ -551,15 +551,17 @@ export const Notebook: React.FC = () => {
     undoableInsertCell(insertIndex, newCell);
     setActiveCellId(newCell.id);
 
-    // Scroll to the new cell
-    requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollToIndex({
-        index: insertIndex,
-        align: 'start',
-        behavior: 'auto',
-        offset: -80
+    // Only scroll if not explicitly disabled (e.g., toolbar plus button shouldn't scroll)
+    if (!noScroll) {
+      requestAnimationFrame(() => {
+        virtuosoRef.current?.scrollToIndex({
+          index: insertIndex,
+          align: 'start',
+          behavior: 'auto',
+          offset: -80
+        });
       });
-    });
+    }
   };
 
   const handleAddCell = (type: CellType) => {
@@ -1125,7 +1127,7 @@ export const Notebook: React.FC = () => {
                   onMove={moveCell}
                   onChangeType={changeCellType}
                   onClick={setActiveCellId}
-                  onAddCell={(afterIndex) => addCell('code', '', afterIndex)}
+                  onAddCell={(afterIndex) => addCell('code', '', afterIndex, true)}
                   onSave={saveNow}
                   searchHighlight={searchQuery}
                   queuePosition={executionQueue.indexOf(cell.id)}
