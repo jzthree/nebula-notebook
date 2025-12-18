@@ -104,6 +104,10 @@ export const NotebookSearch: React.FC<Props> = ({
       setCurrentMatchIndex(0);
       if (newMatches.length > 0) {
         onNavigateToCell(newMatches[0].cellIndex, newMatches[0].cellId);
+        // Re-focus search input after navigation to prevent cell from stealing focus
+        requestAnimationFrame(() => {
+          inputRef.current?.focus();
+        });
       }
     }
 
@@ -119,6 +123,11 @@ export const NotebookSearch: React.FC<Props> = ({
 
     const match = matches[wrappedIndex];
     onNavigateToCell(match.cellIndex, match.cellId);
+
+    // Re-focus search input after navigation
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
   }, [matches, onNavigateToCell]);
 
   const goToNextMatch = useCallback(() => {

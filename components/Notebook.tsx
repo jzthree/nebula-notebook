@@ -1138,7 +1138,6 @@ export const Notebook: React.FC = () => {
                   searchHighlight={searchQuery}
                   queuePosition={executionQueue.indexOf(cell.id)}
                   indentConfig={indentConfig}
-                  preventFocus={isSearchOpen}
                 />
               )}
             />
