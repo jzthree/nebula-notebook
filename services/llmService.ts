@@ -268,6 +268,7 @@ export interface NebulaSettings {
   llmProvider: LLMProvider;
   llmModel: string;
   lastKernel: string;
+  useAIAvatars?: boolean; // Use AI to generate notebook icons (requires API credits)
 }
 
 export const getSettings = (): NebulaSettings => {

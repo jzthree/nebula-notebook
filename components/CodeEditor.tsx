@@ -3,8 +3,10 @@ import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, keymap } from '@codemirror/view';
-import { Prec } from '@codemirror/state';
+import { Prec, EditorState } from '@codemirror/state';
 import { RangeSetBuilder } from '@codemirror/state';
+import { indentUnit } from '@codemirror/language';
+import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 
 interface CurrentMatch {
   cellId: string;
@@ -28,6 +30,7 @@ interface Props {
   searchHighlight?: SearchHighlight | null;
   cellId?: string;
   shouldFocus?: boolean; // When true, focus the editor
+  indentConfig?: IndentationConfig; // Detected indentation configuration
 }
 
 // Light theme that matches our existing style
@@ -38,8 +41,8 @@ const lightTheme = EditorView.theme({
   },
   '.cm-content': {
     fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
-    padding: '16px',
-    minHeight: '4rem',
+    padding: '8px 12px',
+    minHeight: '1.5rem', // Single line minimum
   },
   '.cm-line': {
     padding: '0',
@@ -156,6 +159,7 @@ export const CodeEditor: React.FC<Props> = ({
   searchHighlight,
   cellId,
   shouldFocus = false,
+  indentConfig = DEFAULT_INDENTATION,
 }) => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
 
@@ -184,10 +188,16 @@ export const CodeEditor: React.FC<Props> = ({
   const currentMatchEnd = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.endIndex : undefined;
 
   const extensions = useMemo(() => {
+    // Create indent string based on config
+    const indentStr = indentConfig.useTabs ? '\t' : ' '.repeat(indentConfig.indentSize);
+
     const exts = [
       lightTheme,
       EditorView.lineWrapping,
       language === 'python' ? python() : markdown(),
+      // Configure indentation based on detected style
+      indentUnit.of(indentStr),
+      EditorState.tabSize.of(indentConfig.tabSize),
     ];
 
     // Add keyboard handler if provided - use highest precedence to override CodeMirror defaults
@@ -214,7 +224,7 @@ export const CodeEditor: React.FC<Props> = ({
     }
 
     return exts;
-  }, [language, onKeyDown, searchQuery, searchCaseSensitive, currentMatchStart, currentMatchEnd]);
+  }, [language, onKeyDown, searchQuery, searchCaseSensitive, currentMatchStart, currentMatchEnd, indentConfig]);
 
   const handleChange = useCallback(
     (val: string) => {

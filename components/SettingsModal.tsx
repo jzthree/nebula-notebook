@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Folder, Bot, Check } from 'lucide-react';
+import { X, Folder, Bot, Check, Palette } from 'lucide-react';
 import {
   getSettings,
   saveSettings,
@@ -170,6 +170,37 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                   </option>
                 ))}
               </select>
+            </div>
+
+            {/* Notebook Icons */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                <Palette className="w-4 h-4" />
+                Notebook Icons
+              </label>
+              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                <div className="flex-1">
+                  <p className="text-sm text-slate-700">AI-Generated Icons</p>
+                  <p className="text-xs text-slate-500">
+                    Use AI to generate unique icons for each notebook (uses API credits)
+                  </p>
+                </div>
+                <button
+                  onClick={() => setSettings({ ...settings, useAIAvatars: !settings.useAIAvatars })}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    settings.useAIAvatars ? 'bg-blue-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      settings.useAIAvatars ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                When disabled, colorful auto-generated icons based on notebook name are used (no API calls).
+              </p>
             </div>
           </div>
 

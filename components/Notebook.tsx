@@ -24,6 +24,8 @@ import { KernelManager } from './KernelManager';
 import { NotebookSearch } from './NotebookSearch';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
 import { useNotification } from './NotificationSystem';
+import { detectIndentationFromCells, IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
+import { getNotebookAvatar, updateFavicon, resetFavicon } from '../utils/notebookAvatar';
 
 // Helper to extract filename from path
 function getFilenameFromPath(filePath: string): string {
@@ -104,6 +106,7 @@ export const Notebook: React.FC = () => {
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [showRecoveryBanner, setShowRecoveryBanner] = useState(false);
   const [recoveryData, setRecoveryData] = useState<{ cells: Cell[]; timestamp: number } | null>(null);
+  const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
 
   // Virtuoso Handle for programmatic scrolling
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -207,7 +210,7 @@ export const Notebook: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run once on mount
 
-  // Update browser tab title and URL when file changes
+  // Update browser tab title, URL, and favicon when file changes
   useEffect(() => {
     if (currentFileId) {
       // Update tab title from file path
@@ -217,9 +220,19 @@ export const Notebook: React.FC = () => {
       // Update URL - don't encode slashes for readability
       const baseUrl = window.location.pathname;
       window.history.replaceState({}, '', `${baseUrl}?file=${currentFileId}`);
+
+      // Update favicon with notebook-specific avatar
+      const settings = getSettings();
+      getNotebookAvatar(currentFileId, {
+        useAI: settings.useAIAvatars ?? false,
+        // AI generation function would go here if implemented
+      }).then(avatarUrl => {
+        updateFavicon(avatarUrl);
+      });
     } else {
       document.title = 'Nebula Notebook';
       window.history.replaceState({}, '', window.location.pathname);
+      resetFavicon();
     }
   }, [currentFileId]);
 
@@ -367,6 +380,10 @@ export const Notebook: React.FC = () => {
     if (currentFileId && currentFileId !== id) {
       saveNow(); // Save current file before switching
     }
+
+    // Detect indentation from loaded cells
+    const detectedIndent = detectIndentationFromCells(content);
+    setIndentConfig(detectedIndent);
 
     // Check for crash recovery
     const backup = getBackup(id);
@@ -1124,6 +1141,7 @@ export const Notebook: React.FC = () => {
                   onSave={saveNow}
                   searchHighlight={searchQuery}
                   queuePosition={executionQueue.indexOf(cell.id)}
+                  indentConfig={indentConfig}
                 />
               )}
             />

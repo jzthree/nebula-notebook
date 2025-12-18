@@ -5,6 +5,7 @@ import { CodeEditor } from './CodeEditor';
 import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Sparkles } from 'lucide-react';
 import { generateCellContent, fixCellError, getSettings } from '../services/llmService';
 import { useNotification } from './NotificationSystem';
+import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 
 interface SearchHighlight {
   query: string;
@@ -27,6 +28,7 @@ interface Props {
   onSave?: () => void;
   searchHighlight?: SearchHighlight | null;
   queuePosition?: number; // Position in execution queue (-1 or undefined = not queued)
+  indentConfig?: IndentationConfig; // Detected indentation configuration
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -44,6 +46,7 @@ const CellComponent: React.FC<Props> = ({
   onSave,
   searchHighlight,
   queuePosition,
+  indentConfig = DEFAULT_INDENTATION,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -131,113 +134,144 @@ const CellComponent: React.FC<Props> = ({
   return (
     <div
       onClick={() => onClick(cell.id)}
-      className={`group relative mb-3 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md min-h-[220px]
+      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md
         ${hasError ? 'border-red-200' : isActive ? 'border-blue-400 ring-1 ring-blue-100' : 'border-slate-200 hover:border-slate-300'}
       `}
     >
-      
-      {/* Sidebar / Gutter */}
-      <div className="absolute left-0 top-0 bottom-0 w-12 bg-slate-50 border-r border-slate-100 rounded-l-lg flex flex-col items-center py-2 gap-2 opacity-100 lg:opacity-50 lg:group-hover:opacity-100 transition-opacity">
-        <div className="text-[10px] font-mono font-bold text-slate-400 mb-1 flex flex-col items-center">
-            <span>#{index + 1}</span>
-            {cell.executionCount !== undefined && <span className="text-green-600">[{cell.executionCount}]</span>}
-            {queuePosition !== undefined && queuePosition >= 0 && !cell.isExecuting && (
-              <span className="text-amber-600 animate-pulse" title={`Queued at position ${queuePosition + 1}`}>
-                [*]
-              </span>
-            )}
+      {/* Top Toolbar */}
+      <div className="flex items-center gap-1 px-2 py-1 bg-slate-50 border-b border-slate-100 rounded-t-lg">
+        {/* Left: Cell info and Run button */}
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] font-mono font-bold text-slate-400 min-w-[24px]">
+            #{index + 1}
+          </span>
+          {cell.executionCount !== undefined && (
+            <span className="text-[10px] font-mono text-green-600">[{cell.executionCount}]</span>
+          )}
+          {queuePosition !== undefined && queuePosition >= 0 && !cell.isExecuting && (
+            <span className="text-[10px] font-mono text-amber-600 animate-pulse" title={`Queued at position ${queuePosition + 1}`}>
+              [*]
+            </span>
+          )}
+
+          <button
+            onClick={(e) => { e.stopPropagation(); onRun(cell.id); }}
+            className="p-1 text-slate-500 hover:text-green-600 hover:bg-green-50 rounded"
+            title="Run Cell (Shift+Enter or Ctrl+Enter)"
+          >
+            {cell.isExecuting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+          </button>
         </div>
 
-        <button onClick={(e) => { e.stopPropagation(); onRun(cell.id); }} className="p-1.5 text-slate-500 hover:text-green-600 hover:bg-green-50 rounded" title="Run Cell (Shift+Enter or Ctrl+Enter)">
-          {cell.isExecuting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-        </button>
-        
-        <button onClick={(e) => { e.stopPropagation(); setIsAiOpen(!isAiOpen); }} className={`p-1.5 rounded transition-colors ${isAiOpen ? 'text-purple-600 bg-purple-50' : 'text-slate-500 hover:text-purple-600 hover:bg-purple-50'}`} title="AI Assistant">
-          <Bot className="w-4 h-4" />
-        </button>
-
-        <div className="flex-grow" />
-        
-        <div className="flex flex-col gap-1 mb-2">
-            <button onClick={(e) => { e.stopPropagation(); onMove(cell.id, 'up'); }} className="p-1 text-slate-400 hover:text-slate-700" title="Move Up"><ArrowUp className="w-3 h-3" /></button>
-            <button onClick={(e) => { e.stopPropagation(); onMove(cell.id, 'down'); }} className="p-1 text-slate-400 hover:text-slate-700" title="Move Down"><ArrowDown className="w-3 h-3" /></button>
-            <button onClick={(e) => { e.stopPropagation(); onDelete(cell.id); }} className="p-1 text-slate-400 hover:text-red-600" title="Delete Cell"><Trash2 className="w-3 h-3" /></button>
-        </div>
-      </div>
-
-      <div className="ml-12">
-        {/* AI Prompt Input */}
-        {isAiOpen && (
-          <div className="p-3 bg-purple-50 border-b border-purple-100 flex gap-2 items-center animate-in slide-in-from-top-2">
-            <Bot className="w-5 h-5 text-purple-600" />
-            <input 
-              type="text" 
-              value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              placeholder="Ask AI to write code, debug, or explain..." 
-              className="flex-grow bg-white border-purple-200 border rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-              onKeyDown={(e) => e.key === 'Enter' && handleAiGenerate()}
-              onClick={(e) => e.stopPropagation()}
-            />
-            <button 
-              onClick={(e) => { e.stopPropagation(); handleAiGenerate(); }}
-              disabled={isAiGenerating}
-              className="px-3 py-1.5 bg-purple-600 text-white text-xs font-bold rounded hover:bg-purple-700 disabled:opacity-50"
+        {/* Center: Error fix button */}
+        <div className="flex-1 flex justify-center">
+          {hasError && (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleAiFix(); }}
+              disabled={isFixing}
+              className="flex items-center gap-1 text-[10px] px-2 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
             >
-              {isAiGenerating ? 'Thinking...' : 'Generate'}
+              <Sparkles className="w-3 h-3" />
+              {isFixing ? 'Fixing...' : 'Fix with AI'}
             </button>
-          </div>
-        )}
+          )}
+        </div>
 
-        {/* Toolbar */}
-        <div className="flex items-center justify-between px-2 py-1 bg-slate-50 border-b border-slate-100 rounded-tr-lg">
-          <div className="flex-1">
-             {hasError && (
-               <button 
-                 onClick={(e) => { e.stopPropagation(); handleAiFix(); }}
-                 disabled={isFixing}
-                 className="flex items-center gap-1 text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors animate-in fade-in"
-               >
-                 <Sparkles className="w-3 h-3" />
-                 {isFixing ? 'Fixing...' : 'Fix with AI'}
-               </button>
-             )}
-          </div>
-          <div className="flex gap-2">
-            <button 
+        {/* Right: Cell type toggle and action buttons */}
+        <div className="flex items-center gap-1">
+          {/* Cell type toggle */}
+          <div className="flex gap-0.5 mr-1">
+            <button
               onClick={(e) => { e.stopPropagation(); onChangeType(cell.id, 'code'); }}
-              className={`text-xs px-2 py-1 rounded flex items-center gap-1 ${cell.type === 'code' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-500 hover:text-slate-800'}`}
+              className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${cell.type === 'code' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-400 hover:text-slate-600'}`}
             >
               <CodeIcon className="w-3 h-3" /> Code
             </button>
-            <button 
+            <button
               onClick={(e) => { e.stopPropagation(); onChangeType(cell.id, 'markdown'); }}
-              className={`text-xs px-2 py-1 rounded flex items-center gap-1 ${cell.type === 'markdown' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-500 hover:text-slate-800'}`}
+              className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${cell.type === 'markdown' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-400 hover:text-slate-600'}`}
             >
-              <FileText className="w-3 h-3" /> Markdown
+              <FileText className="w-3 h-3" /> Text
             </button>
           </div>
-        </div>
 
-        {/* Editor Area */}
-        <div className="p-0" onClick={(e) => { e.stopPropagation(); onClick(cell.id); }}>
-          <CodeEditor
-            value={cell.content}
-            onChange={(value) => onUpdate(cell.id, value)}
-            language={cell.type === 'code' ? 'python' : 'markdown'}
-            onKeyDown={handleEditorKeyDown}
-            placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
-            searchHighlight={searchHighlight}
-            cellId={cell.id}
-            shouldFocus={isActive}
-          />
-        </div>
+          {/* Divider */}
+          <div className="w-px h-4 bg-slate-200" />
 
-        {/* Output Area */}
-        {(cell.outputs.length > 0 || cell.isExecuting) && (
-           <CellOutput outputs={cell.outputs} />
-        )}
+          {/* Action buttons */}
+          <button
+            onClick={(e) => { e.stopPropagation(); setIsAiOpen(!isAiOpen); }}
+            className={`p-1 rounded transition-colors ${isAiOpen ? 'text-purple-600 bg-purple-50' : 'text-slate-400 hover:text-purple-600 hover:bg-purple-50'}`}
+            title="AI Assistant"
+          >
+            <Bot className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onMove(cell.id, 'up'); }}
+            className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Move Up"
+          >
+            <ArrowUp className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onMove(cell.id, 'down'); }}
+            className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Move Down"
+          >
+            <ArrowDown className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(cell.id); }}
+            className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Delete Cell"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
+
+      {/* AI Prompt Input */}
+      {isAiOpen && (
+        <div className="px-3 py-2 bg-purple-50 border-b border-purple-100 flex gap-2 items-center">
+          <Bot className="w-4 h-4 text-purple-600 flex-shrink-0" />
+          <input
+            type="text"
+            value={aiPrompt}
+            onChange={(e) => setAiPrompt(e.target.value)}
+            placeholder="Ask AI to write code, debug, or explain..."
+            className="flex-grow bg-white border-purple-200 border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+            onKeyDown={(e) => e.key === 'Enter' && handleAiGenerate()}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            onClick={(e) => { e.stopPropagation(); handleAiGenerate(); }}
+            disabled={isAiGenerating}
+            className="px-2 py-1 bg-purple-600 text-white text-xs font-medium rounded hover:bg-purple-700 disabled:opacity-50"
+          >
+            {isAiGenerating ? 'Thinking...' : 'Generate'}
+          </button>
+        </div>
+      )}
+
+      {/* Editor Area */}
+      <div onClick={(e) => { e.stopPropagation(); onClick(cell.id); }}>
+        <CodeEditor
+          value={cell.content}
+          onChange={(value) => onUpdate(cell.id, value)}
+          language={cell.type === 'code' ? 'python' : 'markdown'}
+          onKeyDown={handleEditorKeyDown}
+          placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
+          searchHighlight={searchHighlight}
+          cellId={cell.id}
+          shouldFocus={isActive}
+          indentConfig={indentConfig}
+        />
+      </div>
+
+      {/* Output Area */}
+      {(cell.outputs.length > 0 || cell.isExecuting) && (
+         <CellOutput outputs={cell.outputs} />
+      )}
     </div>
   );
 };
@@ -248,7 +282,7 @@ const CellComponent: React.FC<Props> = ({
 // but cells only need to re-render when their actual data changes.
 export const Cell = memo(CellComponent, (prevProps, nextProps) => {
   // Return true if props are equal (skip re-render)
-  // Only check: cell data, index, active state, search highlighting, and queue position
+  // Only check: cell data, index, active state, search highlighting, queue position, and indent config
   // Don't check callbacks - they change on every parent render but
   // don't affect what the cell displays
   return (
@@ -256,6 +290,7 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     prevProps.index === nextProps.index &&
     prevProps.isActive === nextProps.isActive &&
     prevProps.searchHighlight === nextProps.searchHighlight &&
-    prevProps.queuePosition === nextProps.queuePosition
+    prevProps.queuePosition === nextProps.queuePosition &&
+    prevProps.indentConfig === nextProps.indentConfig
   );
 });
