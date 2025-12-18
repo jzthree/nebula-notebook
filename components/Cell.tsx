@@ -26,6 +26,7 @@ interface Props {
   onClick: (id: string) => void;
   onSave?: () => void;
   searchHighlight?: SearchHighlight | null;
+  queuePosition?: number; // Position in execution queue (-1 or undefined = not queued)
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -42,6 +43,7 @@ const CellComponent: React.FC<Props> = ({
   onClick,
   onSave,
   searchHighlight,
+  queuePosition,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -139,8 +141,13 @@ const CellComponent: React.FC<Props> = ({
         <div className="text-[10px] font-mono font-bold text-slate-400 mb-1 flex flex-col items-center">
             <span>#{index + 1}</span>
             {cell.executionCount !== undefined && <span className="text-green-600">[{cell.executionCount}]</span>}
+            {queuePosition !== undefined && queuePosition >= 0 && !cell.isExecuting && (
+              <span className="text-amber-600 animate-pulse" title={`Queued at position ${queuePosition + 1}`}>
+                [*]
+              </span>
+            )}
         </div>
-        
+
         <button onClick={(e) => { e.stopPropagation(); onRun(cell.id); }} className="p-1.5 text-slate-500 hover:text-green-600 hover:bg-green-50 rounded" title="Run Cell (Shift+Enter or Ctrl+Enter)">
           {cell.isExecuting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
         </button>
@@ -241,13 +248,14 @@ const CellComponent: React.FC<Props> = ({
 // but cells only need to re-render when their actual data changes.
 export const Cell = memo(CellComponent, (prevProps, nextProps) => {
   // Return true if props are equal (skip re-render)
-  // Only check: cell data, index, active state, and search highlighting
+  // Only check: cell data, index, active state, search highlighting, and queue position
   // Don't check callbacks - they change on every parent render but
   // don't affect what the cell displays
   return (
     prevProps.cell === nextProps.cell &&
     prevProps.index === nextProps.index &&
     prevProps.isActive === nextProps.isActive &&
-    prevProps.searchHighlight === nextProps.searchHighlight
+    prevProps.searchHighlight === nextProps.searchHighlight &&
+    prevProps.queuePosition === nextProps.queuePosition
   );
 });

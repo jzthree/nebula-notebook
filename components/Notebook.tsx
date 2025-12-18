@@ -131,6 +131,7 @@ export const Notebook: React.FC = () => {
   const [isKernelReady, setIsKernelReady] = useState(false);
   const [executionQueue, setExecutionQueue] = useState<string[]>([]);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
+  const [kernelExecutionCount, setKernelExecutionCount] = useState(0); // Global execution counter
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
@@ -492,8 +493,9 @@ export const Notebook: React.FC = () => {
         await kernelService.restartKernel(kernelSessionId);
       }
       setKernelStatus('idle');
-      // Clear all cell outputs
+      // Clear all cell outputs and reset execution counter
       setCells(prev => prev.map(c => ({ ...c, outputs: [], executionCount: undefined })));
+      setKernelExecutionCount(0);
     } catch (error) {
       console.error('Failed to restart kernel:', error);
       setKernelStatus('disconnected');
@@ -754,11 +756,19 @@ export const Notebook: React.FC = () => {
           console.error('Execution error:', error);
         }
 
-        setCells(prev => prev.map(c => c.id === cellId ? {
-          ...c,
-          isExecuting: false,
-          executionCount: (c.executionCount || 0) + 1
-        } : c));
+        // Increment global counter and assign to cell
+        setKernelExecutionCount(prev => {
+          const newCount = prev + 1;
+          setCells(cells => cells.map(c => c.id === cellId ? {
+            ...c,
+            isExecuting: false,
+            executionCount: newCount
+          } : c));
+          return newCount;
+        });
+      } else {
+        // Non-code cell or cell not found, just mark as done
+        setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: false } : c));
       }
 
       setExecutionQueue(prev => prev.slice(1));
@@ -1113,6 +1123,7 @@ export const Notebook: React.FC = () => {
                   onClick={setActiveCellId}
                   onSave={saveNow}
                   searchHighlight={searchQuery}
+                  queuePosition={executionQueue.indexOf(cell.id)}
                 />
               )}
             />
