@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
+import { PythonHighlighter } from './PythonHighlighter';
 import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Sparkles } from 'lucide-react';
 import { generateCellContent, fixCellError, getSettings } from '../services/llmService';
 
@@ -37,6 +38,7 @@ export const Cell: React.FC<Props> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [isFixing, setIsFixing] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-resize textarea
@@ -47,12 +49,12 @@ export const Cell: React.FC<Props> = ({
     }
   }, [cell.content]);
 
-  // Auto-focus textarea when cell becomes active
+  // Auto-focus textarea when cell becomes active or enters edit mode
   useEffect(() => {
-    if (isActive && textareaRef.current) {
+    if ((isActive || isEditing) && textareaRef.current) {
       textareaRef.current.focus();
     }
-  }, [isActive]);
+  }, [isActive, isEditing]);
 
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim()) return;
@@ -201,15 +203,28 @@ export const Cell: React.FC<Props> = ({
 
         {/* Editor Area */}
         <div className="p-0">
-          <textarea
-            ref={textareaRef}
-            value={cell.content}
-            onChange={(e) => onUpdate(cell.id, e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
-            className={`w-full min-h-[4rem] p-4 bg-transparent outline-none resize-none font-mono text-sm leading-6 ${cell.type === 'code' ? 'text-slate-800' : 'text-slate-600 font-sans'}`}
-            spellCheck={false}
-          />
+          {cell.type === 'code' && !isEditing && cell.content ? (
+            // Highlighted view (click to edit)
+            <div
+              onClick={() => setIsEditing(true)}
+              className="w-full min-h-[4rem] p-4 cursor-text"
+            >
+              <PythonHighlighter code={cell.content} />
+            </div>
+          ) : (
+            // Edit mode (textarea)
+            <textarea
+              ref={textareaRef}
+              value={cell.content}
+              onChange={(e) => onUpdate(cell.id, e.target.value)}
+              onKeyDown={handleKeyDown}
+              onFocus={() => setIsEditing(true)}
+              onBlur={() => setIsEditing(false)}
+              placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
+              className={`w-full min-h-[4rem] p-4 bg-transparent outline-none resize-none font-mono text-sm leading-6 ${cell.type === 'code' ? 'text-slate-800' : 'text-slate-600 font-sans'}`}
+              spellCheck={false}
+            />
+          )}
         </div>
 
         {/* Output Area */}
