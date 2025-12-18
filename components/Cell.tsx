@@ -29,6 +29,7 @@ interface Props {
   searchHighlight?: SearchHighlight | null;
   queuePosition?: number; // Position in execution queue (-1 or undefined = not queued)
   indentConfig?: IndentationConfig; // Detected indentation configuration
+  preventFocus?: boolean; // Prevent auto-focus (e.g., when search is open)
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -47,6 +48,7 @@ const CellComponent: React.FC<Props> = ({
   searchHighlight,
   queuePosition,
   indentConfig = DEFAULT_INDENTATION,
+  preventFocus = false,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -257,7 +259,7 @@ const CellComponent: React.FC<Props> = ({
           placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
           searchHighlight={searchHighlight}
           cellId={cell.id}
-          shouldFocus={isActive}
+          shouldFocus={isActive && !preventFocus}
           indentConfig={indentConfig}
         />
       </div>
@@ -276,7 +278,7 @@ const CellComponent: React.FC<Props> = ({
 // but cells only need to re-render when their actual data changes.
 export const Cell = memo(CellComponent, (prevProps, nextProps) => {
   // Return true if props are equal (skip re-render)
-  // Only check: cell data, index, active state, search highlighting, queue position, and indent config
+  // Only check: cell data, index, active state, search highlighting, queue position, indent config, and preventFocus
   // Don't check callbacks - they change on every parent render but
   // don't affect what the cell displays
   return (
@@ -285,6 +287,7 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     prevProps.isActive === nextProps.isActive &&
     prevProps.searchHighlight === nextProps.searchHighlight &&
     prevProps.queuePosition === nextProps.queuePosition &&
-    prevProps.indentConfig === nextProps.indentConfig
+    prevProps.indentConfig === nextProps.indentConfig &&
+    prevProps.preventFocus === nextProps.preventFocus
   );
 });
