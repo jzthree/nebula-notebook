@@ -422,9 +422,11 @@ class KernelService:
 
     async def cleanup(self):
         """Cleanup all kernel sessions"""
-        async with self._lock:
-            for session_id in list(self.sessions.keys()):
-                await self.stop_kernel(session_id)
+        # Get all session IDs first, then stop each one
+        # (stop_kernel acquires lock internally, so we can't hold lock here)
+        session_ids = list(self.sessions.keys())
+        for session_id in session_ids:
+            await self.stop_kernel(session_id)
 
 
 # Global instance

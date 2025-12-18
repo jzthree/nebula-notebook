@@ -97,9 +97,13 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(kernel_service.initialize_async())
 
     yield
-    # Shutdown
+    # Shutdown with timeout
     print("Shutting down... Cleaning up kernels...")
-    await kernel_service.cleanup()
+    try:
+        await asyncio.wait_for(kernel_service.cleanup(), timeout=5.0)
+        print("Cleanup complete.")
+    except asyncio.TimeoutError:
+        print("Cleanup timed out, forcing shutdown.")
 
 
 # --- App ---
