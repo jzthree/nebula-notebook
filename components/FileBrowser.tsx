@@ -17,7 +17,9 @@ import {
   Folder,
   ArrowUp,
   RefreshCw,
-  ExternalLink
+  ExternalLink,
+  ArrowDownAZ,
+  Clock
 } from 'lucide-react';
 import {
   listDirectory,
@@ -56,6 +58,7 @@ export const FileBrowser: React.FC<Props> = ({
   const [editName, setEditName] = useState('');
   const [showNotebooksOnly, setShowNotebooksOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'name' | 'modified'>('modified');
 
   // Load directory on mount and path change
   useEffect(() => {
@@ -186,14 +189,22 @@ export const FileBrowser: React.FC<Props> = ({
         return true;
       })
       .sort((a, b) => {
-        // Folders first, then notebooks, then by name
+        // Folders first
         if (a.isDirectory && !b.isDirectory) return -1;
         if (!a.isDirectory && b.isDirectory) return 1;
-        if (a.extension === '.ipynb' && b.extension !== '.ipynb') return -1;
-        if (a.extension !== '.ipynb' && b.extension === '.ipynb') return 1;
-        return a.name.localeCompare(b.name);
+
+        // Then sort by selected criteria
+        if (sortBy === 'modified') {
+          // Most recent first
+          return b.modified - a.modified;
+        } else {
+          // Notebooks first, then alphabetically
+          if (a.extension === '.ipynb' && b.extension !== '.ipynb') return -1;
+          if (a.extension !== '.ipynb' && b.extension === '.ipynb') return 1;
+          return a.name.localeCompare(b.name);
+        }
       });
-  }, [items, showNotebooksOnly, searchQuery]);
+  }, [items, showNotebooksOnly, searchQuery, sortBy]);
 
   // Path breadcrumbs
   const pathParts = currentPath.split('/').filter(Boolean);
@@ -301,14 +312,22 @@ export const FileBrowser: React.FC<Props> = ({
 
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-bold text-slate-400 uppercase">Files</span>
-            <button
-              onClick={() => setShowNotebooksOnly(!showNotebooksOnly)}
-              className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${showNotebooksOnly ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500'}`}
-              title="Filter Notebooks"
-            >
-              <Filter className="w-3 h-3" />
-              {showNotebooksOnly ? 'Notebooks' : 'All'}
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setSortBy(sortBy === 'name' ? 'modified' : 'name')}
+                className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${sortBy === 'modified' ? 'bg-purple-100 text-purple-700' : 'hover:bg-slate-100 text-slate-500'}`}
+                title={sortBy === 'modified' ? 'Sorted by modified time' : 'Sorted by name'}
+              >
+                {sortBy === 'modified' ? <Clock className="w-3 h-3" /> : <ArrowDownAZ className="w-3 h-3" />}
+              </button>
+              <button
+                onClick={() => setShowNotebooksOnly(!showNotebooksOnly)}
+                className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${showNotebooksOnly ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500'}`}
+                title="Filter Notebooks"
+              >
+                <Filter className="w-3 h-3" />
+              </button>
+            </div>
           </div>
         </div>
 
