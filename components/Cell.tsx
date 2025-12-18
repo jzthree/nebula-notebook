@@ -168,7 +168,10 @@ const CellComponent: React.FC<Props> = ({
       <div className="absolute left-0 top-0 bottom-0 w-12 bg-slate-50 border-r border-slate-100 rounded-l-lg flex flex-col items-center py-2 gap-2 opacity-100 lg:opacity-50 lg:group-hover:opacity-100 transition-opacity">
         <div className="text-[10px] font-mono font-bold text-slate-400 mb-1 flex flex-col items-center">
             <span>#{index + 1}</span>
-            {cell.executionCount !== undefined && <span className="text-green-600">[{cell.executionCount}]</span>}
+            {/* Execution count indicator: [ ] → [*] → [n] */}
+            <span className={cell.isExecuting ? 'text-amber-600' : cell.executionCount !== undefined ? 'text-green-600' : 'text-slate-400'}>
+              {cell.isExecuting ? '[*]' : cell.executionCount !== undefined ? `[${cell.executionCount}]` : '[ ]'}
+            </span>
         </div>
         {/* Mode indicator */}
         {isActive && (

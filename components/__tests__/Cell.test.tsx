@@ -142,4 +142,21 @@ describe('Cell', () => {
       expect(screen.getByText('Cmd')).toBeInTheDocument();
     });
   });
+
+  describe('execution feedback', () => {
+    it('shows [ ] for never-executed cell', () => {
+      render(<Cell {...defaultProps} cell={{ ...mockCell, executionCount: undefined }} />);
+      expect(screen.getByText('[ ]')).toBeInTheDocument();
+    });
+
+    it('shows [*] while cell is executing', () => {
+      render(<Cell {...defaultProps} cell={{ ...mockCell, isExecuting: true }} />);
+      expect(screen.getByText('[*]')).toBeInTheDocument();
+    });
+
+    it('shows [n] after cell has executed', () => {
+      render(<Cell {...defaultProps} cell={{ ...mockCell, executionCount: 5 }} />);
+      expect(screen.getByText('[5]')).toBeInTheDocument();
+    });
+  });
 });
