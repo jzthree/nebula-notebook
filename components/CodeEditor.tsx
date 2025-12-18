@@ -2,10 +2,11 @@ import React, { useCallback, useMemo, useRef, useEffect } from 'react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { markdown } from '@codemirror/lang-markdown';
-import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, keymap } from '@codemirror/view';
+import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate } from '@codemirror/view';
 import { Prec, EditorState } from '@codemirror/state';
 import { RangeSetBuilder } from '@codemirror/state';
 import { indentUnit } from '@codemirror/language';
+import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
 import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 
 interface CurrentMatch {
@@ -31,6 +32,7 @@ interface Props {
   cellId?: string;
   shouldFocus?: boolean; // When true, focus the editor
   indentConfig?: IndentationConfig; // Detected indentation configuration
+  allCellsContent?: string[]; // Content of all cells for variable extraction
 }
 
 // Light theme that matches our existing style
@@ -92,6 +94,36 @@ const lightTheme = EditorView.theme({
     borderRadius: '2px',
     color: 'white',
   },
+  // Autocomplete tooltip styling
+  '.cm-tooltip.cm-tooltip-autocomplete': {
+    backgroundColor: 'white',
+    border: '1px solid #e2e8f0',
+    borderRadius: '6px',
+    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+  },
+  '.cm-tooltip.cm-tooltip-autocomplete > ul': {
+    fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
+    fontSize: '13px',
+  },
+  '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
+    padding: '4px 8px',
+  },
+  '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+    backgroundColor: '#dbeafe',
+    color: '#1e293b',
+  },
+  '.cm-completionIcon': {
+    width: '1em',
+    marginRight: '4px',
+  },
+  '.cm-completionLabel': {
+    color: '#1e293b',
+  },
+  '.cm-completionDetail': {
+    color: '#64748b',
+    marginLeft: '8px',
+    fontStyle: 'italic',
+  },
 });
 
 // Create search highlight decorations
@@ -149,6 +181,148 @@ function createSearchHighlightExtension(
   );
 }
 
+// Extract Python identifiers from code
+function extractPythonIdentifiers(code: string): Set<string> {
+  const identifiers = new Set<string>();
+
+  // Match variable assignments: name = ...
+  const assignmentPattern = /^[ \t]*([a-zA-Z_][a-zA-Z0-9_]*)\s*=/gm;
+
+  // Match function definitions: def name(...
+  const functionPattern = /\bdef\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g;
+
+  // Match class definitions: class Name...
+  const classPattern = /\bclass\s+([a-zA-Z_][a-zA-Z0-9_]*)/g;
+
+  // Match for loop variables: for name in ...
+  const forPattern = /\bfor\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+in\b/g;
+
+  // Match import statements: import name, from x import name
+  const importPattern = /\bimport\s+([a-zA-Z_][a-zA-Z0-9_]*)/g;
+  const fromImportPattern = /\bfrom\s+\S+\s+import\s+([a-zA-Z_][a-zA-Z0-9_,\s]+)/g;
+
+  // Match function parameters: def func(param1, param2):
+  const paramPattern = /\bdef\s+\w+\s*\(([^)]*)\)/g;
+
+  let match;
+
+  while ((match = assignmentPattern.exec(code)) !== null) {
+    identifiers.add(match[1]);
+  }
+
+  while ((match = functionPattern.exec(code)) !== null) {
+    identifiers.add(match[1]);
+  }
+
+  while ((match = classPattern.exec(code)) !== null) {
+    identifiers.add(match[1]);
+  }
+
+  while ((match = forPattern.exec(code)) !== null) {
+    identifiers.add(match[1]);
+  }
+
+  while ((match = importPattern.exec(code)) !== null) {
+    identifiers.add(match[1]);
+  }
+
+  while ((match = fromImportPattern.exec(code)) !== null) {
+    // Split by comma and extract each imported name
+    const imports = match[1].split(',');
+    for (const imp of imports) {
+      const name = imp.trim().split(/\s+as\s+/).pop()?.trim();
+      if (name && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+        identifiers.add(name);
+      }
+    }
+  }
+
+  while ((match = paramPattern.exec(code)) !== null) {
+    const params = match[1].split(',');
+    for (const param of params) {
+      // Extract parameter name (handle type hints and defaults)
+      const paramName = param.split(':')[0].split('=')[0].trim();
+      if (paramName && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(paramName) && paramName !== '*' && paramName !== '**') {
+        identifiers.add(paramName);
+      }
+    }
+  }
+
+  return identifiers;
+}
+
+// Common Python builtins for completion
+const pythonBuiltins = [
+  'print', 'len', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple',
+  'bool', 'type', 'isinstance', 'issubclass', 'hasattr', 'getattr', 'setattr',
+  'open', 'input', 'abs', 'max', 'min', 'sum', 'sorted', 'reversed', 'enumerate',
+  'zip', 'map', 'filter', 'any', 'all', 'round', 'pow', 'divmod', 'hex', 'oct', 'bin',
+  'ord', 'chr', 'format', 'repr', 'hash', 'id', 'dir', 'vars', 'globals', 'locals',
+  'callable', 'iter', 'next', 'slice', 'super', 'object', 'property', 'classmethod',
+  'staticmethod', 'Exception', 'ValueError', 'TypeError', 'KeyError', 'IndexError',
+  'AttributeError', 'ImportError', 'RuntimeError', 'StopIteration', 'True', 'False', 'None',
+];
+
+// Common data science imports
+const dataScienceCompletions = [
+  { label: 'numpy', detail: 'as np' },
+  { label: 'pandas', detail: 'as pd' },
+  { label: 'matplotlib', detail: '.pyplot as plt' },
+  { label: 'sklearn', detail: 'scikit-learn' },
+  { label: 'torch', detail: 'PyTorch' },
+  { label: 'tensorflow', detail: 'as tf' },
+  { label: 'scipy', detail: 'scientific computing' },
+  { label: 'seaborn', detail: 'as sns' },
+];
+
+// Create completion source for Python
+function createPythonCompletionSource(allCellsContent: string[]) {
+  return (context: CompletionContext): CompletionResult | null => {
+    // Get the word before cursor
+    const word = context.matchBefore(/[a-zA-Z_][a-zA-Z0-9_]*/);
+
+    // Don't show completions if we're not typing a word and not explicitly requested
+    if (!word && !context.explicit) return null;
+
+    // Extract identifiers from all cells
+    const identifiers = new Set<string>();
+    for (const content of allCellsContent) {
+      const cellIdentifiers = extractPythonIdentifiers(content);
+      for (const id of cellIdentifiers) {
+        identifiers.add(id);
+      }
+    }
+
+    // Build completion options
+    const options: { label: string; type: string; detail?: string; boost?: number }[] = [];
+
+    // Add user-defined identifiers (higher priority)
+    for (const id of identifiers) {
+      options.push({ label: id, type: 'variable', boost: 2 });
+    }
+
+    // Add Python builtins
+    for (const builtin of pythonBuiltins) {
+      if (!identifiers.has(builtin)) {
+        options.push({ label: builtin, type: 'function', boost: 1 });
+      }
+    }
+
+    // Add common data science modules
+    for (const mod of dataScienceCompletions) {
+      if (!identifiers.has(mod.label)) {
+        options.push({ label: mod.label, type: 'namespace', detail: mod.detail, boost: 0 });
+      }
+    }
+
+    return {
+      from: word ? word.from : context.pos,
+      options,
+      validFor: /^[a-zA-Z_][a-zA-Z0-9_]*$/,
+    };
+  };
+}
+
 export const CodeEditor: React.FC<Props> = ({
   value,
   onChange,
@@ -160,6 +334,7 @@ export const CodeEditor: React.FC<Props> = ({
   cellId,
   shouldFocus = false,
   indentConfig = DEFAULT_INDENTATION,
+  allCellsContent = [],
 }) => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
 
@@ -187,6 +362,9 @@ export const CodeEditor: React.FC<Props> = ({
   const currentMatchStart = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.startIndex : undefined;
   const currentMatchEnd = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.endIndex : undefined;
 
+  // Memoize allCellsContent to avoid unnecessary extension rebuilds
+  const allCellsContentKey = allCellsContent.join('\n---\n');
+
   const extensions = useMemo(() => {
     // Create indent string based on config
     const indentStr = indentConfig.useTabs ? '\t' : ' '.repeat(indentConfig.indentSize);
@@ -199,6 +377,17 @@ export const CodeEditor: React.FC<Props> = ({
       indentUnit.of(indentStr),
       EditorState.tabSize.of(indentConfig.tabSize),
     ];
+
+    // Add autocompletion for Python
+    if (language === 'python') {
+      exts.push(
+        autocompletion({
+          override: [createPythonCompletionSource(allCellsContent)],
+          activateOnTyping: true,
+          defaultKeymap: true,
+        })
+      );
+    }
 
     // Add keyboard handler if provided - use highest precedence to override CodeMirror defaults
     if (onKeyDown) {
@@ -224,7 +413,8 @@ export const CodeEditor: React.FC<Props> = ({
     }
 
     return exts;
-  }, [language, onKeyDown, searchQuery, searchCaseSensitive, currentMatchStart, currentMatchEnd, indentConfig]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language, onKeyDown, searchQuery, searchCaseSensitive, currentMatchStart, currentMatchEnd, indentConfig, allCellsContentKey]);
 
   const handleChange = useCallback(
     (val: string) => {
@@ -248,7 +438,7 @@ export const CodeEditor: React.FC<Props> = ({
         highlightSelectionMatches: true,
         bracketMatching: true,
         closeBrackets: true,
-        autocompletion: false, // Keep it simple for now
+        autocompletion: false, // We handle this ourselves
         indentOnInput: true,
         syntaxHighlighting: true,
         defaultKeymap: true,
