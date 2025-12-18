@@ -40,7 +40,11 @@ export const Notebook: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isKernelManagerOpen, setIsKernelManagerOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState<{ query: string; caseSensitive: boolean } | null>(null);
+  const [searchQuery, setSearchQuery] = useState<{
+    query: string;
+    caseSensitive: boolean;
+    currentMatch?: { cellId: string; startIndex: number; endIndex: number } | null;
+  } | null>(null);
 
   // Notebook rename state
   const [isRenamingNotebook, setIsRenamingNotebook] = useState(false);
@@ -610,8 +614,12 @@ export const Notebook: React.FC = () => {
   }, []);
 
   // Handle search query changes for highlighting
-  const handleSearchChange = useCallback((query: string, caseSensitive: boolean) => {
-    setSearchQuery(query ? { query, caseSensitive } : null);
+  const handleSearchChange = useCallback((
+    query: string,
+    caseSensitive: boolean,
+    currentMatch: { cellId: string; startIndex: number; endIndex: number } | null
+  ) => {
+    setSearchQuery(query ? { query, caseSensitive, currentMatch } : null);
   }, []);
 
   // Handle search close

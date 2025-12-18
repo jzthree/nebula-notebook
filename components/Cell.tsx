@@ -8,6 +8,7 @@ import { generateCellContent, fixCellError, getSettings } from '../services/llmS
 interface SearchHighlight {
   query: string;
   caseSensitive: boolean;
+  currentMatch?: { cellId: string; startIndex: number; endIndex: number } | null;
 }
 
 interface Props {
@@ -204,6 +205,7 @@ export const Cell: React.FC<Props> = ({
             onKeyDown={handleEditorKeyDown}
             placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
             searchHighlight={searchHighlight}
+            cellId={cell.id}
           />
         </div>
 

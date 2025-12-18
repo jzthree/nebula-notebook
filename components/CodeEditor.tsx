@@ -5,9 +5,16 @@ import { markdown } from '@codemirror/lang-markdown';
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
 
+interface CurrentMatch {
+  cellId: string;
+  startIndex: number;
+  endIndex: number;
+}
+
 interface SearchHighlight {
   query: string;
   caseSensitive: boolean;
+  currentMatch?: CurrentMatch | null;
 }
 
 interface Props {
@@ -18,6 +25,7 @@ interface Props {
   placeholder?: string;
   readOnly?: boolean;
   searchHighlight?: SearchHighlight | null;
+  cellId?: string;
 }
 
 // Light theme that matches our existing style
@@ -73,13 +81,25 @@ const lightTheme = EditorView.theme({
     backgroundColor: '#fef08a', // yellow-200
     borderRadius: '2px',
   },
+  // Current search match (highlighted differently)
+  '.cm-searchMatch-current': {
+    backgroundColor: '#fb923c', // orange-400
+    borderRadius: '2px',
+    color: 'white',
+  },
 });
 
-// Create search highlight decoration
+// Create search highlight decorations
 const searchHighlightMark = Decoration.mark({ class: 'cm-searchMatch' });
+const currentMatchMark = Decoration.mark({ class: 'cm-searchMatch-current' });
 
 // Create extension for search highlighting
-function createSearchHighlightExtension(query: string, caseSensitive: boolean) {
+function createSearchHighlightExtension(
+  query: string,
+  caseSensitive: boolean,
+  currentMatchStart?: number,
+  currentMatchEnd?: number
+) {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
@@ -108,7 +128,12 @@ function createSearchHighlightExtension(query: string, caseSensitive: boolean) {
           const idx = searchIn.indexOf(searchStr, pos);
           if (idx === -1) break;
 
-          builder.add(idx, idx + query.length, searchHighlightMark);
+          // Check if this is the current match
+          const isCurrentMatch = currentMatchStart !== undefined &&
+            idx === currentMatchStart &&
+            idx + query.length === currentMatchEnd;
+
+          builder.add(idx, idx + query.length, isCurrentMatch ? currentMatchMark : searchHighlightMark);
           pos = idx + 1;
         }
 
@@ -127,6 +152,7 @@ export const CodeEditor: React.FC<Props> = ({
   placeholder,
   readOnly = false,
   searchHighlight,
+  cellId,
 }) => {
   const extensions = useMemo(() => {
     const exts = [
@@ -148,11 +174,21 @@ export const CodeEditor: React.FC<Props> = ({
 
     // Add search highlighting if active
     if (searchHighlight?.query) {
-      exts.push(createSearchHighlightExtension(searchHighlight.query, searchHighlight.caseSensitive));
+      // Check if current match is in this cell
+      const isCurrentMatchInThisCell = searchHighlight.currentMatch?.cellId === cellId;
+      const currentMatchStart = isCurrentMatchInThisCell ? searchHighlight.currentMatch?.startIndex : undefined;
+      const currentMatchEnd = isCurrentMatchInThisCell ? searchHighlight.currentMatch?.endIndex : undefined;
+
+      exts.push(createSearchHighlightExtension(
+        searchHighlight.query,
+        searchHighlight.caseSensitive,
+        currentMatchStart,
+        currentMatchEnd
+      ));
     }
 
     return exts;
-  }, [language, onKeyDown, searchHighlight]);
+  }, [language, onKeyDown, searchHighlight, cellId]);
 
   const handleChange = useCallback(
     (val: string) => {

@@ -9,12 +9,18 @@ interface SearchMatch {
   endIndex: number;
 }
 
+export interface CurrentMatch {
+  cellId: string;
+  startIndex: number;
+  endIndex: number;
+}
+
 interface Props {
   cells: Cell[];
   isOpen: boolean;
   onClose: () => void;
   onNavigateToCell: (cellIndex: number, cellId: string) => void;
-  onSearchChange?: (query: string, caseSensitive: boolean) => void;
+  onSearchChange?: (query: string, caseSensitive: boolean, currentMatch: CurrentMatch | null) => void;
 }
 
 export const NotebookSearch: React.FC<Props> = ({
@@ -40,15 +46,25 @@ export const NotebookSearch: React.FC<Props> = ({
 
   // Notify parent of search query changes for highlighting
   useEffect(() => {
-    onSearchChange?.(query, caseSensitive);
+    const currentMatch = matches.length > 0 ? {
+      cellId: matches[currentMatchIndex]?.cellId,
+      startIndex: matches[currentMatchIndex]?.startIndex,
+      endIndex: matches[currentMatchIndex]?.endIndex,
+    } : null;
+    onSearchChange?.(query, caseSensitive, currentMatch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, caseSensitive]); // Intentionally exclude onSearchChange to prevent infinite loops
+  }, [query, caseSensitive, currentMatchIndex, matches]); // Intentionally exclude onSearchChange to prevent infinite loops
+
+  // Track previous query to detect query changes vs cell content changes
+  const prevQueryRef = useRef(query);
+  const prevCaseSensitiveRef = useRef(caseSensitive);
 
   // Search through cells
   useEffect(() => {
     if (!query.trim()) {
       setMatches([]);
       setCurrentMatchIndex(0);
+      prevQueryRef.current = query;
       return;
     }
 
@@ -75,12 +91,18 @@ export const NotebookSearch: React.FC<Props> = ({
     });
 
     setMatches(newMatches);
-    setCurrentMatchIndex(0);
 
-    // Navigate to first match
-    if (newMatches.length > 0) {
-      onNavigateToCell(newMatches[0].cellIndex, newMatches[0].cellId);
+    // Only navigate to first match when query changes, not when cell content changes
+    const queryChanged = query !== prevQueryRef.current || caseSensitive !== prevCaseSensitiveRef.current;
+    if (queryChanged) {
+      setCurrentMatchIndex(0);
+      if (newMatches.length > 0) {
+        onNavigateToCell(newMatches[0].cellIndex, newMatches[0].cellId);
+      }
     }
+
+    prevQueryRef.current = query;
+    prevCaseSensitiveRef.current = caseSensitive;
   }, [query, cells, caseSensitive, onNavigateToCell]);
 
   const goToMatch = useCallback((index: number) => {
