@@ -4,7 +4,7 @@ import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
 import { getSettings, saveSettings } from '../services/llmService';
-import { Plus, Play, Trash, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download } from 'lucide-react';
+import { Plus, Play, Trash, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -20,6 +20,7 @@ import { AIChatSidebar } from './AIChatSidebar';
 import { VirtualCellList } from './VirtualCellList';
 import { useUndoRedo } from '../hooks/useUndoRedo';
 import { SettingsModal } from './SettingsModal';
+import { KernelManager } from './KernelManager';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
 
 // Helper to extract filename from path
@@ -36,6 +37,7 @@ export const Notebook: React.FC = () => {
   const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isKernelManagerOpen, setIsKernelManagerOpen] = useState(false);
 
   // Notebook rename state
   const [isRenamingNotebook, setIsRenamingNotebook] = useState(false);
@@ -71,6 +73,9 @@ export const Notebook: React.FC = () => {
   // Virtuoso Handle for programmatic scrolling
   const virtuosoRef = useRef<VirtuosoHandle>(null);
 
+  // Ref for saveNow to avoid stale closures in keyboard handler
+  const saveNowRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
   // Autosave hook
   const performSaveToFile = useCallback(async (fileId: string, cellsToSave: Cell[]) => {
     await saveFileContent(fileId, cellsToSave);
@@ -83,6 +88,9 @@ export const Notebook: React.FC = () => {
     onSave: performSaveToFile,
     enabled: true,
   });
+
+  // Keep saveNow ref updated synchronously (not in useEffect which runs after render)
+  saveNowRef.current = saveNow;
 
   // Execution State
   const [isKernelReady, setIsKernelReady] = useState(false);
@@ -205,7 +213,7 @@ export const Notebook: React.FC = () => {
       // Ctrl+S: Save (works everywhere)
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
-        saveNow();
+        saveNowRef.current();
         return;
       }
 
@@ -264,7 +272,7 @@ export const Notebook: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, cells, activeCellId, saveNow]);
+  }, [undo, redo, cells, activeCellId]);
 
   const refreshFileList = async () => {
     const updatedFiles = await getFiles();
@@ -869,6 +877,12 @@ export const Notebook: React.FC = () => {
                                 <Square className="w-3 h-3" /> Interrupt
                               </button>
                             )}
+                            <button
+                              onClick={() => { setIsKernelMenuOpen(false); setIsKernelManagerOpen(true); }}
+                              className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                            >
+                              <Cpu className="w-3 h-3" /> Manage All Kernels
+                            </button>
                           </div>
                         </div>
                       )}
@@ -952,6 +966,7 @@ export const Notebook: React.FC = () => {
                   onMove={moveCell}
                   onChangeType={changeCellType}
                   onClick={setActiveCellId}
+                  onSave={saveNow}
                 />
               )}
             />
@@ -989,6 +1004,21 @@ export const Notebook: React.FC = () => {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         onRefresh={refreshFileList}
+      />
+
+      {/* Kernel Manager Modal */}
+      <KernelManager
+        isOpen={isKernelManagerOpen}
+        onClose={() => setIsKernelManagerOpen(false)}
+        currentSessionId={kernelSessionId}
+        onKernelKilled={(sessionId) => {
+          // If the killed kernel was our current session, reset state
+          if (sessionId === kernelSessionId) {
+            setKernelSessionId(null);
+            setIsKernelReady(false);
+            setKernelStatus('disconnected');
+          }
+        }}
       />
     </div>
   );

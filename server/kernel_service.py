@@ -211,21 +211,20 @@ class KernelService:
             on_output: Callback for each output message
 
         Returns:
-            Final execution result
+            Final execution result with kernel's execution_count
         """
         session = self.sessions.get(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
 
         session.status = "busy"
-        session.execution_count += 1
-        exec_count = session.execution_count
+        exec_count = None  # Will be set from kernel's execute_reply
 
         try:
             # Execute the code
             msg_id = session.client.execute(code, store_history=True)
 
-            # Process messages until execution is complete
+            # Process iopub messages for output
             while True:
                 try:
                     msg = await asyncio.get_event_loop().run_in_executor(
@@ -243,6 +242,10 @@ class KernelService:
                 if parent_msg_id != msg_id:
                     continue
 
+                # Capture execution count from execute_input
+                if msg_type == 'execute_input':
+                    exec_count = content.get('execution_count')
+
                 output = self._process_message(msg_type, content)
                 if output:
                     await on_output(output)
@@ -250,6 +253,10 @@ class KernelService:
                 # Check for execution completion
                 if msg_type == 'status' and content.get('execution_state') == 'idle':
                     break
+
+            # Update session's execution count from kernel
+            if exec_count is not None:
+                session.execution_count = exec_count
 
             session.status = "idle"
             return {"status": "ok", "execution_count": exec_count}
@@ -335,6 +342,42 @@ class KernelService:
                 "execution_count": session.execution_count
             }
         return None
+
+    def get_all_sessions(self) -> list[dict]:
+        """Get all active kernel sessions with memory usage"""
+        try:
+            import psutil
+            has_psutil = True
+        except ImportError:
+            has_psutil = False
+
+        sessions_info = []
+        for session_id, session in self.sessions.items():
+            info = {
+                "id": session.id,
+                "kernel_name": session.kernel_name,
+                "file_path": session.file_path,
+                "status": session.status,
+                "execution_count": session.execution_count,
+                "memory_mb": None,
+                "pid": None
+            }
+
+            # Get memory usage if psutil available
+            if has_psutil and session.manager.is_alive():
+                try:
+                    # Get kernel process PID
+                    pid = session.manager.kernel.pid
+                    info["pid"] = pid
+                    proc = psutil.Process(pid)
+                    mem_info = proc.memory_info()
+                    info["memory_mb"] = round(mem_info.rss / (1024 * 1024), 1)
+                except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+                    pass
+
+            sessions_info.append(info)
+
+        return sessions_info
 
     async def cleanup(self):
         """Cleanup all kernel sessions"""

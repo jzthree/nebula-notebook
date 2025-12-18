@@ -389,6 +389,28 @@ class KernelService {
 
     return response.json();
   }
+
+  /**
+   * Get all active kernel sessions from server with memory usage
+   */
+  async getAllSessions(): Promise<KernelSessionInfo[]> {
+    const response = await fetch(`${API_BASE}/kernels/sessions`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch kernel sessions');
+    }
+    const data = await response.json();
+    return data.sessions;
+  }
+}
+
+export interface KernelSessionInfo {
+  id: string;
+  kernel_name: string;
+  file_path: string | null;
+  status: string;
+  execution_count: number;
+  memory_mb: number | null;
+  pid: number | null;
 }
 
 // Export singleton instance

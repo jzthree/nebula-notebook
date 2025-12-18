@@ -16,6 +16,7 @@ interface Props {
   onMove: (id: string, direction: 'up' | 'down') => void;
   onChangeType: (id: string, type: CellType) => void;
   onClick: (id: string) => void;
+  onSave?: () => void;
 }
 
 export const Cell: React.FC<Props> = ({
@@ -30,6 +31,7 @@ export const Cell: React.FC<Props> = ({
   onMove,
   onChangeType,
   onClick,
+  onSave,
 }) => {
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -88,6 +90,13 @@ export const Cell: React.FC<Props> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Cmd/Ctrl+S: Save
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      e.preventDefault();
+      onSave?.();
+      return;
+    }
+
     if (e.key === 'Enter') {
       // Shift+Enter: run and advance to next cell
       if (e.shiftKey && !e.ctrlKey && !e.metaKey) {

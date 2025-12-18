@@ -125,6 +125,12 @@ async def list_kernels():
     return {"kernels": kernel_service.get_available_kernels()}
 
 
+@app.get("/api/kernels/sessions")
+async def list_kernel_sessions():
+    """List all active kernel sessions with memory usage"""
+    return {"sessions": kernel_service.get_all_sessions()}
+
+
 @app.post("/api/kernels/start")
 async def start_kernel(request: StartKernelRequest):
     """Start a new kernel session"""

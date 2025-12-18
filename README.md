@@ -2,6 +2,25 @@
 
 A modern, web-based notebook interface for interactive computing with real Jupyter kernels, multi-provider LLM support, and real filesystem access.
 
+## Quick Install
+
+```bash
+# Clone and install
+git clone https://github.com/jzthree/nebula-notebook.git
+cd nebula-notebook
+npm install
+cd server && pip install -r requirements.txt && cd ..
+
+# Configure API keys (at least one required for AI features)
+cp server/.env.example server/.env
+# Edit server/.env with your API keys
+
+# Run
+npm run start
+```
+
+Open http://localhost:3000 in your browser.
+
 ## Features
 
 - **Real Jupyter Kernels** - Execute code using actual Jupyter kernels (Python, Julia, R, etc.)

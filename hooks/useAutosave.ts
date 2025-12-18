@@ -207,8 +207,17 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
+
+    // Check if there are actual changes to save
+    const currentContent = serializeCells(cells);
+    if (currentContent === lastSavedContentRef.current) {
+      // No changes, but still refresh the timestamp to give visual feedback
+      setStatus({ status: 'saved', lastSaved: Date.now() });
+      return;
+    }
+
     await performSave();
-  }, [performSave]);
+  }, [performSave, cells, serializeCells]);
 
   // Initialize last saved content when file changes
   useEffect(() => {
