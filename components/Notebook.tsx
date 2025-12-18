@@ -630,19 +630,11 @@ export const Notebook: React.FC = () => {
 
       undoableDeleteCell(idx);
 
-      // Select and scroll to the next cell (keeps cursor in same position for rapid deletion)
+      // Select the next cell but don't scroll - this keeps the cursor
+      // in the same position, naturally landing on the delete button
+      // of the next cell for rapid deletion
       if (nextCellId) {
         setActiveCellId(nextCellId);
-        // The cell index shifts after deletion, so use the same index for scroll
-        const scrollIdx = idx < cells.length - 1 ? idx : idx - 1;
-        requestAnimationFrame(() => {
-          virtuosoRef.current?.scrollToIndex({
-            index: Math.max(0, scrollIdx),
-            align: 'start',
-            behavior: 'auto',
-            offset: -80
-          });
-        });
       }
     } else {
       // Can't delete last cell, just clear it
