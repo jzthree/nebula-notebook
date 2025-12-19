@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, ChevronDown } from 'lucide-react';
 import { Cell } from '../types';
 
 interface HeaderInfo {
@@ -107,7 +107,6 @@ function getSiblings(headers: HeaderInfo[], header: HeaderInfo, breadcrumbPath: 
 
 interface BreadcrumbSegmentProps {
   header: HeaderInfo;
-  isLast: boolean;
   siblings: HeaderInfo[];
   currentKey: string;
   onNavigate: (header: HeaderInfo) => void;
@@ -115,7 +114,6 @@ interface BreadcrumbSegmentProps {
 
 const BreadcrumbSegment: React.FC<BreadcrumbSegmentProps> = ({
   header,
-  isLast,
   siblings,
   currentKey,
   onNavigate
@@ -152,9 +150,7 @@ const BreadcrumbSegment: React.FC<BreadcrumbSegmentProps> = ({
       <button
         ref={buttonRef}
         onClick={() => setIsOpen(!isOpen)}
-        className={`truncate hover:text-gray-900 transition-colors ${
-          isLast ? 'text-gray-600' : 'text-gray-400'
-        }`}
+        className="truncate text-gray-600 hover:text-gray-900 transition-colors"
         title={header.text}
       >
         {header.text}
@@ -183,6 +179,10 @@ const BreadcrumbSegment: React.FC<BreadcrumbSegmentProps> = ({
 };
 
 export const NotebookBreadcrumb: React.FC<Props> = ({ cells, activeCellId, onNavigate }) => {
+  const [isAllOpen, setIsAllOpen] = useState(false);
+  const allDropdownRef = useRef<HTMLDivElement>(null);
+  const allButtonRef = useRef<HTMLButtonElement>(null);
+
   const headers = useMemo(() => parseHeaders(cells), [cells]);
 
   const activeCellIndex = useMemo(() => {
@@ -201,8 +201,28 @@ export const NotebookBreadcrumb: React.FC<Props> = ({ cells, activeCellId, onNav
     [headers, currentSection]
   );
 
+  // Close "all sections" dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        allDropdownRef.current &&
+        !allDropdownRef.current.contains(e.target as Node) &&
+        allButtonRef.current &&
+        !allButtonRef.current.contains(e.target as Node)
+      ) {
+        setIsAllOpen(false);
+      }
+    };
+
+    if (isAllOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isAllOpen]);
+
   const handleNavigate = useCallback((header: HeaderInfo) => {
     onNavigate(header.cellIndex, header.cellId);
+    setIsAllOpen(false);
   }, [onNavigate]);
 
   if (headers.length === 0) {
@@ -213,7 +233,7 @@ export const NotebookBreadcrumb: React.FC<Props> = ({ cells, activeCellId, onNav
     <div className="border-b border-gray-100">
       <div className="max-w-5xl mx-auto px-4">
         <div className="flex items-center py-1 text-xs text-gray-500">
-          <div className="flex items-center gap-1 min-w-0">
+          <div className="flex items-center gap-1 min-w-0 flex-1">
             {breadcrumbPath.map((header, idx) => (
               <React.Fragment key={header.key}>
                 {idx > 0 && (
@@ -221,13 +241,44 @@ export const NotebookBreadcrumb: React.FC<Props> = ({ cells, activeCellId, onNav
                 )}
                 <BreadcrumbSegment
                   header={header}
-                  isLast={idx === breadcrumbPath.length - 1}
                   siblings={getSiblings(headers, header, breadcrumbPath)}
                   currentKey={header.key}
                   onNavigate={handleNavigate}
                 />
               </React.Fragment>
             ))}
+          </div>
+
+          {/* All sections dropdown */}
+          <div className="relative ml-2">
+            <button
+              ref={allButtonRef}
+              onClick={() => setIsAllOpen(!isAllOpen)}
+              className="flex items-center gap-0.5 text-gray-400 hover:text-gray-600 transition-colors"
+              title="All sections"
+            >
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isAllOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {isAllOpen && (
+              <div
+                ref={allDropdownRef}
+                className="absolute right-0 top-full mt-1 w-72 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-lg z-50"
+              >
+                {headers.map((header) => (
+                  <button
+                    key={header.key}
+                    onClick={() => handleNavigate(header)}
+                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 transition-colors truncate ${
+                      currentSection?.key === header.key ? 'bg-blue-50 text-blue-700' : 'text-gray-600'
+                    }`}
+                    style={{ paddingLeft: `${(header.level - 1) * 16 + 12}px` }}
+                  >
+                    {header.text}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
