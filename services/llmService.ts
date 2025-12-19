@@ -377,7 +377,10 @@ export const getSettings = (): NebulaSettings => {
     rootDirectory: '~',
     llmProvider: 'anthropic',
     llmModel: 'claude-sonnet-4-5-20250929',
-    lastKernel: 'python3'
+    lastKernel: 'python3',
+    notifyOnLongRun: true,
+    notifySoundEnabled: true,
+    notifyThresholdSeconds: 60
   };
 };
 
