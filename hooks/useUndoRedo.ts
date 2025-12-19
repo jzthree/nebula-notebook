@@ -424,18 +424,23 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Load history from persistence (e.g., when loading a notebook)
   // Rebuilds undoStack from loaded operations so undo works
   const loadHistory = useCallback((history: TimestampedOperation[]) => {
+    console.log('[useUndoRedo] loadHistory called with', history.length, 'operations');
+
     // If loaded history starts with a snapshot, use it entirely
     if (history.length > 0 && history[0].type === 'snapshot') {
       fullHistoryRef.current = [...history];
+      console.log('[useUndoRedo] Using loaded history (starts with snapshot)');
     } else if (history.length > 0) {
       // Loaded history has no snapshot - append to current (which has the snapshot)
       // This handles the case where old history format didn't have snapshots
       const currentSnapshot = fullHistoryRef.current.find(op => op.type === 'snapshot');
       if (currentSnapshot) {
         fullHistoryRef.current = [currentSnapshot, ...history];
+        console.log('[useUndoRedo] Prepended current snapshot to loaded history');
       } else {
         // No snapshot anywhere - just use the history as-is (may not be reconstructable)
         fullHistoryRef.current = [...history];
+        console.log('[useUndoRedo] No snapshot found, using history as-is');
       }
     }
     // If history is empty, keep the current snapshot from resetHistory
@@ -445,12 +450,13 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     for (const op of fullHistoryRef.current) {
       if (op.type === 'insertCell' || op.type === 'deleteCell' ||
           op.type === 'moveCell' || op.type === 'updateContent' ||
-          op.type === 'changeType' || op.type === 'batch') {
+          op.type === 'updateContentPatch' || op.type === 'changeType' || op.type === 'batch') {
         // Convert timestamped operation to regular operation (strip timestamp)
         const { timestamp, ...operation } = op as any;
         undoableOps.push(operation as Operation);
       }
     }
+    console.log('[useUndoRedo] Rebuilt undoStack with', undoableOps.length, 'operations');
     setUndoStack(undoableOps);
     setRedoStack([]); // Clear redo stack when loading history
   }, []);
