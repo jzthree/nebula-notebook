@@ -85,8 +85,6 @@ const CellComponent: React.FC<Props> = ({
   }, []);
 
   // Handle keyboard shortcuts in the editor - uses refs so callback is stable
-  // Note: Shift+Enter and Ctrl+Enter are now handled globally in Notebook.tsx
-  // to ensure they always run the active cell (blue border), not just the focused cell
   const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
     // Escape: Exit edit mode (blur the editor)
     if (event.key === 'Escape') {
@@ -102,8 +100,24 @@ const CellComponent: React.FC<Props> = ({
       return true;
     }
 
+    // Shift+Enter: run and advance to next cell
+    if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      // Blur current editor so focus can move to next cell
+      (event.target as HTMLElement)?.blur();
+      onRunAndAdvanceRef.current(cell.id);
+      return true;
+    }
+
+    // Ctrl/Cmd+Enter: run current cell only
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
+      event.preventDefault();
+      onRunRef.current(cell.id);
+      return true;
+    }
+
     return false; // Let CodeMirror handle other keys
-  }, []);
+  }, [cell.id]);
 
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim()) return;
