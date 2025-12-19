@@ -182,13 +182,9 @@ export const Notebook: React.FC = () => {
     await updateNotebookMetadata(fileId, {});
     // Save history in background (non-blocking) - don't slow down notebook save
     const history = getFullHistory();
-    const undoableCount = history.filter(op =>
-      ['insertCell', 'deleteCell', 'moveCell', 'updateContent', 'updateContentPatch', 'changeType', 'batch'].includes(op.type)
-    ).length;
-    console.log('[History] Saving:', history.length, 'total,', undoableCount, 'undoable');
     if (history.length > 0) {
-      saveNotebookHistory(fileId, history).catch(error => {
-        console.warn('Failed to save notebook history:', error);
+      saveNotebookHistory(fileId, history).catch(() => {
+        // Silently ignore history save failures
       });
     }
   }, [getFullHistory]);
@@ -492,17 +488,12 @@ export const Notebook: React.FC = () => {
     // Load persisted history in background (non-blocking)
     loadNotebookHistory(id)
       .then(savedHistory => {
-        console.log('[History] Loaded from disk:', savedHistory.length, 'operations');
         if (savedHistory.length > 0) {
-          const undoableCount = savedHistory.filter(op =>
-            ['insertCell', 'deleteCell', 'moveCell', 'updateContent', 'updateContentPatch', 'changeType', 'batch'].includes(op.type)
-          ).length;
-          console.log('[History] Undoable operations:', undoableCount);
           loadHistory(savedHistory);
         }
       })
-      .catch(error => {
-        console.warn('Failed to load notebook history:', error);
+      .catch(() => {
+        // Silently ignore history load failures
       });
 
     const meta = files.find(f => f.id === id);
