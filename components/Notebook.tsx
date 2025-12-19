@@ -1234,7 +1234,7 @@ export const Notebook: React.FC = () => {
                         )}
                       </span>
 
-                      {/* Execution Indicator - shows currently executing cell */}
+                      {/* Execution Indicator - subtle shortcut to jump to running cell */}
                       {executionQueue.length > 0 && (() => {
                         const executingCellId = executionQueue[0];
                         const executingCellIndex = cells.findIndex(c => c.id === executingCellId);
@@ -1252,13 +1252,13 @@ export const Notebook: React.FC = () => {
                                 });
                               }
                             }}
-                            className="flex items-center gap-1.5 px-2 py-1 text-xs bg-amber-100 text-amber-700 rounded-md hover:bg-amber-200 transition-colors"
-                            title={`Click to jump to executing cell${queueLength > 1 ? ` (${queueLength - 1} more queued)` : ''}`}
+                            className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
+                            title={`Jump to cell ${executingCellIndex + 1}${queueLength > 1 ? ` (${queueLength - 1} more queued)` : ''}`}
                           >
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                            <span>Running #{executingCellIndex + 1}</span>
+                            <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
+                            <span className="tabular-nums">[{executingCellIndex + 1}]</span>
                             {queueLength > 1 && (
-                              <span className="text-amber-600">+{queueLength - 1}</span>
+                              <span className="text-gray-400">+{queueLength - 1}</span>
                             )}
                           </button>
                         );

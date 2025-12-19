@@ -341,6 +341,16 @@ export const CodeEditor: React.FC<Props> = ({
   // Focus editor when shouldFocus becomes true
   useEffect(() => {
     if (shouldFocus) {
+      // Don't steal focus from other inputs (e.g., search bar, dialogs)
+      const activeElement = document.activeElement;
+      const isOtherInputFocused = activeElement instanceof HTMLInputElement ||
+        activeElement instanceof HTMLTextAreaElement ||
+        activeElement?.getAttribute('role') === 'textbox';
+
+      if (isOtherInputFocused) {
+        return; // Don't steal focus from other inputs
+      }
+
       // Use requestAnimationFrame to ensure the editor is fully rendered
       const focusEditor = () => {
         if (editorRef.current?.view) {
