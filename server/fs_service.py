@@ -78,6 +78,30 @@ class FilesystemService:
         else:
             return f"{size / (1024 * 1024 * 1024):.1f}GB"
 
+    def get_directory_mtime(self, path: str) -> Dict[str, Any]:
+        """
+        Get directory modification time (lightweight check for changes)
+
+        Returns:
+            {
+                "path": str,
+                "mtime": float
+            }
+        """
+        path = self._normalize_path(path)
+
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Path not found: {path}")
+
+        if not os.path.isdir(path):
+            raise NotADirectoryError(f"Not a directory: {path}")
+
+        stat = os.stat(path)
+        return {
+            "path": path,
+            "mtime": stat.st_mtime
+        }
+
     def list_directory(self, path: str) -> Dict[str, Any]:
         """
         List contents of a directory
@@ -86,6 +110,7 @@ class FilesystemService:
             {
                 "path": str,
                 "parent": str | None,
+                "mtime": float,
                 "items": [FileInfo...]
             }
         """
@@ -131,9 +156,13 @@ class FilesystemService:
         # Get parent directory
         parent = os.path.dirname(path) if path != "/" else None
 
+        # Get directory mtime for change detection
+        dir_stat = os.stat(path)
+
         return {
             "path": path,
             "parent": parent,
+            "mtime": dir_stat.st_mtime,
             "items": items
         }
 

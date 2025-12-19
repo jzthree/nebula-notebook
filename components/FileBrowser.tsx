@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import {
   listDirectory,
+  getDirectoryMtime,
   createNotebook,
   deleteFile,
   renameFile,
@@ -55,6 +56,7 @@ export const FileBrowser: React.FC<Props> = ({
     return settings.rootDirectory || '~';
   });
   const [loadedPath, setLoadedPath] = useState<string | null>(null); // Track which path items belong to
+  const [loadedMtime, setLoadedMtime] = useState<number | null>(null); // Track directory mtime
   const [items, setItems] = useState<FileItem[]>([]);
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -74,22 +76,28 @@ export const FileBrowser: React.FC<Props> = ({
     loadDirectory(currentPath);
   }, [isOpen, currentPath, loadedPath, error]);
 
-  // Auto-refresh every 30 seconds when panel is open
+  // Poll mtime every 5 seconds - only refresh if directory changed
   useEffect(() => {
     if (!isOpen) return;
 
-    const interval = setInterval(() => {
-      // Silent background refresh - don't set isLoading to avoid UI flash
-      listDirectory(currentPath).then(listing => {
-        setItems(listing.items);
-        setParentPath(listing.parent);
-      }).catch(() => {
-        // Ignore errors on background refresh
-      });
-    }, 30000);
+    const checkForChanges = async () => {
+      try {
+        const { mtime } = await getDirectoryMtime(currentPath);
+        if (loadedMtime !== null && mtime !== loadedMtime) {
+          // Directory changed - do silent refresh
+          const listing = await listDirectory(currentPath);
+          setItems(listing.items);
+          setParentPath(listing.parent);
+          setLoadedMtime(listing.mtime);
+        }
+      } catch {
+        // Ignore errors on background check
+      }
+    };
 
+    const interval = setInterval(checkForChanges, 5000);
     return () => clearInterval(interval);
-  }, [isOpen, currentPath]);
+  }, [isOpen, currentPath, loadedMtime]);
 
   const loadDirectory = async (path: string) => {
     setIsLoading(true);
@@ -101,10 +109,12 @@ export const FileBrowser: React.FC<Props> = ({
       setParentPath(listing.parent);
       setCurrentPath(listing.path);
       setLoadedPath(listing.path); // Mark this path as loaded
+      setLoadedMtime(listing.mtime); // Store mtime for change detection
     } catch (err: any) {
       setError(err.message || 'Failed to load directory');
       setItems([]);
       setLoadedPath(null); // Clear on error so we retry
+      setLoadedMtime(null);
     } finally {
       setIsLoading(false);
     }

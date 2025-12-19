@@ -22,7 +22,13 @@ export interface FileItem {
 export interface DirectoryListing {
   path: string;
   parent: string | null;
+  mtime: number;
   items: FileItem[];
+}
+
+export interface DirectoryMtime {
+  path: string;
+  mtime: number;
 }
 
 // Storage keys for local state
@@ -37,6 +43,20 @@ export const listDirectory = async (path: string = '~'): Promise<DirectoryListin
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.detail || 'Failed to list directory');
+  }
+
+  return response.json();
+};
+
+/**
+ * Get directory modification time (lightweight change detection)
+ */
+export const getDirectoryMtime = async (path: string = '~'): Promise<DirectoryMtime> => {
+  const response = await fetch(`${API_BASE}/fs/mtime?path=${encodeURIComponent(path)}`);
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to get directory mtime');
   }
 
   return response.json();

@@ -390,6 +390,17 @@ async def list_directory(path: str = Query(default="~")):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/fs/mtime")
+async def get_directory_mtime(path: str = Query(default="~")):
+    """Get directory modification time (lightweight change detection)"""
+    try:
+        return fs_service.get_directory_mtime(path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/fs/read")
 async def read_file(path: str):
     """Read file contents"""

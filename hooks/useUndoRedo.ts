@@ -361,8 +361,22 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     // No-op - operations are tracked automatically
   }, []);
 
+  // Strip outputs from cell for compact storage (outputs can be huge - images, dataframes)
+  const stripCellOutputs = useCallback((cell: Cell): Cell => ({
+    ...cell,
+    outputs: [],
+    isExecuting: false
+  }), []);
+
   // Convert updateContent to updateContentPatch for compact storage
   const convertToCompactFormat = useCallback((op: TimestampedOperation): TimestampedOperation => {
+    if (op.type === 'snapshot') {
+      // Strip outputs from snapshot cells to reduce storage size
+      return {
+        ...op,
+        cells: op.cells.map(stripCellOutputs)
+      };
+    }
     if (op.type === 'updateContent') {
       // Convert to patch format for smaller storage
       const diff = createDiff(op.oldContent, op.newContent);
@@ -376,6 +390,20 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
         timestamp: op.timestamp
       };
     }
+    if (op.type === 'insertCell') {
+      // Strip outputs from inserted cell
+      return {
+        ...op,
+        cell: stripCellOutputs(op.cell)
+      };
+    }
+    if (op.type === 'deleteCell') {
+      // Strip outputs from deleted cell
+      return {
+        ...op,
+        cell: stripCellOutputs(op.cell)
+      };
+    }
     if (op.type === 'batch') {
       // Recursively convert batch operations
       return {
@@ -386,7 +414,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       };
     }
     return op;
-  }, []);
+  }, [stripCellOutputs]);
 
   // Get full history for persistence (converts to compact patch format)
   const getFullHistory = useCallback((): TimestampedOperation[] => {
@@ -394,7 +422,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   }, [convertToCompactFormat]);
 
   // Load history from persistence (e.g., when loading a notebook)
-  // Appends to current history (which should already have a snapshot from resetHistory)
+  // Rebuilds undoStack from loaded operations so undo works
   const loadHistory = useCallback((history: TimestampedOperation[]) => {
     // If loaded history starts with a snapshot, use it entirely
     if (history.length > 0 && history[0].type === 'snapshot') {
@@ -411,6 +439,20 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       }
     }
     // If history is empty, keep the current snapshot from resetHistory
+
+    // Rebuild undoStack from the loaded history (only undoable operations)
+    const undoableOps: Operation[] = [];
+    for (const op of fullHistoryRef.current) {
+      if (op.type === 'insertCell' || op.type === 'deleteCell' ||
+          op.type === 'moveCell' || op.type === 'updateContent' ||
+          op.type === 'changeType' || op.type === 'batch') {
+        // Convert timestamped operation to regular operation (strip timestamp)
+        const { timestamp, ...operation } = op as any;
+        undoableOps.push(operation as Operation);
+      }
+    }
+    setUndoStack(undoableOps);
+    setRedoStack([]); // Clear redo stack when loading history
   }, []);
 
   // Log a non-undoable operation (for history tracking)
