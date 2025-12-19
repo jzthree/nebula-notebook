@@ -80,6 +80,7 @@ class RenameFileRequest(BaseModel):
 class SaveNotebookRequest(BaseModel):
     path: str
     cells: List[Dict[str, Any]]
+    kernel_name: Optional[str] = None  # Kernel name to persist in notebook metadata
 
 
 class SaveHistoryRequest(BaseModel):
@@ -479,8 +480,8 @@ async def rename_file(request: RenameFileRequest):
 async def get_notebook_cells(path: str):
     """Read a notebook file and return cells in internal format"""
     try:
-        cells = fs_service.get_notebook_cells(path)
-        return {"path": path, "cells": cells}
+        result = fs_service.get_notebook_cells(path)
+        return {"path": path, "cells": result["cells"], "kernelspec": result["kernelspec"]}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -491,7 +492,7 @@ async def get_notebook_cells(path: str):
 async def save_notebook(request: SaveNotebookRequest):
     """Save cells to a notebook file"""
     try:
-        fs_service.save_notebook_cells(request.path, request.cells)
+        fs_service.save_notebook_cells(request.path, request.cells, request.kernel_name)
         return {"status": "ok", "path": request.path}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

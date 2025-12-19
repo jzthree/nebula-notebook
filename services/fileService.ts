@@ -145,9 +145,26 @@ export const renameFile = async (oldPath: string, newPath: string): Promise<File
 };
 
 /**
+ * Notebook data including cells and metadata
+ */
+export interface NotebookData {
+  cells: Cell[];
+  kernelspec: string;  // kernel name from notebook metadata
+}
+
+/**
  * Get notebook cells from a .ipynb file
+ * @deprecated Use getNotebookData instead to get kernelspec
  */
 export const getNotebookCells = async (path: string): Promise<Cell[]> => {
+  const data = await getNotebookData(path);
+  return data.cells;
+};
+
+/**
+ * Get notebook data including cells and kernelspec
+ */
+export const getNotebookData = async (path: string): Promise<NotebookData> => {
   const response = await fetch(`${API_BASE}/notebook/cells?path=${encodeURIComponent(path)}`);
 
   if (!response.ok) {
@@ -156,17 +173,23 @@ export const getNotebookCells = async (path: string): Promise<Cell[]> => {
   }
 
   const data = await response.json();
-  return data.cells;
+  return {
+    cells: data.cells,
+    kernelspec: data.kernelspec || 'python3'
+  };
 };
 
 /**
  * Save cells to a notebook file
+ * @param path - Path to the notebook file
+ * @param cells - Cells to save
+ * @param kernelName - Optional kernel name to persist in notebook metadata
  */
-export const saveNotebookCells = async (path: string, cells: Cell[]): Promise<void> => {
+export const saveNotebookCells = async (path: string, cells: Cell[], kernelName?: string): Promise<void> => {
   const response = await fetch(`${API_BASE}/notebook/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, cells })
+    body: JSON.stringify({ path, cells, kernel_name: kernelName })
   });
 
   if (!response.ok) {

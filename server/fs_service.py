@@ -308,11 +308,12 @@ class FilesystemService:
 
         return self._get_file_info(new_path).__dict__
 
-    def get_notebook_cells(self, path: str) -> List[Dict[str, Any]]:
+    def get_notebook_cells(self, path: str) -> Dict[str, Any]:
         """
         Read a notebook and convert to internal cell format
 
-        Converts from .ipynb format to our Cell format
+        Converts from .ipynb format to our Cell format.
+        Returns dict with 'cells' and 'kernelspec' keys.
         """
         path = self._normalize_path(path)
 
@@ -321,6 +322,11 @@ class FilesystemService:
 
         with open(path, 'r', encoding='utf-8') as f:
             notebook = json.load(f)
+
+        # Extract kernelspec from metadata
+        metadata = notebook.get("metadata", {})
+        kernelspec = metadata.get("kernelspec", {})
+        kernel_name = kernelspec.get("name", "python3")
 
         cells = []
         for i, nb_cell in enumerate(notebook.get("cells", [])):
@@ -401,15 +407,32 @@ class FilesystemService:
                 "executionCount": nb_cell.get("execution_count")
             })
 
-        return cells
+        return {
+            "cells": cells,
+            "kernelspec": kernel_name
+        }
 
-    def save_notebook_cells(self, path: str, cells: List[Dict[str, Any]]) -> bool:
+    def save_notebook_cells(self, path: str, cells: List[Dict[str, Any]], kernel_name: str = None) -> bool:
         """
         Save cells to a notebook file
 
-        Converts from our Cell format to .ipynb format
+        Converts from our Cell format to .ipynb format.
+
+        Args:
+            path: Path to save the notebook
+            cells: List of cells in internal format
+            kernel_name: Optional kernel name to save in metadata (defaults to python3)
         """
         path = self._normalize_path(path)
+
+        # Use provided kernel_name or default to python3
+        if kernel_name is None:
+            kernel_name = "python3"
+
+        # Generate display name from kernel name
+        display_name = kernel_name.replace("-", " ").replace("_", " ").title()
+        if kernel_name == "python3":
+            display_name = "Python 3"
 
         nb_cells = []
         for cell in cells:
@@ -489,9 +512,9 @@ class FilesystemService:
             "cells": nb_cells,
             "metadata": {
                 "kernelspec": {
-                    "display_name": "Python 3",
+                    "display_name": display_name,
                     "language": "python",
-                    "name": "python3"
+                    "name": kernel_name
                 },
                 "language_info": {
                     "name": "python",

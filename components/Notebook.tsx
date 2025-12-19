@@ -8,8 +8,8 @@ import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, 
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
-  getFileContent,
-  saveFileContent,
+  getNotebookData,
+  saveNotebookCells,
   getActiveFileId,
   saveActiveFileId,
   updateNotebookMetadata,
@@ -181,7 +181,7 @@ export const Notebook: React.FC = () => {
 
   // Autosave hook
   const performSaveToFile = useCallback(async (fileId: string, cellsToSave: Cell[]) => {
-    await saveFileContent(fileId, cellsToSave);
+    await saveNotebookCells(fileId, cellsToSave, currentKernel);
     await updateNotebookMetadata(fileId, {});
     // Save history in background (non-blocking) - don't slow down notebook save
     const history = getFullHistory();
@@ -190,7 +190,7 @@ export const Notebook: React.FC = () => {
         // Silently ignore history save failures
       });
     }
-  }, [getFullHistory]);
+  }, [getFullHistory, currentKernel]);
 
   const { status: autosaveStatus, saveNow, getBackup, clearBackup } = useAutosave({
     fileId: currentFileId,
@@ -528,7 +528,7 @@ export const Notebook: React.FC = () => {
     }
   };
 
-  const loadFileAsync = async (id: string, content: Cell[]) => {
+  const loadFileAsync = async (id: string, content: Cell[], notebookKernel?: string) => {
     if (currentFileId && currentFileId !== id) {
       saveNow(); // Save current file before switching
     }
@@ -584,10 +584,24 @@ export const Notebook: React.FC = () => {
       virtuosoRef.current?.scrollTo({ top: 0 });
     });
 
+    // Use kernel from notebook file if available, otherwise use current kernel preference
+    // Also verify the kernel exists in available kernels
+    let kernelToUse = notebookKernel || currentKernel;
+    const kernelExists = availableKernels.some(k => k.name === kernelToUse);
+    if (!kernelExists && availableKernels.length > 0) {
+      // Fall back to first available kernel if the specified one doesn't exist
+      kernelToUse = availableKernels[0].name;
+    }
+
+    // Update current kernel state to reflect what we're actually using
+    if (kernelToUse !== currentKernel) {
+      setCurrentKernel(kernelToUse);
+    }
+
     // Get or create kernel for this file (one notebook = one kernel)
     try {
       setKernelStatus('starting');
-      const sessionId = await kernelService.getOrCreateKernelForFile(id, currentKernel);
+      const sessionId = await kernelService.getOrCreateKernelForFile(id, kernelToUse);
       setKernelSessionId(sessionId);
       setIsKernelReady(true);
       setKernelStatus('idle');
@@ -618,9 +632,9 @@ export const Notebook: React.FC = () => {
   const loadFile = async (id: string) => {
     setIsLoadingFile(true);
     try {
-      const content = await getFileContent(id);
-      if (content) {
-        loadFileAsync(id, content);
+      const notebookData = await getNotebookData(id);
+      if (notebookData && notebookData.cells) {
+        loadFileAsync(id, notebookData.cells, notebookData.kernelspec);
       } else {
         // File doesn't exist or is empty
         setIsLoadingFile(false);
