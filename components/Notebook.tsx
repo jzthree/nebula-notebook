@@ -206,8 +206,6 @@ export const Notebook: React.FC = () => {
   const [kernelExecutionCount, setKernelExecutionCount] = useState(0); // Global execution counter
   const executionStartTimeRef = useRef<number | null>(null); // Track when queue execution started
 
-  // Visible range for breadcrumb navigation
-  const [visibleRange, setVisibleRange] = useState({ startIndex: 0, endIndex: 0 });
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
@@ -1328,7 +1326,7 @@ export const Notebook: React.FC = () => {
         {/* Breadcrumb navigation for markdown headers */}
         <NotebookBreadcrumb
           cells={cells}
-          visibleRange={visibleRange}
+          activeCellId={activeCellId}
           onNavigate={navigateToCell}
         />
 
@@ -1340,7 +1338,6 @@ export const Notebook: React.FC = () => {
               cells={cells}
               virtuosoRef={virtuosoRef}
               className="h-full"
-              onRangeChange={setVisibleRange}
               renderCell={(cell, idx) => (
                   <CellComponent
                   key={cell.id}

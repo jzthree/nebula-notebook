@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { ChevronRight, ChevronDown } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { Cell } from '../types';
 
 interface HeaderInfo {
@@ -7,12 +7,12 @@ interface HeaderInfo {
   cellIndex: number;
   level: number; // 1 for #, 2 for ##, 3 for ###
   text: string;
-  key: string; // Unique key for React
+  key: string;
 }
 
 interface Props {
   cells: Cell[];
-  visibleRange: { startIndex: number; endIndex: number };
+  activeCellId: string | null;
   onNavigate: (cellIndex: number, cellId: string) => void;
 }
 
@@ -42,13 +42,13 @@ function parseHeaders(cells: Cell[]): HeaderInfo[] {
   return headers;
 }
 
-// Find current section based on visible cells
-function findCurrentSection(headers: HeaderInfo[], visibleStartIndex: number): HeaderInfo | null {
+// Find current section based on active cell
+function findCurrentSection(headers: HeaderInfo[], activeCellIndex: number): HeaderInfo | null {
   if (headers.length === 0) return null;
 
   let current: HeaderInfo | null = null;
   for (const header of headers) {
-    if (header.cellIndex <= visibleStartIndex) {
+    if (header.cellIndex <= activeCellIndex) {
       current = header;
     } else {
       break;
@@ -65,7 +65,6 @@ function buildBreadcrumbPath(headers: HeaderInfo[], current: HeaderInfo | null):
   const path: HeaderInfo[] = [];
   const currentIdx = headers.findIndex(h => h.key === current.key);
 
-  // Walk backwards to find parent headers (lower level numbers = higher in hierarchy)
   for (let i = currentIdx; i >= 0; i--) {
     const header = headers[i];
     if (path.length === 0 || header.level < path[0].level) {
@@ -76,22 +75,54 @@ function buildBreadcrumbPath(headers: HeaderInfo[], current: HeaderInfo | null):
   return path;
 }
 
-export const NotebookBreadcrumb: React.FC<Props> = ({ cells, visibleRange, onNavigate }) => {
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+// Get siblings for a header (same level, within same parent scope)
+function getSiblings(headers: HeaderInfo[], header: HeaderInfo, breadcrumbPath: HeaderInfo[]): HeaderInfo[] {
+  const headerIdx = headers.findIndex(h => h.key === header.key);
+  const level = header.level;
+
+  // Find the parent header (if any) - it's the previous item in breadcrumb path
+  const pathIdx = breadcrumbPath.findIndex(h => h.key === header.key);
+  const parent = pathIdx > 0 ? breadcrumbPath[pathIdx - 1] : null;
+
+  // Find the range of headers under this parent
+  let startIdx = 0;
+  let endIdx = headers.length;
+
+  if (parent) {
+    const parentIdx = headers.findIndex(h => h.key === parent.key);
+    startIdx = parentIdx + 1;
+
+    // Find where parent's scope ends (next header at parent's level or higher)
+    for (let i = parentIdx + 1; i < headers.length; i++) {
+      if (headers[i].level <= parent.level) {
+        endIdx = i;
+        break;
+      }
+    }
+  }
+
+  // Get all headers at the same level within the parent's scope
+  return headers.slice(startIdx, endIdx).filter(h => h.level === level);
+}
+
+interface BreadcrumbSegmentProps {
+  header: HeaderInfo;
+  isLast: boolean;
+  siblings: HeaderInfo[];
+  currentKey: string;
+  onNavigate: (header: HeaderInfo) => void;
+}
+
+const BreadcrumbSegment: React.FC<BreadcrumbSegmentProps> = ({
+  header,
+  isLast,
+  siblings,
+  currentKey,
+  onNavigate
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
-
-  const headers = useMemo(() => parseHeaders(cells), [cells]);
-
-  const currentSection = useMemo(
-    () => findCurrentSection(headers, visibleRange.startIndex),
-    [headers, visibleRange.startIndex]
-  );
-
-  const breadcrumbPath = useMemo(
-    () => buildBreadcrumbPath(headers, currentSection),
-    [headers, currentSection]
-  );
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -101,17 +132,77 @@ export const NotebookBreadcrumb: React.FC<Props> = ({ cells, visibleRange, onNav
         buttonRef.current &&
         !buttonRef.current.contains(e.target as Node)
       ) {
-        setIsDropdownOpen(false);
+        setIsOpen(false);
       }
     };
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isOpen]);
+
+  const handleSelect = (h: HeaderInfo) => {
+    onNavigate(h);
+    setIsOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <button
+        ref={buttonRef}
+        onClick={() => setIsOpen(!isOpen)}
+        className={`truncate hover:text-gray-900 transition-colors ${
+          isLast ? 'text-gray-600' : 'text-gray-400'
+        }`}
+        title={header.text}
+      >
+        {header.text}
+      </button>
+
+      {isOpen && siblings.length > 0 && (
+        <div
+          ref={dropdownRef}
+          className="absolute left-0 top-full mt-1 min-w-48 max-w-72 max-h-64 overflow-auto bg-white border border-gray-200 rounded-lg shadow-lg z-50"
+        >
+          {siblings.map((h) => (
+            <button
+              key={h.key}
+              onClick={() => handleSelect(h)}
+              className={`w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 transition-colors truncate ${
+                h.key === currentKey ? 'bg-blue-50 text-blue-700' : 'text-gray-600'
+              }`}
+            >
+              {h.text}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const NotebookBreadcrumb: React.FC<Props> = ({ cells, activeCellId, onNavigate }) => {
+  const headers = useMemo(() => parseHeaders(cells), [cells]);
+
+  const activeCellIndex = useMemo(() => {
+    if (!activeCellId) return 0;
+    const idx = cells.findIndex(c => c.id === activeCellId);
+    return idx >= 0 ? idx : 0;
+  }, [cells, activeCellId]);
+
+  const currentSection = useMemo(
+    () => findCurrentSection(headers, activeCellIndex),
+    [headers, activeCellIndex]
+  );
+
+  const breadcrumbPath = useMemo(
+    () => buildBreadcrumbPath(headers, currentSection),
+    [headers, currentSection]
+  );
 
   const handleNavigate = useCallback((header: HeaderInfo) => {
     onNavigate(header.cellIndex, header.cellId);
-    setIsDropdownOpen(false);
   }, [onNavigate]);
 
   if (headers.length === 0) {
@@ -122,58 +213,21 @@ export const NotebookBreadcrumb: React.FC<Props> = ({ cells, visibleRange, onNav
     <div className="border-b border-gray-100">
       <div className="max-w-5xl mx-auto px-4">
         <div className="flex items-center py-1 text-xs text-gray-500">
-          {/* Breadcrumb path */}
-          <div className="flex items-center gap-1 min-w-0 flex-1">
+          <div className="flex items-center gap-1 min-w-0">
             {breadcrumbPath.map((header, idx) => (
               <React.Fragment key={header.key}>
                 {idx > 0 && (
                   <ChevronRight className="w-3 h-3 text-gray-300 flex-shrink-0" />
                 )}
-                <button
-                  onClick={() => handleNavigate(header)}
-                  className={`truncate hover:text-gray-900 transition-colors ${
-                    idx === breadcrumbPath.length - 1
-                      ? 'text-gray-600'
-                      : 'text-gray-400'
-                  }`}
-                  title={header.text}
-                >
-                  {header.text}
-                </button>
+                <BreadcrumbSegment
+                  header={header}
+                  isLast={idx === breadcrumbPath.length - 1}
+                  siblings={getSiblings(headers, header, breadcrumbPath)}
+                  currentKey={header.key}
+                  onNavigate={handleNavigate}
+                />
               </React.Fragment>
             ))}
-          </div>
-
-          {/* Dropdown toggle */}
-          <div className="relative ml-2">
-            <button
-              ref={buttonRef}
-              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-              className="flex items-center gap-0.5 text-gray-400 hover:text-gray-600 transition-colors"
-              title="Jump to section"
-            >
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} />
-            </button>
-
-            {isDropdownOpen && (
-              <div
-                ref={dropdownRef}
-                className="absolute right-0 top-full mt-1 w-72 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-lg z-50"
-              >
-                {headers.map((header) => (
-                  <button
-                    key={header.key}
-                    onClick={() => handleNavigate(header)}
-                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 transition-colors ${
-                      currentSection?.key === header.key ? 'bg-blue-50 text-blue-700' : 'text-gray-600'
-                    }`}
-                    style={{ paddingLeft: `${(header.level - 1) * 16 + 12}px` }}
-                  >
-                    <span className="truncate">{header.text}</span>
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       </div>
