@@ -478,6 +478,54 @@ class FilesystemService:
 
         return True
 
+    def _get_history_path(self, notebook_path: str) -> str:
+        """
+        Get the history file path for a notebook.
+        History is stored in .nebula subdirectory alongside the notebook.
+        e.g., /path/to/notebook.ipynb -> /path/to/.nebula/notebook.history.json
+        """
+        notebook_path = self._normalize_path(notebook_path)
+        parent_dir = os.path.dirname(notebook_path)
+        notebook_name = os.path.basename(notebook_path)
+        name_without_ext = os.path.splitext(notebook_name)[0]
+
+        nebula_dir = os.path.join(parent_dir, '.nebula')
+        return os.path.join(nebula_dir, f"{name_without_ext}.history.json")
+
+    def save_history(self, notebook_path: str, history: List[Dict[str, Any]]) -> bool:
+        """
+        Save operation history for a notebook.
+        Creates .nebula directory if it doesn't exist.
+        """
+        history_path = self._get_history_path(notebook_path)
+
+        # Create .nebula directory if needed
+        nebula_dir = os.path.dirname(history_path)
+        if not os.path.exists(nebula_dir):
+            os.makedirs(nebula_dir, exist_ok=True)
+
+        with open(history_path, 'w', encoding='utf-8') as f:
+            json.dump(history, f, indent=2)
+
+        return True
+
+    def load_history(self, notebook_path: str) -> List[Dict[str, Any]]:
+        """
+        Load operation history for a notebook.
+        Returns empty list if no history file exists.
+        """
+        history_path = self._get_history_path(notebook_path)
+
+        if not os.path.exists(history_path):
+            return []
+
+        try:
+            with open(history_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            # If history file is corrupted, return empty list
+            return []
+
 
 # Global instance
 fs_service = FilesystemService()

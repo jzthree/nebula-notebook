@@ -1,18 +1,47 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { Cell, CellType } from '../types';
+import { createDiff, diffToPatch, applyPatch, reversePatch, hashText, Patch } from '../lib/diffUtils';
 
 // Maximum number of operations to keep in history
 const MAX_HISTORY = 100;
 
-// Operation types - each knows how to apply and reverse itself
-export type Operation =
+// Base operation data shared by all operations
+interface BaseOperation {
+  timestamp: number; // Unix timestamp in milliseconds
+}
+
+// Undoable operations - can be reversed
+export type UndoableOperation =
   | { type: 'insertCell'; index: number; cell: Cell }
   | { type: 'deleteCell'; index: number; cell: Cell }
   | { type: 'moveCell'; fromIndex: number; toIndex: number }
   | { type: 'updateContent'; cellId: string; oldContent: string; newContent: string }
+  | { type: 'updateContentPatch'; cellId: string; patch: Patch; oldHash: string; newHash: string }
   | { type: 'changeType'; cellId: string; oldType: CellType; newType: CellType }
-  | { type: 'batch'; operations: Operation[] }; // For grouping multiple operations
+  | { type: 'batch'; operations: UndoableOperation[] };
+
+// Non-undoable operations - for tracking/logging only (AI training data)
+// Note: runCell does NOT include content - it can be reconstructed from edit history
+// by finding the most recent snapshot and replaying updateContent operations
+export type LogOperation =
+  | { type: 'runCell'; cellId: string; cellIndex: number }
+  | { type: 'runAllCells'; cellCount: number }
+  | { type: 'interruptKernel' }
+  | { type: 'restartKernel' }
+  | { type: 'executionComplete'; cellId: string; cellIndex: number; durationMs: number; success: boolean; output?: string };
+
+// Snapshot of notebook state at a point in time (for reconstruction)
+export interface SnapshotOperation {
+  type: 'snapshot';
+  cells: Cell[];
+}
+
+// Combined operation type with timestamp
+export type TimestampedOperation = BaseOperation & (UndoableOperation | LogOperation | SnapshotOperation);
+
+// Legacy Operation type for backwards compatibility with undo/redo logic
+export type Operation = UndoableOperation;
 
 interface UseUndoRedoResult {
   cells: Cell[];
@@ -34,6 +63,11 @@ interface UseUndoRedoResult {
   resetHistory: (initialCells: Cell[]) => void;
   // Legacy support - for operations that don't fit the model
   saveCheckpoint: () => void;
+  // History access for persistence
+  getFullHistory: () => TimestampedOperation[];
+  loadHistory: (history: TimestampedOperation[]) => void;
+  // Log non-undoable operations (for AI training)
+  logOperation: (op: LogOperation) => void;
 }
 
 // Apply an operation to cells (forward)
@@ -57,6 +91,13 @@ function applyOperation(cells: Cell[], op: Operation): Cell[] {
       return cells.map(c =>
         c.id === op.cellId ? { ...c, content: op.newContent } : c
       );
+    }
+    case 'updateContentPatch': {
+      return cells.map(c => {
+        if (c.id !== op.cellId) return c;
+        const { result } = applyPatch(c.content, op.patch);
+        return { ...c, content: result };
+      });
     }
     case 'changeType': {
       return cells.map(c =>
@@ -87,6 +128,14 @@ function reverseOperation(op: Operation): Operation {
         oldContent: op.newContent,
         newContent: op.oldContent
       };
+    case 'updateContentPatch':
+      return {
+        type: 'updateContentPatch',
+        cellId: op.cellId,
+        patch: reversePatch(op.patch),
+        oldHash: op.newHash,
+        newHash: op.oldHash
+      };
     case 'changeType':
       return {
         type: 'changeType',
@@ -105,6 +154,9 @@ function reverseOperation(op: Operation): Operation {
   }
 }
 
+// Maximum operations to keep in full history (for AI training)
+const MAX_FULL_HISTORY = 10000;
+
 export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Current state
   const [cells, setCellsInternal] = useState<Cell[]>(initialCells);
@@ -116,8 +168,24 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Track last content per cell for updateContent operations
   const lastContentRef = useRef<Map<string, string>>(new Map());
 
+  // Full timestamped history for persistence (includes both undoable and log operations)
+  const fullHistoryRef = useRef<TimestampedOperation[]>([]);
+
   const canUndo = undoStack.length > 0;
   const canRedo = redoStack.length > 0;
+
+  // Helper to add operation to full history
+  const addToFullHistory = useCallback((op: UndoableOperation | LogOperation) => {
+    const timestampedOp: TimestampedOperation = {
+      ...op,
+      timestamp: Date.now()
+    };
+    fullHistoryRef.current.push(timestampedOp);
+    // Trim if exceeds max
+    if (fullHistoryRef.current.length > MAX_FULL_HISTORY) {
+      fullHistoryRef.current = fullHistoryRef.current.slice(-MAX_FULL_HISTORY);
+    }
+  }, []);
 
   // Execute an operation and push to undo stack
   const executeOperation = useCallback((op: Operation) => {
@@ -130,7 +198,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       return newStack;
     });
     setRedoStack([]); // Clear redo stack on new operation
-  }, []);
+    addToFullHistory(op); // Track in full history
+  }, [addToFullHistory]);
 
   // Insert a cell at index
   const insertCell = useCallback((index: number, cell: Cell) => {
@@ -171,14 +240,15 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
         // Update last known content
         lastContentRef.current.set(cellId, newContent);
 
+        const op: Operation = {
+          type: 'updateContent',
+          cellId,
+          oldContent,
+          newContent
+        };
+
         // Push operation to undo stack
         setUndoStack(prevStack => {
-          const op: Operation = {
-            type: 'updateContent',
-            cellId,
-            oldContent,
-            newContent
-          };
           const newStack = [...prevStack, op];
           if (newStack.length > MAX_HISTORY) {
             newStack.shift();
@@ -186,11 +256,12 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
           return newStack;
         });
         setRedoStack([]);
+        addToFullHistory(op); // Track in full history
       }
 
       return prev.map(c => c.id === cellId ? { ...c, content: newContent } : c);
     });
-  }, []);
+  }, [addToFullHistory]);
 
   // Change cell type
   const changeType = useCallback((cellId: string, newType: CellType) => {
@@ -213,10 +284,11 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
         return newStack;
       });
       setRedoStack([]);
+      addToFullHistory(op); // Track in full history
 
       return prev.map(c => c.id === cellId ? { ...c, type: newType } : c);
     });
-  }, []);
+  }, [addToFullHistory]);
 
   // Execute a batch of operations as a single undoable action
   const batch = useCallback((operations: Operation[]) => {
@@ -274,6 +346,13 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     lastContentRef.current.clear();
     // Initialize content tracking
     newCells.forEach(c => lastContentRef.current.set(c.id, c.content));
+
+    // Start fresh history with a snapshot (required for trajectory reconstruction)
+    fullHistoryRef.current = [{
+      type: 'snapshot',
+      cells: newCells.map(c => ({ ...c })), // Deep copy
+      timestamp: Date.now()
+    }];
   }, []);
 
   // Legacy: saveCheckpoint does nothing in operation-based system
@@ -281,6 +360,63 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   const saveCheckpoint = useCallback(() => {
     // No-op - operations are tracked automatically
   }, []);
+
+  // Convert updateContent to updateContentPatch for compact storage
+  const convertToCompactFormat = useCallback((op: TimestampedOperation): TimestampedOperation => {
+    if (op.type === 'updateContent') {
+      // Convert to patch format for smaller storage
+      const diff = createDiff(op.oldContent, op.newContent);
+      const patch = diffToPatch(op.oldContent, diff);
+      return {
+        type: 'updateContentPatch',
+        cellId: op.cellId,
+        patch,
+        oldHash: hashText(op.oldContent),
+        newHash: hashText(op.newContent),
+        timestamp: op.timestamp
+      };
+    }
+    if (op.type === 'batch') {
+      // Recursively convert batch operations
+      return {
+        ...op,
+        operations: op.operations.map(subOp =>
+          convertToCompactFormat({ ...subOp, timestamp: op.timestamp }) as UndoableOperation
+        )
+      };
+    }
+    return op;
+  }, []);
+
+  // Get full history for persistence (converts to compact patch format)
+  const getFullHistory = useCallback((): TimestampedOperation[] => {
+    return fullHistoryRef.current.map(convertToCompactFormat);
+  }, [convertToCompactFormat]);
+
+  // Load history from persistence (e.g., when loading a notebook)
+  // Appends to current history (which should already have a snapshot from resetHistory)
+  const loadHistory = useCallback((history: TimestampedOperation[]) => {
+    // If loaded history starts with a snapshot, use it entirely
+    if (history.length > 0 && history[0].type === 'snapshot') {
+      fullHistoryRef.current = [...history];
+    } else if (history.length > 0) {
+      // Loaded history has no snapshot - append to current (which has the snapshot)
+      // This handles the case where old history format didn't have snapshots
+      const currentSnapshot = fullHistoryRef.current.find(op => op.type === 'snapshot');
+      if (currentSnapshot) {
+        fullHistoryRef.current = [currentSnapshot, ...history];
+      } else {
+        // No snapshot anywhere - just use the history as-is (may not be reconstructable)
+        fullHistoryRef.current = [...history];
+      }
+    }
+    // If history is empty, keep the current snapshot from resetHistory
+  }, []);
+
+  // Log a non-undoable operation (for AI training data)
+  const logOperation = useCallback((op: LogOperation) => {
+    addToFullHistory(op);
+  }, [addToFullHistory]);
 
   return {
     cells,
@@ -297,5 +433,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     canRedo,
     resetHistory,
     saveCheckpoint,
+    getFullHistory,
+    loadHistory,
+    logOperation,
   };
 };

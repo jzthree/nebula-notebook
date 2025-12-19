@@ -13,7 +13,9 @@ import {
   getActiveFileId,
   saveActiveFileId,
   updateNotebookMetadata,
-  renameFile
+  renameFile,
+  loadNotebookHistory,
+  saveNotebookHistory
 } from '../services/fileService';
 import { FileBrowser } from './FileBrowser';
 import { AIChatSidebar } from './AIChatSidebar';
@@ -101,7 +103,10 @@ export const Notebook: React.FC = () => {
     redo,
     canUndo,
     canRedo,
-    resetHistory
+    resetHistory,
+    getFullHistory,
+    loadHistory,
+    logOperation
   } = useUndoRedo([]);  // Start with empty cells
 
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
@@ -112,6 +117,61 @@ export const Notebook: React.FC = () => {
   // Virtuoso Handle for programmatic scrolling
   const virtuosoRef = useRef<VirtuosoHandle>(null);
 
+  // Debounced scroll to handle height changes during execution
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingScrollRef = useRef<{ index: number; attempts: number } | null>(null);
+
+  // Smart scroll that debounces rapid requests and retries on height changes
+  const scrollToCellDebounced = useCallback((index: number, delay: number = 50) => {
+    // Cancel any pending scroll
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+
+    // Track this scroll request
+    pendingScrollRef.current = { index, attempts: 0 };
+
+    const performScroll = () => {
+      if (!pendingScrollRef.current || pendingScrollRef.current.index !== index) {
+        return; // Another scroll was requested, abort this one
+      }
+
+      virtuosoRef.current?.scrollToIndex({
+        index,
+        align: 'start',
+        behavior: 'smooth',
+        offset: -80
+      });
+
+      // After initial scroll, do one more adjustment after heights settle
+      if (pendingScrollRef.current.attempts === 0) {
+        pendingScrollRef.current.attempts = 1;
+        scrollTimeoutRef.current = setTimeout(() => {
+          if (pendingScrollRef.current?.index === index) {
+            virtuosoRef.current?.scrollToIndex({
+              index,
+              align: 'start',
+              behavior: 'auto', // Instant adjustment, no jarring smooth scroll
+              offset: -80
+            });
+            pendingScrollRef.current = null;
+          }
+        }, 150); // Wait for output clearing to complete
+      }
+    };
+
+    scrollTimeoutRef.current = setTimeout(performScroll, delay);
+  }, []);
+
+  // Cleanup scroll timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // Ref for saveNow to avoid stale closures in keyboard handler
   const saveNowRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
@@ -119,7 +179,14 @@ export const Notebook: React.FC = () => {
   const performSaveToFile = useCallback(async (fileId: string, cellsToSave: Cell[]) => {
     await saveFileContent(fileId, cellsToSave);
     await updateNotebookMetadata(fileId, {});
-  }, []);
+    // Save history in background (non-blocking) - don't slow down notebook save
+    const history = getFullHistory();
+    if (history.length > 0) {
+      saveNotebookHistory(fileId, history).catch(error => {
+        console.warn('Failed to save notebook history:', error);
+      });
+    }
+  }, [getFullHistory]);
 
   const { status: autosaveStatus, saveNow, getBackup, clearBackup } = useAutosave({
     fileId: currentFileId,
@@ -409,10 +476,23 @@ export const Notebook: React.FC = () => {
     }
 
     resetHistory(content);
+
+    // Set UI state immediately - don't block on history loading
     setCurrentFileId(id);
     saveActiveFileId(id);
     setActiveCellId(content.length > 0 ? content[0].id : null);
     setIsLoadingFile(false);
+
+    // Load persisted history in background (non-blocking)
+    loadNotebookHistory(id)
+      .then(savedHistory => {
+        if (savedHistory.length > 0) {
+          loadHistory(savedHistory);
+        }
+      })
+      .catch(error => {
+        console.warn('Failed to load notebook history:', error);
+      });
 
     const meta = files.find(f => f.id === id);
     if (meta) setCurrentFileMetadata(meta);
@@ -515,6 +595,8 @@ export const Notebook: React.FC = () => {
       // Clear all cell outputs and reset execution counter
       setCells(prev => prev.map(c => ({ ...c, outputs: [], executionCount: undefined })));
       setKernelExecutionCount(0);
+      // Log kernel restart for AI training
+      logOperation({ type: 'restartKernel' });
     } catch (error) {
       console.error('Failed to restart kernel:', error);
       setKernelStatus('disconnected');
@@ -529,6 +611,8 @@ export const Notebook: React.FC = () => {
       setExecutionQueue([]);
       setIsProcessingQueue(false);
       setCells(prev => prev.map(c => ({ ...c, isExecuting: false })));
+      // Log kernel interrupt for AI training
+      logOperation({ type: 'interruptKernel' });
     } catch (error) {
       console.error('Failed to interrupt kernel:', error);
     }
@@ -670,6 +754,12 @@ export const Notebook: React.FC = () => {
   const queueExecution = (id: string) => {
     saveCheckpoint();
     setExecutionQueue(prev => [...prev, id]);
+    // Log cell run for AI training
+    // Note: content is NOT stored here - it's reconstructed from edit history + snapshot
+    const cellIndex = cells.findIndex(c => c.id === id);
+    if (cellIndex >= 0) {
+      logOperation({ type: 'runCell', cellId: id, cellIndex });
+    }
   };
 
   const runAndAdvance = (id: string) => {
@@ -677,16 +767,10 @@ export const Notebook: React.FC = () => {
     const currentIndex = cells.findIndex(c => c.id === id);
     if (currentIndex < cells.length - 1) {
       // Move to next cell and scroll to it
+      // Use debounced scroll to handle height changes when outputs are cleared/regenerated
       const nextIndex = currentIndex + 1;
       setActiveCellId(cells[nextIndex].id);
-      requestAnimationFrame(() => {
-        virtuosoRef.current?.scrollToIndex({
-          index: nextIndex,
-          align: 'start',
-          behavior: 'smooth',
-          offset: -80
-        });
-      });
+      scrollToCellDebounced(nextIndex);
     } else {
       // Create new cell at the end (addCell already handles scrolling via setActiveCellId)
       addCell('code', '', currentIndex);
@@ -769,13 +853,25 @@ export const Notebook: React.FC = () => {
       setIsProcessingQueue(true);
       setKernelStatus('busy');
       const cellId = executionQueue[0];
-      const cell = cells.find(c => c.id === cellId);
+      const cellIndex = cells.findIndex(c => c.id === cellId);
+      const cell = cellIndex >= 0 ? cells[cellIndex] : null;
 
       if (cell && cell.type === 'code') {
+        const cellStartTime = Date.now();
+        let hasError = false;
+        const collectedOutputs: string[] = []; // Track outputs for history
+
         setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: true, outputs: [] } : c));
 
         try {
           await kernelService.executeCode(kernelSessionId, cell.content, (output) => {
+            if (output.type === 'error') {
+              hasError = true;
+            }
+            // Collect text outputs for history (skip images/html)
+            if (output.type === 'stdout' || output.type === 'stderr' || output.type === 'error') {
+              collectedOutputs.push(output.content);
+            }
             setCells(prev => prev.map(c => {
               if (c.id !== cellId) return c;
               return { ...c, outputs: [...c.outputs, output] };
@@ -783,7 +879,25 @@ export const Notebook: React.FC = () => {
           });
         } catch (error) {
           console.error('Execution error:', error);
+          hasError = true;
         }
+
+        // Log execution completion for AI training
+        const durationMs = Date.now() - cellStartTime;
+        // Truncate output to keep history file size reasonable
+        const fullOutput = collectedOutputs.join('\n');
+        const truncatedOutput = fullOutput.length > 2000
+          ? fullOutput.slice(0, 2000) + '...[truncated]'
+          : fullOutput;
+
+        logOperation({
+          type: 'executionComplete',
+          cellId,
+          cellIndex,
+          durationMs,
+          success: !hasError,
+          output: truncatedOutput || undefined
+        });
 
         // Increment global counter and assign to cell
         setKernelExecutionCount(prev => {
@@ -806,7 +920,7 @@ export const Notebook: React.FC = () => {
     };
 
     processNext();
-  }, [executionQueue, isProcessingQueue, isKernelReady, kernelSessionId, cells, setCells]);
+  }, [executionQueue, isProcessingQueue, isKernelReady, kernelSessionId, cells, setCells, logOperation]);
 
   // Track execution timing for notifications
   const prevQueueLengthRef = useRef(0);
@@ -1184,7 +1298,10 @@ export const Notebook: React.FC = () => {
                   <button onClick={saveCurrentNotebook} className="btn-secondary hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors">
                       <Save className="w-4 h-4" /> Save
                   </button>
-                  <button onClick={() => cells.forEach(c => queueExecution(c.id))} className="btn-primary flex items-center gap-2 bg-slate-900 text-white px-3 py-1.5 rounded-md hover:bg-slate-700 text-xs font-medium transition-colors shadow-sm">
+                  <button onClick={() => {
+                    logOperation({ type: 'runAllCells', cellCount: cells.filter(c => c.type === 'code').length });
+                    cells.forEach(c => queueExecution(c.id));
+                  }} className="btn-primary flex items-center gap-2 bg-slate-900 text-white px-3 py-1.5 rounded-md hover:bg-slate-700 text-xs font-medium transition-colors shadow-sm">
                       <Play className="w-4 h-4" /> Run All
                   </button>
 

@@ -81,6 +81,11 @@ class SaveNotebookRequest(BaseModel):
     cells: List[Dict[str, Any]]
 
 
+class SaveHistoryRequest(BaseModel):
+    notebook_path: str
+    history: List[Dict[str, Any]]
+
+
 class InstallKernelRequest(BaseModel):
     python_path: str
     kernel_name: Optional[str] = None
@@ -466,6 +471,28 @@ async def save_notebook(request: SaveNotebookRequest):
     try:
         fs_service.save_notebook_cells(request.path, request.cells)
         return {"status": "ok", "path": request.path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- History Persistence Endpoints ---
+
+@app.get("/api/notebook/history")
+async def get_notebook_history(notebook_path: str):
+    """Load operation history for a notebook from .nebula directory"""
+    try:
+        history = fs_service.load_history(notebook_path)
+        return {"notebook_path": notebook_path, "history": history}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notebook/history")
+async def save_notebook_history(request: SaveHistoryRequest):
+    """Save operation history for a notebook to .nebula directory"""
+    try:
+        fs_service.save_history(request.notebook_path, request.history)
+        return {"status": "ok", "notebook_path": request.notebook_path}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
