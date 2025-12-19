@@ -116,7 +116,7 @@ describe('conflictService', () => {
       expect(result1).toBe(result2);
     });
 
-    it('includes id, type, content, and outputs', () => {
+    it('includes only id, type, and content (excludes outputs)', () => {
       const cells: Cell[] = [
         {
           id: 'cell-1',
@@ -135,9 +135,8 @@ describe('conflictService', () => {
       expect(parsed[0].id).toBe('cell-1');
       expect(parsed[0].type).toBe('code');
       expect(parsed[0].content).toBe('print("hello")');
-      expect(parsed[0].outputs[0].id).toBe('out-1');
-      expect(parsed[0].outputs[0].type).toBe('stdout');
-      expect(parsed[0].outputs[0].content).toBe('hello\n');
+      // Outputs should NOT be included - they can be regenerated
+      expect(parsed[0].outputs).toBeUndefined();
     });
 
     it('ignores isExecuting field (transient state)', () => {
@@ -168,7 +167,7 @@ describe('conflictService', () => {
       expect(result1).toBe(result2);
     });
 
-    it('ignores output timestamp (not relevant for content comparison)', () => {
+    it('ignores outputs entirely (cells with different outputs are equal)', () => {
       const cells1: Cell[] = [
         {
           id: '1',
@@ -183,7 +182,7 @@ describe('conflictService', () => {
           id: '1',
           type: 'code',
           content: 'x = 1',
-          outputs: [{ id: 'out-1', type: 'stdout', content: 'hi', timestamp: 9999 }],
+          outputs: [{ id: 'out-2', type: 'stderr', content: 'error', timestamp: 9999 }],
           isExecuting: false,
         },
       ];
@@ -191,6 +190,7 @@ describe('conflictService', () => {
       const result1 = serializeCellsForComparison(cells1);
       const result2 = serializeCellsForComparison(cells2);
 
+      // Outputs are excluded, so these should be equal
       expect(result1).toBe(result2);
     });
 
@@ -287,7 +287,7 @@ describe('conflictService', () => {
       expect(result).toBe(true);
     });
 
-    it('returns true when outputs change', () => {
+    it('returns false when only outputs change (outputs are regeneratable)', () => {
       const cells: Cell[] = [
         {
           id: '1',
@@ -303,7 +303,8 @@ describe('conflictService', () => {
 
       const result = haveCellsChanged(cells, savedContent);
 
-      expect(result).toBe(true);
+      // Outputs are excluded from comparison - they can be regenerated
+      expect(result).toBe(false);
     });
 
     it('returns false when only isExecuting changes', () => {

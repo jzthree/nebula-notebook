@@ -72,17 +72,13 @@ export async function checkForConflict(
  * @returns JSON string suitable for comparison
  */
 export function serializeCellsForComparison(cells: Cell[]): string {
+  // Only compare id, type, and content - exclude outputs (can be regenerated)
+  // and transient fields like isExecuting
   return JSON.stringify(
     cells.map((c) => ({
       id: c.id,
       type: c.type,
       content: c.content,
-      // Include outputs but exclude timestamp (not content-relevant)
-      outputs: c.outputs?.map((o) => ({
-        id: o.id,
-        type: o.type,
-        content: o.content,
-      })),
     }))
   );
 }
