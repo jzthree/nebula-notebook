@@ -20,10 +20,10 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   onNavigateToCell: (cellIndex: number, cellId: string) => void;
-  onSearchChange?: (query: string, caseSensitive: boolean, currentMatch: CurrentMatch | null) => void;
+  onSearchChange?: (query: string, caseSensitive: boolean, useRegex: boolean, currentMatch: CurrentMatch | null) => void;
   onReplace?: (cellId: string, startIndex: number, endIndex: number, replacement: string) => void;
-  onReplaceAllInCell?: (cellId: string, query: string, replacement: string, caseSensitive: boolean) => void;
-  onReplaceAllInNotebook?: (query: string, replacement: string, caseSensitive: boolean) => void;
+  onReplaceAllInCell?: (cellId: string, query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => void;
+  onReplaceAllInNotebook?: (query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => void;
 }
 
 export const NotebookSearch: React.FC<Props> = ({
@@ -41,6 +41,8 @@ export const NotebookSearch: React.FC<Props> = ({
   const [matches, setMatches] = useState<SearchMatch[]>([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [caseSensitive, setCaseSensitive] = useState(false);
+  const [useRegex, setUseRegex] = useState(false);
+  const [regexError, setRegexError] = useState<string | null>(null);
   const [showReplace, setShowReplace] = useState(false);
   const [showReplaceAllMenu, setShowReplaceAllMenu] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -78,13 +80,14 @@ export const NotebookSearch: React.FC<Props> = ({
       startIndex: matches[currentMatchIndex]?.startIndex,
       endIndex: matches[currentMatchIndex]?.endIndex,
     } : null;
-    onSearchChange?.(query, caseSensitive, currentMatch);
+    onSearchChange?.(query, caseSensitive, useRegex, currentMatch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, query, caseSensitive, currentMatchIndex, matches]); // Intentionally exclude onSearchChange to prevent infinite loops
+  }, [isOpen, query, caseSensitive, useRegex, currentMatchIndex, matches]); // Intentionally exclude onSearchChange to prevent infinite loops
 
   // Track previous query to detect query changes vs cell content changes
   const prevQueryRef = useRef(query);
   const prevCaseSensitiveRef = useRef(caseSensitive);
+  const prevUseRegexRef = useRef(useRegex);
 
   // Search through cells
   useEffect(() => {
@@ -94,36 +97,69 @@ export const NotebookSearch: React.FC<Props> = ({
     if (!query.trim()) {
       setMatches([]);
       setCurrentMatchIndex(0);
+      setRegexError(null);
       prevQueryRef.current = query;
       return;
     }
 
-    const searchQuery = caseSensitive ? query : query.toLowerCase();
     const newMatches: SearchMatch[] = [];
 
+    // Build regex or use string search
+    let regex: RegExp | null = null;
+    if (useRegex) {
+      try {
+        regex = new RegExp(query, caseSensitive ? 'g' : 'gi');
+        setRegexError(null);
+      } catch (e) {
+        setRegexError((e as Error).message);
+        setMatches([]);
+        return;
+      }
+    }
+
     cells.forEach((cell, cellIndex) => {
-      const content = caseSensitive ? cell.content : cell.content.toLowerCase();
-      let startIndex = 0;
+      if (useRegex && regex) {
+        // Regex search
+        regex.lastIndex = 0; // Reset regex state
+        let match;
+        while ((match = regex.exec(cell.content)) !== null) {
+          newMatches.push({
+            cellIndex,
+            cellId: cell.id,
+            startIndex: match.index,
+            endIndex: match.index + match[0].length,
+          });
+          // Prevent infinite loop on zero-length matches
+          if (match[0].length === 0) regex.lastIndex++;
+        }
+      } else {
+        // String search
+        const searchQuery = caseSensitive ? query : query.toLowerCase();
+        const content = caseSensitive ? cell.content : cell.content.toLowerCase();
+        let startIndex = 0;
 
-      while (true) {
-        const foundIndex = content.indexOf(searchQuery, startIndex);
-        if (foundIndex === -1) break;
+        while (true) {
+          const foundIndex = content.indexOf(searchQuery, startIndex);
+          if (foundIndex === -1) break;
 
-        newMatches.push({
-          cellIndex,
-          cellId: cell.id,
-          startIndex: foundIndex,
-          endIndex: foundIndex + query.length,
-        });
+          newMatches.push({
+            cellIndex,
+            cellId: cell.id,
+            startIndex: foundIndex,
+            endIndex: foundIndex + query.length,
+          });
 
-        startIndex = foundIndex + 1;
+          startIndex = foundIndex + 1;
+        }
       }
     });
 
     setMatches(newMatches);
 
     // Only navigate to first match when query changes, not when cell content changes
-    const queryChanged = query !== prevQueryRef.current || caseSensitive !== prevCaseSensitiveRef.current;
+    const queryChanged = query !== prevQueryRef.current ||
+                         caseSensitive !== prevCaseSensitiveRef.current ||
+                         useRegex !== prevUseRegexRef.current;
     if (queryChanged) {
       setCurrentMatchIndex(0);
       if (newMatches.length > 0) {
@@ -137,7 +173,8 @@ export const NotebookSearch: React.FC<Props> = ({
 
     prevQueryRef.current = query;
     prevCaseSensitiveRef.current = caseSensitive;
-  }, [isOpen, query, cells, caseSensitive, onNavigateToCell]);
+    prevUseRegexRef.current = useRegex;
+  }, [isOpen, query, cells, caseSensitive, useRegex, onNavigateToCell]);
 
   const goToMatch = useCallback((index: number) => {
     if (matches.length === 0) return;
@@ -181,7 +218,7 @@ export const NotebookSearch: React.FC<Props> = ({
 
     const currentCellId = matches[currentMatchIndex]?.cellId;
     if (currentCellId) {
-      onReplaceAllInCell(currentCellId, query, replaceText, caseSensitive);
+      onReplaceAllInCell(currentCellId, query, replaceText, caseSensitive, useRegex);
     }
     setShowReplaceAllMenu(false);
 
@@ -189,20 +226,20 @@ export const NotebookSearch: React.FC<Props> = ({
     requestAnimationFrame(() => {
       searchInputRef.current?.focus();
     });
-  }, [matches, currentMatchIndex, query, replaceText, caseSensitive, onReplaceAllInCell]);
+  }, [matches, currentMatchIndex, query, replaceText, caseSensitive, useRegex, onReplaceAllInCell]);
 
   // Replace all in notebook
   const handleReplaceAllInNotebook = useCallback(() => {
     if (!query || !onReplaceAllInNotebook) return;
 
-    onReplaceAllInNotebook(query, replaceText, caseSensitive);
+    onReplaceAllInNotebook(query, replaceText, caseSensitive, useRegex);
     setShowReplaceAllMenu(false);
 
     // Re-focus search input
     requestAnimationFrame(() => {
       searchInputRef.current?.focus();
     });
-  }, [query, replaceText, caseSensitive, onReplaceAllInNotebook]);
+  }, [query, replaceText, caseSensitive, useRegex, onReplaceAllInNotebook]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -242,10 +279,12 @@ export const NotebookSearch: React.FC<Props> = ({
         />
 
         {query && (
-          <span className="text-xs text-slate-500 min-w-[60px]">
-            {matches.length > 0
-              ? `${currentMatchIndex + 1} of ${matches.length}`
-              : 'No matches'}
+          <span className={`text-xs min-w-[60px] ${regexError ? 'text-red-500' : 'text-slate-500'}`}>
+            {regexError
+              ? 'Invalid regex'
+              : matches.length > 0
+                ? `${currentMatchIndex + 1} of ${matches.length}`
+                : 'No matches'}
           </span>
         )}
 
@@ -276,6 +315,16 @@ export const NotebookSearch: React.FC<Props> = ({
           title="Case sensitive"
         >
           Aa
+        </button>
+
+        <button
+          onClick={() => setUseRegex(!useRegex)}
+          className={`px-1.5 py-0.5 text-xs font-mono rounded ${
+            useRegex ? 'bg-blue-100 text-blue-700' : 'text-slate-400 hover:bg-slate-100'
+          }`}
+          title="Use regular expression"
+        >
+          .*
         </button>
 
         <button

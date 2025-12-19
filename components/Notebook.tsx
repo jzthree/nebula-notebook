@@ -73,6 +73,7 @@ export const Notebook: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<{
     query: string;
     caseSensitive: boolean;
+    useRegex: boolean;
     currentMatch?: { cellId: string; startIndex: number; endIndex: number } | null;
   } | null>(null);
 
@@ -795,9 +796,10 @@ export const Notebook: React.FC = () => {
   const handleSearchChange = useCallback((
     query: string,
     caseSensitive: boolean,
+    useRegex: boolean,
     currentMatch: { cellId: string; startIndex: number; endIndex: number } | null
   ) => {
-    setSearchQuery(query ? { query, caseSensitive, currentMatch } : null);
+    setSearchQuery(query ? { query, caseSensitive, useRegex, currentMatch } : null);
   }, []);
 
   // Handle search close
@@ -816,18 +818,14 @@ export const Notebook: React.FC = () => {
   }, [cells, updateContent]);
 
   // Replace all matches in a specific cell
-  const handleReplaceAllInCell = useCallback((cellId: string, query: string, replacement: string, caseSensitive: boolean) => {
+  const handleReplaceAllInCell = useCallback((cellId: string, query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => {
     const cell = cells.find(c => c.id === cellId);
     if (!cell) return;
 
-    let newContent: string;
-    if (caseSensitive) {
-      newContent = cell.content.split(query).join(replacement);
-    } else {
-      // Case-insensitive replace
-      const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-      newContent = cell.content.replace(regex, replacement);
-    }
+    const flags = caseSensitive ? 'g' : 'gi';
+    const pattern = useRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(pattern, flags);
+    const newContent = cell.content.replace(regex, replacement);
 
     if (newContent !== cell.content) {
       updateContent(cellId, newContent);
@@ -835,12 +833,12 @@ export const Notebook: React.FC = () => {
   }, [cells, updateContent]);
 
   // Replace all matches in the entire notebook
-  const handleReplaceAllInNotebook = useCallback((query: string, replacement: string, caseSensitive: boolean) => {
+  const handleReplaceAllInNotebook = useCallback((query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => {
     saveCheckpoint(); // Save undo state before bulk replace
 
-    const regex = caseSensitive
-      ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')
-      : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const flags = caseSensitive ? 'g' : 'gi';
+    const pattern = useRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(pattern, flags);
 
     setCells(prev => prev.map(cell => {
       const newContent = cell.content.replace(regex, replacement);

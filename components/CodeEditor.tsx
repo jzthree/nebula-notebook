@@ -18,6 +18,7 @@ interface CurrentMatch {
 interface SearchHighlight {
   query: string;
   caseSensitive: boolean;
+  useRegex: boolean;
   currentMatch?: CurrentMatch | null;
 }
 
@@ -134,6 +135,7 @@ const currentMatchMark = Decoration.mark({ class: 'cm-searchMatch-current' });
 function createSearchHighlightExtension(
   query: string,
   caseSensitive: boolean,
+  useRegex: boolean,
   currentMatchStart?: number,
   currentMatchEnd?: number
 ) {
@@ -157,21 +159,48 @@ function createSearchHighlightExtension(
         if (!query) return builder.finish();
 
         const doc = view.state.doc.toString();
-        const searchStr = caseSensitive ? query : query.toLowerCase();
-        const searchIn = caseSensitive ? doc : doc.toLowerCase();
 
-        let pos = 0;
-        while (pos < searchIn.length) {
-          const idx = searchIn.indexOf(searchStr, pos);
-          if (idx === -1) break;
+        if (useRegex) {
+          // Regex search
+          try {
+            const regex = new RegExp(query, caseSensitive ? 'g' : 'gi');
+            let match;
+            while ((match = regex.exec(doc)) !== null) {
+              const idx = match.index;
+              const matchLen = match[0].length;
+              if (matchLen === 0) {
+                regex.lastIndex++; // Prevent infinite loop on zero-length matches
+                continue;
+              }
 
-          // Check if this is the current match
-          const isCurrentMatch = currentMatchStart !== undefined &&
-            idx === currentMatchStart &&
-            idx + query.length === currentMatchEnd;
+              const isCurrentMatch = currentMatchStart !== undefined &&
+                idx === currentMatchStart &&
+                idx + matchLen === currentMatchEnd;
 
-          builder.add(idx, idx + query.length, isCurrentMatch ? currentMatchMark : searchHighlightMark);
-          pos = idx + 1;
+              builder.add(idx, idx + matchLen, isCurrentMatch ? currentMatchMark : searchHighlightMark);
+            }
+          } catch {
+            // Invalid regex, return empty decorations
+            return builder.finish();
+          }
+        } else {
+          // String search
+          const searchStr = caseSensitive ? query : query.toLowerCase();
+          const searchIn = caseSensitive ? doc : doc.toLowerCase();
+
+          let pos = 0;
+          while (pos < searchIn.length) {
+            const idx = searchIn.indexOf(searchStr, pos);
+            if (idx === -1) break;
+
+            // Check if this is the current match
+            const isCurrentMatch = currentMatchStart !== undefined &&
+              idx === currentMatchStart &&
+              idx + query.length === currentMatchEnd;
+
+            builder.add(idx, idx + query.length, isCurrentMatch ? currentMatchMark : searchHighlightMark);
+            pos = idx + 1;
+          }
         }
 
         return builder.finish();
@@ -368,6 +397,7 @@ export const CodeEditor: React.FC<Props> = ({
   // when currentMatch changes for a DIFFERENT cell
   const searchQuery = searchHighlight?.query;
   const searchCaseSensitive = searchHighlight?.caseSensitive;
+  const searchUseRegex = searchHighlight?.useRegex;
   const isCurrentMatchInThisCell = searchHighlight?.currentMatch?.cellId === cellId;
   const currentMatchStart = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.startIndex : undefined;
   const currentMatchEnd = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.endIndex : undefined;
@@ -417,6 +447,7 @@ export const CodeEditor: React.FC<Props> = ({
       exts.push(createSearchHighlightExtension(
         searchQuery,
         searchCaseSensitive ?? false,
+        searchUseRegex ?? false,
         currentMatchStart,
         currentMatchEnd
       ));
@@ -424,7 +455,7 @@ export const CodeEditor: React.FC<Props> = ({
 
     return exts;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language, onKeyDown, searchQuery, searchCaseSensitive, currentMatchStart, currentMatchEnd, indentConfig, allCellsContentKey]);
+  }, [language, onKeyDown, searchQuery, searchCaseSensitive, searchUseRegex, currentMatchStart, currentMatchEnd, indentConfig, allCellsContentKey]);
 
   const handleChange = useCallback(
     (val: string) => {

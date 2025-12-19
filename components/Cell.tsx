@@ -10,6 +10,7 @@ import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDete
 interface SearchHighlight {
   query: string;
   caseSensitive: boolean;
+  useRegex: boolean;
   currentMatch?: { cellId: string; startIndex: number; endIndex: number } | null;
 }
 
