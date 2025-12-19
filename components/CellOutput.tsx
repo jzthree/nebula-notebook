@@ -6,16 +6,21 @@ interface Props {
   outputs: ICellOutput[];
 }
 
+// Collapse multiple consecutive blank lines into one
+const compactOutput = (text: string): string => {
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+};
+
 const OutputItem: React.FC<{ output: ICellOutput }> = ({ output }) => {
   switch (output.type) {
     case 'stdout':
       return <div className="font-mono text-sm text-slate-700 whitespace-pre-wrap mb-1">{output.content}</div>;
     case 'stderr':
-      return <div className="font-mono text-sm text-red-600 bg-red-50 p-2 rounded mb-1 whitespace-pre-wrap">{output.content}</div>;
+      return <div className="font-mono text-sm text-red-600 bg-red-50 p-2 rounded mb-1 whitespace-pre-wrap">{compactOutput(output.content)}</div>;
     case 'error':
       return (
         <div className="font-mono text-sm text-red-700 bg-red-100 border-l-4 border-red-500 p-2 mb-2 rounded-r overflow-x-auto whitespace-pre-wrap">
-          {output.content}
+          {compactOutput(output.content)}
         </div>
       );
     case 'image':

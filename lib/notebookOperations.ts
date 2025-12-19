@@ -265,7 +265,7 @@ export function isExecutionEvent(entry: HistoryEntry): entry is { timestamp: num
 }
 
 // ============================================================================
-// Trajectory Extraction - For AI training
+// Trajectory Extraction - For analysis and replay
 // ============================================================================
 
 export interface ExecutionStep {

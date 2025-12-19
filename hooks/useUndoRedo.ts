@@ -21,7 +21,7 @@ export type UndoableOperation =
   | { type: 'changeType'; cellId: string; oldType: CellType; newType: CellType }
   | { type: 'batch'; operations: UndoableOperation[] };
 
-// Non-undoable operations - for tracking/logging only (AI training data)
+// Non-undoable operations - for tracking/logging only
 // Note: runCell does NOT include content - it can be reconstructed from edit history
 // by finding the most recent snapshot and replaying updateContent operations
 export type LogOperation =
@@ -66,7 +66,7 @@ interface UseUndoRedoResult {
   // History access for persistence
   getFullHistory: () => TimestampedOperation[];
   loadHistory: (history: TimestampedOperation[]) => void;
-  // Log non-undoable operations (for AI training)
+  // Log non-undoable operations (for history tracking)
   logOperation: (op: LogOperation) => void;
 }
 
@@ -154,7 +154,7 @@ function reverseOperation(op: Operation): Operation {
   }
 }
 
-// Maximum operations to keep in full history (for AI training)
+// Maximum operations to keep in full history
 const MAX_FULL_HISTORY = 10000;
 
 export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
@@ -413,7 +413,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     // If history is empty, keep the current snapshot from resetHistory
   }, []);
 
-  // Log a non-undoable operation (for AI training data)
+  // Log a non-undoable operation (for history tracking)
   const logOperation = useCallback((op: LogOperation) => {
     addToFullHistory(op);
   }, [addToFullHistory]);

@@ -5,7 +5,7 @@
  * 1. Operations correctly transform state
  * 2. Operations are reversible (undo works)
  * 3. History can reconstruct state at any point
- * 4. Execution trajectories can be extracted for AI training
+ * 4. Execution trajectories can be extracted for analysis
  */
 
 import { describe, it, expect } from 'vitest';

@@ -599,7 +599,7 @@ export const Notebook: React.FC = () => {
       // Clear all cell outputs and reset execution counter
       setCells(prev => prev.map(c => ({ ...c, outputs: [], executionCount: undefined })));
       setKernelExecutionCount(0);
-      // Log kernel restart for AI training
+      // Log kernel restart for history
       logOperation({ type: 'restartKernel' });
     } catch (error) {
       console.error('Failed to restart kernel:', error);
@@ -615,7 +615,7 @@ export const Notebook: React.FC = () => {
       setExecutionQueue([]);
       setIsProcessingQueue(false);
       setCells(prev => prev.map(c => ({ ...c, isExecuting: false })));
-      // Log kernel interrupt for AI training
+      // Log kernel interrupt for history
       logOperation({ type: 'interruptKernel' });
     } catch (error) {
       console.error('Failed to interrupt kernel:', error);
@@ -758,7 +758,7 @@ export const Notebook: React.FC = () => {
   const queueExecution = (id: string) => {
     saveCheckpoint();
     setExecutionQueue(prev => [...prev, id]);
-    // Log cell run for AI training
+    // Log cell run for history
     // Note: content is NOT stored here - it's reconstructed from edit history + snapshot
     const cellIndex = cells.findIndex(c => c.id === id);
     if (cellIndex >= 0) {
@@ -886,7 +886,7 @@ export const Notebook: React.FC = () => {
           hasError = true;
         }
 
-        // Log execution completion for AI training
+        // Log execution completion for history
         const durationMs = Date.now() - cellStartTime;
         // Truncate output to keep history file size reasonable
         const fullOutput = collectedOutputs.join('\n');
