@@ -31,14 +31,6 @@ function hashToColor(hash: number, saturation = 70, lightness = 60): string {
 }
 
 /**
- * Generate a complementary or analogous color
- */
-function getSecondaryColor(hash: number): string {
-  const hue = (hash % 360 + 120) % 360; // 120 degree offset for triadic
-  return `hsl(${hue}, 65%, 55%)`;
-}
-
-/**
  * Get initials from notebook name
  */
 function getInitials(name: string): string {
@@ -54,75 +46,10 @@ function getInitials(name: string): string {
   return baseName.substring(0, 2).toUpperCase();
 }
 
-/**
- * Pattern types for avatar backgrounds
- */
-type PatternType = 'solid' | 'gradient' | 'circles' | 'grid' | 'diagonal' | 'waves';
-
-/**
- * Get pattern type based on hash
- */
-function getPatternType(hash: number): PatternType {
-  const patterns: PatternType[] = ['solid', 'gradient', 'circles', 'grid', 'diagonal', 'waves'];
-  return patterns[hash % patterns.length];
-}
-
-/**
- * Generate SVG pattern element
- */
-function generatePattern(pattern: PatternType, primaryColor: string, secondaryColor: string, hash: number): string {
-  const patternId = `pattern-${hash}`;
-
-  switch (pattern) {
-    case 'gradient':
-      return `
-        <defs>
-          <linearGradient id="${patternId}" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" style="stop-color:${primaryColor}"/>
-            <stop offset="100%" style="stop-color:${secondaryColor}"/>
-          </linearGradient>
-        </defs>
-        <rect width="32" height="32" rx="6" fill="url(#${patternId})"/>
-      `;
-
-    case 'circles':
-      const cx = 8 + (hash % 8);
-      const cy = 8 + ((hash >> 3) % 8);
-      return `
-        <rect width="32" height="32" rx="6" fill="${primaryColor}"/>
-        <circle cx="${cx}" cy="${cy}" r="12" fill="${secondaryColor}" opacity="0.3"/>
-        <circle cx="${32 - cx}" cy="${32 - cy}" r="8" fill="${secondaryColor}" opacity="0.2"/>
-      `;
-
-    case 'grid':
-      return `
-        <rect width="32" height="32" rx="6" fill="${primaryColor}"/>
-        <rect x="4" y="4" width="10" height="10" rx="2" fill="${secondaryColor}" opacity="0.3"/>
-        <rect x="18" y="18" width="10" height="10" rx="2" fill="${secondaryColor}" opacity="0.3"/>
-      `;
-
-    case 'diagonal':
-      return `
-        <rect width="32" height="32" rx="6" fill="${primaryColor}"/>
-        <path d="M0 32 L32 0" stroke="${secondaryColor}" stroke-width="8" opacity="0.2"/>
-        <path d="M-8 24 L24 -8" stroke="${secondaryColor}" stroke-width="4" opacity="0.15"/>
-      `;
-
-    case 'waves':
-      return `
-        <rect width="32" height="32" rx="6" fill="${primaryColor}"/>
-        <path d="M0 20 Q8 14 16 20 T32 20" stroke="${secondaryColor}" stroke-width="3" fill="none" opacity="0.3"/>
-        <path d="M0 26 Q8 20 16 26 T32 26" stroke="${secondaryColor}" stroke-width="2" fill="none" opacity="0.2"/>
-      `;
-
-    case 'solid':
-    default:
-      return `<rect width="32" height="32" rx="6" fill="${primaryColor}"/>`;
-  }
-}
 
 /**
  * Generate a deterministic SVG avatar for a notebook
+ * Simple geometric design with large letters for small icon visibility
  */
 export function generateDeterministicAvatar(notebookName: string): string {
   const cacheKey = `det-${notebookName}`;
@@ -133,15 +60,14 @@ export function generateDeterministicAvatar(notebookName: string): string {
   }
 
   const hash = hashString(notebookName);
-  const primaryColor = hashToColor(hash);
-  const secondaryColor = getSecondaryColor(hash);
-  const pattern = getPatternType(hash >> 8);
+  const primaryColor = hashToColor(hash, 65, 50); // Slightly more saturated, darker for contrast
   const initials = getInitials(notebookName);
 
+  // Simple solid background with maximum size letters
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-      ${generatePattern(pattern, primaryColor, secondaryColor, hash)}
-      <text x="16" y="21" text-anchor="middle" fill="white" font-family="system-ui, sans-serif" font-size="11" font-weight="600" style="text-shadow: 0 1px 2px rgba(0,0,0,0.3)">
+      <rect width="32" height="32" rx="6" fill="${primaryColor}"/>
+      <text x="16" y="22" text-anchor="middle" fill="white" font-family="system-ui, -apple-system, sans-serif" font-size="15" font-weight="700" letter-spacing="-0.5">
         ${initials}
       </text>
     </svg>
