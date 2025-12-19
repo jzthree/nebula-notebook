@@ -403,14 +403,15 @@ export const CodeEditor: React.FC<Props> = ({
       );
     }
 
-    // Add keyboard handler if provided - use highest precedence to override CodeMirror defaults
-    if (onKeyDown) {
+    // Add keyboard and focus handlers - use highest precedence to override CodeMirror defaults
+    const hasHandlers = onKeyDown || onFocus || onBlur;
+    if (hasHandlers) {
       exts.push(
         Prec.highest(
           EditorView.domEventHandlers({
-            keydown: (event) => {
-              return onKeyDown(event);
-            },
+            keydown: onKeyDown ? (event) => onKeyDown(event) : undefined,
+            focus: onFocus ? () => { onFocus(); return false; } : undefined,
+            blur: onBlur ? () => { onBlur(); return false; } : undefined,
           })
         )
       );
@@ -428,7 +429,7 @@ export const CodeEditor: React.FC<Props> = ({
 
     return exts;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language, onKeyDown, searchQuery, searchCaseSensitive, currentMatchStart, currentMatchEnd, indentConfig, allCellsContentKey]);
+  }, [language, onKeyDown, onFocus, onBlur, searchQuery, searchCaseSensitive, currentMatchStart, currentMatchEnd, indentConfig, allCellsContentKey]);
 
   const handleChange = useCallback(
     (val: string) => {

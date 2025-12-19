@@ -57,15 +57,6 @@ function getInitialFileId(): string | null {
   return getActiveFileId();
 }
 
-// Default cell for reset
-const INITIAL_CELL: Cell = {
-  id: crypto.randomUUID(),
-  type: 'code',
-  content: '',
-  outputs: [],
-  isExecuting: false,
-};
-
 export const Notebook: React.FC = () => {
   const { toast, confirm } = useNotification();
 
@@ -429,12 +420,12 @@ export const Notebook: React.FC = () => {
       }
 
       // X - Cut cell
-      if (e.key === 'x' && activeCellId) {
+      if (e.key === 'x' && activeCellId && deleteCellRef.current) {
         e.preventDefault();
         const cellToCut = cells.find(c => c.id === activeCellId);
         if (cellToCut) {
           setCellClipboard({ cell: { ...cellToCut }, isCut: true });
-          deleteCell(activeCellId);
+          deleteCellRef.current(activeCellId);
         }
         return;
       }

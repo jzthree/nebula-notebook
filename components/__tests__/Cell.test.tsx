@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Cell } from '../Cell';
 import { Cell as ICell } from '../../types';
+import { NotificationProvider } from '../NotificationSystem';
 
 // Mock the services
 vi.mock('../../services/llmService', () => ({
@@ -12,6 +13,15 @@ vi.mock('../../services/llmService', () => ({
   generateCellContent: vi.fn().mockResolvedValue('generated code'),
   fixCellError: vi.fn().mockResolvedValue('fixed code'),
 }));
+
+// Helper to render Cell with required providers
+const renderCell = (props: React.ComponentProps<typeof Cell>) => {
+  return render(
+    <NotificationProvider>
+      <Cell {...props} />
+    </NotificationProvider>
+  );
+};
 
 describe('Cell', () => {
   const mockCell: ICell = {
@@ -42,7 +52,7 @@ describe('Cell', () => {
   });
 
   it('renders cell content', () => {
-    const { container } = render(<Cell {...defaultProps} />);
+    const { container } = renderCell(defaultProps);
     // CodeMirror renders content in a .cm-content element, tokenized into spans
     const cmContent = container.querySelector('.cm-content');
     expect(cmContent).toBeInTheDocument();
@@ -50,7 +60,7 @@ describe('Cell', () => {
   });
 
   it('renders cell index', () => {
-    render(<Cell {...defaultProps} index={2} />);
+    renderCell({ ...defaultProps, index: 2 });
     expect(screen.getByText('#3')).toBeInTheDocument();
   });
 
@@ -60,7 +70,7 @@ describe('Cell', () => {
     // which doesn't work with fireEvent in unit tests.
 
     it('has keyboard handler configured', () => {
-      const { container } = render(<Cell {...defaultProps} />);
+      const { container } = renderCell(defaultProps);
       // Verify CodeMirror is rendered with the content
       const cmContent = container.querySelector('.cm-content');
       expect(cmContent).toBeInTheDocument();
@@ -70,7 +80,7 @@ describe('Cell', () => {
   describe('cell actions', () => {
     it('calls onDelete when delete button is clicked', () => {
       const onDelete = vi.fn();
-      render(<Cell {...defaultProps} onDelete={onDelete} />);
+      renderCell({ ...defaultProps, onDelete });
 
       fireEvent.click(screen.getByTitle('Delete Cell'));
       expect(onDelete).toHaveBeenCalledWith('test-cell-1');
@@ -78,7 +88,7 @@ describe('Cell', () => {
 
     it('calls onMove up when move up button is clicked', () => {
       const onMove = vi.fn();
-      render(<Cell {...defaultProps} onMove={onMove} />);
+      renderCell({ ...defaultProps, onMove });
 
       fireEvent.click(screen.getByTitle('Move Up'));
       expect(onMove).toHaveBeenCalledWith('test-cell-1', 'up');
@@ -86,7 +96,7 @@ describe('Cell', () => {
 
     it('calls onMove down when move down button is clicked', () => {
       const onMove = vi.fn();
-      render(<Cell {...defaultProps} onMove={onMove} />);
+      renderCell({ ...defaultProps, onMove });
 
       fireEvent.click(screen.getByTitle('Move Down'));
       expect(onMove).toHaveBeenCalledWith('test-cell-1', 'down');
@@ -94,7 +104,7 @@ describe('Cell', () => {
 
     it('calls onChangeType when code button is clicked', () => {
       const onChangeType = vi.fn();
-      render(<Cell {...defaultProps} onChangeType={onChangeType} />);
+      renderCell({ ...defaultProps, onChangeType });
 
       fireEvent.click(screen.getByText('Code'));
       expect(onChangeType).toHaveBeenCalledWith('test-cell-1', 'code');
@@ -102,7 +112,7 @@ describe('Cell', () => {
 
     it('calls onChangeType when text button is clicked', () => {
       const onChangeType = vi.fn();
-      render(<Cell {...defaultProps} onChangeType={onChangeType} />);
+      renderCell({ ...defaultProps, onChangeType });
 
       fireEvent.click(screen.getByText('Text'));
       expect(onChangeType).toHaveBeenCalledWith('test-cell-1', 'markdown');
@@ -111,7 +121,7 @@ describe('Cell', () => {
 
   describe('run button tooltip', () => {
     it('shows both shortcuts in tooltip', () => {
-      render(<Cell {...defaultProps} />);
+      renderCell(defaultProps);
       const runButton = screen.getByTitle('Run Cell (Shift+Enter or Ctrl+Enter)');
       expect(runButton).toBeInTheDocument();
     });
@@ -119,14 +129,14 @@ describe('Cell', () => {
 
   describe('command/edit mode visual distinction', () => {
     it('shows command mode (green) border when active but not editing', () => {
-      const { container } = render(<Cell {...defaultProps} isActive={true} />);
-      const cellDiv = container.firstChild as HTMLElement;
+      const { container } = renderCell({ ...defaultProps, isActive: true });
+      const cellDiv = container.querySelector('[data-cell-id]') as HTMLElement;
       expect(cellDiv.className).toContain('border-green');
     });
 
     it('shows edit mode (blue) border when editing', () => {
-      const { container } = render(<Cell {...defaultProps} isActive={true} />);
-      const cellDiv = container.firstChild as HTMLElement;
+      const { container } = renderCell({ ...defaultProps, isActive: true });
+      const cellDiv = container.querySelector('[data-cell-id]') as HTMLElement;
 
       // Focus the CodeMirror editor to enter edit mode
       const cmContent = container.querySelector('.cm-content') as HTMLElement;
@@ -137,7 +147,7 @@ describe('Cell', () => {
     });
 
     it('shows mode indicator in gutter', () => {
-      const { container, rerender } = render(<Cell {...defaultProps} isActive={true} />);
+      renderCell({ ...defaultProps, isActive: true });
 
       // Should show command mode indicator
       expect(screen.getByText('Cmd')).toBeInTheDocument();
@@ -146,17 +156,17 @@ describe('Cell', () => {
 
   describe('execution feedback', () => {
     it('shows [ ] for never-executed cell', () => {
-      render(<Cell {...defaultProps} cell={{ ...mockCell, executionCount: undefined }} />);
+      renderCell({ ...defaultProps, cell: { ...mockCell, executionCount: undefined } });
       expect(screen.getByText('[ ]')).toBeInTheDocument();
     });
 
     it('shows [*] while cell is executing', () => {
-      render(<Cell {...defaultProps} cell={{ ...mockCell, isExecuting: true }} />);
+      renderCell({ ...defaultProps, cell: { ...mockCell, isExecuting: true } });
       expect(screen.getByText('[*]')).toBeInTheDocument();
     });
 
     it('shows [n] after cell has executed', () => {
-      render(<Cell {...defaultProps} cell={{ ...mockCell, executionCount: 5 }} />);
+      renderCell({ ...defaultProps, cell: { ...mockCell, executionCount: 5 } });
       expect(screen.getByText('[5]')).toBeInTheDocument();
     });
   });

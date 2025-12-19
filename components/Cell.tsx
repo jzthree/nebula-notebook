@@ -168,9 +168,7 @@ const CellComponent: React.FC<Props> = ({
     <div
       data-cell-id={cell.id}
       onClick={() => onClick(cell.id)}
-      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md
-        ${hasError ? 'border-red-200' : isActive ? 'border-blue-400 ring-1 ring-blue-100' : 'border-slate-200 hover:border-slate-300'}
-      `}
+      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()}`}
     >
       {/* Top Toolbar */}
       <div className="flex items-center gap-1 px-2 py-1 bg-slate-50 border-b border-slate-100 rounded-t-lg">
@@ -179,12 +177,30 @@ const CellComponent: React.FC<Props> = ({
           <span className="text-[10px] font-mono font-bold text-slate-400 min-w-[24px]">
             #{index + 1}
           </span>
-          {cell.executionCount !== undefined && (
-            <span className="text-[10px] font-mono text-green-600">[{cell.executionCount}]</span>
-          )}
-          {queuePosition !== undefined && queuePosition >= 0 && !cell.isExecuting && (
+          {/* Execution feedback: [ ] = never run, [*] = executing/queued, [n] = executed n times */}
+          {cell.isExecuting ? (
+            <span className="text-[10px] font-mono text-amber-600 animate-pulse" title="Executing...">
+              [*]
+            </span>
+          ) : queuePosition !== undefined && queuePosition >= 0 ? (
             <span className="text-[10px] font-mono text-amber-600 animate-pulse" title={`Queued at position ${queuePosition + 1}`}>
               [*]
+            </span>
+          ) : cell.executionCount !== undefined ? (
+            <span className="text-[10px] font-mono text-green-600">[{cell.executionCount}]</span>
+          ) : cell.type === 'code' ? (
+            <span className="text-[10px] font-mono text-slate-400" title="Not yet executed">
+              [ ]
+            </span>
+          ) : null}
+          {/* Mode indicator: Edit (blue) or Cmd (green) when active */}
+          {isActive && (
+            <span className={`text-[9px] font-medium px-1 py-0.5 rounded ${
+              isEditing
+                ? 'bg-blue-100 text-blue-600'
+                : 'bg-green-100 text-green-600'
+            }`}>
+              {isEditing ? 'Edit' : 'Cmd'}
             </span>
           )}
 
@@ -295,6 +311,8 @@ const CellComponent: React.FC<Props> = ({
           onChange={(value) => onUpdate(cell.id, value)}
           language={cell.type === 'code' ? 'python' : 'markdown'}
           onKeyDown={handleEditorKeyDown}
+          onFocus={handleEditorFocus}
+          onBlur={handleEditorBlur}
           placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
           searchHighlight={searchHighlight}
           cellId={cell.id}
