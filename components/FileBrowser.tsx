@@ -50,7 +50,10 @@ export const FileBrowser: React.FC<Props> = ({
   onClose
 }) => {
   const { toast, confirm } = useNotification();
-  const [currentPath, setCurrentPath] = useState<string>('~');
+  const [currentPath, setCurrentPath] = useState<string>(() => {
+    const settings = getSettings();
+    return settings.rootDirectory || '~';
+  });
   const [loadedPath, setLoadedPath] = useState<string | null>(null); // Track which path items belong to
   const [items, setItems] = useState<FileItem[]>([]);
   const [parentPath, setParentPath] = useState<string | null>(null);
@@ -63,23 +66,30 @@ export const FileBrowser: React.FC<Props> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'modified'>('modified');
 
-  // Initialize path from settings on first open
+  // Load directory on first open or when path changes
   useEffect(() => {
     if (!isOpen) return;
-    if (currentPath !== '~') return; // Already initialized
-
-    const settings = getSettings();
-    const targetPath = settings.rootDirectory || '~';
-    setCurrentPath(targetPath);
-  }, [isOpen, currentPath]);
-
-  // Load directory when path changes or on first open
-  useEffect(() => {
-    if (!isOpen || currentPath === '~') return;
     if (loadedPath === currentPath && !error) return; // Already loaded this path
 
     loadDirectory(currentPath);
   }, [isOpen, currentPath, loadedPath, error]);
+
+  // Auto-refresh every 30 seconds when panel is open
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const interval = setInterval(() => {
+      // Silent background refresh - don't set isLoading to avoid UI flash
+      listDirectory(currentPath).then(listing => {
+        setItems(listing.items);
+        setParentPath(listing.parent);
+      }).catch(() => {
+        // Ignore errors on background refresh
+      });
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [isOpen, currentPath]);
 
   const loadDirectory = async (path: string) => {
     setIsLoading(true);
