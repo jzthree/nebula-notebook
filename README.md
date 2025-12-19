@@ -1,6 +1,6 @@
 # Nebula Notebook
 
-A modern, web-based computational notebook with real Jupyter kernels, AI assistance, and a clean interface.
+Nebula is what notebooks should feel like in 2025 — built for what's coming next.
 
 ## Quick Start
 
