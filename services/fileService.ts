@@ -31,6 +31,21 @@ export interface DirectoryMtime {
   mtime: number;
 }
 
+export interface FileMtime {
+  path: string;
+  mtime: number;
+}
+
+export interface NotebookData {
+  cells: Cell[];
+  mtime: number;
+}
+
+export interface SaveResult {
+  success: boolean;
+  mtime: number;
+}
+
 // Storage keys for local state
 const STORAGE_ACTIVE_PATH = 'nebula-active-path';
 
@@ -57,6 +72,20 @@ export const getDirectoryMtime = async (path: string = '~'): Promise<DirectoryMt
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.detail || 'Failed to get directory mtime');
+  }
+
+  return response.json();
+};
+
+/**
+ * Get file modification time (lightweight change detection)
+ */
+export const getFileMtime = async (path: string): Promise<FileMtime> => {
+  const response = await fetch(`${API_BASE}/fs/file-mtime?path=${encodeURIComponent(path)}`);
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to get file mtime');
   }
 
   return response.json();
@@ -150,11 +179,12 @@ export const renameFile = async (oldPath: string, newPath: string): Promise<File
 export interface NotebookData {
   cells: Cell[];
   kernelspec: string;  // kernel name from notebook metadata
+  mtime: number;       // modification time for conflict detection
 }
 
 /**
  * Get notebook cells from a .ipynb file
- * @deprecated Use getNotebookData instead to get kernelspec
+ * @deprecated Use getNotebookData instead to get kernelspec and mtime
  */
 export const getNotebookCells = async (path: string): Promise<Cell[]> => {
   const data = await getNotebookData(path);
@@ -162,7 +192,7 @@ export const getNotebookCells = async (path: string): Promise<Cell[]> => {
 };
 
 /**
- * Get notebook data including cells and kernelspec
+ * Get notebook data including cells, kernelspec, and mtime
  */
 export const getNotebookData = async (path: string): Promise<NotebookData> => {
   const response = await fetch(`${API_BASE}/notebook/cells?path=${encodeURIComponent(path)}`);
@@ -175,7 +205,8 @@ export const getNotebookData = async (path: string): Promise<NotebookData> => {
   const data = await response.json();
   return {
     cells: data.cells,
-    kernelspec: data.kernelspec || 'python3'
+    kernelspec: data.kernelspec || 'python3',
+    mtime: data.mtime
   };
 };
 
@@ -184,8 +215,9 @@ export const getNotebookData = async (path: string): Promise<NotebookData> => {
  * @param path - Path to the notebook file
  * @param cells - Cells to save
  * @param kernelName - Optional kernel name to persist in notebook metadata
+ * @returns SaveResult with success status and new mtime for conflict detection
  */
-export const saveNotebookCells = async (path: string, cells: Cell[], kernelName?: string): Promise<void> => {
+export const saveNotebookCells = async (path: string, cells: Cell[], kernelName?: string): Promise<SaveResult> => {
   const response = await fetch(`${API_BASE}/notebook/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -196,6 +228,9 @@ export const saveNotebookCells = async (path: string, cells: Cell[], kernelName?
     const error = await response.json();
     throw new Error(error.detail || 'Failed to save notebook');
   }
+
+  const data = await response.json();
+  return { success: true, mtime: data.mtime };
 };
 
 // --- Compatibility layer for existing code ---
@@ -225,11 +260,11 @@ export const getFiles = async (): Promise<NotebookMetadata[]> => {
 };
 
 /**
- * Get file content - for backward compatibility
+ * Get file content with mtime - for conflict detection
  */
-export const getFileContent = async (id: string): Promise<Cell[] | null> => {
+export const getFileContentWithMtime = async (id: string): Promise<NotebookData | null> => {
   try {
-    return await getNotebookCells(id);
+    return await getNotebookData(id);
   } catch (e) {
     console.error('Failed to get file content:', e);
     return null;
@@ -237,7 +272,32 @@ export const getFileContent = async (id: string): Promise<Cell[] | null> => {
 };
 
 /**
- * Save file content - for backward compatibility
+ * Get file content - for backward compatibility (without mtime)
+ */
+export const getFileContent = async (id: string): Promise<Cell[] | null> => {
+  try {
+    const result = await getNotebookData(id);
+    return result.cells;
+  } catch (e) {
+    console.error('Failed to get file content:', e);
+    return null;
+  }
+};
+
+/**
+ * Save file content with mtime - for conflict detection
+ */
+export const saveFileContentWithMtime = async (id: string, cells: Cell[], kernelName?: string): Promise<SaveResult | null> => {
+  try {
+    return await saveNotebookCells(id, cells, kernelName);
+  } catch (e) {
+    console.error('Failed to save file content:', e);
+    return null;
+  }
+};
+
+/**
+ * Save file content - for backward compatibility (without mtime)
  */
 export const saveFileContent = async (id: string, cells: Cell[]): Promise<boolean> => {
   try {

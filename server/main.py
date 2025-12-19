@@ -93,6 +93,14 @@ class InstallKernelRequest(BaseModel):
     kernel_name: Optional[str] = None
 
 
+class GenerateStructuredRequest(BaseModel):
+    prompt: str
+    system_prompt: str
+    provider: str = "google"
+    model: str = "gemini-2.5-flash"
+    temperature: float = 0.2
+
+
 # --- Lifespan ---
 
 @asynccontextmanager
@@ -366,6 +374,25 @@ async def generate(request: GenerateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/llm/generate-structured")
+async def generate_structured(request: GenerateStructuredRequest):
+    """Generate structured JSON response from LLM"""
+    try:
+        config = LLMConfig(
+            provider=request.provider,
+            model=request.model,
+            temperature=request.temperature
+        )
+        response = await llm_service.generate_structured(
+            prompt=request.prompt,
+            system_prompt=request.system_prompt,
+            config=config
+        )
+        return {"response": response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/llm/chat")
 async def chat(request: ChatRequest):
     """Chat with LLM including history"""
@@ -407,6 +434,17 @@ async def get_directory_mtime(path: str = Query(default="~")):
     """Get directory modification time (lightweight change detection)"""
     try:
         return fs_service.get_directory_mtime(path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/fs/file-mtime")
+async def get_file_mtime(path: str):
+    """Get file modification time (lightweight change detection)"""
+    try:
+        return fs_service.get_file_mtime(path)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -481,7 +519,7 @@ async def get_notebook_cells(path: str):
     """Read a notebook file and return cells in internal format"""
     try:
         result = fs_service.get_notebook_cells(path)
-        return {"path": path, "cells": result["cells"], "kernelspec": result["kernelspec"]}
+        return {"path": path, "cells": result["cells"], "kernelspec": result["kernelspec"], "mtime": result["mtime"]}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -492,8 +530,8 @@ async def get_notebook_cells(path: str):
 async def save_notebook(request: SaveNotebookRequest):
     """Save cells to a notebook file"""
     try:
-        fs_service.save_notebook_cells(request.path, request.cells, request.kernel_name)
-        return {"status": "ok", "path": request.path}
+        result = fs_service.save_notebook_cells(request.path, request.cells, request.kernel_name)
+        return {"status": "ok", "path": request.path, "mtime": result["mtime"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

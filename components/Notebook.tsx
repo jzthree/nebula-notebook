@@ -10,6 +10,9 @@ import {
   getFiles,
   getNotebookData,
   saveNotebookCells,
+  getFileContentWithMtime,
+  saveFileContentWithMtime,
+  getFileMtime,
   getActiveFileId,
   saveActiveFileId,
   updateNotebookMetadata,
@@ -73,12 +76,24 @@ export const Notebook: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<{
     query: string;
     caseSensitive: boolean;
+    useRegex: boolean;
     currentMatch?: { cellId: string; startIndex: number; endIndex: number } | null;
   } | null>(null);
 
   // Notebook rename state
   const [isRenamingNotebook, setIsRenamingNotebook] = useState(false);
   const [renameValue, setRenameValue] = useState('');
+
+  // Conflict detection state
+  const [lastKnownMtime, setLastKnownMtime] = useState<number | null>(null);
+  const [conflictDialog, setConflictDialog] = useState<{
+    show: boolean;
+    remoteMtime: number;
+    onKeepLocal: () => void;
+    onLoadRemote: () => void;
+  } | null>(null);
+  const [pendingSave, setPendingSave] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   // Kernel State
   const [isKernelMenuOpen, setIsKernelMenuOpen] = useState(false);
@@ -107,7 +122,8 @@ export const Notebook: React.FC = () => {
     resetHistory,
     getFullHistory,
     loadHistory,
-    logOperation
+    logOperation,
+    updateContentAI
   } = useUndoRedo([]);  // Start with empty cells
 
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
@@ -179,18 +195,72 @@ export const Notebook: React.FC = () => {
   // Ref for saveNow to avoid stale closures in keyboard handler
   const saveNowRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
-  // Autosave hook
+  // Autosave hook with conflict detection
   const performSaveToFile = useCallback(async (fileId: string, cellsToSave: Cell[]) => {
-    await saveNotebookCells(fileId, cellsToSave, currentKernel);
-    await updateNotebookMetadata(fileId, {});
-    // Save history in background (non-blocking) - don't slow down notebook save
-    const history = getFullHistory();
-    if (history.length > 0) {
-      saveNotebookHistory(fileId, history).catch(() => {
-        // Silently ignore history save failures
-      });
+    try {
+      // Check remote mtime before saving (if we have a baseline)
+      if (lastKnownMtime !== null) {
+        try {
+          const remoteMtimeData = await getFileMtime(fileId);
+          if (remoteMtimeData.mtime > lastKnownMtime) {
+            // Remote file changed while we were editing - conflict!
+            return new Promise<void>((resolve, reject) => {
+              setConflictDialog({
+                show: true,
+                remoteMtime: remoteMtimeData.mtime,
+                onKeepLocal: async () => {
+                  setConflictDialog(null);
+                  // Force save local version (with kernel name for persistence)
+                  const result = await saveFileContentWithMtime(fileId, cellsToSave, currentKernel);
+                  if (result) {
+                    setLastKnownMtime(result.mtime);
+                    await updateNotebookMetadata(fileId, {});
+                    const history = getFullHistory();
+                    if (history.length > 0) {
+                      saveNotebookHistory(fileId, history).catch(() => {});
+                    }
+                  }
+                  resolve();
+                },
+                onLoadRemote: async () => {
+                  setConflictDialog(null);
+                  // Reload from server
+                  const content = await getFileContentWithMtime(fileId);
+                  if (content) {
+                    resetHistory(content.cells);
+                    setLastKnownMtime(content.mtime);
+                  }
+                  resolve();
+                }
+              });
+            });
+          }
+        } catch (mtimeError) {
+          // Can't check mtime (network issue?) - proceed with save attempt
+          console.warn('Could not check remote mtime:', mtimeError);
+        }
+      }
+
+      // Perform the save (with kernel name for persistence)
+      const result = await saveFileContentWithMtime(fileId, cellsToSave, currentKernel);
+      if (result) {
+        setLastKnownMtime(result.mtime);
+        setPendingSave(false);
+      }
+      await updateNotebookMetadata(fileId, {});
+
+      // Save history in background (non-blocking)
+      const history = getFullHistory();
+      if (history.length > 0) {
+        saveNotebookHistory(fileId, history).catch(() => {});
+      }
+    } catch (error) {
+      // Network error - mark as pending and will retry when online
+      console.warn('Save failed, will retry:', error);
+      setPendingSave(true);
+      throw error; // Re-throw so autosave knows it failed
     }
-  }, [getFullHistory, currentKernel]);
+  }, [getFullHistory, lastKnownMtime, resetHistory, currentKernel]);
 
   const { status: autosaveStatus, saveNow, getBackup, clearBackup } = useAutosave({
     fileId: currentFileId,
@@ -201,6 +271,31 @@ export const Notebook: React.FC = () => {
 
   // Keep saveNow ref updated synchronously (not in useEffect which runs after render)
   saveNowRef.current = saveNow;
+
+  // Online/offline detection and retry pending saves
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      // Retry pending save when coming back online
+      if (pendingSave && currentFileId) {
+        saveNow().catch(() => {
+          // Save retry failed, will try again next time
+        });
+      }
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [pendingSave, currentFileId, saveNow]);
 
   // Execution State
   const [isKernelReady, setIsKernelReady] = useState(false);
@@ -313,6 +408,8 @@ export const Notebook: React.FC = () => {
   // Ref for tracking 'dd' vim-style delete
   const lastKeyRef = useRef<{ key: string; time: number } | null>(null);
   const deleteCellRef = useRef<((id: string) => void) | null>(null);
+  const runAndAdvanceRef = useRef<((id: string) => void) | null>(null);
+  const queueExecutionRef = useRef<((id: string) => void) | null>(null);
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -343,6 +440,24 @@ export const Notebook: React.FC = () => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
         e.preventDefault();
         redo();
+        return;
+      }
+
+      // Shift+Enter: Run active cell and advance (works everywhere)
+      if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        if (activeCellId) {
+          runAndAdvanceRef.current?.(activeCellId);
+        }
+        return;
+      }
+
+      // Ctrl/Cmd+Enter: Run active cell (works everywhere)
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+        e.preventDefault();
+        if (activeCellId) {
+          queueExecutionRef.current?.(activeCellId);
+        }
         return;
       }
 
@@ -632,19 +747,23 @@ export const Notebook: React.FC = () => {
   const loadFile = async (id: string) => {
     setIsLoadingFile(true);
     try {
-      const notebookData = await getNotebookData(id);
-      if (notebookData && notebookData.cells) {
-        loadFileAsync(id, notebookData.cells, notebookData.kernelspec);
+      const result = await getFileContentWithMtime(id);
+      if (result) {
+        setLastKnownMtime(result.mtime);
+        setPendingSave(false);
+        loadFileAsync(id, result.cells, result.kernelspec);
       } else {
         // File doesn't exist or is empty
         setIsLoadingFile(false);
         setCurrentFileId(null);
+        setLastKnownMtime(null);
         saveActiveFileId('');
       }
     } catch (error) {
       console.error('Failed to load file:', error);
       setIsLoadingFile(false);
       setCurrentFileId(null);
+      setLastKnownMtime(null);
       saveActiveFileId('');
     }
   };
@@ -780,14 +899,15 @@ export const Notebook: React.FC = () => {
     setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
   }, [setCells]);
 
-  // Force update with undo tracking - for AI edits, etc.
-  const forceUpdateCell = (id: string, content: string) => {
-    updateContent(id, content);
-  };
+  // AI/bulk update with undo tracking - for AI edits, annotated as AI source
+  const handleAIUpdateCell = useCallback((id: string, content: string) => {
+    updateContentAI(id, content);
+  }, [updateContentAI]);
 
+  // Edit cell from copilot sidebar - also AI-generated content
   const handleEditCell = (index: number, newContent: string) => {
     if (index >= 0 && index < cells.length) {
-      forceUpdateCell(cells[index].id, newContent);
+      updateContentAI(cells[index].id, newContent);
     }
   };
 
@@ -830,7 +950,7 @@ export const Notebook: React.FC = () => {
       }
     } else {
       // Can't delete last cell, just clear it
-      forceUpdateCell(id, '');
+      updateContent(id, '');
     }
   };
   // Update ref for keyboard shortcut handler
@@ -881,6 +1001,10 @@ export const Notebook: React.FC = () => {
     }
   };
 
+  // Update refs for keyboard shortcut handler
+  runAndAdvanceRef.current = runAndAdvance;
+  queueExecutionRef.current = queueExecution;
+
   // Navigate to a specific cell (used by search)
   const navigateToCell = useCallback((cellIndex: number, cellId: string) => {
     setActiveCellId(cellId);
@@ -896,9 +1020,10 @@ export const Notebook: React.FC = () => {
   const handleSearchChange = useCallback((
     query: string,
     caseSensitive: boolean,
+    useRegex: boolean,
     currentMatch: { cellId: string; startIndex: number; endIndex: number } | null
   ) => {
-    setSearchQuery(query ? { query, caseSensitive, currentMatch } : null);
+    setSearchQuery(query ? { query, caseSensitive, useRegex, currentMatch } : null);
   }, []);
 
   // Handle search close
@@ -917,18 +1042,14 @@ export const Notebook: React.FC = () => {
   }, [cells, updateContent]);
 
   // Replace all matches in a specific cell
-  const handleReplaceAllInCell = useCallback((cellId: string, query: string, replacement: string, caseSensitive: boolean) => {
+  const handleReplaceAllInCell = useCallback((cellId: string, query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => {
     const cell = cells.find(c => c.id === cellId);
     if (!cell) return;
 
-    let newContent: string;
-    if (caseSensitive) {
-      newContent = cell.content.split(query).join(replacement);
-    } else {
-      // Case-insensitive replace
-      const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-      newContent = cell.content.replace(regex, replacement);
-    }
+    const flags = caseSensitive ? 'g' : 'gi';
+    const pattern = useRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(pattern, flags);
+    const newContent = cell.content.replace(regex, replacement);
 
     if (newContent !== cell.content) {
       updateContent(cellId, newContent);
@@ -936,12 +1057,12 @@ export const Notebook: React.FC = () => {
   }, [cells, updateContent]);
 
   // Replace all matches in the entire notebook
-  const handleReplaceAllInNotebook = useCallback((query: string, replacement: string, caseSensitive: boolean) => {
+  const handleReplaceAllInNotebook = useCallback((query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => {
     saveCheckpoint(); // Save undo state before bulk replace
 
-    const regex = caseSensitive
-      ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')
-      : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const flags = caseSensitive ? 'g' : 'gi';
+    const pattern = useRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(pattern, flags);
 
     setCells(prev => prev.map(cell => {
       const newContent = cell.content.replace(regex, replacement);
@@ -1104,6 +1225,44 @@ export const Notebook: React.FC = () => {
 
       {/* Main Content */}
       <div className={`flex-1 flex flex-col h-screen transition-all duration-300 ${isFileBrowserOpen ? 'lg:ml-72' : ''} ${isChatOpen ? 'lg:mr-80' : ''}`}>
+
+        {/* Conflict Dialog */}
+        {conflictDialog?.show && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+              <div className="flex items-start gap-3 mb-4">
+                <AlertCircle className="w-6 h-6 text-orange-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800">Notebook Changed on Server</h3>
+                  <p className="text-sm text-slate-600 mt-1">
+                    The notebook was modified on the server while you were editing.
+                    How would you like to proceed?
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={conflictDialog.onKeepLocal}
+                  className="w-full px-4 py-2.5 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors"
+                >
+                  Keep My Changes
+                  <span className="block text-xs font-normal text-blue-200 mt-0.5">
+                    Overwrite server version with your local edits
+                  </span>
+                </button>
+                <button
+                  onClick={conflictDialog.onLoadRemote}
+                  className="w-full px-4 py-2.5 text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+                >
+                  Load Server Version
+                  <span className="block text-xs font-normal text-slate-500 mt-0.5">
+                    Discard your changes and reload from server
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Recovery Banner */}
         {showRecoveryBanner && recoveryData && (
@@ -1312,25 +1471,37 @@ export const Notebook: React.FC = () => {
 
                       {/* Save Status Indicator */}
                       <span className="flex items-center gap-1 text-xs">
+                        {!isOnline && (
+                          <span className="flex items-center gap-1 text-orange-600 mr-2" title="No internet connection">
+                            <CloudOff className="w-3 h-3" />
+                            <span>Offline</span>
+                          </span>
+                        )}
+                        {pendingSave && isOnline && (
+                          <span className="flex items-center gap-1 text-orange-600 mr-2" title="Syncing changes...">
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                            <span>Syncing</span>
+                          </span>
+                        )}
                         {autosaveStatus.status === 'saving' && (
                           <span className="flex items-center gap-1 text-blue-600">
                             <Loader2 className="w-3 h-3 animate-spin" />
                             <span>Saving...</span>
                           </span>
                         )}
-                        {autosaveStatus.status === 'saved' && (
+                        {autosaveStatus.status === 'saved' && !pendingSave && (
                           <span className="flex items-center gap-1 text-green-600" title={autosaveStatus.lastSaved ? `Last saved ${formatLastSaved(autosaveStatus.lastSaved)}` : ''}>
                             <Check className="w-3 h-3" />
                             <span className="text-slate-400">{formatLastSaved(autosaveStatus.lastSaved)}</span>
                           </span>
                         )}
-                        {autosaveStatus.status === 'unsaved' && (
+                        {autosaveStatus.status === 'unsaved' && !pendingSave && (
                           <span className="flex items-center gap-1 text-amber-600" title="Unsaved changes">
                             <Cloud className="w-3 h-3" />
                             <span className="text-slate-400">Unsaved</span>
                           </span>
                         )}
-                        {autosaveStatus.status === 'error' && (
+                        {autosaveStatus.status === 'error' && !pendingSave && (
                           <span className="flex items-center gap-1 text-red-600" title="Save failed">
                             <AlertCircle className="w-3 h-3" />
                             <span>Save failed</span>
@@ -1455,6 +1626,7 @@ export const Notebook: React.FC = () => {
                   isActive={activeCellId === cell.id}
                   allCells={cells}
                   onUpdate={handleUpdateCell}
+                  onAIUpdate={handleAIUpdateCell}
                   onRun={queueExecution}
                   onRunAndAdvance={runAndAdvance}
                   onDelete={deleteCell}

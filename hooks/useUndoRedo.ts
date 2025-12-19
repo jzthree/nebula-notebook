@@ -11,13 +11,16 @@ interface BaseOperation {
   timestamp: number; // Unix timestamp in milliseconds
 }
 
+// Source of content edit (for tracking AI vs user edits)
+export type EditSource = 'user' | 'ai';
+
 // Undoable operations - can be reversed
 export type UndoableOperation =
   | { type: 'insertCell'; index: number; cell: Cell }
   | { type: 'deleteCell'; index: number; cell: Cell }
   | { type: 'moveCell'; fromIndex: number; toIndex: number }
-  | { type: 'updateContent'; cellId: string; oldContent: string; newContent: string }
-  | { type: 'updateContentPatch'; cellId: string; patch: Patch; oldHash: string; newHash: string }
+  | { type: 'updateContent'; cellId: string; oldContent: string; newContent: string; source?: EditSource }
+  | { type: 'updateContentPatch'; cellId: string; patch: Patch; oldHash: string; newHash: string; source?: EditSource }
   | { type: 'changeType'; cellId: string; oldType: CellType; newType: CellType }
   | { type: 'batch'; operations: UndoableOperation[] };
 
@@ -50,7 +53,8 @@ interface UseUndoRedoResult {
   insertCell: (index: number, cell: Cell) => void;
   deleteCell: (index: number) => Cell | null;
   moveCell: (fromIndex: number, toIndex: number) => void;
-  updateContent: (cellId: string, newContent: string) => void;
+  updateContent: (cellId: string, newContent: string, source?: EditSource) => void;
+  updateContentAI: (cellId: string, newContent: string) => void; // Convenience for AI edits
   changeType: (cellId: string, newType: CellType) => void;
   // Batch operations (for compound actions)
   batch: (operations: Operation[]) => void;
@@ -232,7 +236,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   }, [executeOperation]);
 
   // Update cell content - tracks old content for undo
-  const updateContent = useCallback((cellId: string, newContent: string) => {
+  // source: 'user' (default) or 'ai' for AI-generated edits
+  const updateContent = useCallback((cellId: string, newContent: string, source: EditSource = 'user') => {
     setCellsInternal(prev => {
       const cell = prev.find(c => c.id === cellId);
       if (!cell) return prev;
@@ -248,7 +253,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
           type: 'updateContent',
           cellId,
           oldContent,
-          newContent
+          newContent,
+          source
         };
 
         // Push operation to undo stack
@@ -266,6 +272,11 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       return prev.map(c => c.id === cellId ? { ...c, content: newContent } : c);
     });
   }, [addToFullHistory]);
+
+  // Convenience function for AI edits - automatically marks source as 'ai'
+  const updateContentAI = useCallback((cellId: string, newContent: string) => {
+    updateContent(cellId, newContent, 'ai');
+  }, [updateContent]);
 
   // Change cell type
   const changeType = useCallback((cellId: string, newType: CellType) => {
@@ -391,7 +402,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
         patch,
         oldHash: hashText(op.oldContent),
         newHash: hashText(op.newContent),
-        timestamp: op.timestamp
+        timestamp: op.timestamp,
+        ...(op.source && { source: op.source }) // Preserve AI annotation
       };
     }
     if (op.type === 'insertCell') {
@@ -467,6 +479,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     deleteCell,
     moveCell,
     updateContent,
+    updateContentAI,
     changeType,
     batch,
     undo,

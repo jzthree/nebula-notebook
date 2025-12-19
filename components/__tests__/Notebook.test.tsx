@@ -35,9 +35,20 @@ vi.mock('../../services/fileService', () => ({
       { id: 'cell-1', type: 'code', content: 'print("hello")', outputs: [], isExecuting: false },
       { id: 'cell-2', type: 'code', content: 'x = 1', outputs: [], isExecuting: false },
     ],
-    kernelspec: 'python3'
+    kernelspec: 'python3',
+    mtime: Date.now() / 1000
   }),
-  saveNotebookCells: vi.fn().mockResolvedValue(undefined),
+  getFileContentWithMtime: vi.fn().mockResolvedValue({
+    cells: [
+      { id: 'cell-1', type: 'code', content: 'print("hello")', outputs: [], isExecuting: false },
+      { id: 'cell-2', type: 'code', content: 'x = 1', outputs: [], isExecuting: false },
+    ],
+    kernelspec: 'python3',
+    mtime: Date.now() / 1000
+  }),
+  saveNotebookCells: vi.fn().mockResolvedValue({ success: true, mtime: Date.now() / 1000 }),
+  saveFileContentWithMtime: vi.fn().mockResolvedValue({ success: true, mtime: Date.now() / 1000 }),
+  getFileMtime: vi.fn().mockResolvedValue({ mtime: Date.now() / 1000 }),
   getActiveFileId: vi.fn().mockReturnValue('/test/notebook.ipynb'),
   saveActiveFileId: vi.fn(),
   updateNotebookMetadata: vi.fn().mockResolvedValue(undefined),

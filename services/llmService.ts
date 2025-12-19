@@ -23,6 +23,13 @@ export interface ProvidersResponse {
   providers: Record<LLMProvider, string[]>;
 }
 
+// Structured response for cell generation
+export interface CellGenerationResponse {
+  code: string | null;        // The Python code to put in the cell
+  explanation: string | null; // Explanation/notes about the code
+  action: 'replace' | 'append' | 'explain_only'; // What to do with the response
+}
+
 // Default models per provider (updated Dec 2025)
 export const DEFAULT_MODELS: Record<LLMProvider, string> = {
   google: 'gemini-3.0-flash',
@@ -72,7 +79,12 @@ export const generateCellContent = async (
   targetCellId: string,
   config: LLMConfig = { provider: 'google', model: 'gemini-3.0-flash' }
 ): Promise<string> => {
-  const codeContext = contextCells
+  // Find current cell to include its content
+  const currentCell = contextCells.find(c => c.id === targetCellId);
+  const currentCellContent = currentCell?.content?.trim() || '';
+
+  // Get other cells as context
+  const otherCellsContext = contextCells
     .filter(c => c.type === 'code' && c.id !== targetCellId)
     .map((c, i) => `Cell ${i + 1}:\n${c.content}`)
     .join('\n\n');
@@ -82,15 +94,18 @@ export const generateCellContent = async (
     Rules:
     1. If asked for code, return ONLY the Python code. No backticks.
     2. If asked for explanation, return Markdown.
-    3. Use context.
+    3. Use context from other cells and current cell content.
     4. Be concise.
   `;
 
   const userContent = `
-    Context (Previous Cells):
-    ${codeContext}
+    Context (Other Cells):
+    ${otherCellsContext || '(no other cells)'}
 
-    Current Request:
+    Current Cell Content:
+    ${currentCellContent || '(empty)'}
+
+    Request:
     ${prompt}
   `;
 
@@ -113,6 +128,79 @@ export const generateCellContent = async (
 
   const data = await response.json();
   return cleanResponse(data.response);
+};
+
+/**
+ * Generate cell content with structured JSON response
+ * Returns separate code and explanation fields
+ */
+export const generateCellContentStructured = async (
+  prompt: string,
+  contextCells: Cell[],
+  targetCellId: string,
+  config: LLMConfig = { provider: 'google', model: 'gemini-3.0-flash' }
+): Promise<CellGenerationResponse> => {
+  // Find current cell to include its content
+  const currentCell = contextCells.find(c => c.id === targetCellId);
+  const currentCellContent = currentCell?.content?.trim() || '';
+
+  // Get other cells as context
+  const otherCellsContext = contextCells
+    .filter(c => c.type === 'code' && c.id !== targetCellId)
+    .map((c, i) => `Cell ${i + 1}:\n${c.content}`)
+    .join('\n\n');
+
+  const systemPrompt = `You are an expert Python data science assistant embedded in a Jupyter Notebook.
+
+You must respond with a JSON object with this exact structure:
+{
+  "code": "string or null - the Python code to put in the cell (no markdown backticks)",
+  "explanation": "string or null - brief explanation of what the code does or why you made certain choices",
+  "action": "replace | append | explain_only"
+}
+
+Rules:
+- "action" must be one of: "replace" (replace cell content), "append" (add to existing), "explain_only" (no code change)
+- If the user asks for code, provide it in "code" field WITHOUT backticks or markdown
+- If the user asks for explanation only, set "code" to null and "action" to "explain_only"
+- Keep explanations concise (1-3 sentences)
+- Use context from other cells and current cell content`;
+
+  const userContent = `Context (Other Cells):
+${otherCellsContext || '(no other cells)'}
+
+Current Cell Content:
+${currentCellContent || '(empty)'}
+
+Request:
+${prompt}`;
+
+  const response = await fetch(`${API_BASE}/llm/generate-structured`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt: userContent,
+      system_prompt: systemPrompt,
+      provider: config.provider,
+      model: config.model,
+      temperature: config.temperature || 0.2
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to generate content');
+  }
+
+  const data = await response.json();
+  const result = data.response as CellGenerationResponse;
+
+  // Validate and sanitize response
+  return {
+    code: result.code ? cleanResponse(result.code) : null,
+    explanation: result.explanation || null,
+    action: result.action || 'replace'
+  };
 };
 
 /**
