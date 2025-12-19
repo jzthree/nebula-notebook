@@ -401,6 +401,17 @@ async def get_directory_mtime(path: str = Query(default="~")):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/fs/file-mtime")
+async def get_file_mtime(path: str):
+    """Get file modification time (lightweight change detection)"""
+    try:
+        return fs_service.get_file_mtime(path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/fs/read")
 async def read_file(path: str):
     """Read file contents"""
@@ -468,8 +479,8 @@ async def rename_file(request: RenameFileRequest):
 async def get_notebook_cells(path: str):
     """Read a notebook file and return cells in internal format"""
     try:
-        cells = fs_service.get_notebook_cells(path)
-        return {"path": path, "cells": cells}
+        result = fs_service.get_notebook_cells(path)
+        return {"path": path, "cells": result["cells"], "mtime": result["mtime"]}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -480,8 +491,8 @@ async def get_notebook_cells(path: str):
 async def save_notebook(request: SaveNotebookRequest):
     """Save cells to a notebook file"""
     try:
-        fs_service.save_notebook_cells(request.path, request.cells)
-        return {"status": "ok", "path": request.path}
+        result = fs_service.save_notebook_cells(request.path, request.cells)
+        return {"status": "ok", "path": request.path, "mtime": result["mtime"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -102,6 +102,27 @@ class FilesystemService:
             "mtime": stat.st_mtime
         }
 
+    def get_file_mtime(self, path: str) -> Dict[str, Any]:
+        """
+        Get file modification time (lightweight check for changes)
+
+        Returns:
+            {
+                "path": str,
+                "mtime": float
+            }
+        """
+        path = self._normalize_path(path)
+
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File not found: {path}")
+
+        stat = os.stat(path)
+        return {
+            "path": path,
+            "mtime": stat.st_mtime
+        }
+
     def list_directory(self, path: str) -> Dict[str, Any]:
         """
         List contents of a directory
@@ -308,11 +329,12 @@ class FilesystemService:
 
         return self._get_file_info(new_path).__dict__
 
-    def get_notebook_cells(self, path: str) -> List[Dict[str, Any]]:
+    def get_notebook_cells(self, path: str) -> Dict[str, Any]:
         """
         Read a notebook and convert to internal cell format
 
         Converts from .ipynb format to our Cell format
+        Returns: { "cells": [...], "mtime": float }
         """
         path = self._normalize_path(path)
 
@@ -401,13 +423,19 @@ class FilesystemService:
                 "executionCount": nb_cell.get("execution_count")
             })
 
-        return cells
+        # Get file mtime
+        stat = os.stat(path)
+        return {
+            "cells": cells,
+            "mtime": stat.st_mtime
+        }
 
-    def save_notebook_cells(self, path: str, cells: List[Dict[str, Any]]) -> bool:
+    def save_notebook_cells(self, path: str, cells: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Save cells to a notebook file
 
         Converts from our Cell format to .ipynb format
+        Returns: { "success": bool, "mtime": float }
         """
         path = self._normalize_path(path)
 
@@ -505,7 +533,12 @@ class FilesystemService:
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(notebook, f, indent=2)
 
-        return True
+        # Get new mtime after save
+        stat = os.stat(path)
+        return {
+            "success": True,
+            "mtime": stat.st_mtime
+        }
 
     def _get_history_path(self, notebook_path: str) -> str:
         """
