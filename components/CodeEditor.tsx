@@ -489,6 +489,7 @@ export const CodeEditor: React.FC<Props> = ({
         syntaxHighlighting: true,
         defaultKeymap: true,
         historyKeymap: true,
+        searchKeymap: false, // Disable per-cell search, we have notebook-wide search
       }}
     />
   );

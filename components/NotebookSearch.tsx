@@ -24,6 +24,7 @@ interface Props {
   onReplace?: (cellId: string, startIndex: number, endIndex: number, replacement: string) => void;
   onReplaceAllInCell?: (cellId: string, query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => void;
   onReplaceAllInNotebook?: (query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => void;
+  activeCellId?: string | null; // Start search from this cell
 }
 
 export const NotebookSearch: React.FC<Props> = ({
@@ -35,6 +36,7 @@ export const NotebookSearch: React.FC<Props> = ({
   onReplace,
   onReplaceAllInCell,
   onReplaceAllInNotebook,
+  activeCellId,
 }) => {
   const [query, setQuery] = useState('');
   const [replaceText, setReplaceText] = useState('');
@@ -160,21 +162,34 @@ export const NotebookSearch: React.FC<Props> = ({
     const queryChanged = query !== prevQueryRef.current ||
                          caseSensitive !== prevCaseSensitiveRef.current ||
                          useRegex !== prevUseRegexRef.current;
-    if (queryChanged) {
-      setCurrentMatchIndex(0);
-      if (newMatches.length > 0) {
-        onNavigateToCell(newMatches[0].cellIndex, newMatches[0].cellId);
-        // Re-focus search input after navigation to prevent cell from stealing focus
-        requestAnimationFrame(() => {
-          searchInputRef.current?.focus();
-        });
+    if (queryChanged && newMatches.length > 0) {
+      // Find first match at or after the active cell
+      const activeCellIndex = activeCellId
+        ? cells.findIndex(c => c.id === activeCellId)
+        : 0;
+
+      // Find the first match in active cell or later
+      let startIndex = newMatches.findIndex(m => m.cellIndex >= activeCellIndex);
+
+      // If no match found at or after active cell, wrap to beginning
+      if (startIndex === -1) {
+        startIndex = 0;
       }
+
+      setCurrentMatchIndex(startIndex);
+      onNavigateToCell(newMatches[startIndex].cellIndex, newMatches[startIndex].cellId);
+      // Re-focus search input after navigation to prevent cell from stealing focus
+      requestAnimationFrame(() => {
+        searchInputRef.current?.focus();
+      });
+    } else if (queryChanged) {
+      setCurrentMatchIndex(0);
     }
 
     prevQueryRef.current = query;
     prevCaseSensitiveRef.current = caseSensitive;
     prevUseRegexRef.current = useRegex;
-  }, [isOpen, query, cells, caseSensitive, useRegex, onNavigateToCell]);
+  }, [isOpen, query, cells, caseSensitive, useRegex, onNavigateToCell, activeCellId]);
 
   const goToMatch = useCallback((index: number) => {
     if (matches.length === 0) return;

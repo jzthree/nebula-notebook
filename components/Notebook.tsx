@@ -431,17 +431,8 @@ export const Notebook: React.FC = () => {
         return;
       }
 
-      // Undo/Redo work even in input fields with modifier keys
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-        return;
-      }
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-        e.preventDefault();
-        redo();
-        return;
-      }
+      // Ctrl+Z / Ctrl+Shift+Z are handled by CodeMirror for per-cell undo/redo
+      // Notebook-level undo/redo is available via toolbar buttons
 
       // Shift+Enter and Ctrl+Enter are handled by Cell.tsx when in editor
       // Only handle here when in command mode (not focused in an input/editor)
@@ -1554,7 +1545,7 @@ export const Notebook: React.FC = () => {
                       onClick={undo}
                       disabled={!canUndo}
                       className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded disabled:opacity-30 transition-colors"
-                      title="Global Undo (Ctrl+Z)"
+                      title="Notebook Undo (cell insert/delete/move)"
                     >
                       <Undo2 className="w-4 h-4" />
                     </button>
@@ -1562,7 +1553,7 @@ export const Notebook: React.FC = () => {
                       onClick={redo}
                       disabled={!canRedo}
                       className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded disabled:opacity-30 transition-colors"
-                      title="Global Redo (Ctrl+Shift+Z)"
+                      title="Notebook Redo (cell insert/delete/move)"
                     >
                       <Redo2 className="w-4 h-4" />
                     </button>
@@ -1706,6 +1697,7 @@ export const Notebook: React.FC = () => {
         onReplace={handleReplace}
         onReplaceAllInCell={handleReplaceAllInCell}
         onReplaceAllInNotebook={handleReplaceAllInNotebook}
+        activeCellId={activeCellId}
       />
     </div>
   );
