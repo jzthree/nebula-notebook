@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Folder, Bot, Check, Palette, Bell } from 'lucide-react';
+import { X, Folder, Bot, Check, Palette, Bell, Volume2 } from 'lucide-react';
 import {
   getSettings,
   saveSettings,
@@ -244,6 +244,24 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                   <span className="text-xs text-slate-500">seconds</span>
                 </div>
               )}
+              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg mt-2">
+                <div className="flex items-center gap-2">
+                  <Volume2 className="w-4 h-4 text-slate-500" />
+                  <p className="text-sm text-slate-700">Sound Alert</p>
+                </div>
+                <button
+                  onClick={() => setSettings({ ...settings, notifySoundEnabled: !settings.notifySoundEnabled })}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    settings.notifySoundEnabled ? 'bg-blue-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      settings.notifySoundEnabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
           </div>
 

@@ -271,6 +271,7 @@ export interface NebulaSettings {
   useAIAvatars?: boolean; // Use AI to generate notebook icons (requires API credits)
   notifyOnLongRun?: boolean; // Send browser notification when long-running jobs complete
   notifyThresholdSeconds?: number; // Threshold in seconds for "long-running" (default 60)
+  notifySoundEnabled?: boolean; // Play sound when long-running jobs complete
 }
 
 export const getSettings = (): NebulaSettings => {

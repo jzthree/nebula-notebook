@@ -26,6 +26,7 @@ import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
 import { useNotification } from './NotificationSystem';
 import { detectIndentationFromCells, IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 import { getNotebookAvatar, updateFavicon, resetFavicon } from '../utils/notebookAvatar';
+import { playSuccessSound } from '../utils/notificationSound';
 
 // Helper to extract filename from path
 function getFilenameFromPath(filePath: string): string {
@@ -844,11 +845,16 @@ export const Notebook: React.FC = () => {
       const elapsedSeconds = (Date.now() - executionStartTimeRef.current) / 1000;
       const settings = getSettings();
 
-      if (settings.notifyOnLongRun) {
-        const threshold = settings.notifyThresholdSeconds ?? 60;
+      const threshold = settings.notifyThresholdSeconds ?? 60;
 
-        if (elapsedSeconds >= threshold) {
-          // Request permission and send notification
+      if (elapsedSeconds >= threshold) {
+        // Play sound notification if enabled
+        if (settings.notifySoundEnabled) {
+          playSuccessSound();
+        }
+
+        // Send browser notification if enabled
+        if (settings.notifyOnLongRun) {
           if (Notification.permission === 'granted') {
             const minutes = Math.floor(elapsedSeconds / 60);
             const seconds = Math.floor(elapsedSeconds % 60);
