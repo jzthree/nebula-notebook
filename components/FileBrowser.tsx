@@ -51,6 +51,7 @@ export const FileBrowser: React.FC<Props> = ({
 }) => {
   const { toast, confirm } = useNotification();
   const [currentPath, setCurrentPath] = useState<string>('~');
+  const [loadedPath, setLoadedPath] = useState<string | null>(null); // Track which path items belong to
   const [items, setItems] = useState<FileItem[]>([]);
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -62,28 +63,23 @@ export const FileBrowser: React.FC<Props> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'modified'>('modified');
 
-  // Load directory when opening or path changes
+  // Initialize path from settings on first open
   useEffect(() => {
     if (!isOpen) return;
+    if (currentPath !== '~') return; // Already initialized
 
-    // On first open, use settings path; otherwise use current path
     const settings = getSettings();
-    const targetPath = currentPath === '~' ? (settings.rootDirectory || '~') : currentPath;
+    const targetPath = settings.rootDirectory || '~';
+    setCurrentPath(targetPath);
+  }, [isOpen, currentPath]);
 
-    // Only load if path changed or we haven't loaded yet
-    if (targetPath !== currentPath) {
-      setCurrentPath(targetPath);
-    } else {
-      loadDirectory(targetPath);
-    }
-  }, [isOpen]);
-
-  // Load when path changes (user navigation)
+  // Load directory when path changes or on first open
   useEffect(() => {
-    if (isOpen && currentPath && currentPath !== '~') {
-      loadDirectory(currentPath);
-    }
-  }, [currentPath]);
+    if (!isOpen || currentPath === '~') return;
+    if (loadedPath === currentPath && !error) return; // Already loaded this path
+
+    loadDirectory(currentPath);
+  }, [isOpen, currentPath, loadedPath, error]);
 
   const loadDirectory = async (path: string) => {
     setIsLoading(true);
@@ -94,9 +90,11 @@ export const FileBrowser: React.FC<Props> = ({
       setItems(listing.items);
       setParentPath(listing.parent);
       setCurrentPath(listing.path);
+      setLoadedPath(listing.path); // Mark this path as loaded
     } catch (err: any) {
       setError(err.message || 'Failed to load directory');
       setItems([]);
+      setLoadedPath(null); // Clear on error so we retry
     } finally {
       setIsLoading(false);
     }
@@ -356,13 +354,15 @@ export const FileBrowser: React.FC<Props> = ({
             </div>
           )}
 
-          {isLoading && (
+          {/* Only show loading screen on initial load (no items yet) */}
+          {isLoading && items.length === 0 && (
             <div className="text-center py-8 text-slate-400 text-xs">
               Loading...
             </div>
           )}
 
-          {!isLoading && !error && filteredItems.map(item => (
+          {/* Show files even during background refresh */}
+          {!error && filteredItems.map(item => (
             <div
               key={item.id}
               onClick={() => handleItemClick(item)}
