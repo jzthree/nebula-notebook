@@ -1,116 +1,81 @@
 # Nebula Notebook
 
-A modern, web-based notebook interface for interactive computing with real Jupyter kernels, multi-provider LLM support, and real filesystem access.
+Nebula is what notebooks should feel like in 2025 — built for what's coming next.
 
-## Quick Install
+## Quick Start
 
 ```bash
-# Clone and install
 git clone https://github.com/jzthree/nebula-notebook.git
 cd nebula-notebook
 npm install
 cd server && pip install -r requirements.txt && cd ..
 
-# Configure API keys (at least one required for AI features)
+# Configure API keys (optional, for AI features)
 cp server/.env.example server/.env
 # Edit server/.env with your API keys
 
-# Run
 npm run start
 ```
 
-Open http://localhost:3000 in your browser.
+Open http://localhost:3000
 
 ## Features
 
-- **Real Jupyter Kernels** - Execute code using actual Jupyter kernels (Python, Julia, R, etc.)
-- **Multi-Provider LLM Support** - AI assistance powered by Google Gemini, OpenAI, or Anthropic
-- **Real Filesystem** - Browse and edit notebooks from your actual filesystem
-- **Autosave** - Never lose your work with automatic saving and crash recovery
-- **Modern UI** - Clean, responsive interface with cell-based editing
+**Core**
+- Real Jupyter kernel execution (Python, Julia, R, etc.)
+- Real filesystem access - open notebooks from anywhere
+- Autosave with crash recovery
+- Undo/redo with full edit history
+
+**Navigation**
+- Table of Contents breadcrumb - auto-generated from markdown headers
+- Search & replace across all cells (Cmd/Ctrl+F)
+- Keyboard shortcuts (Shift+Enter to run, Cmd+S to save, etc.)
+
+**AI Assistant**
+- Multi-provider support: Gemini, OpenAI, Anthropic
+- Code generation and error fixing
+- Context-aware suggestions
+
+**Editor**
+- Syntax highlighting with CodeMirror
+- Tab autocomplete for variables
+- Auto-indent detection
+- Execution queue with status indicators
+
+**UI/UX**
+- Virtualized cell list for large notebooks
+- Collapsible/resizable outputs
+- Sound & browser notifications for long-running cells
+- Dark-mode friendly error display
 
 ## Prerequisites
 
 - Node.js 18+
 - Python 3.10+
-- Jupyter kernels installed (e.g., `pip install ipykernel`)
-
-## Setup
-
-### 1. Install dependencies
-
-```bash
-# Frontend dependencies
-npm install
-
-# Backend dependencies
-cd server
-pip install -r requirements.txt
-```
-
-### 2. Configure API keys
-
-Copy the example environment file and add your API keys:
-
-```bash
-cp server/.env.example server/.env
-```
-
-Edit `server/.env` with your API keys (at least one is required for AI features):
-
-```
-GEMINI_API_KEY=your_key_here
-OPENAI_API_KEY=your_key_here
-ANTHROPIC_API_KEY=your_key_here
-```
-
-### 3. Run the application
-
-```bash
-# Start both frontend and backend
-npm run start
-```
-
-Or run them separately:
-
-```bash
-# Terminal 1: Backend (FastAPI)
-npm run server
-
-# Terminal 2: Frontend (Vite)
-npm run dev
-```
-
-Open http://localhost:3000 in your browser.
+- Jupyter kernels (`pip install ipykernel`)
 
 ## Project Structure
 
 ```
 nebula-notebook/
 ├── components/       # React components
-├── hooks/           # Custom React hooks
-├── services/        # Frontend services (kernel, LLM, filesystem)
-├── server/          # Python FastAPI backend
-│   ├── main.py           # API endpoints
-│   ├── kernel_service.py # Jupyter kernel management
-│   ├── llm_service.py    # Multi-provider LLM service
-│   └── fs_service.py     # Filesystem operations
-├── types.ts         # TypeScript type definitions
-└── vite.config.ts   # Vite configuration
+├── hooks/            # Custom React hooks
+├── lib/              # Core utilities (diff, operations)
+├── services/         # Frontend API clients
+├── server/           # Python FastAPI backend
+│   ├── main.py
+│   ├── kernel_service.py
+│   ├── llm_service.py
+│   └── fs_service.py
+└── types.ts
 ```
 
 ## Tech Stack
 
-**Frontend:**
-- React 19 + TypeScript
-- Vite
-- Tailwind CSS
-- Lucide Icons
-
-**Backend:**
-- FastAPI
-- jupyter_client (kernel management)
-- OpenAI, Anthropic, Google GenAI SDKs
+- **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, CodeMirror
+- **Backend**: FastAPI, jupyter_client
+- **AI**: OpenAI, Anthropic, Google GenAI SDKs
 
 ## License
 

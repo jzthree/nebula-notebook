@@ -4,7 +4,7 @@ import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
 import { getSettings, saveSettings } from '../services/llmService';
-import { Plus, Play, Trash, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu } from 'lucide-react';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -13,7 +13,9 @@ import {
   getActiveFileId,
   saveActiveFileId,
   updateNotebookMetadata,
-  renameFile
+  renameFile,
+  loadNotebookHistory,
+  saveNotebookHistory
 } from '../services/fileService';
 import { FileBrowser } from './FileBrowser';
 import { AIChatSidebar } from './AIChatSidebar';
@@ -22,7 +24,12 @@ import { useUndoRedo } from '../hooks/useUndoRedo';
 import { SettingsModal } from './SettingsModal';
 import { KernelManager } from './KernelManager';
 import { NotebookSearch } from './NotebookSearch';
+import { NotebookBreadcrumb } from './NotebookBreadcrumb';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
+import { useNotification } from './NotificationSystem';
+import { detectIndentationFromCells, IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
+import { getNotebookAvatar, updateFavicon, resetFavicon } from '../utils/notebookAvatar';
+import { playSuccessSound } from '../utils/notificationSound';
 
 // Initial cell for reset
 const INITIAL_CELL: Cell = {
@@ -50,7 +57,18 @@ function getInitialFileId(): string | null {
   return getActiveFileId();
 }
 
+// Default cell for reset
+const INITIAL_CELL: Cell = {
+  id: crypto.randomUUID(),
+  type: 'code',
+  content: '',
+  outputs: [],
+  isExecuting: false,
+};
+
 export const Notebook: React.FC = () => {
+  const { toast, confirm } = useNotification();
+
   // File System State
   const [files, setFiles] = useState<NotebookMetadata[]>([]);
   const [currentFileId, setCurrentFileId] = useState<string | null>(getInitialFileId);
@@ -81,28 +99,91 @@ export const Notebook: React.FC = () => {
   const [isDiscoveringPythons, setIsDiscoveringPythons] = useState(false);
   const [isInstallingKernel, setIsInstallingKernel] = useState<string | null>(null);
 
-  // Undo/Redo & State Management
+  // Undo/Redo & State Management (operation-based)
   const {
     cells,
     setCells,
-    pushState,
+    insertCell: undoableInsertCell,
+    deleteCell: undoableDeleteCell,
+    moveCell: undoableMoveCell,
+    updateContent,
+    changeType,
     saveCheckpoint,
     undo,
     redo,
     canUndo,
     canRedo,
-    resetHistory
+    resetHistory,
+    getFullHistory,
+    loadHistory,
+    logOperation
   } = useUndoRedo([]);  // Start with empty cells
 
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [showRecoveryBanner, setShowRecoveryBanner] = useState(false);
   const [recoveryData, setRecoveryData] = useState<{ cells: Cell[]; timestamp: number } | null>(null);
+  const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
 
   // Clipboard for cut/copy/paste cells
   const [cellClipboard, setCellClipboard] = useState<{ cell: Cell; isCut: boolean } | null>(null);
 
   // Virtuoso Handle for programmatic scrolling
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+
+  // Debounced scroll to handle height changes during execution
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingScrollRef = useRef<{ index: number; attempts: number } | null>(null);
+
+  // Smart scroll that debounces rapid requests and retries on height changes
+  const scrollToCellDebounced = useCallback((index: number, delay: number = 50) => {
+    // Cancel any pending scroll
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+
+    // Track this scroll request
+    pendingScrollRef.current = { index, attempts: 0 };
+
+    const performScroll = () => {
+      if (!pendingScrollRef.current || pendingScrollRef.current.index !== index) {
+        return; // Another scroll was requested, abort this one
+      }
+
+      virtuosoRef.current?.scrollToIndex({
+        index,
+        align: 'start',
+        behavior: 'smooth',
+        offset: -80
+      });
+
+      // After initial scroll, do one more adjustment after heights settle
+      if (pendingScrollRef.current.attempts === 0) {
+        pendingScrollRef.current.attempts = 1;
+        scrollTimeoutRef.current = setTimeout(() => {
+          if (pendingScrollRef.current?.index === index) {
+            virtuosoRef.current?.scrollToIndex({
+              index,
+              align: 'start',
+              behavior: 'auto', // Instant adjustment, no jarring smooth scroll
+              offset: -80
+            });
+            pendingScrollRef.current = null;
+          }
+        }, 150); // Wait for output clearing to complete
+      }
+    };
+
+    scrollTimeoutRef.current = setTimeout(performScroll, delay);
+  }, []);
+
+  // Cleanup scroll timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Ref for saveNow to avoid stale closures in keyboard handler
   const saveNowRef = useRef<() => Promise<void>>(() => Promise.resolve());
@@ -111,7 +192,14 @@ export const Notebook: React.FC = () => {
   const performSaveToFile = useCallback(async (fileId: string, cellsToSave: Cell[]) => {
     await saveFileContent(fileId, cellsToSave);
     await updateNotebookMetadata(fileId, {});
-  }, []);
+    // Save history in background (non-blocking) - don't slow down notebook save
+    const history = getFullHistory();
+    if (history.length > 0) {
+      saveNotebookHistory(fileId, history).catch(() => {
+        // Silently ignore history save failures
+      });
+    }
+  }, [getFullHistory]);
 
   const { status: autosaveStatus, saveNow, getBackup, clearBackup } = useAutosave({
     fileId: currentFileId,
@@ -127,6 +215,9 @@ export const Notebook: React.FC = () => {
   const [isKernelReady, setIsKernelReady] = useState(false);
   const [executionQueue, setExecutionQueue] = useState<string[]>([]);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
+  const [kernelExecutionCount, setKernelExecutionCount] = useState(0); // Global execution counter
+  const executionStartTimeRef = useRef<number | null>(null); // Track when queue execution started
+
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
@@ -158,7 +249,7 @@ export const Notebook: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to install kernel:', error);
-      alert(`Failed to install kernel: ${error}`);
+      toast(`Failed to install kernel: ${error}`, 'error');
     } finally {
       setIsInstallingKernel(null);
     }
@@ -202,7 +293,7 @@ export const Notebook: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run once on mount
 
-  // Update browser tab title and URL when file changes
+  // Update browser tab title, URL, and favicon when file changes
   useEffect(() => {
     if (currentFileId) {
       // Update tab title from file path
@@ -212,9 +303,19 @@ export const Notebook: React.FC = () => {
       // Update URL - don't encode slashes for readability
       const baseUrl = window.location.pathname;
       window.history.replaceState({}, '', `${baseUrl}?file=${currentFileId}`);
+
+      // Update favicon with notebook-specific avatar
+      const settings = getSettings();
+      getNotebookAvatar(currentFileId, {
+        useAI: settings.useAIAvatars ?? false,
+        // AI generation function would go here if implemented
+      }).then(avatarUrl => {
+        updateFavicon(avatarUrl);
+      });
     } else {
       document.title = 'Nebula Notebook';
       window.history.replaceState({}, '', window.location.pathname);
+      resetFavicon();
     }
   }, [currentFileId]);
 
@@ -422,7 +523,7 @@ export const Notebook: React.FC = () => {
       saveActiveFileId(newPath);
       setIsRenamingNotebook(false);
     } catch (err: any) {
-      alert(err.message || 'Failed to rename notebook');
+      toast(err.message || 'Failed to rename notebook', 'error');
     }
   };
 
@@ -440,6 +541,10 @@ export const Notebook: React.FC = () => {
     if (currentFileId && currentFileId !== id) {
       saveNow(); // Save current file before switching
     }
+
+    // Detect indentation from loaded cells
+    const detectedIndent = detectIndentationFromCells(content);
+    setIndentConfig(detectedIndent);
 
     // Check for crash recovery
     const backup = getBackup(id);
@@ -463,10 +568,23 @@ export const Notebook: React.FC = () => {
     }
 
     resetHistory(content);
+
+    // Set UI state immediately - don't block on history loading
     setCurrentFileId(id);
     saveActiveFileId(id);
     setActiveCellId(content.length > 0 ? content[0].id : null);
     setIsLoadingFile(false);
+
+    // Load persisted history in background (non-blocking)
+    loadNotebookHistory(id)
+      .then(savedHistory => {
+        if (savedHistory.length > 0) {
+          loadHistory(savedHistory);
+        }
+      })
+      .catch(() => {
+        // Silently ignore history load failures
+      });
 
     const meta = files.find(f => f.id === id);
     if (meta) setCurrentFileMetadata(meta);
@@ -507,9 +625,22 @@ export const Notebook: React.FC = () => {
   };
 
   const loadFile = async (id: string) => {
-    const content = await getFileContent(id);
-    if (content) {
-      loadFileAsync(id, content);
+    setIsLoadingFile(true);
+    try {
+      const content = await getFileContent(id);
+      if (content) {
+        loadFileAsync(id, content);
+      } else {
+        // File doesn't exist or is empty
+        setIsLoadingFile(false);
+        setCurrentFileId(null);
+        saveActiveFileId('');
+      }
+    } catch (error) {
+      console.error('Failed to load file:', error);
+      setIsLoadingFile(false);
+      setCurrentFileId(null);
+      saveActiveFileId('');
     }
   };
 
@@ -558,8 +689,11 @@ export const Notebook: React.FC = () => {
         await kernelService.restartKernel(kernelSessionId);
       }
       setKernelStatus('idle');
-      // Clear all cell outputs
+      // Clear all cell outputs and reset execution counter
       setCells(prev => prev.map(c => ({ ...c, outputs: [], executionCount: undefined })));
+      setKernelExecutionCount(0);
+      // Log kernel restart for history
+      logOperation({ type: 'restartKernel' });
     } catch (error) {
       console.error('Failed to restart kernel:', error);
       setKernelStatus('disconnected');
@@ -574,6 +708,8 @@ export const Notebook: React.FC = () => {
       setExecutionQueue([]);
       setIsProcessingQueue(false);
       setCells(prev => prev.map(c => ({ ...c, isExecuting: false })));
+      // Log kernel interrupt for history
+      logOperation({ type: 'interruptKernel' });
     } catch (error) {
       console.error('Failed to interrupt kernel:', error);
     }
@@ -581,7 +717,7 @@ export const Notebook: React.FC = () => {
 
   // --- CELL OPERATIONS ---
 
-  const addCell = (type: CellType = 'code', content: string = '', atIndex?: number, position: 'above' | 'below' = 'below') => {
+  const addCell = (type: CellType = 'code', content: string = '', afterIndex?: number, noScroll?: boolean) => {
     const newCell: Cell = {
       id: crypto.randomUUID(),
       type,
@@ -590,16 +726,25 @@ export const Notebook: React.FC = () => {
       isExecuting: false
     };
 
-    const newCells = [...cells];
-    if (atIndex !== undefined && atIndex >= 0 && atIndex < cells.length) {
-      const insertIndex = position === 'above' ? atIndex : atIndex + 1;
-      newCells.splice(insertIndex, 0, newCell);
-    } else {
-      newCells.push(newCell);
-    }
+    // Calculate insertion index
+    const insertIndex = (afterIndex !== undefined && afterIndex >= 0 && afterIndex < cells.length)
+      ? afterIndex + 1
+      : cells.length;
 
-    pushState(newCells);
+    undoableInsertCell(insertIndex, newCell);
     setActiveCellId(newCell.id);
+
+    // Only scroll if not explicitly disabled (e.g., toolbar plus button shouldn't scroll)
+    if (!noScroll) {
+      requestAnimationFrame(() => {
+        virtuosoRef.current?.scrollToIndex({
+          index: insertIndex,
+          align: 'start',
+          behavior: 'smooth',
+          offset: -80
+        });
+      });
+    }
   };
 
   const handleAddCell = (type: CellType) => {
@@ -624,13 +769,15 @@ export const Notebook: React.FC = () => {
     addCell('code', code, indexToInsert);
   };
 
+  // Text edits - not individually undoable (too many operations)
+  // Use setCells directly for per-keystroke updates
   const handleUpdateCell = useCallback((id: string, content: string) => {
     setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
   }, [setCells]);
 
+  // Force update with undo tracking - for AI edits, etc.
   const forceUpdateCell = (id: string, content: string) => {
-    const newCells = cells.map(c => c.id === id ? { ...c, content } : c);
-    pushState(newCells);
+    updateContent(id, content);
   };
 
   const handleEditCell = (index: number, newContent: string) => {
@@ -639,24 +786,43 @@ export const Notebook: React.FC = () => {
     }
   };
 
-  const handleDeleteCellByIndex = (index: number) => {
+  const handleDeleteCellByIndex = async (index: number) => {
     if (index >= 0 && index < cells.length) {
-      if (confirm(`Are you sure you want to delete Cell #${index + 1}?`)) {
+      const confirmed = await confirm({
+        title: 'Delete Cell',
+        message: `Are you sure you want to delete Cell #${index + 1}?`,
+        confirmLabel: 'Delete',
+        variant: 'danger',
+      });
+      if (confirmed) {
         deleteCell(cells[index].id);
       }
     }
   };
 
   const changeCellType = (id: string, type: CellType) => {
-    const newCells = cells.map(c => c.id === id ? { ...c, type } : c);
-    pushState(newCells);
+    changeType(id, type);
   };
 
   const deleteCell = (id: string) => {
+    const idx = cells.findIndex(c => c.id === id);
+    if (idx === -1) return;
+
     if (cells.length > 1) {
-      const newCells = cells.filter(c => c.id !== id);
-      pushState(newCells);
+      // Determine which cell to select after deletion
+      const nextIdx = idx < cells.length - 1 ? idx : idx - 1;
+      const nextCellId = cells[nextIdx === idx ? idx + 1 : nextIdx]?.id;
+
+      undoableDeleteCell(idx);
+
+      // Select the next cell but don't scroll - this keeps the cursor
+      // in the same position, naturally landing on the delete button
+      // of the next cell for rapid deletion
+      if (nextCellId) {
+        setActiveCellId(nextCellId);
+      }
     } else {
+      // Can't delete last cell, just clear it
       forceUpdateCell(id, '');
     }
   };
@@ -669,11 +835,13 @@ export const Notebook: React.FC = () => {
     if (direction === 'up' && idx === 0) return;
     if (direction === 'down' && idx === cells.length - 1) return;
 
-    const newCells = [...cells];
     const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
-    [newCells[idx], newCells[targetIdx]] = [newCells[targetIdx], newCells[idx]];
+    undoableMoveCell(idx, targetIdx);
 
-    pushState(newCells);
+    // Don't auto-scroll for move operations - the cell only moves by one position
+    // and typically stays visible. Auto-scrolling causes flickering due to
+    // race conditions between state updates and scroll calculations.
+    // User can manually scroll if needed.
   };
 
   const updateCellOutputs = (id: string, newOutputs: any[], isExec: boolean) => {
@@ -683,16 +851,25 @@ export const Notebook: React.FC = () => {
   const queueExecution = (id: string) => {
     saveCheckpoint();
     setExecutionQueue(prev => [...prev, id]);
+    // Log cell run for history
+    // Note: content is NOT stored here - it's reconstructed from edit history + snapshot
+    const cellIndex = cells.findIndex(c => c.id === id);
+    if (cellIndex >= 0) {
+      logOperation({ type: 'runCell', cellId: id, cellIndex });
+    }
   };
 
   const runAndAdvance = (id: string) => {
     queueExecution(id);
     const currentIndex = cells.findIndex(c => c.id === id);
     if (currentIndex < cells.length - 1) {
-      // Move to next cell
-      setActiveCellId(cells[currentIndex + 1].id);
+      // Move to next cell and scroll to it
+      // Use debounced scroll to handle height changes when outputs are cleared/regenerated
+      const nextIndex = currentIndex + 1;
+      setActiveCellId(cells[nextIndex].id);
+      scrollToCellDebounced(nextIndex);
     } else {
-      // Create new cell at the end
+      // Create new cell at the end (addCell already handles scrolling via setActiveCellId)
       addCell('code', '', currentIndex);
     }
   };
@@ -703,7 +880,7 @@ export const Notebook: React.FC = () => {
     virtuosoRef.current?.scrollToIndex({
       index: cellIndex,
       align: 'start',    // Start alignment ensures code editor (at top of cell) is visible
-      behavior: 'auto',  // Instant scroll for fast search navigation
+      behavior: 'smooth',
       offset: -80        // Small offset so cell isn't flush with top (accounts for header)
     });
   }, []);
@@ -723,12 +900,47 @@ export const Notebook: React.FC = () => {
     setSearchQuery(null);
   }, []);
 
-  const handleReset = () => {
-    if (confirm("Resetting will clear all cells in this notebook. Continue?")) {
-      pushState([INITIAL_CELL]);
-      setActiveCellId(INITIAL_CELL.id);
+  // Replace a single match in a cell
+  const handleReplace = useCallback((cellId: string, startIndex: number, endIndex: number, replacement: string) => {
+    const cell = cells.find(c => c.id === cellId);
+    if (!cell) return;
+
+    const newContent = cell.content.slice(0, startIndex) + replacement + cell.content.slice(endIndex);
+    updateContent(cellId, newContent);
+  }, [cells, updateContent]);
+
+  // Replace all matches in a specific cell
+  const handleReplaceAllInCell = useCallback((cellId: string, query: string, replacement: string, caseSensitive: boolean) => {
+    const cell = cells.find(c => c.id === cellId);
+    if (!cell) return;
+
+    let newContent: string;
+    if (caseSensitive) {
+      newContent = cell.content.split(query).join(replacement);
+    } else {
+      // Case-insensitive replace
+      const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      newContent = cell.content.replace(regex, replacement);
     }
-  };
+
+    if (newContent !== cell.content) {
+      updateContent(cellId, newContent);
+    }
+  }, [cells, updateContent]);
+
+  // Replace all matches in the entire notebook
+  const handleReplaceAllInNotebook = useCallback((query: string, replacement: string, caseSensitive: boolean) => {
+    saveCheckpoint(); // Save undo state before bulk replace
+
+    const regex = caseSensitive
+      ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')
+      : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+
+    setCells(prev => prev.map(cell => {
+      const newContent = cell.content.replace(regex, replacement);
+      return newContent !== cell.content ? { ...cell, content: newContent } : cell;
+    }));
+  }, [saveCheckpoint, setCells]);
 
   // Execution Processor
   useEffect(() => {
@@ -738,13 +950,25 @@ export const Notebook: React.FC = () => {
       setIsProcessingQueue(true);
       setKernelStatus('busy');
       const cellId = executionQueue[0];
-      const cell = cells.find(c => c.id === cellId);
+      const cellIndex = cells.findIndex(c => c.id === cellId);
+      const cell = cellIndex >= 0 ? cells[cellIndex] : null;
 
       if (cell && cell.type === 'code') {
+        const cellStartTime = Date.now();
+        let hasError = false;
+        const collectedOutputs: string[] = []; // Track outputs for history
+
         setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: true, outputs: [] } : c));
 
         try {
           await kernelService.executeCode(kernelSessionId, cell.content, (output) => {
+            if (output.type === 'error') {
+              hasError = true;
+            }
+            // Collect text outputs for history (skip images/html)
+            if (output.type === 'stdout' || output.type === 'stderr' || output.type === 'error') {
+              collectedOutputs.push(output.content);
+            }
             setCells(prev => prev.map(c => {
               if (c.id !== cellId) return c;
               return { ...c, outputs: [...c.outputs, output] };
@@ -752,13 +976,39 @@ export const Notebook: React.FC = () => {
           });
         } catch (error) {
           console.error('Execution error:', error);
+          hasError = true;
         }
 
-        setCells(prev => prev.map(c => c.id === cellId ? {
-          ...c,
-          isExecuting: false,
-          executionCount: (c.executionCount || 0) + 1
-        } : c));
+        // Log execution completion for history
+        const durationMs = Date.now() - cellStartTime;
+        // Truncate output to keep history file size reasonable
+        const fullOutput = collectedOutputs.join('\n');
+        const truncatedOutput = fullOutput.length > 2000
+          ? fullOutput.slice(0, 2000) + '...[truncated]'
+          : fullOutput;
+
+        logOperation({
+          type: 'executionComplete',
+          cellId,
+          cellIndex,
+          durationMs,
+          success: !hasError,
+          output: truncatedOutput || undefined
+        });
+
+        // Increment global counter and assign to cell
+        setKernelExecutionCount(prev => {
+          const newCount = prev + 1;
+          setCells(cells => cells.map(c => c.id === cellId ? {
+            ...c,
+            isExecuting: false,
+            executionCount: newCount
+          } : c));
+          return newCount;
+        });
+      } else {
+        // Non-code cell or cell not found, just mark as done
+        setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: false } : c));
       }
 
       setExecutionQueue(prev => prev.slice(1));
@@ -767,7 +1017,56 @@ export const Notebook: React.FC = () => {
     };
 
     processNext();
-  }, [executionQueue, isProcessingQueue, isKernelReady, kernelSessionId, cells, setCells]);
+  }, [executionQueue, isProcessingQueue, isKernelReady, kernelSessionId, cells, setCells, logOperation]);
+
+  // Track execution timing for notifications
+  const prevQueueLengthRef = useRef(0);
+  useEffect(() => {
+    const prevLength = prevQueueLengthRef.current;
+    const currentLength = executionQueue.length;
+
+    // Queue just became non-empty - start timing
+    if (prevLength === 0 && currentLength > 0) {
+      executionStartTimeRef.current = Date.now();
+    }
+
+    // Queue just became empty after having items - check if we should notify
+    if (prevLength > 0 && currentLength === 0 && executionStartTimeRef.current) {
+      const elapsedSeconds = (Date.now() - executionStartTimeRef.current) / 1000;
+      const settings = getSettings();
+
+      const threshold = settings.notifyThresholdSeconds ?? 60;
+
+      if (elapsedSeconds >= threshold) {
+        // Play sound notification if enabled
+        if (settings.notifySoundEnabled) {
+          playSuccessSound();
+        }
+
+        // Send browser notification if enabled
+        if (settings.notifyOnLongRun) {
+          if (Notification.permission === 'granted') {
+            const minutes = Math.floor(elapsedSeconds / 60);
+            const seconds = Math.floor(elapsedSeconds % 60);
+            const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+
+            new Notification('Nebula Notebook', {
+              body: `Execution completed in ${timeStr}`,
+              icon: '/favicon.svg',
+              tag: 'execution-complete', // Prevents duplicate notifications
+            });
+          } else if (Notification.permission === 'default') {
+            // Request permission for future notifications
+            Notification.requestPermission();
+          }
+        }
+      }
+
+      executionStartTimeRef.current = null;
+    }
+
+    prevQueueLengthRef.current = currentLength;
+  }, [executionQueue.length]);
 
   const getKernelDisplayName = () => {
     const kernel = availableKernels.find(k => k.name === currentKernel);
@@ -1031,6 +1330,36 @@ export const Notebook: React.FC = () => {
                           </span>
                         )}
                       </span>
+
+                      {/* Execution Indicator - subtle shortcut to jump to running cell */}
+                      {executionQueue.length > 0 && (() => {
+                        const executingCellId = executionQueue[0];
+                        const executingCellIndex = cells.findIndex(c => c.id === executingCellId);
+                        const queueLength = executionQueue.length;
+                        return (
+                          <button
+                            onClick={() => {
+                              if (executingCellIndex >= 0) {
+                                setActiveCellId(executingCellId);
+                                virtuosoRef.current?.scrollToIndex({
+                                  index: executingCellIndex,
+                                  align: 'start',
+                                  behavior: 'smooth',
+                                  offset: -80
+                                });
+                              }
+                            }}
+                            className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
+                            title={`Jump to cell ${executingCellIndex + 1}${queueLength > 1 ? ` (${queueLength - 1} more queued)` : ''}`}
+                          >
+                            <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
+                            <span className="tabular-nums">[{executingCellIndex + 1}]</span>
+                            {queueLength > 1 && (
+                              <span className="text-gray-400">+{queueLength - 1}</span>
+                            )}
+                          </button>
+                        );
+                      })()}
                     </div>
 
                  </div>
@@ -1066,10 +1395,10 @@ export const Notebook: React.FC = () => {
                   <button onClick={saveCurrentNotebook} className="btn-secondary hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors">
                       <Save className="w-4 h-4" /> Save
                   </button>
-                  <button onClick={handleReset} className="btn-secondary hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-red-50 text-red-600 text-xs font-medium transition-colors">
-                      <Trash className="w-4 h-4" /> Reset
-                  </button>
-                  <button onClick={() => cells.forEach(c => queueExecution(c.id))} className="btn-primary flex items-center gap-2 bg-slate-900 text-white px-3 py-1.5 rounded-md hover:bg-slate-700 text-xs font-medium transition-colors shadow-sm">
+                  <button onClick={() => {
+                    logOperation({ type: 'runAllCells', cellCount: cells.filter(c => c.type === 'code').length });
+                    cells.forEach(c => queueExecution(c.id));
+                  }} className="btn-primary flex items-center gap-2 bg-slate-900 text-white px-3 py-1.5 rounded-md hover:bg-slate-700 text-xs font-medium transition-colors shadow-sm">
                       <Play className="w-4 h-4" /> Run All
                   </button>
 
@@ -1088,6 +1417,20 @@ export const Notebook: React.FC = () => {
                </div>
             </div>
         </header>
+
+        {/* Loading progress bar */}
+        {isLoadingFile && (
+          <div className="h-0.5 bg-slate-100 overflow-hidden">
+            <div className="h-full bg-blue-500 animate-loading-bar" />
+          </div>
+        )}
+
+        {/* Breadcrumb navigation for markdown headers */}
+        <NotebookBreadcrumb
+          cells={cells}
+          activeCellId={activeCellId}
+          onNavigate={navigateToCell}
+        />
 
         {/* Virtuoso Scrollable Area */}
         <div className="flex-1 h-full pt-3">
@@ -1111,8 +1454,11 @@ export const Notebook: React.FC = () => {
                   onMove={moveCell}
                   onChangeType={changeCellType}
                   onClick={setActiveCellId}
+                  onAddCell={(afterIndex) => addCell('code', '', afterIndex, true)}
                   onSave={saveNow}
                   searchHighlight={searchQuery}
+                  queuePosition={executionQueue.indexOf(cell.id)}
+                  indentConfig={indentConfig}
                 />
               )}
             />
@@ -1174,6 +1520,9 @@ export const Notebook: React.FC = () => {
         onClose={handleSearchClose}
         onNavigateToCell={navigateToCell}
         onSearchChange={handleSearchChange}
+        onReplace={handleReplace}
+        onReplaceAllInCell={handleReplaceAllInCell}
+        onReplaceAllInNotebook={handleReplaceAllInNotebook}
       />
     </div>
   );

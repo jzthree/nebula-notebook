@@ -82,6 +82,11 @@ class SaveNotebookRequest(BaseModel):
     cells: List[Dict[str, Any]]
 
 
+class SaveHistoryRequest(BaseModel):
+    notebook_path: str
+    history: List[Dict[str, Any]]
+
+
 class InstallKernelRequest(BaseModel):
     python_path: str
     kernel_name: Optional[str] = None
@@ -108,9 +113,13 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(kernel_service.initialize_async())
 
     yield
-    # Shutdown
+    # Shutdown with timeout
     print("Shutting down... Cleaning up kernels...")
-    await kernel_service.cleanup()
+    try:
+        await asyncio.wait_for(kernel_service.cleanup(), timeout=5.0)
+        print("Cleanup complete.")
+    except asyncio.TimeoutError:
+        print("Cleanup timed out, forcing shutdown.")
 
 
 # --- App ---
@@ -392,6 +401,17 @@ async def list_directory(path: str = Query(default="~")):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/fs/mtime")
+async def get_directory_mtime(path: str = Query(default="~")):
+    """Get directory modification time (lightweight change detection)"""
+    try:
+        return fs_service.get_directory_mtime(path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/fs/read")
 async def read_file(path: str):
     """Read file contents"""
@@ -473,6 +493,28 @@ async def save_notebook(request: SaveNotebookRequest):
     try:
         fs_service.save_notebook_cells(request.path, request.cells)
         return {"status": "ok", "path": request.path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- History Persistence Endpoints ---
+
+@app.get("/api/notebook/history")
+async def get_notebook_history(notebook_path: str):
+    """Load operation history for a notebook from .nebula directory"""
+    try:
+        history = fs_service.load_history(notebook_path)
+        return {"notebook_path": notebook_path, "history": history}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notebook/history")
+async def save_notebook_history(request: SaveHistoryRequest):
+    """Save operation history for a notebook to .nebula directory"""
+    try:
+        fs_service.save_history(request.notebook_path, request.history)
+        return {"status": "ok", "notebook_path": request.notebook_path}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

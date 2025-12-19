@@ -3,6 +3,7 @@
  */
 import { Cell, NotebookMetadata } from '../types';
 import { getSettings, saveSettings } from './llmService';
+import { TimestampedOperation } from '../hooks/useUndoRedo';
 
 const API_BASE = '/api';
 
@@ -21,7 +22,13 @@ export interface FileItem {
 export interface DirectoryListing {
   path: string;
   parent: string | null;
+  mtime: number;
   items: FileItem[];
+}
+
+export interface DirectoryMtime {
+  path: string;
+  mtime: number;
 }
 
 // Storage keys for local state
@@ -36,6 +43,20 @@ export const listDirectory = async (path: string = '~'): Promise<DirectoryListin
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.detail || 'Failed to list directory');
+  }
+
+  return response.json();
+};
+
+/**
+ * Get directory modification time (lightweight change detection)
+ */
+export const getDirectoryMtime = async (path: string = '~'): Promise<DirectoryMtime> => {
+  const response = await fetch(`${API_BASE}/fs/mtime?path=${encodeURIComponent(path)}`);
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to get directory mtime');
   }
 
   return response.json();
@@ -279,4 +300,57 @@ export const initFileSystem = async (defaultCells: Cell[]): Promise<void> => {
   }
 
   // No active file, user will need to create or open one
+};
+
+// --- History Persistence ---
+
+/**
+ * Load operation history for a notebook from .nebula directory
+ */
+export const loadNotebookHistory = async (notebookPath: string): Promise<TimestampedOperation[]> => {
+  try {
+    const response = await fetch(
+      `${API_BASE}/notebook/history?notebook_path=${encodeURIComponent(notebookPath)}`
+    );
+
+    if (!response.ok) {
+      console.warn('Failed to load history:', await response.text());
+      return [];
+    }
+
+    const data = await response.json();
+    return data.history || [];
+  } catch (error) {
+    console.warn('Failed to load notebook history:', error);
+    return [];
+  }
+};
+
+/**
+ * Save operation history for a notebook to .nebula directory
+ */
+export const saveNotebookHistory = async (
+  notebookPath: string,
+  history: TimestampedOperation[]
+): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE}/notebook/history`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        notebook_path: notebookPath,
+        history
+      })
+    });
+
+    if (!response.ok) {
+      console.warn('Failed to save history:', await response.text());
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.warn('Failed to save notebook history:', error);
+    return false;
+  }
 };

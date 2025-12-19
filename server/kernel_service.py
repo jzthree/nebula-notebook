@@ -42,6 +42,11 @@ class KernelService:
         # Session persistence store
         self._session_store = session_store
 
+    def _normalize_path(self, path: str) -> str:
+        """Normalize a file path for consistent lookup"""
+        from pathlib import Path
+        return str(Path(path).expanduser().resolve())
+
     @property
     def is_ready(self) -> bool:
         """Check if kernel service has completed initial discovery"""
@@ -106,8 +111,14 @@ class KernelService:
             cwd: Working directory for the kernel process
             file_path: The notebook file path (for "one notebook = one kernel")
         """
-        from pathlib import Path
+        # Normalize file path for consistent lookup
+        normalized_file_path = self._normalize_path(file_path) if file_path else None
 
+        async with self._lock:
+            return await self._start_kernel_internal(kernel_name, cwd, normalized_file_path)
+
+    async def _start_kernel_internal(self, kernel_name: str = "python3", cwd: str = None, file_path: str = None) -> str:
+        """Internal kernel start - caller must hold self._lock"""
         session_id = str(uuid.uuid4())
 
         # Create kernel manager
@@ -116,8 +127,7 @@ class KernelService:
         # Prepare start_kernel kwargs
         start_kwargs = {}
         if cwd:
-            expanded_cwd = str(Path(cwd).expanduser().resolve())
-            start_kwargs['cwd'] = expanded_cwd
+            start_kwargs['cwd'] = self._normalize_path(cwd)
 
         km.start_kernel(**start_kwargs)
 
@@ -137,10 +147,9 @@ class KernelService:
             status="idle"
         )
 
-        async with self._lock:
-            self.sessions[session_id] = session
-            if file_path:
-                self.file_to_session[file_path] = session_id
+        self.sessions[session_id] = session
+        if file_path:
+            self.file_to_session[file_path] = session_id
 
         # Persist session to database
         now = datetime.now().timestamp()
@@ -186,11 +195,13 @@ class KernelService:
         """
         from pathlib import Path
 
-        session_to_stop = None
+        # Normalize path for consistent lookup
+        normalized_path = self._normalize_path(file_path)
 
-        # Check if kernel already exists for this file
+        # Hold lock for the entire operation to prevent race conditions
+        # where two concurrent requests both create kernels for the same file
         async with self._lock:
-            existing_session_id = self.file_to_session.get(file_path)
+            existing_session_id = self.file_to_session.get(normalized_path)
             if existing_session_id and existing_session_id in self.sessions:
                 session = self.sessions[existing_session_id]
                 # Verify kernel is still alive
@@ -204,21 +215,18 @@ class KernelService:
                         # Mark for stopping outside the lock
                         session_to_stop = existing_session_id
                 else:
-                    # Kernel died, clean up
-                    del self.file_to_session[file_path]
+                    # Kernel died, clean up and create new
+                    del self.file_to_session[normalized_path]
                     del self.sessions[existing_session_id]
 
-        # Stop old kernel outside of lock if needed
-        if session_to_stop:
-            await self.stop_kernel(session_to_stop)
-
-        # Create new kernel with notebook's directory as cwd
-        cwd = str(Path(file_path).parent) if file_path else None
-        return await self.start_kernel(kernel_name=kernel_name, cwd=cwd, file_path=file_path)
+            # Create new kernel with notebook's directory as cwd (inside lock)
+            cwd = str(Path(normalized_path).parent)
+            return await self._start_kernel_internal(kernel_name=kernel_name, cwd=cwd, file_path=normalized_path)
 
     def get_kernel_for_file(self, file_path: str) -> Optional[str]:
         """Get the session_id for a notebook file if one exists"""
-        session_id = self.file_to_session.get(file_path)
+        normalized_path = self._normalize_path(file_path)
+        session_id = self.file_to_session.get(normalized_path)
         if session_id and session_id in self.sessions:
             if self.sessions[session_id].manager.is_alive():
                 return session_id
@@ -345,14 +353,16 @@ class KernelService:
             # Execute the code
             msg_id = session.client.execute(code, store_history=True)
 
-            # Process iopub messages for output
+            # Process iopub messages for output (no timeout - cells can run indefinitely)
             while True:
                 try:
                     msg = await asyncio.get_event_loop().run_in_executor(
                         None,
-                        lambda: session.client.get_iopub_msg(timeout=30)
+                        lambda: session.client.get_iopub_msg(timeout=None)
                     )
-                except:
+                except Exception as e:
+                    # Only break on actual errors, not timeouts
+                    print(f"Error getting iopub message: {e}")
                     break
 
                 msg_type = msg.get('msg_type', '')
@@ -502,9 +512,11 @@ class KernelService:
 
     async def cleanup(self):
         """Cleanup all kernel sessions"""
-        async with self._lock:
-            for session_id in list(self.sessions.keys()):
-                await self.stop_kernel(session_id)
+        # Get all session IDs first, then stop each one
+        # (stop_kernel acquires lock internally, so we can't hold lock here)
+        session_ids = list(self.sessions.keys())
+        for session_id in session_ids:
+            await self.stop_kernel(session_id)
 
 
 # Global instance

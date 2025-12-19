@@ -34,6 +34,7 @@ describe('Cell', () => {
     onMove: vi.fn(),
     onChangeType: vi.fn(),
     onClick: vi.fn(),
+    onAddCell: vi.fn(),
   };
 
   beforeEach(() => {
@@ -99,11 +100,11 @@ describe('Cell', () => {
       expect(onChangeType).toHaveBeenCalledWith('test-cell-1', 'code');
     });
 
-    it('calls onChangeType when markdown button is clicked', () => {
+    it('calls onChangeType when text button is clicked', () => {
       const onChangeType = vi.fn();
       render(<Cell {...defaultProps} onChangeType={onChangeType} />);
 
-      fireEvent.click(screen.getByText('Markdown'));
+      fireEvent.click(screen.getByText('Text'));
       expect(onChangeType).toHaveBeenCalledWith('test-cell-1', 'markdown');
     });
   });

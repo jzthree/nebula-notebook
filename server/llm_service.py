@@ -10,11 +10,11 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 
-# Available models per provider
+# Available models per provider (updated Dec 2025)
 AVAILABLE_MODELS = {
-    "google": ["gemini-2.5-flash", "gemini-2.5-pro"],
-    "openai": ["gpt-4o", "gpt-4o-mini"],
-    "anthropic": ["claude-sonnet-4-5-20250929", "claude-sonnet-4-20250514"]
+    "google": ["gemini-3.0-flash", "gemini-3.0-pro", "gemini-2.5-flash"],
+    "openai": ["gpt-5.2", "gpt-5-mini", "gpt-4o"],
+    "anthropic": ["claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251101"]
 }
 
 

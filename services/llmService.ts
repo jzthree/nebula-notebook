@@ -23,10 +23,10 @@ export interface ProvidersResponse {
   providers: Record<LLMProvider, string[]>;
 }
 
-// Default models per provider
+// Default models per provider (updated Dec 2025)
 export const DEFAULT_MODELS: Record<LLMProvider, string> = {
-  google: 'gemini-2.5-flash',
-  openai: 'gpt-4o',
+  google: 'gemini-3.0-flash',
+  openai: 'gpt-5.2',
   anthropic: 'claude-sonnet-4-5-20250929'
 };
 
@@ -70,7 +70,7 @@ export const generateCellContent = async (
   prompt: string,
   contextCells: Cell[],
   targetCellId: string,
-  config: LLMConfig = { provider: 'google', model: 'gemini-2.5-flash' }
+  config: LLMConfig = { provider: 'google', model: 'gemini-3.0-flash' }
 ): Promise<string> => {
   const codeContext = contextCells
     .filter(c => c.type === 'code' && c.id !== targetCellId)
@@ -122,7 +122,7 @@ export const fixCellError = async (
   code: string,
   error: string,
   contextCells: Cell[],
-  config: LLMConfig = { provider: 'google', model: 'gemini-2.5-flash' }
+  config: LLMConfig = { provider: 'google', model: 'gemini-3.0-flash' }
 ): Promise<string> => {
   const context = getNotebookContext(contextCells);
 
@@ -172,7 +172,7 @@ export const chatWithNotebook = async (
   message: string,
   history: ChatMessage[],
   cells: Cell[],
-  config: LLMConfig = { provider: 'google', model: 'gemini-2.5-flash' }
+  config: LLMConfig = { provider: 'google', model: 'gemini-3.0-flash' }
 ): Promise<string> => {
   const context = getNotebookContext(cells);
 
@@ -268,6 +268,10 @@ export interface NebulaSettings {
   llmProvider: LLMProvider;
   llmModel: string;
   lastKernel: string;
+  useAIAvatars?: boolean; // Use AI to generate notebook icons (requires API credits)
+  notifyOnLongRun?: boolean; // Send browser notification when long-running jobs complete
+  notifyThresholdSeconds?: number; // Threshold in seconds for "long-running" (default 60)
+  notifySoundEnabled?: boolean; // Play sound when long-running jobs complete
 }
 
 export const getSettings = (): NebulaSettings => {

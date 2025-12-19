@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import {
   listDirectory,
+  getDirectoryMtime,
   createNotebook,
   deleteFile,
   renameFile,
@@ -30,6 +31,7 @@ import {
   DirectoryListing
 } from '../services/fileService';
 import { getSettings, saveSettings } from '../services/llmService';
+import { useNotification } from './NotificationSystem';
 
 interface Props {
   files: NotebookMetadata[];
@@ -48,7 +50,13 @@ export const FileBrowser: React.FC<Props> = ({
   isOpen,
   onClose
 }) => {
-  const [currentPath, setCurrentPath] = useState<string>('~');
+  const { toast, confirm } = useNotification();
+  const [currentPath, setCurrentPath] = useState<string>(() => {
+    const settings = getSettings();
+    return settings.rootDirectory || '~';
+  });
+  const [loadedPath, setLoadedPath] = useState<string | null>(null); // Track which path items belong to
+  const [loadedMtime, setLoadedMtime] = useState<number | null>(null); // Track directory mtime
   const [items, setItems] = useState<FileItem[]>([]);
   const [parentPath, setParentPath] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -60,19 +68,36 @@ export const FileBrowser: React.FC<Props> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'modified'>('modified');
 
-  // Load directory on mount and path change
+  // Load directory on first open or when path changes
   useEffect(() => {
-    if (isOpen) {
-      const settings = getSettings();
-      setCurrentPath(settings.rootDirectory || '~');
-    }
-  }, [isOpen]);
+    if (!isOpen) return;
+    if (loadedPath === currentPath && !error) return; // Already loaded this path
 
+    loadDirectory(currentPath);
+  }, [isOpen, currentPath, loadedPath, error]);
+
+  // Poll mtime every 5 seconds - only refresh if directory changed
   useEffect(() => {
-    if (isOpen && currentPath) {
-      loadDirectory(currentPath);
-    }
-  }, [currentPath, isOpen]);
+    if (!isOpen) return;
+
+    const checkForChanges = async () => {
+      try {
+        const { mtime } = await getDirectoryMtime(currentPath);
+        if (loadedMtime !== null && mtime !== loadedMtime) {
+          // Directory changed - do silent refresh
+          const listing = await listDirectory(currentPath);
+          setItems(listing.items);
+          setParentPath(listing.parent);
+          setLoadedMtime(listing.mtime);
+        }
+      } catch {
+        // Ignore errors on background check
+      }
+    };
+
+    const interval = setInterval(checkForChanges, 5000);
+    return () => clearInterval(interval);
+  }, [isOpen, currentPath, loadedMtime]);
 
   const loadDirectory = async (path: string) => {
     setIsLoading(true);
@@ -83,9 +108,13 @@ export const FileBrowser: React.FC<Props> = ({
       setItems(listing.items);
       setParentPath(listing.parent);
       setCurrentPath(listing.path);
+      setLoadedPath(listing.path); // Mark this path as loaded
+      setLoadedMtime(listing.mtime); // Store mtime for change detection
     } catch (err: any) {
       setError(err.message || 'Failed to load directory');
       setItems([]);
+      setLoadedPath(null); // Clear on error so we retry
+      setLoadedMtime(null);
     } finally {
       setIsLoading(false);
     }
@@ -114,20 +143,26 @@ export const FileBrowser: React.FC<Props> = ({
         loadDirectory(currentPath);
         onRefresh();
       } catch (err: any) {
-        alert(err.message || 'Failed to create notebook');
+        toast(err.message || 'Failed to create notebook', 'error');
       }
     }
   };
 
   const handleDelete = async (e: React.MouseEvent, item: FileItem) => {
     e.stopPropagation();
-    if (confirm(`Are you sure you want to delete "${item.name}"?`)) {
+    const confirmed = await confirm({
+      title: 'Delete File',
+      message: `Are you sure you want to delete "${item.name}"?`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
+    if (confirmed) {
       try {
         await deleteFile(item.path);
         loadDirectory(currentPath);
         onRefresh();
       } catch (err: any) {
-        alert(err.message || 'Failed to delete file');
+        toast(err.message || 'Failed to delete file', 'error');
       }
     }
   };
@@ -149,7 +184,7 @@ export const FileBrowser: React.FC<Props> = ({
           loadDirectory(currentPath);
           onRefresh();
         } catch (err: any) {
-          alert(err.message || 'Failed to rename file');
+          toast(err.message || 'Failed to rename file', 'error');
         }
       }
       setEditingId(null);
@@ -168,7 +203,7 @@ export const FileBrowser: React.FC<Props> = ({
       onSelect(item.path);
       if (window.innerWidth < 1024) onClose();
     } else {
-      alert(`Preview for ${item.extension} files is not implemented yet.`);
+      toast(`Preview for ${item.extension} files is not implemented yet.`, 'info');
     }
   };
 
@@ -339,13 +374,15 @@ export const FileBrowser: React.FC<Props> = ({
             </div>
           )}
 
-          {isLoading && (
+          {/* Only show loading screen on initial load (no items yet) */}
+          {isLoading && items.length === 0 && (
             <div className="text-center py-8 text-slate-400 text-xs">
               Loading...
             </div>
           )}
 
-          {!isLoading && !error && filteredItems.map(item => (
+          {/* Show files even during background refresh */}
+          {!error && filteredItems.map(item => (
             <div
               key={item.id}
               onClick={() => handleItemClick(item)}
