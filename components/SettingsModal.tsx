@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Folder, Bot, Check, Palette } from 'lucide-react';
+import { X, Folder, Bot, Check, Palette, Bell } from 'lucide-react';
 import {
   getSettings,
   saveSettings,
@@ -201,6 +201,49 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
               <p className="mt-1 text-xs text-slate-500">
                 When disabled, colorful auto-generated icons based on notebook name are used (no API calls).
               </p>
+            </div>
+
+            {/* Notifications */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                <Bell className="w-4 h-4" />
+                Notifications
+              </label>
+              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                <div className="flex-1">
+                  <p className="text-sm text-slate-700">Long-Running Job Alerts</p>
+                  <p className="text-xs text-slate-500">
+                    Browser notification when queued cells finish after threshold
+                  </p>
+                </div>
+                <button
+                  onClick={() => setSettings({ ...settings, notifyOnLongRun: !settings.notifyOnLongRun })}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    settings.notifyOnLongRun ? 'bg-blue-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      settings.notifyOnLongRun ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+              {settings.notifyOnLongRun && (
+                <div className="mt-2 flex items-center gap-2">
+                  <label className="text-xs text-slate-600">Threshold:</label>
+                  <input
+                    type="number"
+                    min="10"
+                    max="600"
+                    step="10"
+                    value={settings.notifyThresholdSeconds ?? 60}
+                    onChange={(e) => setSettings({ ...settings, notifyThresholdSeconds: parseInt(e.target.value) || 60 })}
+                    className="w-20 px-2 py-1 border border-slate-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <span className="text-xs text-slate-500">seconds</span>
+                </div>
+              )}
             </div>
           </div>
 

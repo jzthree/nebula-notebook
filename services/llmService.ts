@@ -269,6 +269,8 @@ export interface NebulaSettings {
   llmModel: string;
   lastKernel: string;
   useAIAvatars?: boolean; // Use AI to generate notebook icons (requires API credits)
+  notifyOnLongRun?: boolean; // Send browser notification when long-running jobs complete
+  notifyThresholdSeconds?: number; // Threshold in seconds for "long-running" (default 60)
 }
 
 export const getSettings = (): NebulaSettings => {

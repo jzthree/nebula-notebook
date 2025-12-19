@@ -135,6 +135,7 @@ export const Notebook: React.FC = () => {
   const [executionQueue, setExecutionQueue] = useState<string[]>([]);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   const [kernelExecutionCount, setKernelExecutionCount] = useState(0); // Global execution counter
+  const executionStartTimeRef = useRef<number | null>(null); // Track when queue execution started
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
@@ -826,6 +827,50 @@ export const Notebook: React.FC = () => {
 
     processNext();
   }, [executionQueue, isProcessingQueue, isKernelReady, kernelSessionId, cells, setCells]);
+
+  // Track execution timing for notifications
+  const prevQueueLengthRef = useRef(0);
+  useEffect(() => {
+    const prevLength = prevQueueLengthRef.current;
+    const currentLength = executionQueue.length;
+
+    // Queue just became non-empty - start timing
+    if (prevLength === 0 && currentLength > 0) {
+      executionStartTimeRef.current = Date.now();
+    }
+
+    // Queue just became empty after having items - check if we should notify
+    if (prevLength > 0 && currentLength === 0 && executionStartTimeRef.current) {
+      const elapsedSeconds = (Date.now() - executionStartTimeRef.current) / 1000;
+      const settings = getSettings();
+
+      if (settings.notifyOnLongRun) {
+        const threshold = settings.notifyThresholdSeconds ?? 60;
+
+        if (elapsedSeconds >= threshold) {
+          // Request permission and send notification
+          if (Notification.permission === 'granted') {
+            const minutes = Math.floor(elapsedSeconds / 60);
+            const seconds = Math.floor(elapsedSeconds % 60);
+            const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+
+            new Notification('Nebula Notebook', {
+              body: `Execution completed in ${timeStr}`,
+              icon: '/favicon.svg',
+              tag: 'execution-complete', // Prevents duplicate notifications
+            });
+          } else if (Notification.permission === 'default') {
+            // Request permission for future notifications
+            Notification.requestPermission();
+          }
+        }
+      }
+
+      executionStartTimeRef.current = null;
+    }
+
+    prevQueueLengthRef.current = currentLength;
+  }, [executionQueue.length]);
 
   const getKernelDisplayName = () => {
     const kernel = availableKernels.find(k => k.name === currentKernel);
