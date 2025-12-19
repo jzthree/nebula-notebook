@@ -62,19 +62,28 @@ export const FileBrowser: React.FC<Props> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'modified'>('modified');
 
-  // Load directory on mount and path change
+  // Load directory when opening or path changes
   useEffect(() => {
-    if (isOpen) {
-      const settings = getSettings();
-      setCurrentPath(settings.rootDirectory || '~');
+    if (!isOpen) return;
+
+    // On first open, use settings path; otherwise use current path
+    const settings = getSettings();
+    const targetPath = currentPath === '~' ? (settings.rootDirectory || '~') : currentPath;
+
+    // Only load if path changed or we haven't loaded yet
+    if (targetPath !== currentPath) {
+      setCurrentPath(targetPath);
+    } else {
+      loadDirectory(targetPath);
     }
   }, [isOpen]);
 
+  // Load when path changes (user navigation)
   useEffect(() => {
-    if (isOpen && currentPath) {
+    if (isOpen && currentPath && currentPath !== '~') {
       loadDirectory(currentPath);
     }
-  }, [currentPath, isOpen]);
+  }, [currentPath]);
 
   const loadDirectory = async (path: string) => {
     setIsLoading(true);

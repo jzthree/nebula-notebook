@@ -535,6 +535,7 @@ export const Notebook: React.FC = () => {
   };
 
   const loadFile = async (id: string) => {
+    setIsLoadingFile(true);
     try {
       const content = await getFileContent(id);
       if (content) {
@@ -1322,6 +1323,13 @@ export const Notebook: React.FC = () => {
                </div>
             </div>
         </header>
+
+        {/* Loading progress bar */}
+        {isLoadingFile && (
+          <div className="h-0.5 bg-slate-100 overflow-hidden">
+            <div className="h-full bg-blue-500 animate-loading-bar" />
+          </div>
+        )}
 
         {/* Breadcrumb navigation for markdown headers */}
         <NotebookBreadcrumb
