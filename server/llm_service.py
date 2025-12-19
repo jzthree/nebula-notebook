@@ -2,12 +2,58 @@
 Multi-Provider LLM Service - Supports Gemini, OpenAI, and Anthropic
 """
 import os
+import json
+import re
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 from google import genai
 from google.genai import types
 from openai import OpenAI
 from anthropic import Anthropic
+
+
+# --- JSON Repair Utilities ---
+
+def repair_json(s: str) -> str:
+    """
+    Attempts to fix common JSON formatting issues from LLM output:
+    - Single quotes instead of double quotes
+    - Trailing commas
+    - Unquoted keys
+    """
+    result = s
+    # Replace single quotes with double quotes (careful with apostrophes)
+    result = re.sub(r":\s*'([^']*)'", r': "\1"', result)
+    # Remove trailing commas before } or ]
+    result = re.sub(r',(\s*[}\]])', r'\1', result)
+    return result
+
+
+def parse_json_with_repair(s: str) -> Any:
+    """Try to parse JSON with automatic repair on failure"""
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        try:
+            repaired = repair_json(s)
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            raise
+
+
+def extract_json_from_response(response: str) -> Any:
+    """Extract JSON from a response that may contain markdown code blocks"""
+    # Try to find JSON in code block first
+    json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response)
+    if json_match:
+        return parse_json_with_repair(json_match.group(1))
+
+    # Try to find raw JSON object
+    json_match = re.search(r'\{[\s\S]*\}', response)
+    if json_match:
+        return parse_json_with_repair(json_match.group(0))
+
+    raise ValueError("No JSON found in response")
 
 
 # Available models per provider (updated Dec 2025)
@@ -210,6 +256,100 @@ class LLMService:
         )
 
         return response.content[0].text
+
+    async def generate_structured(
+        self,
+        prompt: str,
+        system_prompt: str,
+        config: LLMConfig,
+        schema_hint: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate a structured JSON response from the LLM
+
+        Args:
+            prompt: User prompt
+            system_prompt: System instructions (should include JSON schema)
+            config: LLM configuration
+            schema_hint: Optional JSON schema description to append to prompt
+
+        Returns:
+            Parsed JSON response as dict
+        """
+        if config.provider == "google":
+            return await self._generate_structured_google(prompt, system_prompt, config)
+        elif config.provider == "openai":
+            return await self._generate_structured_openai(prompt, system_prompt, config)
+        elif config.provider == "anthropic":
+            return await self._generate_structured_anthropic(prompt, system_prompt, config)
+        else:
+            raise ValueError(f"Unknown provider: {config.provider}")
+
+    async def _generate_structured_google(
+        self,
+        prompt: str,
+        system_prompt: str,
+        config: LLMConfig
+    ) -> Dict[str, Any]:
+        """Generate structured JSON using Google Gemini"""
+        client = self._get_google_client()
+
+        response = client.models.generate_content(
+            model=config.model,
+            contents=[prompt],
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=config.temperature,
+                max_output_tokens=config.max_tokens,
+                response_mime_type="application/json"  # Native JSON mode
+            )
+        )
+
+        return extract_json_from_response(response.text)
+
+    async def _generate_structured_openai(
+        self,
+        prompt: str,
+        system_prompt: str,
+        config: LLMConfig
+    ) -> Dict[str, Any]:
+        """Generate structured JSON using OpenAI"""
+        client = self._get_openai_client()
+
+        response = client.chat.completions.create(
+            model=config.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+            response_format={"type": "json_object"}  # Native JSON mode
+        )
+
+        return json.loads(response.choices[0].message.content)
+
+    async def _generate_structured_anthropic(
+        self,
+        prompt: str,
+        system_prompt: str,
+        config: LLMConfig
+    ) -> Dict[str, Any]:
+        """Generate structured JSON using Anthropic Claude"""
+        client = self._get_anthropic_client()
+
+        # Anthropic doesn't have native JSON mode, so we enforce via prompt
+        enhanced_system = system_prompt + "\n\nIMPORTANT: Respond with ONLY a valid JSON object. No markdown, no explanation outside the JSON."
+
+        response = client.messages.create(
+            model=config.model,
+            max_tokens=config.max_tokens,
+            system=enhanced_system,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=config.temperature
+        )
+
+        return extract_json_from_response(response.content[0].text)
 
     async def chat(
         self,

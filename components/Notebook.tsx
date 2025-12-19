@@ -121,7 +121,8 @@ export const Notebook: React.FC = () => {
     resetHistory,
     getFullHistory,
     loadHistory,
-    logOperation
+    logOperation,
+    updateContentAI
   } = useUndoRedo([]);  // Start with empty cells
 
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
@@ -403,6 +404,8 @@ export const Notebook: React.FC = () => {
   // Ref for tracking 'dd' vim-style delete
   const lastKeyRef = useRef<{ key: string; time: number } | null>(null);
   const deleteCellRef = useRef<((id: string) => void) | null>(null);
+  const runAndAdvanceRef = useRef<((id: string) => void) | null>(null);
+  const queueExecutionRef = useRef<((id: string) => void) | null>(null);
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -433,6 +436,24 @@ export const Notebook: React.FC = () => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
         e.preventDefault();
         redo();
+        return;
+      }
+
+      // Shift+Enter: Run active cell and advance (works everywhere)
+      if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        if (activeCellId) {
+          runAndAdvanceRef.current?.(activeCellId);
+        }
+        return;
+      }
+
+      // Ctrl/Cmd+Enter: Run active cell (works everywhere)
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+        e.preventDefault();
+        if (activeCellId) {
+          queueExecutionRef.current?.(activeCellId);
+        }
         return;
       }
 
@@ -778,14 +799,15 @@ export const Notebook: React.FC = () => {
     setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
   }, [setCells]);
 
-  // Force update with undo tracking - for AI edits, etc.
-  const forceUpdateCell = (id: string, content: string) => {
-    updateContent(id, content);
-  };
+  // AI/bulk update with undo tracking - for AI edits, annotated as AI source
+  const handleAIUpdateCell = useCallback((id: string, content: string) => {
+    updateContentAI(id, content);
+  }, [updateContentAI]);
 
+  // Edit cell from copilot sidebar - also AI-generated content
   const handleEditCell = (index: number, newContent: string) => {
     if (index >= 0 && index < cells.length) {
-      forceUpdateCell(cells[index].id, newContent);
+      updateContentAI(cells[index].id, newContent);
     }
   };
 
@@ -826,7 +848,7 @@ export const Notebook: React.FC = () => {
       }
     } else {
       // Can't delete last cell, just clear it
-      forceUpdateCell(id, '');
+      updateContent(id, '');
     }
   };
   // Update ref for keyboard shortcut handler
@@ -876,6 +898,10 @@ export const Notebook: React.FC = () => {
       addCell('code', '', currentIndex);
     }
   };
+
+  // Update refs for keyboard shortcut handler
+  runAndAdvanceRef.current = runAndAdvance;
+  queueExecutionRef.current = queueExecution;
 
   // Navigate to a specific cell (used by search)
   const navigateToCell = useCallback((cellIndex: number, cellId: string) => {
@@ -1498,6 +1524,7 @@ export const Notebook: React.FC = () => {
                   isActive={activeCellId === cell.id}
                   allCells={cells}
                   onUpdate={handleUpdateCell}
+                  onAIUpdate={handleAIUpdateCell}
                   onRun={queueExecution}
                   onRunAndAdvance={runAndAdvance}
                   onDelete={deleteCell}

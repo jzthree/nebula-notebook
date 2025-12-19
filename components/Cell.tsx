@@ -3,7 +3,7 @@ import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
 import { CodeEditor } from './CodeEditor';
 import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Sparkles, Plus } from 'lucide-react';
-import { generateCellContent, fixCellError, getSettings } from '../services/llmService';
+import { generateCellContentStructured, fixCellError, getSettings, CellGenerationResponse } from '../services/llmService';
 import { useNotification } from './NotificationSystem';
 import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 
@@ -20,6 +20,7 @@ interface Props {
   isActive: boolean;
   allCells: ICell[];
   onUpdate: (id: string, content: string) => void;
+  onAIUpdate?: (id: string, content: string) => void; // For AI edits (tracked in undo history)
   onRun: (id: string) => void;
   onRunAndAdvance: (id: string) => void;
   onDelete: (id: string) => void;
@@ -39,6 +40,7 @@ const CellComponent: React.FC<Props> = ({
   isActive,
   allCells,
   onUpdate,
+  onAIUpdate,
   onRun,
   onRunAndAdvance,
   onDelete,
@@ -56,6 +58,7 @@ const CellComponent: React.FC<Props> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [isFixing, setIsFixing] = useState(false);
+  const [aiExplanation, setAiExplanation] = useState<string | null>(null);
 
   // Use refs for callbacks to avoid recreating handleEditorKeyDown on every render
   // This prevents CodeMirror extensions from being recreated on every keystroke
@@ -72,6 +75,8 @@ const CellComponent: React.FC<Props> = ({
   });
 
   // Handle keyboard shortcuts in the editor - uses refs so callback is stable
+  // Note: Shift+Enter and Ctrl+Enter are now handled globally in Notebook.tsx
+  // to ensure they always run the active cell (blue border), not just the focused cell
   const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
     // Cmd/Ctrl+S: Save
     if ((event.metaKey || event.ctrlKey) && event.key === 's') {
@@ -80,34 +85,39 @@ const CellComponent: React.FC<Props> = ({
       return true;
     }
 
-    // Shift+Enter: run and advance to next cell
-    if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey) {
-      event.preventDefault();
-      onRunAndAdvanceRef.current(cell.id);
-      return true;
-    }
-
-    // Ctrl/Cmd+Enter: run current cell only
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
-      event.preventDefault();
-      onRunRef.current(cell.id);
-      return true;
-    }
-
     return false; // Let CodeMirror handle other keys
-  }, [cell.id]); // Only depends on cell.id now
+  }, []);
 
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim()) return;
     setIsAiGenerating(true);
+    setAiExplanation(null);
     try {
       const settings = getSettings();
       const config = { provider: settings.llmProvider, model: settings.llmModel };
-      const newContent = await generateCellContent(aiPrompt, allCellsRef.current, cell.id, config);
-      onUpdate(cell.id, newContent);
+      const result = await generateCellContentStructured(aiPrompt, allCellsRef.current, cell.id, config);
+
+      // Handle different actions
+      if (result.action === 'explain_only') {
+        // Just show explanation, don't modify code
+        setAiExplanation(result.explanation);
+      } else if (result.code) {
+        // Apply code change
+        const newContent = result.action === 'append'
+          ? cell.content + '\n' + result.code
+          : result.code;
+        // Use onAIUpdate for undo tracking, fall back to onUpdate
+        (onAIUpdate || onUpdate)(cell.id, newContent);
+        // Show explanation if provided
+        if (result.explanation) {
+          setAiExplanation(result.explanation);
+        }
+      }
+
       setIsAiOpen(false);
       setAiPrompt('');
     } catch (e) {
+      console.error('AI generation failed:', e);
       toast('Failed to generate AI content. Check console for details.', 'error');
     } finally {
       setIsAiGenerating(false);
@@ -123,7 +133,8 @@ const CellComponent: React.FC<Props> = ({
       const settings = getSettings();
       const config = { provider: settings.llmProvider, model: settings.llmModel };
       const fixedCode = await fixCellError(cell.content, errorOutput.content, allCellsRef.current, config);
-      onUpdate(cell.id, fixedCode);
+      // Use onAIUpdate for undo tracking, fall back to onUpdate
+      (onAIUpdate || onUpdate)(cell.id, fixedCode);
     } catch (e) {
       console.error(e);
       toast('Could not fix code automatically.', 'error');
@@ -253,6 +264,21 @@ const CellComponent: React.FC<Props> = ({
             className="px-2 py-1 bg-purple-600 text-white text-xs font-medium rounded hover:bg-purple-700 disabled:opacity-50"
           >
             {isAiGenerating ? 'Thinking...' : 'Generate'}
+          </button>
+        </div>
+      )}
+
+      {/* AI Explanation - shown when AI provides explanatory text */}
+      {aiExplanation && (
+        <div className="px-3 py-2 bg-purple-50 border-b border-purple-100 flex gap-2 items-start">
+          <Sparkles className="w-4 h-4 text-purple-500 flex-shrink-0 mt-0.5" />
+          <p className="flex-grow text-sm text-purple-800">{aiExplanation}</p>
+          <button
+            onClick={(e) => { e.stopPropagation(); setAiExplanation(null); }}
+            className="text-purple-400 hover:text-purple-600 flex-shrink-0"
+            title="Dismiss"
+          >
+            <span className="text-lg leading-none">&times;</span>
           </button>
         </div>
       )}

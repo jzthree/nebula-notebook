@@ -91,6 +91,14 @@ class InstallKernelRequest(BaseModel):
     kernel_name: Optional[str] = None
 
 
+class GenerateStructuredRequest(BaseModel):
+    prompt: str
+    system_prompt: str
+    provider: str = "google"
+    model: str = "gemini-2.5-flash"
+    temperature: float = 0.2
+
+
 # --- Lifespan ---
 
 @asynccontextmanager
@@ -348,6 +356,25 @@ async def generate(request: GenerateRequest):
             system_prompt=request.system_prompt,
             config=config,
             images=request.images
+        )
+        return {"response": response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/llm/generate-structured")
+async def generate_structured(request: GenerateStructuredRequest):
+    """Generate structured JSON response from LLM"""
+    try:
+        config = LLMConfig(
+            provider=request.provider,
+            model=request.model,
+            temperature=request.temperature
+        )
+        response = await llm_service.generate_structured(
+            prompt=request.prompt,
+            system_prompt=request.system_prompt,
+            config=config
         )
         return {"response": response}
     except Exception as e:
