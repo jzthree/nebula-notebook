@@ -24,6 +24,7 @@ import { useUndoRedo } from '../hooks/useUndoRedo';
 import { SettingsModal } from './SettingsModal';
 import { KernelManager } from './KernelManager';
 import { NotebookSearch } from './NotebookSearch';
+import { NotebookBreadcrumb } from './NotebookBreadcrumb';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
 import { useNotification } from './NotificationSystem';
 import { detectIndentationFromCells, IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
@@ -204,6 +205,9 @@ export const Notebook: React.FC = () => {
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   const [kernelExecutionCount, setKernelExecutionCount] = useState(0); // Global execution counter
   const executionStartTimeRef = useRef<number | null>(null); // Track when queue execution started
+
+  // Visible range for breadcrumb navigation
+  const [visibleRange, setVisibleRange] = useState({ startIndex: 0, endIndex: 0 });
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
@@ -1321,6 +1325,13 @@ export const Notebook: React.FC = () => {
             </div>
         </header>
 
+        {/* Breadcrumb navigation for markdown headers */}
+        <NotebookBreadcrumb
+          cells={cells}
+          visibleRange={visibleRange}
+          onNavigate={navigateToCell}
+        />
+
         {/* Virtuoso Scrollable Area */}
         <div className="flex-1 h-full pt-3">
             {/* Force remount when file changes to recalculate cell heights */}
@@ -1329,6 +1340,7 @@ export const Notebook: React.FC = () => {
               cells={cells}
               virtuosoRef={virtuosoRef}
               className="h-full"
+              onRangeChange={setVisibleRange}
               renderCell={(cell, idx) => (
                   <CellComponent
                   key={cell.id}
