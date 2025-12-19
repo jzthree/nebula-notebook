@@ -4,7 +4,7 @@ import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
 import { getSettings, saveSettings } from '../services/llmService';
-import { Plus, Play, Trash, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu } from 'lucide-react';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -761,27 +761,6 @@ export const Notebook: React.FC = () => {
     }));
   }, [saveCheckpoint, setCells]);
 
-  const handleReset = async () => {
-    const confirmed = await confirm({
-      title: 'Reset Notebook',
-      message: 'This will clear all cells in this notebook. This action cannot be undone.',
-      confirmLabel: 'Reset',
-      variant: 'danger',
-    });
-    if (confirmed) {
-      const newCell: Cell = {
-        id: crypto.randomUUID(),
-        type: 'code',
-        content: '',
-        outputs: [],
-        isExecuting: false,
-      };
-      // Reset clears history - not undoable (user confirmed)
-      resetHistory([newCell]);
-      setActiveCellId(newCell.id);
-    }
-  };
-
   // Execution Processor
   useEffect(() => {
     if (isProcessingQueue || executionQueue.length === 0 || !isKernelReady || !kernelSessionId) return;
@@ -1204,9 +1183,6 @@ export const Notebook: React.FC = () => {
                   </button>
                   <button onClick={saveCurrentNotebook} className="btn-secondary hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors">
                       <Save className="w-4 h-4" /> Save
-                  </button>
-                  <button onClick={handleReset} className="btn-secondary hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-red-50 text-red-600 text-xs font-medium transition-colors">
-                      <Trash className="w-4 h-4" /> Reset
                   </button>
                   <button onClick={() => cells.forEach(c => queueExecution(c.id))} className="btn-primary flex items-center gap-2 bg-slate-900 text-white px-3 py-1.5 rounded-md hover:bg-slate-700 text-xs font-medium transition-colors shadow-sm">
                       <Play className="w-4 h-4" /> Run All
