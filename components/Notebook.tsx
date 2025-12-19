@@ -443,22 +443,26 @@ export const Notebook: React.FC = () => {
         return;
       }
 
-      // Shift+Enter: Run active cell and advance (works everywhere)
-      if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault();
-        if (activeCellId) {
-          runAndAdvanceRef.current?.(activeCellId);
+      // Shift+Enter and Ctrl+Enter are handled by Cell.tsx when in editor
+      // Only handle here when in command mode (not focused in an input/editor)
+      if (!isInput) {
+        // Shift+Enter: Run active cell and advance
+        if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          if (activeCellId) {
+            runAndAdvanceRef.current?.(activeCellId);
+          }
+          return;
         }
-        return;
-      }
 
-      // Ctrl/Cmd+Enter: Run active cell (works everywhere)
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
-        e.preventDefault();
-        if (activeCellId) {
-          queueExecutionRef.current?.(activeCellId);
+        // Ctrl/Cmd+Enter: Run active cell
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+          e.preventDefault();
+          if (activeCellId) {
+            queueExecutionRef.current?.(activeCellId);
+          }
+          return;
         }
-        return;
       }
 
       // The following shortcuts only work when not in an input field
