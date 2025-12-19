@@ -212,8 +212,8 @@ class KernelService:
                     else:
                         # Kernel type changed - need to stop old and start new
                         print(f"Switching kernel for {file_path}: {session.kernel_name} -> {kernel_name}")
-                        # Mark for stopping outside the lock
-                        session_to_stop = existing_session_id
+                        # Stop old kernel and clean up (inside lock to prevent race)
+                        await self._stop_kernel_internal(existing_session_id)
                 else:
                     # Kernel died, clean up and create new
                     del self.file_to_session[normalized_path]
@@ -248,6 +248,47 @@ class KernelService:
                 client.kernel_info()
                 await asyncio.sleep(0.1)
 
+    async def _stop_kernel_internal(self, session_id: str, timeout: float = 5.0) -> bool:
+        """Internal kernel stop - caller must hold self._lock
+
+        Args:
+            session_id: The kernel session ID
+            timeout: Seconds to wait for graceful shutdown before forcing
+
+        Returns:
+            True if kernel was stopped successfully
+        """
+        session = self.sessions.pop(session_id, None)
+        # Also remove from file_to_session mapping
+        if session and session.file_path:
+            self.file_to_session.pop(session.file_path, None)
+
+        if session:
+            try:
+                session.client.stop_channels()
+
+                # Graceful shutdown: try SIGTERM first, then force if needed
+                if session.manager.is_alive():
+                    try:
+                        session.manager.shutdown_kernel(now=False)
+                        loop = asyncio.get_event_loop()
+                        start_time = loop.time()
+                        while session.manager.is_alive() and (loop.time() - start_time) < timeout:
+                            await asyncio.sleep(0.1)
+                        if session.manager.is_alive():
+                            print(f"Kernel {session_id} did not stop gracefully, forcing shutdown")
+                            session.manager.shutdown_kernel(now=True)
+                    except Exception as e:
+                        print(f"Graceful shutdown failed for {session_id}: {e}")
+                        session.manager.shutdown_kernel(now=True)
+
+                self._session_store.delete_session(session_id)
+                return True
+            except Exception as e:
+                print(f"Error stopping kernel: {e}")
+                return False
+        return False
+
     async def stop_kernel(self, session_id: str, timeout: float = 5.0) -> bool:
         """Stop a kernel session with graceful shutdown
 
@@ -258,46 +299,8 @@ class KernelService:
         Returns:
             True if kernel was stopped successfully
         """
-        import signal
-
         async with self._lock:
-            session = self.sessions.pop(session_id, None)
-            # Also remove from file_to_session mapping
-            if session and session.file_path:
-                self.file_to_session.pop(session.file_path, None)
-
-        if session:
-            try:
-                session.client.stop_channels()
-
-                # Graceful shutdown: try SIGTERM first, then force if needed
-                if session.manager.is_alive():
-                    try:
-                        # Try graceful shutdown (SIGTERM)
-                        session.manager.shutdown_kernel(now=False)
-
-                        # Wait for kernel to terminate gracefully
-                        loop = asyncio.get_event_loop()
-                        start_time = loop.time()
-                        while session.manager.is_alive() and (loop.time() - start_time) < timeout:
-                            await asyncio.sleep(0.1)
-
-                        # If still alive after timeout, force kill (SIGKILL)
-                        if session.manager.is_alive():
-                            print(f"Kernel {session_id} did not stop gracefully, forcing shutdown")
-                            session.manager.shutdown_kernel(now=True)
-                    except Exception as e:
-                        # If graceful fails, force it
-                        print(f"Graceful shutdown failed for {session_id}: {e}")
-                        session.manager.shutdown_kernel(now=True)
-
-                # Delete from persistence store
-                self._session_store.delete_session(session_id)
-                return True
-            except Exception as e:
-                print(f"Error stopping kernel: {e}")
-                return False
-        return False
+            return await self._stop_kernel_internal(session_id, timeout)
 
     async def interrupt_kernel(self, session_id: str) -> bool:
         """Interrupt kernel execution"""

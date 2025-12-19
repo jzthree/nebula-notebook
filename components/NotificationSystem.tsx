@@ -134,6 +134,16 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const toastTimeouts = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
+  // Dismiss toast
+  const dismissToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+    const timeout = toastTimeouts.current.get(id);
+    if (timeout) {
+      clearTimeout(timeout);
+      toastTimeouts.current.delete(id);
+    }
+  }, []);
+
   // Add toast
   const toast = useCallback((message: string, type: ToastType = 'info', duration: number = 4000) => {
     const id = crypto.randomUUID();
@@ -148,17 +158,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }, duration);
       toastTimeouts.current.set(id, timeout);
     }
-  }, []);
-
-  // Dismiss toast
-  const dismissToast = useCallback((id: string) => {
-    setToasts(prev => prev.filter(t => t.id !== id));
-    const timeout = toastTimeouts.current.get(id);
-    if (timeout) {
-      clearTimeout(timeout);
-      toastTimeouts.current.delete(id);
-    }
-  }, []);
+  }, [dismissToast]);
 
   // Show confirm dialog
   const confirm = useCallback((options: {

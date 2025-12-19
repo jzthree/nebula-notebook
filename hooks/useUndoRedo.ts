@@ -95,7 +95,11 @@ function applyOperation(cells: Cell[], op: Operation): Cell[] {
     case 'updateContentPatch': {
       return cells.map(c => {
         if (c.id !== op.cellId) return c;
-        const { result } = applyPatch(c.content, op.patch);
+        const { result, success } = applyPatch(c.content, op.patch);
+        if (!success) {
+          console.warn(`Failed to apply patch to cell ${c.id}, keeping original content`);
+          return c;
+        }
         return { ...c, content: result };
       });
     }

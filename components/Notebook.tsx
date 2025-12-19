@@ -793,6 +793,8 @@ export const Notebook: React.FC = () => {
 
   const handleDeleteCellByIndex = async (index: number) => {
     if (index >= 0 && index < cells.length) {
+      // Capture cell ID before async operation to avoid race condition
+      const cellId = cells[index].id;
       const confirmed = await confirm({
         title: 'Delete Cell',
         message: `Are you sure you want to delete Cell #${index + 1}?`,
@@ -800,7 +802,7 @@ export const Notebook: React.FC = () => {
         variant: 'danger',
       });
       if (confirmed) {
-        deleteCell(cells[index].id);
+        deleteCell(cellId);
       }
     }
   };
