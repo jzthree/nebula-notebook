@@ -17,8 +17,7 @@ import {
   saveActiveFileId,
   updateNotebookMetadata,
   renameFile,
-  loadNotebookHistory,
-  saveNotebookHistory
+  loadNotebookHistory
 } from '../services/fileService';
 import { FileBrowser } from './FileBrowser';
 import { AIChatSidebar } from './AIChatSidebar';
@@ -196,6 +195,9 @@ export const Notebook: React.FC = () => {
   // Autosave hook with conflict detection
   const performSaveToFile = useCallback(async (fileId: string, cellsToSave: Cell[]) => {
     try {
+      // Get history to save alongside notebook
+      const history = getFullHistory();
+
       // Check remote mtime before saving (if we have a baseline)
       if (lastKnownMtime !== null) {
         try {
@@ -208,15 +210,11 @@ export const Notebook: React.FC = () => {
                 remoteMtime: remoteMtimeData.mtime,
                 onKeepLocal: async () => {
                   setConflictDialog(null);
-                  // Force save local version (with kernel name for persistence)
-                  const result = await saveFileContentWithMtime(fileId, cellsToSave, currentKernel);
+                  // Force save local version (with kernel name and history)
+                  const result = await saveFileContentWithMtime(fileId, cellsToSave, currentKernel, history);
                   if (result) {
                     setLastKnownMtime(result.mtime);
                     await updateNotebookMetadata(fileId, {});
-                    const history = getFullHistory();
-                    if (history.length > 0) {
-                      saveNotebookHistory(fileId, history).catch(() => {});
-                    }
                   }
                   resolve();
                 },
@@ -239,19 +237,13 @@ export const Notebook: React.FC = () => {
         }
       }
 
-      // Perform the save (with kernel name for persistence)
-      const result = await saveFileContentWithMtime(fileId, cellsToSave, currentKernel);
+      // Perform the save (notebook + history in single request)
+      const result = await saveFileContentWithMtime(fileId, cellsToSave, currentKernel, history);
       if (result) {
         setLastKnownMtime(result.mtime);
         setPendingSave(false);
       }
       await updateNotebookMetadata(fileId, {});
-
-      // Save history in background (non-blocking)
-      const history = getFullHistory();
-      if (history.length > 0) {
-        saveNotebookHistory(fileId, history).catch(() => {});
-      }
     } catch (error) {
       // Network error - mark as pending and will retry when online
       console.warn('Save failed, will retry:', error);

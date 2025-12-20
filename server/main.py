@@ -81,6 +81,7 @@ class SaveNotebookRequest(BaseModel):
     path: str
     cells: List[Dict[str, Any]]
     kernel_name: Optional[str] = None  # Kernel name to persist in notebook metadata
+    history: Optional[List[Dict[str, Any]]] = None  # Operation history to save alongside notebook
 
 
 class SaveHistoryRequest(BaseModel):
@@ -528,9 +529,14 @@ async def get_notebook_cells(path: str):
 
 @app.post("/api/notebook/save")
 async def save_notebook(request: SaveNotebookRequest):
-    """Save cells to a notebook file"""
+    """Save cells and optionally history to a notebook file"""
     try:
         result = fs_service.save_notebook_cells(request.path, request.cells, request.kernel_name)
+
+        # Save history alongside notebook if provided
+        if request.history is not None:
+            fs_service.save_history(request.path, request.history)
+
         return {"status": "ok", "path": request.path, "mtime": result["mtime"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

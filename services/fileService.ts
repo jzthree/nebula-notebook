@@ -244,11 +244,16 @@ export const getNotebookData = async (path: string): Promise<NotebookData> => {
  * @param kernelName - Optional kernel name to persist in notebook metadata
  * @returns SaveResult with success status and new mtime for conflict detection
  */
-export const saveNotebookCells = async (path: string, cells: Cell[], kernelName?: string): Promise<SaveResult> => {
+export const saveNotebookCells = async (
+  path: string,
+  cells: Cell[],
+  kernelName?: string,
+  history?: any[]
+): Promise<SaveResult> => {
   const response = await fetch(`${API_BASE}/notebook/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, cells, kernel_name: kernelName })
+    body: JSON.stringify({ path, cells, kernel_name: kernelName, history })
   });
 
   if (!response.ok) {
@@ -314,9 +319,14 @@ export const getFileContent = async (id: string): Promise<Cell[] | null> => {
 /**
  * Save file content with mtime - for conflict detection
  */
-export const saveFileContentWithMtime = async (id: string, cells: Cell[], kernelName?: string): Promise<SaveResult | null> => {
+export const saveFileContentWithMtime = async (
+  id: string,
+  cells: Cell[],
+  kernelName?: string,
+  history?: any[]
+): Promise<SaveResult | null> => {
   try {
-    return await saveNotebookCells(id, cells, kernelName);
+    return await saveNotebookCells(id, cells, kernelName, history);
   } catch (e) {
     console.error('Failed to save file content:', e);
     return null;
