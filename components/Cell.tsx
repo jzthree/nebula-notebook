@@ -41,6 +41,7 @@ interface Props {
   indentConfig?: IndentationConfig; // Detected indentation configuration
   requestedFocusMode?: 'cell' | 'editor' | null; // Focus mode requested by Notebook
   onFocusModeApplied?: () => void; // Callback when focus mode has been applied
+  isSearchOpen?: boolean; // When true, Escape closes search instead of exiting edit mode
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -68,6 +69,7 @@ const CellComponent: React.FC<Props> = ({
   indentConfig = DEFAULT_INDENTATION,
   requestedFocusMode,
   onFocusModeApplied,
+  isSearchOpen = false,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -461,6 +463,7 @@ const CellComponent: React.FC<Props> = ({
           onModEnter={() => onRunRef.current(cell.id)}
           onEscape={() => { focusCellAfterBlurRef.current = true; }}
           onSave={() => onSaveRef.current?.()}
+          isSearchOpen={isSearchOpen}
           onFocus={handleEditorFocus}
           onBlur={handleEditorBlur}
           placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
@@ -496,6 +499,7 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     prevProps.searchHighlight === nextProps.searchHighlight &&
     prevProps.queuePosition === nextProps.queuePosition &&
     prevProps.indentConfig === nextProps.indentConfig &&
-    prevProps.requestedFocusMode === nextProps.requestedFocusMode
+    prevProps.requestedFocusMode === nextProps.requestedFocusMode &&
+    prevProps.isSearchOpen === nextProps.isSearchOpen
   );
 });
