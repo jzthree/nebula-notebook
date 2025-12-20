@@ -106,6 +106,8 @@ export const Notebook: React.FC = () => {
     changeType,
     saveCheckpoint,
     flushCell,
+    peekUndo,
+    peekRedo,
     undo: rawUndo,
     redo: rawRedo,
     canUndo,
@@ -149,11 +151,22 @@ export const Notebook: React.FC = () => {
   const [highlightedCellIds, setHighlightedCellIds] = useState<Set<string>>(new Set());
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Track visible cell range for smart scrolling
+  const [visibleRange, setVisibleRange] = useState<{ startIndex: number; endIndex: number }>({ startIndex: 0, endIndex: 10 });
+
   // Virtuoso Handle for programmatic scrolling
   const virtuosoRef = useRef<VirtuosoHandle>(null);
 
-  // Helper to show visual feedback for undo/redo
-  const showUndoRedoFeedback = useCallback((affectedCellIds: string[], operationType: string) => {
+  // Helper to check if a cell index is currently visible
+  const isCellVisible = useCallback((cellIndex: number): boolean => {
+    // Add a small buffer to avoid scrolling for cells just barely off-screen
+    const buffer = 1;
+    return cellIndex >= visibleRange.startIndex - buffer &&
+           cellIndex <= visibleRange.endIndex + buffer;
+  }, [visibleRange]);
+
+  // Helper to show visual feedback for undo/redo (highlight only, no scrolling)
+  const showUndoRedoFeedback = useCallback((affectedCellIds: string[]) => {
     // Clear any pending highlight timeout
     if (highlightTimeoutRef.current) {
       clearTimeout(highlightTimeoutRef.current);
@@ -162,43 +175,129 @@ export const Notebook: React.FC = () => {
     // Set highlighted cells
     setHighlightedCellIds(new Set(affectedCellIds));
 
-    // Scroll to first affected cell if it exists in current cells
-    if (affectedCellIds.length > 0) {
-      // For delete operations, the cell won't exist anymore, so we skip scroll
-      // For other operations, find and scroll to the cell
-      const firstCellId = affectedCellIds[0];
-      const cellIndex = cells.findIndex(c => c.id === firstCellId);
-      if (cellIndex >= 0) {
+    // Clear highlights after animation
+    highlightTimeoutRef.current = setTimeout(() => {
+      setHighlightedCellIds(new Set());
+    }, 1500); // Match CSS animation duration
+  }, []);
+
+  // Wrapped undo/redo that flush active cell first and show visual feedback
+  // If cell is off-screen, scroll to it first so user sees the change happen
+  const undo = useCallback(() => {
+    flushActiveCell();
+
+    // Peek at what will be affected
+    const peek = peekUndo();
+    if (!peek || peek.affectedCellIds.length === 0) {
+      rawUndo();
+      return;
+    }
+
+    const firstCellId = peek.affectedCellIds[0];
+    const cellIndex = cells.findIndex(c => c.id === firstCellId);
+
+    // If cell is not visible (or is a delete that will restore it), scroll first
+    const needsScroll = cellIndex >= 0 && !isCellVisible(cellIndex);
+    const isDeleteUndo = peek.operationType === 'deleteCell'; // Will restore a cell
+
+    if (needsScroll || isDeleteUndo) {
+      // For delete undo, we need to scroll after the operation restores the cell
+      if (isDeleteUndo) {
+        const result = rawUndo();
+        if (result && result.affectedCellIds.length > 0) {
+          showUndoRedoFeedback(result.affectedCellIds);
+          // Find the restored cell and scroll to it
+          requestAnimationFrame(() => {
+            const restoredIndex = cells.findIndex(c => c.id === result.affectedCellIds[0]);
+            if (restoredIndex >= 0) {
+              virtuosoRef.current?.scrollToIndex({
+                index: restoredIndex,
+                align: 'center',
+                behavior: 'smooth'
+              });
+            }
+          });
+        }
+      } else {
+        // Scroll first, then apply after a brief delay so user sees the change
         virtuosoRef.current?.scrollToIndex({
           index: cellIndex,
           align: 'center',
           behavior: 'smooth'
         });
+        setTimeout(() => {
+          const result = rawUndo();
+          if (result && result.affectedCellIds.length > 0) {
+            showUndoRedoFeedback(result.affectedCellIds);
+          }
+        }, 300); // Brief delay for scroll to complete
+      }
+    } else {
+      // Cell is visible, apply immediately
+      const result = rawUndo();
+      if (result && result.affectedCellIds.length > 0) {
+        showUndoRedoFeedback(result.affectedCellIds);
       }
     }
-
-    // Clear highlights after animation
-    highlightTimeoutRef.current = setTimeout(() => {
-      setHighlightedCellIds(new Set());
-    }, 1500); // Match CSS animation duration
-  }, [cells]);
-
-  // Wrapped undo/redo that flush active cell first and show visual feedback
-  const undo = useCallback(() => {
-    flushActiveCell();
-    const result = rawUndo();
-    if (result && result.affectedCellIds.length > 0) {
-      showUndoRedoFeedback(result.affectedCellIds, result.operationType);
-    }
-  }, [flushActiveCell, rawUndo, showUndoRedoFeedback]);
+  }, [flushActiveCell, peekUndo, rawUndo, cells, isCellVisible, showUndoRedoFeedback]);
 
   const redo = useCallback(() => {
     flushActiveCell();
-    const result = rawRedo();
-    if (result && result.affectedCellIds.length > 0) {
-      showUndoRedoFeedback(result.affectedCellIds, result.operationType);
+
+    // Peek at what will be affected
+    const peek = peekRedo();
+    if (!peek || peek.affectedCellIds.length === 0) {
+      rawRedo();
+      return;
     }
-  }, [flushActiveCell, rawRedo, showUndoRedoFeedback]);
+
+    const firstCellId = peek.affectedCellIds[0];
+    const cellIndex = cells.findIndex(c => c.id === firstCellId);
+
+    // If cell is not visible (or is an insert), scroll first
+    const needsScroll = cellIndex >= 0 && !isCellVisible(cellIndex);
+    const isInsertRedo = peek.operationType === 'insertCell'; // Will add a new cell
+
+    if (needsScroll || isInsertRedo) {
+      // For insert redo, we need to scroll after the operation adds the cell
+      if (isInsertRedo) {
+        const result = rawRedo();
+        if (result && result.affectedCellIds.length > 0) {
+          showUndoRedoFeedback(result.affectedCellIds);
+          // Find the inserted cell and scroll to it
+          requestAnimationFrame(() => {
+            const insertedIndex = cells.findIndex(c => c.id === result.affectedCellIds[0]);
+            if (insertedIndex >= 0) {
+              virtuosoRef.current?.scrollToIndex({
+                index: insertedIndex,
+                align: 'center',
+                behavior: 'smooth'
+              });
+            }
+          });
+        }
+      } else {
+        // Scroll first, then apply after a brief delay so user sees the change
+        virtuosoRef.current?.scrollToIndex({
+          index: cellIndex,
+          align: 'center',
+          behavior: 'smooth'
+        });
+        setTimeout(() => {
+          const result = rawRedo();
+          if (result && result.affectedCellIds.length > 0) {
+            showUndoRedoFeedback(result.affectedCellIds);
+          }
+        }, 300); // Brief delay for scroll to complete
+      }
+    } else {
+      // Cell is visible, apply immediately
+      const result = rawRedo();
+      if (result && result.affectedCellIds.length > 0) {
+        showUndoRedoFeedback(result.affectedCellIds);
+      }
+    }
+  }, [flushActiveCell, peekRedo, rawRedo, cells, isCellVisible, showUndoRedoFeedback]);
 
   // Debounced scroll to handle height changes during execution
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -1622,6 +1721,7 @@ export const Notebook: React.FC = () => {
               cells={cells}
               virtuosoRef={virtuosoRef}
               className="h-full"
+              onRangeChange={(range) => setVisibleRange(range)}
               renderCell={(cell, idx) => (
                   <CellComponent
                   key={cell.id}

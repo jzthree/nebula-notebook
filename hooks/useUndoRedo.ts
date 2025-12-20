@@ -66,6 +66,9 @@ interface UseUndoRedoResult {
   batch: (operations: Operation[]) => void;
   // Flush pending content for a single cell (O(1) - call before keyframe operations)
   flushCell: (cellId: string, currentContent: string) => void;
+  // Peek at next undo/redo without applying (for scroll-before-apply)
+  peekUndo: () => UndoRedoResult | null;
+  peekRedo: () => UndoRedoResult | null;
   // Undo/Redo - returns affected cells for visual feedback
   undo: () => UndoRedoResult | null;
   redo: () => UndoRedoResult | null;
@@ -416,6 +419,26 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     }
   }, []);
 
+  // Peek at what the next undo would affect (without applying)
+  const peekUndo = useCallback((): UndoRedoResult | null => {
+    if (undoStack.length === 0) return null;
+    const op = undoStack[undoStack.length - 1];
+    return {
+      affectedCellIds: getAffectedCellIds(op),
+      operationType: op.type
+    };
+  }, [undoStack]);
+
+  // Peek at what the next redo would affect (without applying)
+  const peekRedo = useCallback((): UndoRedoResult | null => {
+    if (redoStack.length === 0) return null;
+    const op = redoStack[redoStack.length - 1];
+    return {
+      affectedCellIds: getAffectedCellIds(op),
+      operationType: op.type
+    };
+  }, [redoStack]);
+
   // Undo last operation
   // Note: Caller should call flushCell(activeCellId, content) before undo
   // to capture any pending content changes in the active cell
@@ -596,6 +619,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     changeType,
     batch,
     flushCell,
+    peekUndo,
+    peekRedo,
     undo,
     redo,
     canUndo,
