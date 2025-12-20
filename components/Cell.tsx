@@ -93,6 +93,11 @@ const CellComponent: React.FC<Props> = ({
     cellContentRef.current = cell.content;
   });
 
+  // Ref to cell container for focusing in command mode
+  const cellRef = useRef<HTMLDivElement>(null);
+  // Track if we should focus cell div after blur (e.g., after Escape)
+  const focusCellAfterBlurRef = useRef(false);
+
   // Handle focus/blur to track edit mode
   const handleEditorFocus = useCallback(() => {
     setIsEditing(true);
@@ -108,13 +113,20 @@ const CellComponent: React.FC<Props> = ({
     if (onFlushRef.current) {
       onFlushRef.current(cellIdRef.current, cellContentRef.current);
     }
+    // Only focus cell div if requested (e.g., after Escape key)
+    // This prevents stealing focus when clicking elsewhere
+    if (focusCellAfterBlurRef.current) {
+      focusCellAfterBlurRef.current = false;
+      setTimeout(() => cellRef.current?.focus(), 0);
+    }
   }, []);
 
   // Handle keyboard shortcuts in the editor - uses refs so callback is stable
   const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
-    // Escape: Exit edit mode (blur the editor)
+    // Escape: Exit edit mode (blur the editor) and enter command mode
     if (event.key === 'Escape') {
       event.preventDefault();
+      focusCellAfterBlurRef.current = true; // Focus cell div after blur
       (event.target as HTMLElement)?.blur();
       return true;
     }
@@ -202,22 +214,126 @@ const CellComponent: React.FC<Props> = ({
 
   const hasError = cell.outputs.some(o => o.type === 'error');
 
-  // Border: Active (blue), Selected (purple), Error (red), Default (slate)
+  // Border colors:
+  // - Active + Editing (blue): editor has focus, CodeMirror handles keys
+  // - Active + Not Editing (green): cell selected, cell operations via keyboard
+  // - Multi-selected (purple): part of multi-selection
+  // - Error (red): cell has error output
+  // - Default (slate): inactive
   const getBorderClass = () => {
     if (hasError) return 'border-red-200';
-    if (isActive) return 'border-blue-400 ring-1 ring-blue-100';
+    if (isActive && isEditing) return 'border-blue-400 ring-1 ring-blue-100';
+    if (isActive && !isEditing) return 'border-green-500 ring-1 ring-green-100';
     if (isSelected) return 'border-purple-400 ring-1 ring-purple-100 bg-purple-50/30';
     return 'border-slate-200 hover:border-slate-300';
   };
 
+  // Handle topbar click - select cell without focusing editor (command mode)
+  const handleTopbarClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Blur any focused editor to enter command mode
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    setIsEditing(false);
+    onActivateRef.current(cellIdRef.current);
+    // Focus the cell div to capture keyboard events
+    setTimeout(() => cellRef.current?.focus(), 0);
+  }, []);
+
+  // Handle keyboard shortcuts when cell is selected but not editing (command mode)
+  const handleCellKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // Only handle keys when this cell is active and not editing
+    if (!isActive || isEditing) return;
+
+    // Cmd/Ctrl+Shift+Arrow: move cell position
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        onMove(cell.id, 'up');
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        onMove(cell.id, 'down');
+        return;
+      }
+    }
+
+    // Arrow up/down: navigate between cells
+    if (e.key === 'ArrowUp' && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+      e.preventDefault();
+      const cells = allCellsRef.current;
+      if (index > 0) {
+        const prevCell = cells[index - 1];
+        onActivateRef.current(prevCell.id);
+        // Focus the prev cell's div
+        setTimeout(() => {
+          const prevCellEl = document.querySelector(`[data-cell-id="${prevCell.id}"]`) as HTMLElement;
+          prevCellEl?.focus();
+        }, 0);
+      }
+      return;
+    }
+    if (e.key === 'ArrowDown' && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+      e.preventDefault();
+      const cells = allCellsRef.current;
+      if (index < cells.length - 1) {
+        const nextCell = cells[index + 1];
+        onActivateRef.current(nextCell.id);
+        // Focus the next cell's div
+        setTimeout(() => {
+          const nextCellEl = document.querySelector(`[data-cell-id="${nextCell.id}"]`) as HTMLElement;
+          nextCellEl?.focus();
+        }, 0);
+      }
+      return;
+    }
+
+    // Enter: focus editor (enter edit mode)
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      // Focus will be handled by shouldFocus prop when isActive
+      setIsEditing(true);
+      return;
+    }
+
+    // Delete/Backspace: delete cell
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      onDelete(cell.id);
+      return;
+    }
+
+    // Shift+Enter: run and advance
+    if (e.key === 'Enter' && e.shiftKey) {
+      e.preventDefault();
+      onRunAndAdvanceRef.current(cell.id);
+      return;
+    }
+
+    // Ctrl/Cmd+Enter: run cell
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      onRunRef.current(cell.id);
+      return;
+    }
+  }, [isActive, isEditing, cell.id, index, onMove, onDelete]);
+
   return (
     <div
+      ref={cellRef}
       data-cell-id={cell.id}
       onClick={(e) => onClick(cell.id, e)}
-      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()} ${isHighlighted ? 'cell-highlight-animation' : ''}`}
+      onKeyDown={handleCellKeyDown}
+      tabIndex={isActive && !isEditing ? 0 : -1}
+      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()} ${isHighlighted ? 'cell-highlight-animation' : ''} ${isActive && !isEditing ? 'outline-none' : ''}`}
     >
-      {/* Top Toolbar */}
-      <div className="flex items-center gap-1 px-2 py-1 bg-slate-50 border-b border-slate-100 rounded-t-lg">
+      {/* Top Toolbar - click here to enter command mode */}
+      <div
+        className="flex items-center gap-1 px-2 py-1 bg-slate-50 border-b border-slate-100 rounded-t-lg cursor-pointer"
+        onClick={handleTopbarClick}
+      >
         {/* Left: Cell info, Run button, and action buttons */}
         <div className="flex items-center gap-0.5">
           <span className="text-[10px] font-mono font-bold text-slate-400 min-w-[24px]">
@@ -354,8 +470,8 @@ const CellComponent: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Editor Area */}
-      <div onClick={(e) => { e.stopPropagation(); onClick(cell.id); }}>
+      {/* Editor Area - clicking here enters edit mode */}
+      <div onClick={(e) => { e.stopPropagation(); setIsEditing(true); onClick(cell.id, e); }}>
         <CodeEditor
           value={cell.content}
           onChange={(value) => onUpdate(cell.id, value)}
@@ -366,7 +482,7 @@ const CellComponent: React.FC<Props> = ({
           placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
           searchHighlight={searchHighlight}
           cellId={cell.id}
-          shouldFocus={isActive}
+          shouldFocus={isActive && isEditing}
           indentConfig={indentConfig}
           allCellsContent={allCells.filter(c => c.type === 'code').map(c => c.content)}
         />

@@ -208,107 +208,58 @@ export const Notebook: React.FC = () => {
     }, 1500); // Match CSS animation duration
   }, []);
 
-  // Wrapped undo/redo that flush active cell first and show visual feedback
-  // If cell is off-screen, scroll to it first so user sees the change happen
+  // Helper to apply undo/redo with scroll and feedback
+  // - If operation DELETES a cell: scroll first (so user sees the cell), then operate
+  // - Otherwise: operate first, then scroll and highlight
+  const applyWithScrollFeedback = useCallback((
+    peekFn: () => { affectedCellIds: string[]; operationType: string } | null,
+    applyFn: () => { affectedCellIds: string[] } | null,
+    willDeleteCell: boolean
+  ) => {
+    flushActiveCell();
+
+    const peek = peekFn();
+    if (!peek || peek.affectedCellIds.length === 0) {
+      applyFn();
+      return;
+    }
+
+    const firstCellId = peek.affectedCellIds[0];
+    const cellIndex = cells.findIndex(c => c.id === firstCellId);
+    const cellExists = cellIndex >= 0;
+    const needsScroll = cellExists && !isCellVisible(cellIndex);
+
+    if (willDeleteCell && needsScroll) {
+      // Scroll to cell first so user sees it before deletion
+      virtuosoRef.current?.scrollToIndex({ index: cellIndex, align: 'center', behavior: 'smooth' });
+      setTimeout(() => {
+        const result = applyFn();
+        if (result?.affectedCellIds.length) showUndoRedoFeedback(result.affectedCellIds);
+      }, 300);
+    } else {
+      // Apply first, then scroll and highlight
+      const result = applyFn();
+      if (result?.affectedCellIds.length) {
+        showUndoRedoFeedback(result.affectedCellIds);
+        // Schedule scroll for after cells update (handles new cells or moved cells)
+        pendingScrollCellIdRef.current = result.affectedCellIds[0];
+      }
+    }
+  }, [flushActiveCell, cells, isCellVisible, showUndoRedoFeedback]);
+
+  // Undo: deleteCell restores a cell, insertCell removes it
   const undo = useCallback(() => {
-    flushActiveCell();
-
-    // Peek at what will be affected
     const peek = peekUndo();
-    if (!peek || peek.affectedCellIds.length === 0) {
-      rawUndo();
-      return;
-    }
+    const willDelete = peek?.operationType === 'insertCell'; // Undo insert = delete
+    applyWithScrollFeedback(peekUndo, rawUndo, willDelete);
+  }, [peekUndo, rawUndo, applyWithScrollFeedback]);
 
-    const firstCellId = peek.affectedCellIds[0];
-    const cellIndex = cells.findIndex(c => c.id === firstCellId);
-    const isDeleteUndo = peek.operationType === 'deleteCell'; // Will restore a cell
-
-    // For delete undo, cell doesn't exist yet - apply first, then scroll via effect
-    if (isDeleteUndo) {
-      const result = rawUndo();
-      if (result && result.affectedCellIds.length > 0) {
-        showUndoRedoFeedback(result.affectedCellIds);
-        // Schedule scroll for after cells update
-        pendingScrollCellIdRef.current = result.affectedCellIds[0];
-      }
-      return;
-    }
-
-    // For other operations, check if cell is visible
-    const needsScroll = cellIndex >= 0 && !isCellVisible(cellIndex);
-
-    if (needsScroll) {
-      // Scroll first, then apply after a brief delay so user sees the change
-      virtuosoRef.current?.scrollToIndex({
-        index: cellIndex,
-        align: 'center',
-        behavior: 'smooth'
-      });
-      setTimeout(() => {
-        const result = rawUndo();
-        if (result && result.affectedCellIds.length > 0) {
-          showUndoRedoFeedback(result.affectedCellIds);
-        }
-      }, 300);
-    } else {
-      // Cell is visible (or not found), apply immediately
-      const result = rawUndo();
-      if (result && result.affectedCellIds.length > 0) {
-        showUndoRedoFeedback(result.affectedCellIds);
-      }
-    }
-  }, [flushActiveCell, peekUndo, rawUndo, cells, isCellVisible, showUndoRedoFeedback]);
-
+  // Redo: insertCell adds a cell, deleteCell removes it
   const redo = useCallback(() => {
-    flushActiveCell();
-
-    // Peek at what will be affected
     const peek = peekRedo();
-    if (!peek || peek.affectedCellIds.length === 0) {
-      rawRedo();
-      return;
-    }
-
-    const firstCellId = peek.affectedCellIds[0];
-    const cellIndex = cells.findIndex(c => c.id === firstCellId);
-    const isInsertRedo = peek.operationType === 'insertCell'; // Will add a new cell
-
-    // For insert redo, cell doesn't exist yet - apply first, then scroll via effect
-    if (isInsertRedo) {
-      const result = rawRedo();
-      if (result && result.affectedCellIds.length > 0) {
-        showUndoRedoFeedback(result.affectedCellIds);
-        // Schedule scroll for after cells update
-        pendingScrollCellIdRef.current = result.affectedCellIds[0];
-      }
-      return;
-    }
-
-    // For other operations, check if cell is visible
-    const needsScroll = cellIndex >= 0 && !isCellVisible(cellIndex);
-
-    if (needsScroll) {
-      // Scroll first, then apply after a brief delay so user sees the change
-      virtuosoRef.current?.scrollToIndex({
-        index: cellIndex,
-        align: 'center',
-        behavior: 'smooth'
-      });
-      setTimeout(() => {
-        const result = rawRedo();
-        if (result && result.affectedCellIds.length > 0) {
-          showUndoRedoFeedback(result.affectedCellIds);
-        }
-      }, 300);
-    } else {
-      // Cell is visible (or not found), apply immediately
-      const result = rawRedo();
-      if (result && result.affectedCellIds.length > 0) {
-        showUndoRedoFeedback(result.affectedCellIds);
-      }
-    }
-  }, [flushActiveCell, peekRedo, rawRedo, cells, isCellVisible, showUndoRedoFeedback]);
+    const willDelete = peek?.operationType === 'deleteCell'; // Redo delete = delete
+    applyWithScrollFeedback(peekRedo, rawRedo, willDelete);
+  }, [peekRedo, rawRedo, applyWithScrollFeedback]);
 
   // Debounced scroll to handle height changes during execution
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -1891,12 +1842,43 @@ export const Notebook: React.FC = () => {
               </button>
             </div>
             <div className="p-4 space-y-4">
+              {/* Mode explanation */}
+              <div className="bg-slate-50 rounded p-3 text-xs text-slate-600">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="inline-block w-3 h-3 rounded border-2 border-green-500"></span>
+                  <strong>Command mode</strong>: Click cell header to select. Navigate with arrow keys.
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-block w-3 h-3 rounded border-2 border-blue-400"></span>
+                  <strong>Edit mode</strong>: Click editor or press Enter to edit code.
+                </div>
+              </div>
               <div>
                 <h3 className="text-sm font-medium text-slate-600 mb-2">Execution</h3>
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Run cell and advance</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Shift + Enter</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Run cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Ctrl/Cmd + Enter</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Interrupt kernel</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Ctrl/Cmd + C</kbd></div>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Command Mode (green border)</h3>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-600">Navigate up</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">↑</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Navigate down</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">↓</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Enter edit mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Enter</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Delete cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Delete / Backspace</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Move cell up</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↑</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Move cell down</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↓</kbd></div>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Edit Mode (blue border)</h3>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-600">Exit to command mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Escape</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Save</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + S</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Undo</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Z</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Redo</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + Z</kbd></div>
                 </div>
               </div>
               <div>
@@ -1907,25 +1889,10 @@ export const Notebook: React.FC = () => {
                 </div>
               </div>
               <div>
-                <h3 className="text-sm font-medium text-slate-600 mb-2">Editing</h3>
-                <div className="space-y-1 text-sm">
-                  <div className="flex justify-between"><span className="text-slate-600">Undo</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Z</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Redo</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + Z</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Exit editor</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Escape</kbd></div>
-                </div>
-              </div>
-              <div>
-                <h3 className="text-sm font-medium text-slate-600 mb-2">Selection</h3>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Multi-Selection</h3>
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Select range</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Shift + Click</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Toggle select</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Click</kbd></div>
-                </div>
-              </div>
-              <div>
-                <h3 className="text-sm font-medium text-slate-600 mb-2">Cells</h3>
-                <div className="space-y-1 text-sm">
-                  <div className="flex justify-between"><span className="text-slate-600">Move cell up</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↑</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Move cell down</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↓</kbd></div>
                 </div>
               </div>
             </div>
