@@ -110,10 +110,14 @@ const CellComponent: React.FC<Props> = ({
   // Apply requested focus mode from Notebook (handles virtualization properly)
   useEffect(() => {
     if (requestedFocusMode === 'editor') {
+      // Setting focusState triggers CodeEditor's shouldFocus mechanism
       setFocusState('editor');
-      onFocusModeApplied?.();
+      // Clear pendingFocus after a tick to avoid re-render cascade
+      // (the focus will happen async via CodeEditor's useEffect)
+      setTimeout(() => onFocusModeApplied?.(), 0);
     } else if (requestedFocusMode === 'cell') {
       cellRef.current?.focus();
+      // For cell mode, focus is synchronous, so clear immediately
       onFocusModeApplied?.();
     }
   }, [requestedFocusMode, onFocusModeApplied]);
@@ -265,8 +269,9 @@ const CellComponent: React.FC<Props> = ({
 
   // Handle keyboard shortcuts when cell div has focus (command mode)
   const handleCellKeyDown = useCallback((e: React.KeyboardEvent) => {
-    // Only handle keys when cell div has focus (not when editor has focus)
-    // The event only fires on cell div when it has focus, so no extra check needed
+    // Only handle when cell div itself has focus (not bubbled from editor)
+    // Without this check, Shift+Enter would execute twice (once from CodeMirror, once from here)
+    if (focusState !== 'cell') return;
 
     // Cmd/Ctrl+Shift+Arrow: move cell position
     if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
@@ -327,7 +332,7 @@ const CellComponent: React.FC<Props> = ({
       onRunRef.current(cell.id);
       return;
     }
-  }, [cell.id, index, onMove, onDelete]);
+  }, [cell.id, index, onMove, onDelete, focusState]);
 
   return (
     <div
