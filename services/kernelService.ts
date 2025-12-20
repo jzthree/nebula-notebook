@@ -50,11 +50,22 @@ interface SessionState {
     reject: (error: any) => void;
     onOutput: (output: CellOutput) => void;
   }>;
+  filePath?: string; // Associated notebook file path
+  kernelName?: string; // Kernel name for reconnection
 }
+
+// Reconnection callback type
+type ReconnectCallback = (sessionId: string, filePath?: string) => void;
 
 class KernelService {
   // Multi-session state: sessionId -> SessionState
   private sessions: Map<string, SessionState> = new Map();
+
+  // Reconnection state
+  private reconnectInterval: NodeJS.Timeout | null = null;
+  private disconnectedSessions: Set<string> = new Set();
+  private onReconnectCallbacks: ReconnectCallback[] = [];
+  private onDisconnectCallbacks: ((sessionId: string) => void)[] = [];
 
   /**
    * Get list of available kernels on the system
@@ -141,14 +152,23 @@ class KernelService {
       this.sessions.set(sessionId, {
         sessionId,
         ws: null,
-        messageQueue: []
+        messageQueue: [],
+        filePath,
+        kernelName,
       });
 
       // Connect WebSocket
       await this.connectWebSocket(sessionId);
-    } else if (!this.isConnected(sessionId)) {
-      // Reconnect if disconnected
-      await this.connectWebSocket(sessionId);
+    } else {
+      // Update filePath and kernelName in case they changed
+      const session = this.sessions.get(sessionId)!;
+      session.filePath = filePath;
+      session.kernelName = kernelName;
+
+      if (!this.isConnected(sessionId)) {
+        // Reconnect if disconnected
+        await this.connectWebSocket(sessionId);
+      }
     }
 
     return sessionId;
@@ -184,6 +204,17 @@ class KernelService {
         console.log('Kernel WebSocket closed');
         if (session.ws === ws) {
           session.ws = null;
+          // Add to disconnected sessions and start reconnection
+          this.disconnectedSessions.add(sessionId);
+          this.startReconnectLoop();
+          // Notify disconnect callbacks
+          for (const callback of this.onDisconnectCallbacks) {
+            try {
+              callback(sessionId);
+            } catch (e) {
+              console.error('Disconnect callback error:', e);
+            }
+          }
         }
       };
 
@@ -329,10 +360,83 @@ class KernelService {
   }
 
   /**
+   * Subscribe to reconnection events
+   */
+  onReconnect(callback: ReconnectCallback): () => void {
+    this.onReconnectCallbacks.push(callback);
+    return () => {
+      this.onReconnectCallbacks = this.onReconnectCallbacks.filter(cb => cb !== callback);
+    };
+  }
+
+  /**
+   * Subscribe to disconnection events
+   */
+  onDisconnect(callback: (sessionId: string) => void): () => void {
+    this.onDisconnectCallbacks.push(callback);
+    return () => {
+      this.onDisconnectCallbacks = this.onDisconnectCallbacks.filter(cb => cb !== callback);
+    };
+  }
+
+  /**
+   * Start the reconnection loop (tries every second)
+   */
+  private startReconnectLoop(): void {
+    if (this.reconnectInterval) return; // Already running
+
+    this.reconnectInterval = setInterval(async () => {
+      if (this.disconnectedSessions.size === 0) {
+        // No disconnected sessions, stop the loop
+        this.stopReconnectLoop();
+        return;
+      }
+
+      // Try to reconnect each disconnected session
+      for (const sessionId of Array.from(this.disconnectedSessions)) {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+          this.disconnectedSessions.delete(sessionId);
+          continue;
+        }
+
+        try {
+          await this.connectWebSocket(sessionId);
+          this.disconnectedSessions.delete(sessionId);
+          console.log(`Reconnected session ${sessionId}`);
+
+          // Notify callbacks
+          for (const callback of this.onReconnectCallbacks) {
+            try {
+              callback(sessionId, session.filePath);
+            } catch (e) {
+              console.error('Reconnect callback error:', e);
+            }
+          }
+        } catch (e) {
+          // Still disconnected, will retry next interval
+        }
+      }
+    }, 1000); // Try every second
+  }
+
+  /**
+   * Stop the reconnection loop
+   */
+  private stopReconnectLoop(): void {
+    if (this.reconnectInterval) {
+      clearInterval(this.reconnectInterval);
+      this.reconnectInterval = null;
+    }
+  }
+
+  /**
    * Clear all sessions (for testing)
    * @internal
    */
   _clearAllSessions(): void {
+    this.stopReconnectLoop();
+    this.disconnectedSessions.clear();
     this.sessions.clear();
   }
 

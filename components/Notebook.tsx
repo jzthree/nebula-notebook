@@ -295,6 +295,68 @@ export const Notebook: React.FC = () => {
     };
   }, [pendingSave, currentFileId, saveNow]);
 
+  // Handle kernel WebSocket reconnection
+  useEffect(() => {
+    const unsubscribeReconnect = kernelService.onReconnect(async (sessionId, filePath) => {
+      // Only handle reconnection for current file's kernel
+      if (!currentFileId || filePath !== currentFileId) return;
+
+      console.log('Kernel reconnected, checking for file changes...');
+      setKernelStatus('idle');
+      setIsKernelReady(true);
+
+      try {
+        // Check if file was modified on server while disconnected
+        const { mtime: currentMtime } = await getFileMtime(currentFileId);
+
+        if (lastKnownMtime && currentMtime > lastKnownMtime) {
+          // File was modified on server - show conflict dialog
+          console.log('File modified on server during disconnect, showing conflict dialog');
+          setConflictDialog({
+            show: true,
+            serverMtime: currentMtime,
+            onKeepLocal: async () => {
+              // Force save our local version
+              await saveNow();
+              setLastKnownMtime(currentMtime);
+              setConflictDialog(null);
+            },
+            onLoadRemote: async () => {
+              // Reload from server
+              const result = await getFileContentWithMtime(currentFileId);
+              if (result) {
+                resetHistory(result.cells);
+                setLastKnownMtime(result.mtime);
+              }
+              setConflictDialog(null);
+            },
+          });
+        } else {
+          // No conflict - autosave current state
+          console.log('No file conflict, autosaving...');
+          await saveNow();
+        }
+      } catch (error) {
+        console.error('Error checking file after reconnect:', error);
+        // Still try to save
+        saveNow().catch(() => {});
+      }
+    });
+
+    const unsubscribeDisconnect = kernelService.onDisconnect((sessionId) => {
+      if (kernelSessionId === sessionId) {
+        console.log('Kernel disconnected, will attempt reconnection...');
+        setKernelStatus('disconnected');
+        setIsKernelReady(false);
+      }
+    });
+
+    return () => {
+      unsubscribeReconnect();
+      unsubscribeDisconnect();
+    };
+  }, [currentFileId, kernelSessionId, lastKnownMtime, saveNow, resetHistory]);
+
   // Execution State
   const [isKernelReady, setIsKernelReady] = useState(false);
   const [executionQueue, setExecutionQueue] = useState<string[]>([]);
