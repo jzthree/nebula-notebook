@@ -8,11 +8,7 @@ import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, 
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
-  getNotebookData,
-  saveNotebookCells,
   getFileContentWithMtime,
-  saveFileContentWithMtime,
-  getFileMtime,
   getActiveFileId,
   saveActiveFileId,
   updateNotebookMetadata,
@@ -29,6 +25,7 @@ import { NotebookSearch } from './NotebookSearch';
 import { NotebookBreadcrumb } from './NotebookBreadcrumb';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
 import { useNotification } from './NotificationSystem';
+import { useConflictResolution } from '../hooks/useConflictResolution';
 import { detectIndentationFromCells, IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 import { getNotebookAvatar, updateFavicon, resetFavicon } from '../utils/notebookAvatar';
 import { playSuccessSound } from '../utils/notificationSound';
@@ -85,12 +82,6 @@ export const Notebook: React.FC = () => {
 
   // Conflict detection state
   const [lastKnownMtime, setLastKnownMtime] = useState<number | null>(null);
-  const [conflictDialog, setConflictDialog] = useState<{
-    show: boolean;
-    remoteMtime: number;
-    onKeepLocal: () => void;
-    onLoadRemote: () => void;
-  } | null>(null);
   const [pendingSave, setPendingSave] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -128,6 +119,18 @@ export const Notebook: React.FC = () => {
 
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
+
+  // Conflict resolution hook
+  const {
+    conflictDialog,
+    saveWithCheck,
+    keepLocal,
+    loadRemote,
+    dismissDialog: dismissConflictDialog
+  } = useConflictResolution(
+    setLastKnownMtime,
+    resetHistory
+  );
 
   // Clipboard for cut/copy/paste cells
   const [cellClipboard, setCellClipboard] = useState<{ cell: Cell; isCut: boolean } | null>(null);
@@ -261,59 +264,34 @@ export const Notebook: React.FC = () => {
       // Get history to save alongside notebook
       const history = getFullHistory();
 
-      // Check remote mtime before saving (if we have a baseline)
-      if (lastKnownMtime !== null) {
-        try {
-          const remoteMtimeData = await getFileMtime(fileId);
-          if (remoteMtimeData.mtime > lastKnownMtime) {
-            // Remote file changed while we were editing - conflict!
-            return new Promise<void>((resolve, reject) => {
-              setConflictDialog({
-                show: true,
-                remoteMtime: remoteMtimeData.mtime,
-                onKeepLocal: async () => {
-                  setConflictDialog(null);
-                  // Force save local version (with kernel name and history)
-                  const result = await saveFileContentWithMtime(fileId, cellsToSave, currentKernel, history);
-                  if (result) {
-                    setLastKnownMtime(result.mtime);
-                    await updateNotebookMetadata(fileId, {});
-                  }
-                  resolve();
-                },
-                onLoadRemote: async () => {
-                  setConflictDialog(null);
-                  // Reload from server
-                  const content = await getFileContentWithMtime(fileId);
-                  if (content) {
-                    resetHistory(content.cells);
-                    setLastKnownMtime(content.mtime);
-                  }
-                  resolve();
-                }
-              });
-            });
-          }
-        } catch (mtimeError) {
-          // Can't check mtime (network issue?) - proceed with save attempt
-          console.warn('Could not check remote mtime:', mtimeError);
-        }
+      // Use conflict resolution hook to save with conflict checking
+      const result = await saveWithCheck(
+        fileId,
+        cellsToSave,
+        lastKnownMtime,
+        currentKernel,
+        history
+      );
+
+      if (result.needsResolution) {
+        // Conflict detected - dialog is shown, wait for user action
+        // The hook will handle mtime updates when resolved
+        return;
       }
 
-      // Perform the save (notebook + history in single request)
-      const result = await saveFileContentWithMtime(fileId, cellsToSave, currentKernel, history);
-      if (result) {
-        setLastKnownMtime(result.mtime);
+      if (result.success) {
         setPendingSave(false);
+        await updateNotebookMetadata(fileId, {});
+      } else if (result.error) {
+        throw new Error(result.error);
       }
-      await updateNotebookMetadata(fileId, {});
     } catch (error) {
       // Network error - mark as pending and will retry when online
       console.warn('Save failed, will retry:', error);
       setPendingSave(true);
       throw error; // Re-throw so autosave knows it failed
     }
-  }, [getFullHistory, lastKnownMtime, resetHistory, currentKernel]);
+  }, [getFullHistory, lastKnownMtime, currentKernel, saveWithCheck]);
 
   const { status: autosaveStatus, saveNow } = useAutosave({
     fileId: currentFileId,
@@ -360,41 +338,12 @@ export const Notebook: React.FC = () => {
       setKernelStatus('idle');
       setIsKernelReady(true);
 
+      // Trigger save which will check for conflicts via saveWithCheck
+      // If there's a conflict, the hook will show the dialog automatically
       try {
-        // Check if file was modified on server while disconnected
-        const { mtime: currentMtime } = await getFileMtime(currentFileId);
-
-        if (lastKnownMtime && currentMtime > lastKnownMtime) {
-          // File was modified on server - show conflict dialog
-          console.log('File modified on server during disconnect, showing conflict dialog');
-          setConflictDialog({
-            show: true,
-            remoteMtime: currentMtime,
-            onKeepLocal: async () => {
-              // Force save our local version
-              await saveNow();
-              setLastKnownMtime(currentMtime);
-              setConflictDialog(null);
-            },
-            onLoadRemote: async () => {
-              // Reload from server
-              const result = await getFileContentWithMtime(currentFileId);
-              if (result) {
-                resetHistory(result.cells);
-                setLastKnownMtime(result.mtime);
-              }
-              setConflictDialog(null);
-            },
-          });
-        } else {
-          // No conflict - autosave current state
-          console.log('No file conflict, autosaving...');
-          await saveNow();
-        }
+        await saveNow();
       } catch (error) {
-        console.error('Error checking file after reconnect:', error);
-        // Still try to save
-        saveNow().catch(() => {});
+        console.error('Error saving after reconnect:', error);
       }
     });
 
@@ -410,7 +359,7 @@ export const Notebook: React.FC = () => {
       unsubscribeReconnect();
       unsubscribeDisconnect();
     };
-  }, [currentFileId, kernelSessionId, lastKnownMtime, saveNow, resetHistory]);
+  }, [currentFileId, kernelSessionId, saveNow]);
 
   // Execution State
   const [isKernelReady, setIsKernelReady] = useState(false);
@@ -1330,7 +1279,7 @@ export const Notebook: React.FC = () => {
               </div>
               <div className="flex flex-col gap-2">
                 <button
-                  onClick={conflictDialog.onKeepLocal}
+                  onClick={keepLocal}
                   className="w-full px-4 py-2.5 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors"
                 >
                   Keep My Changes
@@ -1339,7 +1288,7 @@ export const Notebook: React.FC = () => {
                   </span>
                 </button>
                 <button
-                  onClick={conflictDialog.onLoadRemote}
+                  onClick={loadRemote}
                   className="w-full px-4 py-2.5 text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
                 >
                   Load Server Version

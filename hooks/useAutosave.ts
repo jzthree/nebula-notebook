@@ -1,38 +1,12 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Cell } from '../types';
-
-// Dynamic autosave delay based on notebook file size
-const MIN_AUTOSAVE_DELAY = 1000;   // 1 second minimum
-const MAX_AUTOSAVE_DELAY = 60000;  // 60 seconds maximum
-
-// Note: localStorage backup removed - quota too small for notebooks, and we save to server anyway
-
-// Calculate autosave delay based on serialized content size
-// Small notebooks (<100KB): 1-2 seconds
-// Medium notebooks (100KB-1MB): 2-5 seconds
-// Large notebooks (1MB-10MB): 5-15 seconds
-// Very large notebooks (10MB-100MB): 15-60 seconds
-function getAutosaveDelay(sizeInBytes: number): number {
-  const sizeInKB = sizeInBytes / 1024;
-  const sizeInMB = sizeInKB / 1024;
-
-  if (sizeInMB >= 100) {
-    // 100MB+ : don't autosave, only manual save
-    return MAX_AUTOSAVE_DELAY;
-  } else if (sizeInMB >= 10) {
-    // 10-100MB: 15-60 seconds (scale linearly)
-    return Math.min(15000 + (sizeInMB - 10) * 500, MAX_AUTOSAVE_DELAY);
-  } else if (sizeInMB >= 1) {
-    // 1-10MB: 5-15 seconds
-    return 5000 + (sizeInMB - 1) * 1111;
-  } else if (sizeInKB >= 100) {
-    // 100KB-1MB: 2-5 seconds
-    return 2000 + (sizeInKB - 100) * 3.33;
-  } else {
-    // <100KB: 1-2 seconds
-    return MIN_AUTOSAVE_DELAY + sizeInKB * 10;
-  }
-}
+import {
+  AutosaveState,
+  AutosaveEvent,
+  AutosaveEffect,
+  autosaveReducer,
+  getInitialState,
+} from './autosaveStateMachine';
 
 export interface AutosaveStatus {
   status: 'saved' | 'saving' | 'unsaved' | 'error';
@@ -47,15 +21,21 @@ export interface UseAutosaveOptions {
 }
 
 export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosaveOptions) {
-  const [status, setStatus] = useState<AutosaveStatus>({
+  // UI status (derived from machine state)
+  const [uiStatus, setUiStatus] = useState<AutosaveStatus>({
     status: 'saved',
     lastSaved: null,
   });
 
+  // State machine state
+  const [machineState, setMachineState] = useState<AutosaveState>(getInitialState);
+
+  // Refs for timers and content tracking
+  const checkTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedContentRef = useRef<string>('');
-  const isSavingRef = useRef(false);
-  const pendingSaveRef = useRef(false);  // Track if save needed after current save completes
+  const cellsRef = useRef(cells);
 
   // Serialize cells for comparison (includes outputs to trigger save after execution)
   const serializeCells = useCallback((cells: Cell[]) => {
@@ -63,7 +43,6 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
       id: c.id,
       type: c.type,
       content: c.content,
-      // Include outputs so autosave triggers after cell execution
       outputs: c.outputs?.map(o => ({
         id: o.id,
         type: o.type,
@@ -72,60 +51,120 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
     })));
   }, []);
 
-
   // Check if there are unsaved changes
   const hasUnsavedChanges = useCallback(() => {
     const currentContent = serializeCells(cells);
     return currentContent !== lastSavedContentRef.current;
   }, [cells, serializeCells]);
 
-  // Perform the actual save
-  const performSave = useCallback(async () => {
-    if (!fileId || !enabled) return;
+  // Cancel all pending operations
+  const cancelPendingOperations = useCallback(() => {
+    if (checkTimeoutRef.current) {
+      clearTimeout(checkTimeoutRef.current);
+      checkTimeoutRef.current = null;
+    }
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+  }, []);
 
-    // If already saving, mark that we need another save after current completes
-    if (isSavingRef.current) {
-      pendingSaveRef.current = true;
+  // Dispatch an event to the state machine and execute effects
+  const dispatch = useCallback((event: AutosaveEvent) => {
+    setMachineState(currentState => {
+      const { state: newState, effects } = autosaveReducer(currentState, event);
+
+      // Execute effects (scheduled in next tick to avoid state update conflicts)
+      if (effects.length > 0) {
+        setTimeout(() => {
+          effects.forEach(effect => executeEffect(effect));
+        }, 0);
+      }
+
+      return newState;
+    });
+  }, []);
+
+  // Perform the actual save operation
+  const performSave = useCallback(async () => {
+    if (!fileId || !enabled) {
+      dispatch({ type: 'SAVE_SUCCESS' }); // No-op success
       return;
     }
 
     const currentContent = serializeCells(cells);
     if (currentContent === lastSavedContentRef.current) {
-      return; // No changes
+      dispatch({ type: 'SAVE_SUCCESS' }); // No actual changes
+      return;
     }
 
-    isSavingRef.current = true;
-    pendingSaveRef.current = false;
-    setStatus({ status: 'saving', lastSaved: status.lastSaved });
+    setUiStatus(prev => ({ status: 'saving', lastSaved: prev.lastSaved }));
 
     try {
-      // Perform save to server
       await onSave(fileId, cells);
-
-      // Update tracking
       lastSavedContentRef.current = currentContent;
-      const now = Date.now();
-      setStatus({ status: 'saved', lastSaved: now });
+      setUiStatus({ status: 'saved', lastSaved: Date.now() });
+      dispatch({ type: 'SAVE_SUCCESS' });
     } catch (error) {
       console.error('Autosave failed:', error);
-      setStatus({ status: 'error', lastSaved: status.lastSaved });
-    } finally {
-      isSavingRef.current = false;
-
-      // If changes occurred during save, trigger another save
-      if (pendingSaveRef.current) {
-        pendingSaveRef.current = false;
-        // Use a shorter delay for pending saves since we just finished one
-        setTimeout(() => performSave(), MIN_AUTOSAVE_DELAY);
-      }
+      setUiStatus(prev => ({ status: 'error', lastSaved: prev.lastSaved }));
+      dispatch({ type: 'SAVE_ERROR', error: error instanceof Error ? error : new Error(String(error)) });
     }
-  }, [fileId, cells, enabled, onSave, serializeCells, status.lastSaved]);
+  }, [fileId, cells, enabled, onSave, serializeCells, dispatch]);
 
-  // Track cells reference to detect changes without expensive serialization
-  const cellsRef = useRef(cells);
-  const checkTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Check for changes and report to state machine
+  const checkForChanges = useCallback(() => {
+    const currentContent = serializeCells(cells);
+    const hasChanges = currentContent !== lastSavedContentRef.current;
+    const contentSize = hasChanges ? new Blob([currentContent]).size : 0;
 
-  // Debounced save effect - defer expensive comparison to avoid blocking typing
+    if (!hasChanges) {
+      setUiStatus(prev => prev.status === 'unsaved' ? { ...prev, status: 'saved' } : prev);
+    }
+
+    dispatch({ type: 'CHECK_COMPLETE', hasChanges, contentSize });
+  }, [cells, serializeCells, dispatch]);
+
+  // Execute a single effect
+  const executeEffect = useCallback((effect: AutosaveEffect) => {
+    switch (effect.type) {
+      case 'SCHEDULE_CHECK':
+        checkTimeoutRef.current = setTimeout(() => {
+          checkForChanges();
+        }, effect.delay);
+        break;
+
+      case 'SCHEDULE_SAVE':
+        saveTimeoutRef.current = setTimeout(() => {
+          dispatch({ type: 'TIMEOUT_FIRED' });
+        }, effect.delay);
+        break;
+
+      case 'SCHEDULE_RETRY':
+        retryTimeoutRef.current = setTimeout(() => {
+          dispatch({ type: 'RETRY' });
+        }, effect.delay);
+        break;
+
+      case 'CANCEL_PENDING_OPERATIONS':
+        cancelPendingOperations();
+        break;
+
+      case 'PERFORM_SAVE':
+        performSave();
+        break;
+
+      case 'UPDATE_SAVED_CONTENT':
+        // Content already updated in performSave
+        break;
+    }
+  }, [checkForChanges, cancelPendingOperations, performSave, dispatch]);
+
+  // React to cells changes
   useEffect(() => {
     if (!fileId || !enabled) return;
 
@@ -133,68 +172,41 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
     if (cells === cellsRef.current) return;
     cellsRef.current = cells;
 
-    // Mark as unsaved immediately (cheap operation)
-    setStatus(prev => prev.status === 'unsaved' ? prev : { ...prev, status: 'unsaved' });
+    // Mark as unsaved immediately
+    setUiStatus(prev => prev.status === 'unsaved' ? prev : { ...prev, status: 'unsaved' });
 
-    // Clear existing timeouts
-    if (checkTimeoutRef.current) {
-      clearTimeout(checkTimeoutRef.current);
-    }
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
+    // Dispatch cells changed event
+    dispatch({ type: 'CELLS_CHANGED' });
+  }, [cells, fileId, enabled, dispatch]);
 
-    // Defer expensive comparison check - don't block typing
-    checkTimeoutRef.current = setTimeout(() => {
-      const currentContent = serializeCells(cells);
-      if (currentContent === lastSavedContentRef.current) {
-        // No actual changes, reset status
-        setStatus(prev => ({ ...prev, status: 'saved' }));
-        return;
-      }
-
-      // Calculate delay based on content size
-      const contentSize = new Blob([currentContent]).size;
-      const delay = getAutosaveDelay(contentSize);
-
-      // Schedule the actual save
-      saveTimeoutRef.current = setTimeout(() => {
-        performSave();
-      }, delay);
-    }, 300); // 300ms debounce before even checking for changes
-
+  // Cleanup on unmount
+  useEffect(() => {
     return () => {
-      if (checkTimeoutRef.current) {
-        clearTimeout(checkTimeoutRef.current);
-      }
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
+      cancelPendingOperations();
     };
-  }, [cells, fileId, enabled, serializeCells, performSave]);
+  }, [cancelPendingOperations]);
 
   // Save immediately (for manual save)
   const saveNow = useCallback(async () => {
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
+    cancelPendingOperations();
 
     // Check if there are actual changes to save
     const currentContent = serializeCells(cells);
     if (currentContent === lastSavedContentRef.current) {
       // No changes, but still refresh the timestamp to give visual feedback
-      setStatus({ status: 'saved', lastSaved: Date.now() });
+      setUiStatus({ status: 'saved', lastSaved: Date.now() });
       return;
     }
 
-    await performSave();
-  }, [performSave, cells, serializeCells]);
+    dispatch({ type: 'MANUAL_SAVE' });
+  }, [cancelPendingOperations, cells, serializeCells, dispatch]);
 
   // Initialize last saved content when file changes
   useEffect(() => {
     if (fileId) {
       lastSavedContentRef.current = serializeCells(cells);
-      setStatus({ status: 'saved', lastSaved: Date.now() });
+      setUiStatus({ status: 'saved', lastSaved: Date.now() });
+      setMachineState(getInitialState());
     }
   }, [fileId]); // Only on fileId change, not cells
 
@@ -216,16 +228,16 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden' && hasUnsavedChanges()) {
-        performSave();
+        dispatch({ type: 'MANUAL_SAVE' });
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [hasUnsavedChanges, performSave]);
+  }, [hasUnsavedChanges, dispatch]);
 
   return {
-    status,
+    status: uiStatus,
     saveNow,
     hasUnsavedChanges,
   };

@@ -23,6 +23,8 @@ vi.mock('../../services/kernelService', () => ({
     interruptKernel: vi.fn().mockResolvedValue(true),
     executeCode: vi.fn().mockResolvedValue({ status: 'ok', execution_count: 1 }),
     installKernel: vi.fn().mockResolvedValue({ kernel_name: 'python3' }),
+    onReconnect: vi.fn().mockReturnValue(() => {}),
+    onDisconnect: vi.fn().mockReturnValue(() => {}),
   },
   KernelSpec: {},
   PythonEnvironment: {},
