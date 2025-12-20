@@ -82,6 +82,9 @@ export const Notebook: React.FC = () => {
 
   // Conflict detection state
   const [lastKnownMtime, setLastKnownMtime] = useState<number | null>(null);
+  const lastKnownMtimeRef = useRef<number | null>(null);
+  // Keep ref in sync to avoid stale closures in save callbacks
+  lastKnownMtimeRef.current = lastKnownMtime;
   const [pendingSave, setPendingSave] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -366,11 +369,11 @@ export const Notebook: React.FC = () => {
       // Get history to save alongside notebook
       const history = getFullHistory();
 
-      // Use conflict resolution hook to save with conflict checking
+      // Use ref for mtime to avoid stale closures causing false conflicts
       const result = await saveWithCheck(
         fileId,
         cellsToSave,
-        lastKnownMtime,
+        lastKnownMtimeRef.current,
         currentKernel,
         history
       );
@@ -393,7 +396,7 @@ export const Notebook: React.FC = () => {
       setPendingSave(true);
       throw error; // Re-throw so autosave knows it failed
     }
-  }, [getFullHistory, lastKnownMtime, currentKernel, saveWithCheck]);
+  }, [getFullHistory, currentKernel, saveWithCheck]);
 
   const { status: autosaveStatus, saveNow } = useAutosave({
     fileId: currentFileId,

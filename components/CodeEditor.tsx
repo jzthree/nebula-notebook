@@ -477,6 +477,21 @@ export const CodeEditor: React.FC<Props> = ({
               },
             },
             {
+              // Explicit Ctrl-Enter for Mac users who prefer Ctrl over Cmd
+              key: 'Ctrl-Enter',
+              run: () => {
+                const event = new KeyboardEvent('keydown', {
+                  key: 'Enter',
+                  shiftKey: false,
+                  ctrlKey: true,
+                  metaKey: false,
+                  bubbles: true,
+                  cancelable: true,
+                });
+                return onKeyDown(event);
+              },
+            },
+            {
               key: 'Mod-s',
               run: () => {
                 const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
