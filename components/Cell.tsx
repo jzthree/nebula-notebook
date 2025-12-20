@@ -18,6 +18,7 @@ interface Props {
   cell: ICell;
   index: number;
   isActive: boolean;
+  isSelected?: boolean; // Part of multi-selection
   isHighlighted?: boolean; // Visual feedback for undo/redo
   allCells: ICell[];
   onUpdate: (id: string, content: string) => void;
@@ -28,7 +29,7 @@ interface Props {
   onDelete: (id: string) => void;
   onMove: (id: string, direction: 'up' | 'down') => void;
   onChangeType: (id: string, type: CellType) => void;
-  onClick: (id: string) => void;
+  onClick: (id: string, event: React.MouseEvent) => void;
   onAddCell: (afterIndex: number) => void;
   onSave?: () => void;
   searchHighlight?: SearchHighlight | null;
@@ -40,6 +41,7 @@ const CellComponent: React.FC<Props> = ({
   cell,
   index,
   isActive,
+  isSelected = false,
   isHighlighted = false,
   allCells,
   onUpdate,
@@ -193,22 +195,18 @@ const CellComponent: React.FC<Props> = ({
 
   const hasError = cell.outputs.some(o => o.type === 'error');
 
-  // Determine border style based on mode:
-  // - Error: red
-  // - Active + Editing: blue (edit mode)
-  // - Active + Not Editing: green (command mode)
-  // - Not Active: slate
+  // Border: Active (blue), Selected (purple), Error (red), Default (slate)
   const getBorderClass = () => {
     if (hasError) return 'border-red-200';
-    if (isActive && isEditing) return 'border-blue-400 ring-1 ring-blue-100';
-    if (isActive) return 'border-green-500 ring-1 ring-green-100';
+    if (isActive) return 'border-blue-400 ring-1 ring-blue-100';
+    if (isSelected) return 'border-purple-400 ring-1 ring-purple-100 bg-purple-50/30';
     return 'border-slate-200 hover:border-slate-300';
   };
 
   return (
     <div
       data-cell-id={cell.id}
-      onClick={() => onClick(cell.id)}
+      onClick={(e) => onClick(cell.id, e)}
       className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()} ${isHighlighted ? 'cell-highlight-animation' : ''}`}
     >
       {/* Top Toolbar */}
@@ -234,17 +232,6 @@ const CellComponent: React.FC<Props> = ({
               [ ]
             </span>
           ) : null}
-          {/* Mode indicator: Edit (blue) or Cmd (green) when active */}
-          {isActive && (
-            <span className={`text-[9px] font-medium px-1 py-0.5 rounded ${
-              isEditing
-                ? 'bg-blue-100 text-blue-600'
-                : 'bg-green-100 text-green-600'
-            }`}>
-              {isEditing ? 'Edit' : 'Cmd'}
-            </span>
-          )}
-
           <button
             onClick={(e) => { e.stopPropagation(); onRun(cell.id); }}
             className="p-1 text-slate-500 hover:text-green-600 hover:bg-green-50 rounded"
@@ -392,13 +379,12 @@ const CellComponent: React.FC<Props> = ({
 // but cells only need to re-render when their actual data changes.
 export const Cell = memo(CellComponent, (prevProps, nextProps) => {
   // Return true if props are equal (skip re-render)
-  // Only check: cell data, index, active state, highlight state, search highlighting, queue position, and indent config
-  // Don't check callbacks - they change on every parent render but
-  // don't affect what the cell displays
+  // Only check visual state - not callbacks which change frequently
   return (
     prevProps.cell === nextProps.cell &&
     prevProps.index === nextProps.index &&
     prevProps.isActive === nextProps.isActive &&
+    prevProps.isSelected === nextProps.isSelected &&
     prevProps.isHighlighted === nextProps.isHighlighted &&
     prevProps.searchHighlight === nextProps.searchHighlight &&
     prevProps.queuePosition === nextProps.queuePosition &&

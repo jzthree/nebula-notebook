@@ -4,7 +4,7 @@ import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
 import { getSettings, saveSettings } from '../services/llmService';
-import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu } from 'lucide-react';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -69,6 +69,7 @@ export const Notebook: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isKernelManagerOpen, setIsKernelManagerOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isKeyboardHelpOpen, setIsKeyboardHelpOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState<{
     query: string;
     caseSensitive: boolean;
@@ -87,6 +88,10 @@ export const Notebook: React.FC = () => {
   lastKnownMtimeRef.current = lastKnownMtime;
   const [pendingSave, setPendingSave] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  // Multi-select state
+  const [selectedCellIds, setSelectedCellIds] = useState<Set<string>>(new Set());
+  const lastClickedCellIdRef = useRef<string | null>(null);
 
   // Kernel State
   const [isKernelMenuOpen, setIsKernelMenuOpen] = useState(false);
@@ -1043,6 +1048,42 @@ export const Notebook: React.FC = () => {
     }
   };
 
+  // Handle cell click with multi-select support
+  const handleCellClick = useCallback((id: string, event: React.MouseEvent) => {
+    const clickedIndex = cells.findIndex(c => c.id === id);
+
+    if (event.shiftKey && lastClickedCellIdRef.current) {
+      // Shift+Click: range select from last clicked to current
+      const lastIndex = cells.findIndex(c => c.id === lastClickedCellIdRef.current);
+      if (lastIndex !== -1 && clickedIndex !== -1) {
+        const start = Math.min(lastIndex, clickedIndex);
+        const end = Math.max(lastIndex, clickedIndex);
+        const newSelection = new Set<string>();
+        for (let i = start; i <= end; i++) {
+          newSelection.add(cells[i].id);
+        }
+        setSelectedCellIds(newSelection);
+      }
+    } else if (event.metaKey || event.ctrlKey) {
+      // Cmd/Ctrl+Click: toggle selection
+      setSelectedCellIds(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(id)) {
+          newSet.delete(id);
+        } else {
+          newSet.add(id);
+        }
+        return newSet;
+      });
+      lastClickedCellIdRef.current = id;
+    } else {
+      // Normal click: clear selection and set active
+      setSelectedCellIds(new Set());
+      setActiveCellId(id);
+      lastClickedCellIdRef.current = id;
+    }
+  }, [cells, setActiveCellId]);
+
   const handleDeleteCellByIndex = async (index: number) => {
     if (index >= 0 && index < cells.length) {
       // Capture cell ID before async operation to avoid race condition
@@ -1069,25 +1110,38 @@ export const Notebook: React.FC = () => {
     // Keyframe: flush active cell before delete
     flushActiveCell();
 
-    const idx = cells.findIndex(c => c.id === id);
-    if (idx === -1) return;
+    // If there are selected cells, delete all of them
+    const idsToDelete = selectedCellIds.size > 0 ? Array.from(selectedCellIds) : [id];
 
-    if (cells.length > 1) {
-      // Determine which cell to select after deletion
-      const nextIdx = idx < cells.length - 1 ? idx : idx - 1;
-      const nextCellId = cells[nextIdx === idx ? idx + 1 : nextIdx]?.id;
+    // Can't delete all cells - keep at least one
+    if (idsToDelete.length >= cells.length) {
+      // Clear the first cell instead
+      updateContent(cells[0].id, '');
+      setSelectedCellIds(new Set());
+      setActiveCellId(cells[0].id);
+      return;
+    }
 
+    // Delete in reverse order (highest index first) to avoid index shifting issues
+    const indicesToDelete = idsToDelete
+      .map(cellId => cells.findIndex(c => c.id === cellId))
+      .filter(idx => idx !== -1)
+      .sort((a, b) => b - a);
+
+    // Find the cell to select after deletion (first cell after all deleted ones)
+    const minIdx = Math.min(...indicesToDelete);
+    const remainingCells = cells.filter(c => !idsToDelete.includes(c.id));
+    const nextCellId = remainingCells[Math.min(minIdx, remainingCells.length - 1)]?.id;
+
+    // Delete each cell
+    for (const idx of indicesToDelete) {
       undoableDeleteCell(idx);
+    }
 
-      // Select the next cell but don't scroll - this keeps the cursor
-      // in the same position, naturally landing on the delete button
-      // of the next cell for rapid deletion
-      if (nextCellId) {
-        setActiveCellId(nextCellId);
-      }
-    } else {
-      // Can't delete last cell, just clear it
-      updateContent(id, '');
+    // Clear selection and set next active cell
+    setSelectedCellIds(new Set());
+    if (nextCellId) {
+      setActiveCellId(nextCellId);
     }
   };
   // Update ref for keyboard shortcut handler
@@ -1674,6 +1728,13 @@ export const Notebook: React.FC = () => {
                   </div>
 
                   <button
+                    onClick={() => setIsKeyboardHelpOpen(true)}
+                    className="btn-secondary hidden sm:flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors"
+                    title="Keyboard Shortcuts"
+                  >
+                    <Keyboard className="w-4 h-4" />
+                  </button>
+                  <button
                     onClick={() => setIsSettingsOpen(true)}
                     className="btn-secondary hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors"
                   >
@@ -1734,6 +1795,7 @@ export const Notebook: React.FC = () => {
                   cell={cell}
                   index={idx}
                   isActive={activeCellId === cell.id}
+                  isSelected={selectedCellIds.has(cell.id)}
                   isHighlighted={highlightedCellIds.has(cell.id)}
                   allCells={cells}
                   onUpdate={handleUpdateCell}
@@ -1744,7 +1806,7 @@ export const Notebook: React.FC = () => {
                   onDelete={deleteCell}
                   onMove={moveCell}
                   onChangeType={changeCellType}
-                  onClick={setActiveCellId}
+                  onClick={handleCellClick}
                   onAddCell={(afterIndex) => addCell('code', '', afterIndex, true)}
                   onSave={saveNow}
                   searchHighlight={searchQuery}
@@ -1816,6 +1878,59 @@ export const Notebook: React.FC = () => {
         onReplaceAllInNotebook={handleReplaceAllInNotebook}
         activeCellId={activeCellId}
       />
+
+      {/* Keyboard Shortcuts Help Modal */}
+      {isKeyboardHelpOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setIsKeyboardHelpOpen(false)}>
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b">
+              <h2 className="text-lg font-semibold text-slate-800">Keyboard Shortcuts</h2>
+              <button onClick={() => setIsKeyboardHelpOpen(false)} className="p-1 hover:bg-slate-100 rounded">
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Execution</h3>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-600">Run cell and advance</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Shift + Enter</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Run cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Ctrl/Cmd + Enter</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Interrupt kernel</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Ctrl/Cmd + C</kbd></div>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">File</h3>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-600">Save</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + S</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Find</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + F</kbd></div>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Editing</h3>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-600">Undo</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Z</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Redo</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + Z</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Exit editor</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Escape</kbd></div>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Selection</h3>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-600">Select range</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Shift + Click</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Toggle select</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Click</kbd></div>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Cells</h3>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-600">Move cell up</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↑</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Move cell down</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↓</kbd></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
