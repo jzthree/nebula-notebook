@@ -37,6 +37,9 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
   const lastSavedContentRef = useRef<string>('');
   const cellsRef = useRef(cells);
 
+  // Ref for executeEffect to avoid stale closure in dispatch
+  const executeEffectRef = useRef<(effect: AutosaveEffect) => void>(() => {});
+
   // Serialize cells for comparison (includes outputs to trigger save after execution)
   const serializeCells = useCallback((cells: Cell[]) => {
     return JSON.stringify(cells.map(c => ({
@@ -79,9 +82,10 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
       const { state: newState, effects } = autosaveReducer(currentState, event);
 
       // Execute effects (scheduled in next tick to avoid state update conflicts)
+      // Use ref to avoid stale closure - executeEffectRef always has the latest version
       if (effects.length > 0) {
         setTimeout(() => {
-          effects.forEach(effect => executeEffect(effect));
+          effects.forEach(effect => executeEffectRef.current(effect));
         }, 0);
       }
 
@@ -163,6 +167,9 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
         break;
     }
   }, [checkForChanges, cancelPendingOperations, performSave, dispatch]);
+
+  // Keep executeEffect ref in sync to avoid stale closures
+  executeEffectRef.current = executeEffect;
 
   // React to cells changes
   useEffect(() => {
