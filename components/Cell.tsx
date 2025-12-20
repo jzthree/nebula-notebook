@@ -65,18 +65,24 @@ const CellComponent: React.FC<Props> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
 
-  // Use refs for callbacks to avoid recreating handleEditorKeyDown on every render
+  // Use refs for callbacks and values to avoid recreating handlers on every render
   // This prevents CodeMirror extensions from being recreated on every keystroke
   const allCellsRef = useRef(allCells);
   const onRunRef = useRef(onRun);
   const onRunAndAdvanceRef = useRef(onRunAndAdvance);
   const onSaveRef = useRef(onSave);
+  const onFlushRef = useRef(onFlush);
+  const cellIdRef = useRef(cell.id);
+  const cellContentRef = useRef(cell.content);
 
   useEffect(() => {
     allCellsRef.current = allCells;
     onRunRef.current = onRun;
     onRunAndAdvanceRef.current = onRunAndAdvance;
     onSaveRef.current = onSave;
+    onFlushRef.current = onFlush;
+    cellIdRef.current = cell.id;
+    cellContentRef.current = cell.content;
   });
 
   // Handle focus/blur to track edit mode
@@ -87,10 +93,11 @@ const CellComponent: React.FC<Props> = ({
   const handleEditorBlur = useCallback(() => {
     setIsEditing(false);
     // Flush pending content on blur (keyframe for undo history)
-    if (onFlush) {
-      onFlush(cell.id, cell.content);
+    // Use refs to avoid recreating this callback on every keystroke
+    if (onFlushRef.current) {
+      onFlushRef.current(cellIdRef.current, cellContentRef.current);
     }
-  }, [cell.id, cell.content, onFlush]);
+  }, []);
 
   // Handle keyboard shortcuts in the editor - uses refs so callback is stable
   const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
