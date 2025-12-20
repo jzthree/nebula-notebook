@@ -11,8 +11,6 @@ import {
   getNotebookData,
   saveNotebookCells,
   getFileContentWithMtime,
-  saveFileContentWithMtime,
-  getFileMtime,
   getActiveFileId,
   saveActiveFileId,
   updateNotebookMetadata,
@@ -30,6 +28,7 @@ import { NotebookSearch } from './NotebookSearch';
 import { NotebookBreadcrumb } from './NotebookBreadcrumb';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
 import { useRecoveryBanner } from '../hooks/useRecoveryBanner';
+import { useConflictResolution } from '../hooks/useConflictResolution';
 import { useNotification } from './NotificationSystem';
 import { detectIndentationFromCells, IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 import { getNotebookAvatar, updateFavicon, resetFavicon } from '../utils/notebookAvatar';
@@ -85,14 +84,8 @@ export const Notebook: React.FC = () => {
   const [isRenamingNotebook, setIsRenamingNotebook] = useState(false);
   const [renameValue, setRenameValue] = useState('');
 
-  // Conflict detection state
+  // Conflict detection state (lastKnownMtime passed to useConflictResolution hook)
   const [lastKnownMtime, setLastKnownMtime] = useState<number | null>(null);
-  const [conflictDialog, setConflictDialog] = useState<{
-    show: boolean;
-    remoteMtime: number;
-    onKeepLocal: () => void;
-    onLoadRemote: () => void;
-  } | null>(null);
   const [pendingSave, setPendingSave] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -138,6 +131,18 @@ export const Notebook: React.FC = () => {
     recoverChanges,
     discardRecovery,
   } = useRecoveryBanner(currentFileId, resetHistory);
+
+  // Conflict resolution hook - manages conflict detection and resolution dialog
+  const {
+    conflictDialog,
+    checkAndSave,
+    keepLocal,
+    loadRemote,
+  } = useConflictResolution(
+    setLastKnownMtime,  // onMtimeUpdate
+    resetHistory,        // onCellsReset
+    currentKernel
+  );
 
   // Clipboard for cut/copy/paste cells
   const [cellClipboard, setCellClipboard] = useState<{ cell: Cell; isCut: boolean } | null>(null);
@@ -206,61 +211,23 @@ export const Notebook: React.FC = () => {
   // Autosave hook with conflict detection
   const performSaveToFile = useCallback(async (fileId: string, cellsToSave: Cell[]) => {
     try {
-      // Check remote mtime before saving (if we have a baseline)
-      if (lastKnownMtime !== null) {
-        try {
-          const remoteMtimeData = await getFileMtime(fileId);
-          if (remoteMtimeData.mtime > lastKnownMtime) {
-            // Remote file changed while we were editing - conflict!
-            return new Promise<void>((resolve, reject) => {
-              setConflictDialog({
-                show: true,
-                remoteMtime: remoteMtimeData.mtime,
-                onKeepLocal: async () => {
-                  setConflictDialog(null);
-                  // Force save local version (with kernel name for persistence)
-                  const result = await saveFileContentWithMtime(fileId, cellsToSave, currentKernel);
-                  if (result) {
-                    setLastKnownMtime(result.mtime);
-                    await updateNotebookMetadata(fileId, {});
-                    const history = getFullHistory();
-                    if (history.length > 0) {
-                      saveNotebookHistory(fileId, history).catch(() => {});
-                    }
-                  }
-                  resolve();
-                },
-                onLoadRemote: async () => {
-                  setConflictDialog(null);
-                  // Reload from server
-                  const content = await getFileContentWithMtime(fileId);
-                  if (content) {
-                    resetHistory(content.cells);
-                    setLastKnownMtime(content.mtime);
-                  }
-                  resolve();
-                }
-              });
-            });
-          }
-        } catch (mtimeError) {
-          // Can't check mtime (network issue?) - proceed with save attempt
-          console.warn('Could not check remote mtime:', mtimeError);
-        }
+      // Use hook to check for conflicts and save
+      const result = await checkAndSave(fileId, cellsToSave, lastKnownMtime);
+
+      if (result.needsResolution) {
+        // Conflict detected - dialog is shown by hook, wait for user action
+        return;
       }
 
-      // Perform the save (with kernel name for persistence)
-      const result = await saveFileContentWithMtime(fileId, cellsToSave, currentKernel);
-      if (result) {
-        setLastKnownMtime(result.mtime);
+      if (result.success) {
         setPendingSave(false);
-      }
-      await updateNotebookMetadata(fileId, {});
+        await updateNotebookMetadata(fileId, {});
 
-      // Save history in background (non-blocking)
-      const history = getFullHistory();
-      if (history.length > 0) {
-        saveNotebookHistory(fileId, history).catch(() => {});
+        // Save history in background (non-blocking)
+        const history = getFullHistory();
+        if (history.length > 0) {
+          saveNotebookHistory(fileId, history).catch(() => {});
+        }
       }
     } catch (error) {
       // Network error - mark as pending and will retry when online
@@ -268,7 +235,19 @@ export const Notebook: React.FC = () => {
       setPendingSave(true);
       throw error; // Re-throw so autosave knows it failed
     }
-  }, [getFullHistory, lastKnownMtime, resetHistory, currentKernel]);
+  }, [checkAndSave, getFullHistory, lastKnownMtime]);
+
+  // Wrapper for keepLocal that also saves execution history after conflict resolution
+  const keepLocalWithHistory = useCallback(async () => {
+    await keepLocal();
+    if (currentFileId) {
+      await updateNotebookMetadata(currentFileId, {});
+      const history = getFullHistory();
+      if (history.length > 0) {
+        saveNotebookHistory(currentFileId, history).catch(() => {});
+      }
+    }
+  }, [keepLocal, currentFileId, getFullHistory]);
 
   const { status: autosaveStatus, saveNow } = useAutosave({
     fileId: currentFileId,
@@ -1198,7 +1177,7 @@ export const Notebook: React.FC = () => {
       <div className={`flex-1 flex flex-col h-screen transition-all duration-300 ${isFileBrowserOpen ? 'lg:ml-72' : ''} ${isChatOpen ? 'lg:mr-80' : ''}`}>
 
         {/* Conflict Dialog */}
-        {conflictDialog?.show && (
+        {conflictDialog.isOpen && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
               <div className="flex items-start gap-3 mb-4">
@@ -1213,7 +1192,7 @@ export const Notebook: React.FC = () => {
               </div>
               <div className="flex flex-col gap-2">
                 <button
-                  onClick={conflictDialog.onKeepLocal}
+                  onClick={keepLocalWithHistory}
                   className="w-full px-4 py-2.5 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors"
                 >
                   Keep My Changes
@@ -1222,7 +1201,7 @@ export const Notebook: React.FC = () => {
                   </span>
                 </button>
                 <button
-                  onClick={conflictDialog.onLoadRemote}
+                  onClick={loadRemote}
                   className="w-full px-4 py-2.5 text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
                 >
                   Load Server Version
