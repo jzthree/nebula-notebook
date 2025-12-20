@@ -535,9 +535,44 @@ export const Notebook: React.FC = () => {
   const deleteCellRef = useRef<((id: string) => void) | null>(null);
   const runAndAdvanceRef = useRef<((id: string, focusMode: 'cell' | 'editor') => void) | null>(null);
   const queueExecutionRef = useRef<((id: string) => void) | null>(null);
-  // Track pending focus mode for next cell after Shift+Enter
-  const [pendingFocusMode, setPendingFocusMode] = useState<'cell' | 'editor' | null>(null);
-  const clearPendingFocusMode = useCallback(() => setPendingFocusMode(null), []);
+  // Track pending focus for next cell (handles virtualization by polling for DOM element)
+  const [pendingFocus, setPendingFocus] = useState<{ cellId: string; mode: 'cell' | 'editor' } | null>(null);
+  const pendingFocusRef = useRef(pendingFocus);
+  pendingFocusRef.current = pendingFocus;
+
+  // Effect to handle pending focus - polls for DOM element to handle virtualization delay
+  useEffect(() => {
+    if (!pendingFocus) return;
+
+    const { cellId, mode } = pendingFocus;
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 20; // ~320ms max wait
+
+    const tryFocus = () => {
+      if (cancelled || attempts >= maxAttempts) return;
+      attempts++;
+
+      const cellEl = document.querySelector(`[data-cell-id="${cellId}"]`) as HTMLElement;
+      if (!cellEl) {
+        // Element not yet rendered by Virtuoso, retry
+        requestAnimationFrame(tryFocus);
+        return;
+      }
+
+      if (mode === 'editor') {
+        const editorEl = cellEl.querySelector('.cm-content') as HTMLElement;
+        editorEl?.focus();
+      } else {
+        cellEl.focus();
+      }
+      setPendingFocus(null);
+    };
+
+    requestAnimationFrame(tryFocus);
+
+    return () => { cancelled = true; };
+  }, [pendingFocus]);
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -872,7 +907,7 @@ export const Notebook: React.FC = () => {
 
   // --- CELL OPERATIONS ---
 
-  const addCell = (type: CellType = 'code', content: string = '', afterIndex?: number, noScroll?: boolean) => {
+  const addCell = (type: CellType = 'code', content: string = '', afterIndex?: number, noScroll?: boolean | 'cell' | 'editor') => {
     // Keyframe: flush active cell before insert
     flushActiveCell();
 
@@ -892,8 +927,17 @@ export const Notebook: React.FC = () => {
     undoableInsertCell(insertIndex, newCell);
     setActiveCellId(newCell.id);
 
+    // Handle focus mode if provided (for Shift+Enter creating new cell)
+    const focusMode = typeof noScroll === 'string' ? noScroll : null;
+    const shouldScroll = noScroll !== true && typeof noScroll !== 'string';
+
+    if (focusMode) {
+      // Set pending focus for the new cell
+      setPendingFocus({ cellId: newCell.id, mode: focusMode });
+    }
+
     // Only scroll if not explicitly disabled (e.g., toolbar plus button shouldn't scroll)
-    if (!noScroll) {
+    if (shouldScroll) {
       requestAnimationFrame(() => {
         virtuosoRef.current?.scrollToIndex({
           index: insertIndex,
@@ -1084,16 +1128,17 @@ export const Notebook: React.FC = () => {
   const runAndAdvance = (id: string, focusMode: 'cell' | 'editor') => {
     queueExecution(id);
     const currentIndex = cells.findIndex(c => c.id === id);
-    // Set pending focus mode for the next cell
-    setPendingFocusMode(focusMode);
     if (currentIndex < cells.length - 1) {
       // Move to next cell and scroll to it
       const nextIndex = currentIndex + 1;
-      setActiveCellId(cells[nextIndex].id);
+      const nextCellId = cells[nextIndex].id;
+      setActiveCellId(nextCellId);
       scrollToCellDebounced(nextIndex);
+      // Set pending focus - will poll for DOM element after virtualization renders
+      setPendingFocus({ cellId: nextCellId, mode: focusMode });
     } else {
-      // Create new cell at the end
-      addCell('code', '', currentIndex);
+      // Create new cell at the end with focus mode
+      addCell('code', '', currentIndex, focusMode);
     }
   };
 
@@ -1111,6 +1156,21 @@ export const Notebook: React.FC = () => {
       offset: -80        // Small offset so cell isn't flush with top (accounts for header)
     });
   }, []);
+
+  // Navigate to adjacent cell with virtualization support (used by arrow keys in cell mode)
+  const navigateCellRelative = useCallback((fromCellId: string, direction: 'up' | 'down') => {
+    const currentIndex = cells.findIndex(c => c.id === fromCellId);
+    if (currentIndex === -1) return;
+
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= cells.length) return;
+
+    const targetCellId = cells[targetIndex].id;
+    setActiveCellId(targetCellId);
+    scrollToCellDebounced(targetIndex);
+    // Use polling to wait for virtualization to render the target cell
+    setPendingFocus({ cellId: targetCellId, mode: 'cell' });
+  }, [cells, scrollToCellDebounced]);
 
   // Handle search query changes for highlighting
   const handleSearchChange = useCallback((
@@ -1708,13 +1768,12 @@ export const Notebook: React.FC = () => {
                   onChangeType={changeCellType}
                   onClick={handleCellClick}
                   onActivate={setActiveCellId}
+                  onNavigateCell={(direction) => navigateCellRelative(cell.id, direction)}
                   onAddCell={(afterIndex) => addCell('code', '', afterIndex, true)}
                   onSave={saveNow}
                   searchHighlight={searchQuery}
                   queuePosition={executionQueue.indexOf(cell.id)}
                   indentConfig={indentConfig}
-                  pendingFocusMode={pendingFocusMode}
-                  onClearPendingFocusMode={clearPendingFocusMode}
                 />
               )}
             />

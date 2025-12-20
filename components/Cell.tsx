@@ -33,13 +33,12 @@ interface Props {
   onChangeType: (id: string, type: CellType) => void;
   onClick: (id: string, event: React.MouseEvent) => void;
   onActivate: (id: string) => void; // Set as active cell without multi-select logic
+  onNavigateCell: (direction: 'up' | 'down') => void; // Navigate to adjacent cell (handles virtualization)
   onAddCell: (afterIndex: number) => void;
   onSave?: () => void;
   searchHighlight?: SearchHighlight | null;
   queuePosition?: number; // Position in execution queue (-1 or undefined = not queued)
   indentConfig?: IndentationConfig; // Detected indentation configuration
-  pendingFocusMode?: FocusMode | null; // Focus mode to apply when becoming active
-  onClearPendingFocusMode?: () => void; // Clear after applying
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -59,13 +58,12 @@ const CellComponent: React.FC<Props> = ({
   onChangeType,
   onClick,
   onActivate,
+  onNavigateCell,
   onAddCell,
   onSave,
   searchHighlight,
   queuePosition,
   indentConfig = DEFAULT_INDENTATION,
-  pendingFocusMode,
-  onClearPendingFocusMode,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -104,19 +102,6 @@ const CellComponent: React.FC<Props> = ({
   const cellRef = useRef<HTMLDivElement>(null);
   // Track if we should focus cell div after blur (e.g., after Escape)
   const focusCellAfterBlurRef = useRef(false);
-
-  // Apply pending focus mode when this cell becomes active
-  useEffect(() => {
-    if (isActive && pendingFocusMode) {
-      if (pendingFocusMode === 'editor') {
-        setFocusState('editor');
-      } else {
-        // Focus cell div for command mode
-        cellRef.current?.focus();
-      }
-      onClearPendingFocusMode?.();
-    }
-  }, [isActive, pendingFocusMode, onClearPendingFocusMode]);
 
   // Handle focus/blur to track focus state
   const handleEditorFocus = useCallback(() => {
@@ -282,18 +267,11 @@ const CellComponent: React.FC<Props> = ({
       }
     }
 
-    // Arrow up/down: navigate between cells
+    // Arrow up/down: navigate between cells (handled by Notebook for virtualization)
     if (e.key === 'ArrowUp' && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
       e.preventDefault();
-      const cells = allCellsRef.current;
       if (index > 0) {
-        const prevCell = cells[index - 1];
-        onActivateRef.current(prevCell.id);
-        // Focus the prev cell's div
-        setTimeout(() => {
-          const prevCellEl = document.querySelector(`[data-cell-id="${prevCell.id}"]`) as HTMLElement;
-          prevCellEl?.focus();
-        }, 0);
+        onNavigateCell('up');
       }
       return;
     }
@@ -301,13 +279,7 @@ const CellComponent: React.FC<Props> = ({
       e.preventDefault();
       const cells = allCellsRef.current;
       if (index < cells.length - 1) {
-        const nextCell = cells[index + 1];
-        onActivateRef.current(nextCell.id);
-        // Focus the next cell's div
-        setTimeout(() => {
-          const nextCellEl = document.querySelector(`[data-cell-id="${nextCell.id}"]`) as HTMLElement;
-          nextCellEl?.focus();
-        }, 0);
+        onNavigateCell('down');
       }
       return;
     }
