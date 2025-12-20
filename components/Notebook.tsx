@@ -562,67 +562,10 @@ export const Notebook: React.FC = () => {
       // Ctrl+Z / Ctrl+Shift+Z are handled by CodeMirror for per-cell undo/redo
       // Notebook-level undo/redo is available via toolbar buttons
 
-      // Shift+Enter and Ctrl+Enter are handled by Cell.tsx when focused
-      // Only handle here when not focused in an input/editor
-      if (!isInput) {
-        // Shift+Enter: Run active cell and advance (default to editor mode)
-        if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
-          e.preventDefault();
-          if (activeCellId) {
-            runAndAdvanceRef.current?.(activeCellId, 'editor');
-          }
-          return;
-        }
-
-        // Ctrl/Cmd+Enter: Run active cell
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
-          e.preventDefault();
-          if (activeCellId) {
-            queueExecutionRef.current?.(activeCellId);
-          }
-          return;
-        }
-      }
-
-      // The following shortcuts only work when not in an input field
-      if (isInput) return;
-
-      // Arrow key navigation between cells
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        e.preventDefault();
-        const currentIndex = activeCellId
-          ? cells.findIndex(c => c.id === activeCellId)
-          : -1;
-
-        if (e.key === 'ArrowUp' && currentIndex > 0) {
-          setActiveCellId(cells[currentIndex - 1].id);
-        } else if (e.key === 'ArrowDown' && currentIndex < cells.length - 1) {
-          setActiveCellId(cells[currentIndex + 1].id);
-        } else if (currentIndex === -1 && cells.length > 0) {
-          // No cell selected, select first or last based on direction
-          setActiveCellId(e.key === 'ArrowDown' ? cells[0].id : cells[cells.length - 1].id);
-        }
-        return;
-      }
-
-      // Vim-style 'dd' to delete cell
-      if (e.key === 'd') {
-        const now = Date.now();
-        if (lastKeyRef.current?.key === 'd' && now - lastKeyRef.current.time < 500) {
-          // Double 'd' pressed within 500ms - delete active cell
-          if (activeCellId && deleteCellRef.current) {
-            e.preventDefault();
-            deleteCellRef.current(activeCellId);
-          }
-          lastKeyRef.current = null;
-        } else {
-          lastKeyRef.current = { key: 'd', time: now };
-        }
-        return;
-      }
-
-      // Reset 'd' tracking on any other key
-      lastKeyRef.current = null;
+      // Cell-related shortcuts are handled by Cell.tsx when cell/editor is focused
+      // Skip here if event is from a cell (has data-cell-id or is inside one)
+      const isFromCell = (target as HTMLElement).closest?.('[data-cell-id]') !== null;
+      if (isInput || isFromCell) return;
 
       // Jupyter-style shortcuts (command mode only - not in input fields)
       const currentIndex = activeCellId ? cells.findIndex(c => c.id === activeCellId) : -1;
