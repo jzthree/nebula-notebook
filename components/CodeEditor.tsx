@@ -358,8 +358,8 @@ function createPythonCompletionSource(allCellsContentRef: React.RefObject<string
   };
 }
 
-// Typing lag measurement extension
-const MEASURE_TYPING_LAG = true; // Set to false to disable logging
+// Typing lag measurement extension (disabled - not accurate, doesn't include render time)
+const MEASURE_TYPING_LAG = false;
 let lastKeydownTime = 0;
 
 function createTypingLagExtension() {
