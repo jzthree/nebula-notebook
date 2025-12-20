@@ -314,7 +314,7 @@ export const Notebook: React.FC = () => {
           console.log('File modified on server during disconnect, showing conflict dialog');
           setConflictDialog({
             show: true,
-            serverMtime: currentMtime,
+            remoteMtime: currentMtime,
             onKeepLocal: async () => {
               // Force save our local version
               await saveNow();
