@@ -362,6 +362,10 @@ class FilesystemService:
             else:
                 content = source
 
+            # Preserve cell ID from metadata if available, otherwise generate new one
+            cell_metadata = nb_cell.get("metadata", {})
+            cell_id = cell_metadata.get("nebula_id") or nb_cell.get("id") or f"cell-{i}"
+
             # Convert outputs
             outputs = []
             for output in nb_cell.get("outputs", []):
@@ -420,7 +424,7 @@ class FilesystemService:
                     })
 
             cells.append({
-                "id": f"cell-{i}",
+                "id": cell_id,
                 "type": "markdown" if cell_type == "markdown" else "code",
                 "content": content,
                 "outputs": outputs,
@@ -524,7 +528,9 @@ class FilesystemService:
             nb_cell = {
                 "cell_type": cell_type,
                 "source": source,
-                "metadata": {}
+                "metadata": {
+                    "nebula_id": cell.get("id")  # Preserve cell ID for undo/redo history
+                }
             }
 
             if cell_type == "code":
