@@ -66,7 +66,8 @@ const CellComponent: React.FC<Props> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [isFixing, setIsFixing] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
+  // Focus state: 'editor' = editing code, 'cell' = command mode, 'none' = unfocused
+  const [focusState, setFocusState] = useState<'none' | 'cell' | 'editor'>('none');
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
 
   // ⚠️ PERFORMANCE CRITICAL: All callbacks passed to CodeEditor MUST be stable.
@@ -98,27 +99,32 @@ const CellComponent: React.FC<Props> = ({
   // Track if we should focus cell div after blur (e.g., after Escape)
   const focusCellAfterBlurRef = useRef(false);
 
-  // Handle focus/blur to track edit mode
+  // Handle focus/blur to track focus state
   const handleEditorFocus = useCallback(() => {
-    setIsEditing(true);
-    // Ensure this cell becomes active when editor is focused
-    // This keeps active cell in sync with editor focus
+    setFocusState('editor');
     onActivateRef.current(cellIdRef.current);
   }, []);
 
   const handleEditorBlur = useCallback(() => {
-    setIsEditing(false);
+    setFocusState('none');
     // Flush pending content on blur (keyframe for undo history)
-    // Use refs to avoid recreating this callback on every keystroke
     if (onFlushRef.current) {
       onFlushRef.current(cellIdRef.current, cellContentRef.current);
     }
-    // Only focus cell div if requested (e.g., after Escape key)
-    // This prevents stealing focus when clicking elsewhere
+    // Focus cell div if requested (e.g., after Escape key) to enter command mode
     if (focusCellAfterBlurRef.current) {
       focusCellAfterBlurRef.current = false;
       setTimeout(() => cellRef.current?.focus(), 0);
     }
+  }, []);
+
+  const handleCellFocus = useCallback(() => {
+    setFocusState('cell');
+    onActivateRef.current(cellIdRef.current);
+  }, []);
+
+  const handleCellBlur = useCallback(() => {
+    setFocusState('none');
   }, []);
 
   // Handle keyboard shortcuts in the editor - uses refs so callback is stable
@@ -214,37 +220,29 @@ const CellComponent: React.FC<Props> = ({
 
   const hasError = cell.outputs.some(o => o.type === 'error');
 
-  // Border colors:
-  // - Active + Editing (blue): editor has focus, CodeMirror handles keys
-  // - Active + Not Editing (green): cell selected, cell operations via keyboard
-  // - Multi-selected (purple): part of multi-selection
-  // - Error (red): cell has error output
-  // - Default (slate): inactive
+  // Border colors based on focus state:
+  // - editor (blue): CodeMirror has focus, handles keyboard
+  // - cell (green): cell div has focus, cell-level commands
+  // - none (slate): unfocused
   const getBorderClass = () => {
     if (hasError) return 'border-red-200';
-    if (isActive && isEditing) return 'border-blue-400 ring-1 ring-blue-100';
-    if (isActive && !isEditing) return 'border-green-500 ring-1 ring-green-100';
+    if (focusState === 'editor') return 'border-blue-400 ring-1 ring-blue-100';
+    if (focusState === 'cell') return 'border-green-500 ring-1 ring-green-100';
     if (isSelected) return 'border-purple-400 ring-1 ring-purple-100 bg-purple-50/30';
     return 'border-slate-200 hover:border-slate-300';
   };
 
-  // Handle topbar click - select cell without focusing editor (command mode)
+  // Handle topbar click - enter command mode (focus cell div)
   const handleTopbarClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    // Blur any focused editor to enter command mode
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
-    setIsEditing(false);
-    onActivateRef.current(cellIdRef.current);
-    // Focus the cell div to capture keyboard events
-    setTimeout(() => cellRef.current?.focus(), 0);
+    // Focus the cell div - this will trigger handleCellFocus
+    cellRef.current?.focus();
   }, []);
 
-  // Handle keyboard shortcuts when cell is selected but not editing (command mode)
+  // Handle keyboard shortcuts when cell div has focus (command mode)
   const handleCellKeyDown = useCallback((e: React.KeyboardEvent) => {
-    // Only handle keys when this cell is active and not editing
-    if (!isActive || isEditing) return;
+    // Only handle keys when cell div has focus (not when editor has focus)
+    // The event only fires on cell div when it has focus, so no extra check needed
 
     // Cmd/Ctrl+Shift+Arrow: move cell position
     if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
@@ -293,8 +291,8 @@ const CellComponent: React.FC<Props> = ({
     // Enter: focus editor (enter edit mode)
     if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
-      // Focus will be handled by shouldFocus prop when isActive
-      setIsEditing(true);
+      // Set state to trigger shouldFocus, which will focus the editor
+      setFocusState('editor');
       return;
     }
 
@@ -318,7 +316,7 @@ const CellComponent: React.FC<Props> = ({
       onRunRef.current(cell.id);
       return;
     }
-  }, [isActive, isEditing, cell.id, index, onMove, onDelete]);
+  }, [cell.id, index, onMove, onDelete]);
 
   return (
     <div
@@ -326,8 +324,10 @@ const CellComponent: React.FC<Props> = ({
       data-cell-id={cell.id}
       onClick={(e) => onClick(cell.id, e)}
       onKeyDown={handleCellKeyDown}
-      tabIndex={isActive && !isEditing ? 0 : -1}
-      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()} ${isHighlighted ? 'cell-highlight-animation' : ''} ${isActive && !isEditing ? 'outline-none' : ''}`}
+      onFocus={handleCellFocus}
+      onBlur={handleCellBlur}
+      tabIndex={isActive ? 0 : -1}
+      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()} ${isHighlighted ? 'cell-highlight-animation' : ''} ${focusState === 'cell' ? 'outline-none' : ''}`}
     >
       {/* Top Toolbar - click here to enter command mode */}
       <div
@@ -470,8 +470,8 @@ const CellComponent: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Editor Area - clicking here enters edit mode */}
-      <div onClick={(e) => { e.stopPropagation(); setIsEditing(true); onClick(cell.id, e); }}>
+      {/* Editor Area - clicking focuses editor naturally via CodeMirror */}
+      <div onClick={(e) => { e.stopPropagation(); onClick(cell.id, e); }}>
         <CodeEditor
           value={cell.content}
           onChange={(value) => onUpdate(cell.id, value)}
@@ -482,7 +482,7 @@ const CellComponent: React.FC<Props> = ({
           placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
           searchHighlight={searchHighlight}
           cellId={cell.id}
-          shouldFocus={isActive && isEditing}
+          shouldFocus={focusState === 'editor'}
           indentConfig={indentConfig}
           allCellsContent={allCells.filter(c => c.type === 'code').map(c => c.content)}
         />

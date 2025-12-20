@@ -174,14 +174,17 @@ function reverseOperation(op: Operation): Operation {
 }
 
 // Extract affected cell IDs from an operation
-function getAffectedCellIds(op: Operation): string[] {
+// For moveCell, we need the cells array to look up the cell ID by index
+function getAffectedCellIds(op: Operation, cells?: Cell[]): string[] {
   switch (op.type) {
     case 'insertCell':
     case 'deleteCell':
       return [op.cell.id];
     case 'moveCell':
-      // moveCell doesn't have a cell ID directly, we'd need the cells array
-      // For now, return empty - the caller can handle this case
+      // Look up cell ID from the destination index (where it ends up after the op)
+      if (cells && op.toIndex >= 0 && op.toIndex < cells.length) {
+        return [cells[op.toIndex].id];
+      }
       return [];
     case 'updateContent':
     case 'updateContentPatch':
@@ -191,7 +194,7 @@ function getAffectedCellIds(op: Operation): string[] {
       // Collect all unique cell IDs from batch operations
       const ids = new Set<string>();
       for (const subOp of op.operations) {
-        for (const id of getAffectedCellIds(subOp)) {
+        for (const id of getAffectedCellIds(subOp, cells)) {
           ids.add(id);
         }
       }
@@ -423,21 +426,25 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   const peekUndo = useCallback((): UndoRedoResult | null => {
     if (undoStack.length === 0) return null;
     const op = undoStack[undoStack.length - 1];
+    const reversedOp = reverseOperation(op);
+    // For moveCell, we need to simulate where the cell will be after undo
+    // The reversed op's toIndex is where the cell will end up
     return {
-      affectedCellIds: getAffectedCellIds(op),
+      affectedCellIds: getAffectedCellIds(reversedOp, cells),
       operationType: op.type
     };
-  }, [undoStack]);
+  }, [undoStack, cells]);
 
   // Peek at what the next redo would affect (without applying)
   const peekRedo = useCallback((): UndoRedoResult | null => {
     if (redoStack.length === 0) return null;
     const op = redoStack[redoStack.length - 1];
+    // For moveCell, op.toIndex is where the cell will end up after redo
     return {
-      affectedCellIds: getAffectedCellIds(op),
+      affectedCellIds: getAffectedCellIds(op, cells),
       operationType: op.type
     };
-  }, [redoStack]);
+  }, [redoStack, cells]);
 
   // Undo last operation
   // Note: Caller should call flushCell(activeCellId, content) before undo
@@ -449,16 +456,20 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     const op = undoStack[undoStack.length - 1];
     const reversedOp = reverseOperation(op);
 
-    setCellsInternal(prev => applyOperation(prev, reversedOp));
+    let newCells: Cell[] = [];
+    setCellsInternal(prev => {
+      newCells = applyOperation(prev, reversedOp);
+      return newCells;
+    });
     setUndoStack(prev => prev.slice(0, -1));
     setRedoStack(prev => [...prev, op]);
 
     // Update content tracking after undo
     updateContentTrackingAfterUndo(op);
 
-    // Return affected cells for visual feedback
+    // Return affected cells for visual feedback (use newCells for moveCell lookup)
     return {
-      affectedCellIds: getAffectedCellIds(op),
+      affectedCellIds: getAffectedCellIds(reversedOp, newCells),
       operationType: op.type
     };
   }, [undoStack, updateContentTrackingAfterUndo]);
@@ -470,16 +481,20 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
 
     const op = redoStack[redoStack.length - 1];
 
-    setCellsInternal(prev => applyOperation(prev, op));
+    let newCells: Cell[] = [];
+    setCellsInternal(prev => {
+      newCells = applyOperation(prev, op);
+      return newCells;
+    });
     setRedoStack(prev => prev.slice(0, -1));
     setUndoStack(prev => [...prev, op]);
 
     // Update content tracking
     updateContentTrackingAfterOp(op);
 
-    // Return affected cells for visual feedback
+    // Return affected cells for visual feedback (use newCells for moveCell lookup)
     return {
-      affectedCellIds: getAffectedCellIds(op),
+      affectedCellIds: getAffectedCellIds(op, newCells),
       operationType: op.type
     };
   }, [redoStack, updateContentTrackingAfterOp]);
