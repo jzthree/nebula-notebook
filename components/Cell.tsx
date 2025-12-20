@@ -14,6 +14,8 @@ interface SearchHighlight {
   currentMatch?: { cellId: string; startIndex: number; endIndex: number } | null;
 }
 
+type FocusMode = 'cell' | 'editor';
+
 interface Props {
   cell: ICell;
   index: number;
@@ -25,7 +27,7 @@ interface Props {
   onAIUpdate?: (id: string, content: string) => void; // For AI edits (tracked in undo history)
   onFlush?: (id: string, content: string) => void; // Flush pending content on blur
   onRun: (id: string) => void;
-  onRunAndAdvance: (id: string) => void;
+  onRunAndAdvance: (id: string, focusMode: FocusMode) => void;
   onDelete: (id: string) => void;
   onMove: (id: string, direction: 'up' | 'down') => void;
   onChangeType: (id: string, type: CellType) => void;
@@ -36,6 +38,8 @@ interface Props {
   searchHighlight?: SearchHighlight | null;
   queuePosition?: number; // Position in execution queue (-1 or undefined = not queued)
   indentConfig?: IndentationConfig; // Detected indentation configuration
+  pendingFocusMode?: FocusMode | null; // Focus mode to apply when becoming active
+  onClearPendingFocusMode?: () => void; // Clear after applying
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -60,6 +64,8 @@ const CellComponent: React.FC<Props> = ({
   searchHighlight,
   queuePosition,
   indentConfig = DEFAULT_INDENTATION,
+  pendingFocusMode,
+  onClearPendingFocusMode,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -99,6 +105,19 @@ const CellComponent: React.FC<Props> = ({
   // Track if we should focus cell div after blur (e.g., after Escape)
   const focusCellAfterBlurRef = useRef(false);
 
+  // Apply pending focus mode when this cell becomes active
+  useEffect(() => {
+    if (isActive && pendingFocusMode) {
+      if (pendingFocusMode === 'editor') {
+        setFocusState('editor');
+      } else {
+        // Focus cell div for command mode
+        cellRef.current?.focus();
+      }
+      onClearPendingFocusMode?.();
+    }
+  }, [isActive, pendingFocusMode, onClearPendingFocusMode]);
+
   // Handle focus/blur to track focus state
   const handleEditorFocus = useCallback(() => {
     setFocusState('editor');
@@ -118,13 +137,19 @@ const CellComponent: React.FC<Props> = ({
     }
   }, []);
 
-  const handleCellFocus = useCallback(() => {
-    setFocusState('cell');
-    onActivateRef.current(cellIdRef.current);
+  const handleCellFocus = useCallback((e: React.FocusEvent) => {
+    // Only handle if the cell div itself is focused, not a child (like the editor)
+    if (e.target === e.currentTarget) {
+      setFocusState('cell');
+      onActivateRef.current(cellIdRef.current);
+    }
   }, []);
 
-  const handleCellBlur = useCallback(() => {
-    setFocusState('none');
+  const handleCellBlur = useCallback((e: React.FocusEvent) => {
+    // Only handle if focus is leaving the cell div itself
+    if (e.target === e.currentTarget) {
+      setFocusState('none');
+    }
   }, []);
 
   // Handle keyboard shortcuts in the editor - uses refs so callback is stable
@@ -144,12 +169,11 @@ const CellComponent: React.FC<Props> = ({
       return true;
     }
 
-    // Shift+Enter: run and advance to next cell
+    // Shift+Enter: run and advance to next cell (stay in editor mode)
     if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
-      // Blur current editor so focus can move to next cell
       (event.target as HTMLElement)?.blur();
-      onRunAndAdvanceRef.current(cell.id);
+      onRunAndAdvanceRef.current(cell.id, 'editor');
       return true;
     }
 
@@ -303,10 +327,10 @@ const CellComponent: React.FC<Props> = ({
       return;
     }
 
-    // Shift+Enter: run and advance
+    // Shift+Enter: run and advance (stay in cell mode)
     if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault();
-      onRunAndAdvanceRef.current(cell.id);
+      onRunAndAdvanceRef.current(cell.id, 'cell');
       return;
     }
 

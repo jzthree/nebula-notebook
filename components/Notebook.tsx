@@ -533,8 +533,11 @@ export const Notebook: React.FC = () => {
   // Ref for tracking 'dd' vim-style delete
   const lastKeyRef = useRef<{ key: string; time: number } | null>(null);
   const deleteCellRef = useRef<((id: string) => void) | null>(null);
-  const runAndAdvanceRef = useRef<((id: string) => void) | null>(null);
+  const runAndAdvanceRef = useRef<((id: string, focusMode: 'cell' | 'editor') => void) | null>(null);
   const queueExecutionRef = useRef<((id: string) => void) | null>(null);
+  // Track pending focus mode for next cell after Shift+Enter
+  const [pendingFocusMode, setPendingFocusMode] = useState<'cell' | 'editor' | null>(null);
+  const clearPendingFocusMode = useCallback(() => setPendingFocusMode(null), []);
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -559,14 +562,14 @@ export const Notebook: React.FC = () => {
       // Ctrl+Z / Ctrl+Shift+Z are handled by CodeMirror for per-cell undo/redo
       // Notebook-level undo/redo is available via toolbar buttons
 
-      // Shift+Enter and Ctrl+Enter are handled by Cell.tsx when in editor
-      // Only handle here when in command mode (not focused in an input/editor)
+      // Shift+Enter and Ctrl+Enter are handled by Cell.tsx when focused
+      // Only handle here when not focused in an input/editor
       if (!isInput) {
-        // Shift+Enter: Run active cell and advance
+        // Shift+Enter: Run active cell and advance (default to editor mode)
         if (e.key === 'Enter' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
           e.preventDefault();
           if (activeCellId) {
-            runAndAdvanceRef.current?.(activeCellId);
+            runAndAdvanceRef.current?.(activeCellId, 'editor');
           }
           return;
         }
@@ -1133,17 +1136,18 @@ export const Notebook: React.FC = () => {
     }
   };
 
-  const runAndAdvance = (id: string) => {
+  const runAndAdvance = (id: string, focusMode: 'cell' | 'editor') => {
     queueExecution(id);
     const currentIndex = cells.findIndex(c => c.id === id);
+    // Set pending focus mode for the next cell
+    setPendingFocusMode(focusMode);
     if (currentIndex < cells.length - 1) {
       // Move to next cell and scroll to it
-      // Use debounced scroll to handle height changes when outputs are cleared/regenerated
       const nextIndex = currentIndex + 1;
       setActiveCellId(cells[nextIndex].id);
       scrollToCellDebounced(nextIndex);
     } else {
-      // Create new cell at the end (addCell already handles scrolling via setActiveCellId)
+      // Create new cell at the end
       addCell('code', '', currentIndex);
     }
   };
@@ -1764,6 +1768,8 @@ export const Notebook: React.FC = () => {
                   searchHighlight={searchQuery}
                   queuePosition={executionQueue.indexOf(cell.id)}
                   indentConfig={indentConfig}
+                  pendingFocusMode={pendingFocusMode}
+                  onClearPendingFocusMode={clearPendingFocusMode}
                 />
               )}
             />
@@ -1845,51 +1851,39 @@ export const Notebook: React.FC = () => {
               {/* Mode explanation */}
               <div className="bg-slate-50 rounded p-3 text-xs text-slate-600">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="inline-block w-3 h-3 rounded border-2 border-green-500"></span>
-                  <strong>Command mode</strong>: Click cell header to select. Navigate with arrow keys.
+                  <span className="inline-block w-3 h-3 rounded border-2 border-blue-400"></span>
+                  <strong>Editor focused</strong>: Click editor to edit code
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="inline-block w-3 h-3 rounded border-2 border-blue-400"></span>
-                  <strong>Edit mode</strong>: Click editor or press Enter to edit code.
+                  <span className="inline-block w-3 h-3 rounded border-2 border-green-500"></span>
+                  <strong>Cell focused</strong>: Click header or press Escape for cell commands
                 </div>
               </div>
               <div>
-                <h3 className="text-sm font-medium text-slate-600 mb-2">Execution</h3>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Run (works in both modes)</h3>
                 <div className="space-y-1 text-sm">
-                  <div className="flex justify-between"><span className="text-slate-600">Run cell and advance</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Shift + Enter</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Run and advance (preserves mode)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Shift + Enter</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Run cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Ctrl/Cmd + Enter</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Interrupt kernel</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Ctrl/Cmd + C</kbd></div>
                 </div>
               </div>
               <div>
-                <h3 className="text-sm font-medium text-slate-600 mb-2">Command Mode (green border)</h3>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Cell Focused (green border)</h3>
                 <div className="space-y-1 text-sm">
-                  <div className="flex justify-between"><span className="text-slate-600">Navigate up</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">↑</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Navigate down</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">↓</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Enter edit mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Enter</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Navigate cells</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">↑ / ↓</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Edit cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Enter</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Delete cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Delete / Backspace</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Move cell up</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↑</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Move cell down</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↓</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Move cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↑/↓</kbd></div>
                 </div>
               </div>
               <div>
-                <h3 className="text-sm font-medium text-slate-600 mb-2">Edit Mode (blue border)</h3>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Editor Focused (blue border)</h3>
                 <div className="space-y-1 text-sm">
-                  <div className="flex justify-between"><span className="text-slate-600">Exit to command mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Escape</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Exit to cell mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Escape</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Save</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + S</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Undo</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Z</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Redo</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + Z</kbd></div>
                 </div>
               </div>
               <div>
-                <h3 className="text-sm font-medium text-slate-600 mb-2">File</h3>
-                <div className="space-y-1 text-sm">
-                  <div className="flex justify-between"><span className="text-slate-600">Save</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + S</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Find</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + F</kbd></div>
-                </div>
-              </div>
-              <div>
-                <h3 className="text-sm font-medium text-slate-600 mb-2">Multi-Selection</h3>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Selection</h3>
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Select range</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Shift + Click</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Toggle select</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Click</kbd></div>
