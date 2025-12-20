@@ -27,7 +27,11 @@ interface Props {
   value: string;
   onChange: (value: string) => void;
   language: 'python' | 'markdown';
-  onKeyDown?: (event: KeyboardEvent) => boolean; // Return true to prevent default
+  // Direct callbacks for keyboard shortcuts (simpler than synthetic events)
+  onShiftEnter?: () => void;  // Run and advance
+  onModEnter?: () => void;    // Run current cell (Cmd/Ctrl+Enter)
+  onEscape?: () => void;      // Exit edit mode
+  onSave?: () => void;        // Save notebook (Cmd/Ctrl+S)
   onFocus?: () => void;
   onBlur?: () => void;
   placeholder?: string;
@@ -362,7 +366,10 @@ export const CodeEditor: React.FC<Props> = ({
   value,
   onChange,
   language,
-  onKeyDown,
+  onShiftEnter,
+  onModEnter,
+  onEscape,
+  onSave,
   onFocus,
   onBlur,
   placeholder,
@@ -445,90 +452,45 @@ export const CodeEditor: React.FC<Props> = ({
       );
     }
 
-    // Add keymap to intercept shortcuts BEFORE CodeMirror's default handling
-    if (onKeyDown) {
-      exts.push(
-        Prec.highest(
-          keymap.of([
-            {
-              key: 'Shift-Enter',
-              run: () => {
-                const event = new KeyboardEvent('keydown', {
-                  key: 'Enter',
-                  shiftKey: true,
-                  ctrlKey: false,
-                  metaKey: false,
-                  bubbles: true,
-                  cancelable: true,
-                });
-                // Don't blur here - Cell's requestedFocusMode handles focus transition
-                return onKeyDown(event);
-              },
-            },
-            {
-              key: 'Mod-Enter',
-              run: () => {
-                const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
-                const event = new KeyboardEvent('keydown', {
-                  key: 'Enter',
-                  shiftKey: false,
-                  ctrlKey: !isMac,
-                  metaKey: isMac,
-                  bubbles: true,
-                  cancelable: true,
-                });
-                return onKeyDown(event);
-              },
-            },
-            {
-              // Explicit Ctrl-Enter for Mac users who prefer Ctrl over Cmd
-              key: 'Ctrl-Enter',
-              run: () => {
-                const event = new KeyboardEvent('keydown', {
-                  key: 'Enter',
-                  shiftKey: false,
-                  ctrlKey: true,
-                  metaKey: false,
-                  bubbles: true,
-                  cancelable: true,
-                });
-                return onKeyDown(event);
-              },
-            },
-            {
-              key: 'Mod-s',
-              run: () => {
-                const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
-                const event = new KeyboardEvent('keydown', {
-                  key: 's',
-                  shiftKey: false,
-                  ctrlKey: !isMac,
-                  metaKey: isMac,
-                  bubbles: true,
-                  cancelable: true,
-                });
-                return onKeyDown(event);
-              },
-            },
-            {
-              key: 'Escape',
-              run: (view) => {
-                const event = new KeyboardEvent('keydown', {
-                  key: 'Escape',
-                  bubbles: true,
-                  cancelable: true,
-                });
-                const handled = onKeyDown(event);
-                // Blur the editor since synthetic event has no target
-                if (handled) {
-                  view.contentDOM.blur();
-                }
-                return handled;
-              },
-            },
-          ])
-        )
-      );
+    // Add keymap for cell shortcuts - direct callbacks (no synthetic events)
+    const keymapEntries: { key: string; run: (view: EditorView) => boolean }[] = [];
+
+    if (onShiftEnter) {
+      keymapEntries.push({
+        key: 'Shift-Enter',
+        run: () => { onShiftEnter(); return true; },
+      });
+    }
+
+    if (onModEnter) {
+      // Mod-Enter = Cmd on Mac, Ctrl on Windows/Linux
+      keymapEntries.push({
+        key: 'Mod-Enter',
+        run: () => { onModEnter(); return true; },
+      });
+      // Also handle explicit Ctrl-Enter on Mac for users who prefer it
+      keymapEntries.push({
+        key: 'Ctrl-Enter',
+        run: () => { onModEnter(); return true; },
+      });
+    }
+
+    if (onSave) {
+      keymapEntries.push({
+        key: 'Mod-s',
+        run: () => { onSave(); return true; },
+      });
+    }
+
+    if (onEscape) {
+      keymapEntries.push({
+        key: 'Escape',
+        run: (view) => { onEscape(); view.contentDOM.blur(); return true; },
+      });
+    }
+
+    if (keymapEntries.length > 0) {
+      exts.push(Prec.highest(keymap.of(keymapEntries)));
     }
 
     // Add focus/blur handlers
@@ -556,7 +518,7 @@ export const CodeEditor: React.FC<Props> = ({
 
     return exts;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language, onKeyDown, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, currentMatchStart, currentMatchEnd, indentConfig]);
+  }, [language, onShiftEnter, onModEnter, onEscape, onSave, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, currentMatchStart, currentMatchEnd, indentConfig]);
 
   const handleChange = useCallback(
     (val: string) => {

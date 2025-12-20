@@ -156,41 +156,6 @@ const CellComponent: React.FC<Props> = ({
     }
   }, []);
 
-  // Handle keyboard shortcuts in the editor - uses refs so callback is stable
-  const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
-    // Escape: Exit edit mode and enter cell mode
-    // Note: CodeMirror handles the blur, we just set the flag to focus cell div after
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      focusCellAfterBlurRef.current = true; // Focus cell div after blur
-      return true;
-    }
-
-    // Cmd/Ctrl+S: Save
-    if ((event.metaKey || event.ctrlKey) && event.key === 's') {
-      event.preventDefault();
-      onSaveRef.current?.();
-      return true;
-    }
-
-    // Shift+Enter: run and advance to next cell (stay in editor mode)
-    // Note: CodeEditor's keymap handler blurs the view after calling this
-    if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey) {
-      event.preventDefault();
-      onRunAndAdvanceRef.current(cell.id, 'editor');
-      return true;
-    }
-
-    // Ctrl/Cmd+Enter: run current cell only
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
-      event.preventDefault();
-      onRunRef.current(cell.id);
-      return true;
-    }
-
-    return false; // Let CodeMirror handle other keys
-  }, [cell.id]);
-
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim()) return;
     setIsAiGenerating(true);
@@ -492,7 +457,10 @@ const CellComponent: React.FC<Props> = ({
           value={cell.content}
           onChange={(value) => onUpdate(cell.id, value)}
           language={cell.type === 'code' ? 'python' : 'markdown'}
-          onKeyDown={handleEditorKeyDown}
+          onShiftEnter={() => onRunAndAdvanceRef.current(cell.id, 'editor')}
+          onModEnter={() => onRunRef.current(cell.id)}
+          onEscape={() => { focusCellAfterBlurRef.current = true; }}
+          onSave={() => onSaveRef.current?.()}
           onFocus={handleEditorFocus}
           onBlur={handleEditorBlur}
           placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
