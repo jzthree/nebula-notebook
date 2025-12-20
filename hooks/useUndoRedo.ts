@@ -90,7 +90,9 @@ function applyOperation(cells: Cell[], op: Operation): Cell[] {
   switch (op.type) {
     case 'insertCell': {
       const newCells = [...cells];
-      newCells.splice(op.index, 0, op.cell);
+      // Create new object to ensure React memo comparisons detect the change
+      // (important for undo - the stored cell object might be the same reference)
+      newCells.splice(op.index, 0, { ...op.cell });
       return newCells;
     }
     case 'deleteCell': {
