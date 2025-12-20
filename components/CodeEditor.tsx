@@ -358,36 +358,6 @@ function createPythonCompletionSource(allCellsContentRef: React.RefObject<string
   };
 }
 
-// Typing lag measurement extension (disabled - not accurate, doesn't include render time)
-const MEASURE_TYPING_LAG = false;
-let lastKeydownTime = 0;
-
-function createTypingLagExtension() {
-  return EditorView.domEventHandlers({
-    keydown: () => {
-      lastKeydownTime = performance.now();
-      return false; // Don't prevent default
-    },
-  });
-}
-
-function createTypingLagUpdateListener() {
-  return EditorView.updateListener.of((update) => {
-    if (MEASURE_TYPING_LAG && update.docChanged && lastKeydownTime > 0) {
-      const lag = performance.now() - lastKeydownTime;
-      if (lag < 1000) { // Only log reasonable values
-        if (lag > 50) {
-          // Warn when lag exceeds 50ms - likely an extension rebuild issue
-          console.warn(`⚠️ Typing lag: ${lag.toFixed(1)}ms - check if callbacks are stable`);
-        } else {
-          console.log(`⌨️ Typing lag: ${lag.toFixed(1)}ms`);
-        }
-      }
-      lastKeydownTime = 0;
-    }
-  });
-}
-
 export const CodeEditor: React.FC<Props> = ({
   value,
   onChange,
@@ -459,9 +429,6 @@ export const CodeEditor: React.FC<Props> = ({
       // Configure indentation based on detected style
       indentUnit.of(indentStr),
       EditorState.tabSize.of(indentConfig.tabSize),
-      // Typing lag measurement
-      createTypingLagExtension(),
-      createTypingLagUpdateListener(),
     ];
 
     // Add autocompletion for Python - uses ref so no rebuild on content changes
