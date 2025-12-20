@@ -550,19 +550,27 @@ export const Notebook: React.FC = () => {
     const maxAttempts = 20; // ~320ms max wait
 
     const tryFocus = () => {
-      if (cancelled || attempts >= maxAttempts) return;
+      if (cancelled || attempts >= maxAttempts) {
+        setPendingFocus(null);
+        return;
+      }
       attempts++;
 
       const cellEl = document.querySelector(`[data-cell-id="${cellId}"]`) as HTMLElement;
       if (!cellEl) {
-        // Element not yet rendered by Virtuoso, retry
+        // Cell element not yet rendered by Virtuoso, retry
         requestAnimationFrame(tryFocus);
         return;
       }
 
       if (mode === 'editor') {
         const editorEl = cellEl.querySelector('.cm-content') as HTMLElement;
-        editorEl?.focus();
+        if (!editorEl) {
+          // Editor not yet rendered, retry
+          requestAnimationFrame(tryFocus);
+          return;
+        }
+        editorEl.focus();
       } else {
         cellEl.focus();
       }

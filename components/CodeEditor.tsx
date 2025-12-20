@@ -452,7 +452,7 @@ export const CodeEditor: React.FC<Props> = ({
           keymap.of([
             {
               key: 'Shift-Enter',
-              run: () => {
+              run: (view) => {
                 const event = new KeyboardEvent('keydown', {
                   key: 'Enter',
                   shiftKey: true,
@@ -461,7 +461,12 @@ export const CodeEditor: React.FC<Props> = ({
                   bubbles: true,
                   cancelable: true,
                 });
-                return onKeyDown(event);
+                const handled = onKeyDown(event);
+                // Blur so focus can move to next cell's editor
+                if (handled) {
+                  view.contentDOM.blur();
+                }
+                return handled;
               },
             },
             {

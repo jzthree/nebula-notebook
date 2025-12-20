@@ -155,9 +155,9 @@ const CellComponent: React.FC<Props> = ({
     }
 
     // Shift+Enter: run and advance to next cell (stay in editor mode)
+    // Note: CodeEditor's keymap handler blurs the view after calling this
     if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
-      (event.target as HTMLElement)?.blur();
       onRunAndAdvanceRef.current(cell.id, 'editor');
       return true;
     }
