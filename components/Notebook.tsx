@@ -127,8 +127,6 @@ export const Notebook: React.FC = () => {
   } = useUndoRedo([]);  // Start with empty cells
 
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
-  const [showRecoveryBanner, setShowRecoveryBanner] = useState(false);
-  const [recoveryData, setRecoveryData] = useState<{ cells: Cell[]; timestamp: number } | null>(null);
   const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
 
   // Clipboard for cut/copy/paste cells
@@ -262,7 +260,7 @@ export const Notebook: React.FC = () => {
     }
   }, [getFullHistory, lastKnownMtime, resetHistory, currentKernel]);
 
-  const { status: autosaveStatus, saveNow, getBackup, clearBackup } = useAutosave({
+  const { status: autosaveStatus, saveNow } = useAutosave({
     fileId: currentFileId,
     cells,
     onSave: performSaveToFile,
@@ -647,27 +645,6 @@ export const Notebook: React.FC = () => {
     const detectedIndent = detectIndentationFromCells(content);
     setIndentConfig(detectedIndent);
 
-    // Check for crash recovery
-    const backup = getBackup(id);
-    if (backup) {
-      const backupAge = Date.now() - backup.timestamp;
-      const oneHour = 60 * 60 * 1000;
-
-      // If backup is less than 1 hour old and different from loaded content
-      if (backupAge < oneHour) {
-        const backupContent = JSON.stringify(backup.cells.map(c => ({ id: c.id, type: c.type, content: c.content })));
-        const loadedContent = JSON.stringify(content.map(c => ({ id: c.id, type: c.type, content: c.content })));
-
-        if (backupContent !== loadedContent) {
-          setRecoveryData(backup);
-          setShowRecoveryBanner(true);
-        }
-      } else {
-        // Clear old backups
-        clearBackup(id);
-      }
-    }
-
     resetHistory(content);
 
     // Set UI state immediately - don't block on history loading
@@ -719,24 +696,6 @@ export const Notebook: React.FC = () => {
       console.error('Failed to get/create kernel for file:', error);
       setKernelStatus('disconnected');
     }
-  };
-
-  // Handle recovery actions
-  const handleRecoverChanges = () => {
-    if (recoveryData && currentFileId) {
-      resetHistory(recoveryData.cells);
-      clearBackup(currentFileId);
-    }
-    setShowRecoveryBanner(false);
-    setRecoveryData(null);
-  };
-
-  const handleDiscardRecovery = () => {
-    if (currentFileId) {
-      clearBackup(currentFileId);
-    }
-    setShowRecoveryBanner(false);
-    setRecoveryData(null);
   };
 
   const loadFile = async (id: string) => {
@@ -1253,39 +1212,6 @@ export const Notebook: React.FC = () => {
                   <span className="block text-xs font-normal text-slate-500 mt-0.5">
                     Discard your changes and reload from server
                   </span>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Recovery Banner */}
-        {showRecoveryBanner && recoveryData && (
-          <div className="flex-none bg-amber-50 border-b border-amber-200 px-4 py-3 z-30">
-            <div className="max-w-5xl mx-auto flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-amber-800">
-                    Unsaved changes recovered
-                  </p>
-                  <p className="text-xs text-amber-600">
-                    Found unsaved changes from {formatLastSaved(recoveryData.timestamp)}. Would you like to restore them?
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <button
-                  onClick={handleDiscardRecovery}
-                  className="px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 rounded transition-colors"
-                >
-                  Discard
-                </button>
-                <button
-                  onClick={handleRecoverChanges}
-                  className="px-3 py-1.5 text-xs font-medium bg-amber-600 text-white hover:bg-amber-700 rounded transition-colors"
-                >
-                  Restore Changes
                 </button>
               </div>
             </div>

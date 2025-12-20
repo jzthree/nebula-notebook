@@ -5,8 +5,7 @@ import { Cell } from '../types';
 const MIN_AUTOSAVE_DELAY = 1000;   // 1 second minimum
 const MAX_AUTOSAVE_DELAY = 60000;  // 60 seconds maximum
 
-const BACKUP_KEY_PREFIX = 'nebula-backup-';
-const BACKUP_TIMESTAMP_KEY = 'nebula-backup-timestamp-';
+// Note: localStorage backup removed - quota too small for notebooks, and we save to server anyway
 
 // Calculate autosave delay based on serialized content size
 // Small notebooks (<100KB): 1-2 seconds
@@ -73,47 +72,6 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
     })));
   }, []);
 
-  // Save to localStorage as backup
-  const saveBackup = useCallback((fileId: string, cells: Cell[]) => {
-    try {
-      const backupKey = BACKUP_KEY_PREFIX + fileId;
-      const timestampKey = BACKUP_TIMESTAMP_KEY + fileId;
-      localStorage.setItem(backupKey, JSON.stringify(cells));
-      localStorage.setItem(timestampKey, Date.now().toString());
-    } catch (e) {
-      console.warn('Failed to save backup to localStorage:', e);
-    }
-  }, []);
-
-  // Get backup from localStorage
-  const getBackup = useCallback((fileId: string): { cells: Cell[]; timestamp: number } | null => {
-    try {
-      const backupKey = BACKUP_KEY_PREFIX + fileId;
-      const timestampKey = BACKUP_TIMESTAMP_KEY + fileId;
-      const backup = localStorage.getItem(backupKey);
-      const timestamp = localStorage.getItem(timestampKey);
-
-      if (backup && timestamp) {
-        return {
-          cells: JSON.parse(backup),
-          timestamp: parseInt(timestamp, 10),
-        };
-      }
-    } catch (e) {
-      console.warn('Failed to read backup from localStorage:', e);
-    }
-    return null;
-  }, []);
-
-  // Clear backup after successful save
-  const clearBackup = useCallback((fileId: string) => {
-    try {
-      localStorage.removeItem(BACKUP_KEY_PREFIX + fileId);
-      localStorage.removeItem(BACKUP_TIMESTAMP_KEY + fileId);
-    } catch (e) {
-      // Ignore
-    }
-  }, []);
 
   // Check if there are unsaved changes
   const hasUnsavedChanges = useCallback(() => {
@@ -141,19 +99,13 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
     setStatus({ status: 'saving', lastSaved: status.lastSaved });
 
     try {
-      // Save backup first (in case main save fails)
-      saveBackup(fileId, cells);
-
-      // Perform main save
+      // Perform save to server
       await onSave(fileId, cells);
 
       // Update tracking
       lastSavedContentRef.current = currentContent;
       const now = Date.now();
       setStatus({ status: 'saved', lastSaved: now });
-
-      // Clear backup after successful save
-      clearBackup(fileId);
     } catch (error) {
       console.error('Autosave failed:', error);
       setStatus({ status: 'error', lastSaved: status.lastSaved });
@@ -167,7 +119,7 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
         setTimeout(() => performSave(), MIN_AUTOSAVE_DELAY);
       }
     }
-  }, [fileId, cells, enabled, onSave, serializeCells, saveBackup, clearBackup, status.lastSaved]);
+  }, [fileId, cells, enabled, onSave, serializeCells, status.lastSaved]);
 
   // Track cells reference to detect changes without expensive serialization
   const cellsRef = useRef(cells);
@@ -276,8 +228,6 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
     status,
     saveNow,
     hasUnsavedChanges,
-    getBackup,
-    clearBackup,
   };
 }
 

@@ -77,8 +77,7 @@ vi.mock('../../hooks/useAutosave', () => ({
   useAutosave: vi.fn().mockReturnValue({
     status: { status: 'saved', lastSaved: Date.now() },
     saveNow: vi.fn().mockResolvedValue(undefined),
-    getBackup: vi.fn().mockReturnValue(null),
-    clearBackup: vi.fn(),
+    hasUnsavedChanges: vi.fn().mockReturnValue(false),
   }),
   formatLastSaved: vi.fn().mockReturnValue('just now'),
 }));
@@ -456,8 +455,7 @@ describe('Notebook', () => {
       vi.mocked(useAutosave).mockReturnValue({
         status: { status: 'saved', lastSaved: Date.now() },
         saveNow: mockSaveNow,
-        getBackup: vi.fn().mockReturnValue(null),
-        clearBackup: vi.fn(),
+        hasUnsavedChanges: vi.fn().mockReturnValue(false),
       });
 
       renderNotebook();
@@ -481,8 +479,7 @@ describe('Notebook', () => {
       vi.mocked(useAutosave).mockReturnValue({
         status: { status: 'saved', lastSaved: Date.now() },
         saveNow: mockSaveNow,
-        getBackup: vi.fn().mockReturnValue(null),
-        clearBackup: vi.fn(),
+        hasUnsavedChanges: vi.fn().mockReturnValue(false),
       });
 
       renderNotebook();
