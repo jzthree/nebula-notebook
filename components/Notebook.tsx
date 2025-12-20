@@ -951,6 +951,7 @@ export const Notebook: React.FC = () => {
 
     if (event.shiftKey && lastClickedCellIdRef.current) {
       // Shift+Click: range select from last clicked to current
+      event.preventDefault(); // Prevent browser text selection
       const lastIndex = cells.findIndex(c => c.id === lastClickedCellIdRef.current);
       if (lastIndex !== -1 && clickedIndex !== -1) {
         const start = Math.min(lastIndex, clickedIndex);
@@ -962,6 +963,7 @@ export const Notebook: React.FC = () => {
         setSelectedCellIds(newSelection);
       }
     } else if (event.metaKey || event.ctrlKey) {
+      event.preventDefault(); // Prevent browser default
       // Cmd/Ctrl+Click: toggle selection
       setSelectedCellIds(prev => {
         const newSet = new Set(prev);
@@ -1795,11 +1797,11 @@ export const Notebook: React.FC = () => {
               <div className="bg-slate-50 rounded p-3 text-xs text-slate-600">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="inline-block w-3 h-3 rounded border-2 border-blue-400"></span>
-                  <strong>Editor focused</strong>: Click editor to edit code
+                  <strong>Edit mode</strong>: Click editor to edit code
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="inline-block w-3 h-3 rounded border-2 border-green-500"></span>
-                  <strong>Cell focused</strong>: Click header or press Escape for cell commands
+                  <strong>Cell mode</strong>: Click header or press Escape for cell commands
                 </div>
               </div>
               <div>
@@ -1810,16 +1812,16 @@ export const Notebook: React.FC = () => {
                 </div>
               </div>
               <div>
-                <h3 className="text-sm font-medium text-slate-600 mb-2">Cell Focused (green border)</h3>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Cell Mode (green border)</h3>
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Navigate cells</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">↑ / ↓</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Edit cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Enter</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Enter edit mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Enter</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Delete cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Delete / Backspace</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Move cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↑/↓</kbd></div>
                 </div>
               </div>
               <div>
-                <h3 className="text-sm font-medium text-slate-600 mb-2">Editor Focused (blue border)</h3>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Edit Mode (blue border)</h3>
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Exit to cell mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Escape</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Save</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + S</kbd></div>

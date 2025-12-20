@@ -511,13 +511,18 @@ export const CodeEditor: React.FC<Props> = ({
             },
             {
               key: 'Escape',
-              run: () => {
+              run: (view) => {
                 const event = new KeyboardEvent('keydown', {
                   key: 'Escape',
                   bubbles: true,
                   cancelable: true,
                 });
-                return onKeyDown(event);
+                const handled = onKeyDown(event);
+                // Blur the editor since synthetic event has no target
+                if (handled) {
+                  view.contentDOM.blur();
+                }
+                return handled;
               },
             },
           ])

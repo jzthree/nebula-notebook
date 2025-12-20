@@ -154,11 +154,11 @@ const CellComponent: React.FC<Props> = ({
 
   // Handle keyboard shortcuts in the editor - uses refs so callback is stable
   const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
-    // Escape: Exit edit mode (blur the editor) and enter command mode
+    // Escape: Exit edit mode and enter cell mode
+    // Note: CodeMirror handles the blur, we just set the flag to focus cell div after
     if (event.key === 'Escape') {
       event.preventDefault();
       focusCellAfterBlurRef.current = true; // Focus cell div after blur
-      (event.target as HTMLElement)?.blur();
       return true;
     }
 
