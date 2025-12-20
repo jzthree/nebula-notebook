@@ -376,7 +376,12 @@ function createTypingLagUpdateListener() {
     if (MEASURE_TYPING_LAG && update.docChanged && lastKeydownTime > 0) {
       const lag = performance.now() - lastKeydownTime;
       if (lag < 1000) { // Only log reasonable values
-        console.log(`⌨️ Typing lag: ${lag.toFixed(1)}ms`);
+        if (lag > 50) {
+          // Warn when lag exceeds 50ms - likely an extension rebuild issue
+          console.warn(`⚠️ Typing lag: ${lag.toFixed(1)}ms - check if callbacks are stable`);
+        } else {
+          console.log(`⌨️ Typing lag: ${lag.toFixed(1)}ms`);
+        }
       }
       lastKeydownTime = 0;
     }
@@ -439,6 +444,10 @@ export const CodeEditor: React.FC<Props> = ({
   const currentMatchStart = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.startIndex : undefined;
   const currentMatchEnd = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.endIndex : undefined;
 
+  // ⚠️ PERFORMANCE CRITICAL: Extensions rebuild when dependencies change.
+  // All callbacks (onKeyDown, onFocus, onBlur) MUST be stable - use refs in Cell.tsx
+  // to avoid recreating them on every keystroke. If you see typing lag, check if
+  // any callback dependency is changing on each render (e.g., cell.content).
   const extensions = useMemo(() => {
     // Create indent string based on config
     const indentStr = indentConfig.useTabs ? '\t' : ' '.repeat(indentConfig.indentSize);

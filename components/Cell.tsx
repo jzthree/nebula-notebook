@@ -65,8 +65,10 @@ const CellComponent: React.FC<Props> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
 
-  // Use refs for callbacks and values to avoid recreating handlers on every render
-  // This prevents CodeMirror extensions from being recreated on every keystroke
+  // ⚠️ PERFORMANCE CRITICAL: All callbacks passed to CodeEditor MUST be stable.
+  // CodeEditor rebuilds extensions when onKeyDown/onFocus/onBlur change.
+  // Use refs for any value that changes frequently (cell.content, callbacks).
+  // If typing becomes laggy, check if any handler dependency changes per-keystroke.
   const allCellsRef = useRef(allCells);
   const onRunRef = useRef(onRun);
   const onRunAndAdvanceRef = useRef(onRunAndAdvance);
