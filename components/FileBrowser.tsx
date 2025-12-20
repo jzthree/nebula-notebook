@@ -19,7 +19,8 @@ import {
   RefreshCw,
   ExternalLink,
   ArrowDownAZ,
-  Clock
+  Clock,
+  Download
 } from 'lucide-react';
 import {
   listDirectory,
@@ -27,6 +28,7 @@ import {
   createNotebook,
   deleteFile,
   renameFile,
+  downloadFile,
   FileItem,
   DirectoryListing
 } from '../services/fileService';
@@ -204,6 +206,16 @@ export const FileBrowser: React.FC<Props> = ({
       if (window.innerWidth < 1024) onClose();
     } else {
       toast(`Preview for ${item.extension} files is not implemented yet.`, 'info');
+    }
+  };
+
+  const handleDownload = async (e: React.MouseEvent, item: FileItem) => {
+    e.stopPropagation();
+    try {
+      await downloadFile(item.path, item.name);
+      toast(`Downloaded ${item.name}`, 'success');
+    } catch (err: any) {
+      toast(err.message || 'Failed to download file', 'error');
     }
   };
 
@@ -444,6 +456,14 @@ export const FileBrowser: React.FC<Props> = ({
                         <div className="w-[1px] bg-slate-200"></div>
                       </>
                     )}
+                    <button
+                      onClick={(e) => handleDownload(e, item)}
+                      className="p-1 text-slate-400 hover:text-purple-600 hover:bg-purple-50"
+                      title="Download"
+                    >
+                      <Download className="w-3 h-3" />
+                    </button>
+                    <div className="w-[1px] bg-slate-200"></div>
                     <button
                       onClick={(e) => startEdit(e, item)}
                       className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50"

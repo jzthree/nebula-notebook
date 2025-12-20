@@ -106,6 +106,33 @@ export const readFile = async (path: string): Promise<{ path: string; type: stri
 };
 
 /**
+ * Download a file to the user's computer
+ */
+export const downloadFile = async (path: string, filename: string): Promise<void> => {
+  const fileData = await readFile(path);
+
+  let blob: Blob;
+  if (fileData.type === 'notebook') {
+    // For notebooks, stringify the JSON content
+    blob = new Blob([JSON.stringify(fileData.content, null, 2)], { type: 'application/json' });
+  } else if (fileData.type === 'text') {
+    blob = new Blob([fileData.content], { type: 'text/plain' });
+  } else {
+    // For binary files, the content might be base64 encoded
+    blob = new Blob([fileData.content], { type: 'application/octet-stream' });
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+/**
  * Write content to a file
  */
 export const writeFile = async (path: string, content: any, fileType: string = 'text'): Promise<void> => {

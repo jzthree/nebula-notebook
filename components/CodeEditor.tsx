@@ -4,6 +4,7 @@ import { python } from '@codemirror/lang-python';
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate } from '@codemirror/view';
 import { Prec, EditorState } from '@codemirror/state';
+import { keymap } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
 import { indentUnit } from '@codemirror/language';
 import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
@@ -306,14 +307,17 @@ const dataScienceCompletions = [
   { label: 'seaborn', detail: 'as sns' },
 ];
 
-// Create completion source for Python
-function createPythonCompletionSource(allCellsContent: string[]) {
+// Create completion source for Python - uses ref to avoid extension rebuilds
+function createPythonCompletionSource(allCellsContentRef: React.RefObject<string[]>) {
   return (context: CompletionContext): CompletionResult | null => {
     // Get the word before cursor
     const word = context.matchBefore(/[a-zA-Z_][a-zA-Z0-9_]*/);
 
     // Don't show completions if we're not typing a word and not explicitly requested
     if (!word && !context.explicit) return null;
+
+    // Read current content from ref (fresh on each completion request)
+    const allCellsContent = allCellsContentRef.current || [];
 
     // Extract identifiers from all cells
     const identifiers = new Set<string>();
@@ -354,6 +358,31 @@ function createPythonCompletionSource(allCellsContent: string[]) {
   };
 }
 
+// Typing lag measurement extension
+const MEASURE_TYPING_LAG = true; // Set to false to disable logging
+let lastKeydownTime = 0;
+
+function createTypingLagExtension() {
+  return EditorView.domEventHandlers({
+    keydown: () => {
+      lastKeydownTime = performance.now();
+      return false; // Don't prevent default
+    },
+  });
+}
+
+function createTypingLagUpdateListener() {
+  return EditorView.updateListener.of((update) => {
+    if (MEASURE_TYPING_LAG && update.docChanged && lastKeydownTime > 0) {
+      const lag = performance.now() - lastKeydownTime;
+      if (lag < 1000) { // Only log reasonable values
+        console.log(`⌨️ Typing lag: ${lag.toFixed(1)}ms`);
+      }
+      lastKeydownTime = 0;
+    }
+  });
+}
+
 export const CodeEditor: React.FC<Props> = ({
   value,
   onChange,
@@ -370,6 +399,10 @@ export const CodeEditor: React.FC<Props> = ({
   allCellsContent = [],
 }) => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
+
+  // Use ref for allCellsContent to avoid extension rebuilds on every keystroke
+  const allCellsContentRef = useRef<string[]>(allCellsContent);
+  allCellsContentRef.current = allCellsContent; // Update ref on each render
 
   // Focus editor when shouldFocus becomes true
   useEffect(() => {
@@ -406,9 +439,6 @@ export const CodeEditor: React.FC<Props> = ({
   const currentMatchStart = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.startIndex : undefined;
   const currentMatchEnd = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.endIndex : undefined;
 
-  // Memoize allCellsContent to avoid unnecessary extension rebuilds
-  const allCellsContentKey = allCellsContent.join('\n---\n');
-
   const extensions = useMemo(() => {
     // Create indent string based on config
     const indentStr = indentConfig.useTabs ? '\t' : ' '.repeat(indentConfig.indentSize);
@@ -420,26 +450,67 @@ export const CodeEditor: React.FC<Props> = ({
       // Configure indentation based on detected style
       indentUnit.of(indentStr),
       EditorState.tabSize.of(indentConfig.tabSize),
+      // Typing lag measurement
+      createTypingLagExtension(),
+      createTypingLagUpdateListener(),
     ];
 
-    // Add autocompletion for Python
+    // Add autocompletion for Python - uses ref so no rebuild on content changes
     if (language === 'python') {
       exts.push(
         autocompletion({
-          override: [createPythonCompletionSource(allCellsContent)],
+          override: [createPythonCompletionSource(allCellsContentRef)],
           activateOnTyping: true,
           defaultKeymap: true,
         })
       );
     }
 
-    // Add keyboard and focus handlers - use highest precedence to override CodeMirror defaults
-    const hasHandlers = onKeyDown || onFocus || onBlur;
-    if (hasHandlers) {
+    // Add keymap to intercept Shift+Enter and Ctrl/Cmd+Enter BEFORE CodeMirror's default newline handling
+    if (onKeyDown) {
+      exts.push(
+        Prec.highest(
+          keymap.of([
+            {
+              key: 'Shift-Enter',
+              run: (view) => {
+                // Create a synthetic keyboard event to pass to our handler
+                const event = new KeyboardEvent('keydown', {
+                  key: 'Enter',
+                  shiftKey: true,
+                  ctrlKey: false,
+                  metaKey: false,
+                  bubbles: true,
+                  cancelable: true,
+                });
+                return onKeyDown(event);
+              },
+            },
+            {
+              key: 'Mod-Enter',
+              run: (view) => {
+                const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+                const event = new KeyboardEvent('keydown', {
+                  key: 'Enter',
+                  shiftKey: false,
+                  ctrlKey: !isMac,
+                  metaKey: isMac,
+                  bubbles: true,
+                  cancelable: true,
+                });
+                return onKeyDown(event);
+              },
+            },
+          ])
+        )
+      );
+    }
+
+    // Add focus/blur handlers
+    if (onFocus || onBlur) {
       exts.push(
         Prec.highest(
           EditorView.domEventHandlers({
-            keydown: onKeyDown ? (event) => onKeyDown(event) : undefined,
             focus: onFocus ? () => { onFocus(); return false; } : undefined,
             blur: onBlur ? () => { onBlur(); return false; } : undefined,
           })
@@ -460,7 +531,7 @@ export const CodeEditor: React.FC<Props> = ({
 
     return exts;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language, onKeyDown, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, currentMatchStart, currentMatchEnd, indentConfig, allCellsContentKey]);
+  }, [language, onKeyDown, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, currentMatchStart, currentMatchEnd, indentConfig]);
 
   const handleChange = useCallback(
     (val: string) => {
