@@ -32,7 +32,8 @@ interface Props {
   onModEnter?: () => void;    // Run current cell (Cmd/Ctrl+Enter)
   onEscape?: () => void;      // Exit edit mode
   onSave?: () => void;        // Save notebook (Cmd/Ctrl+S)
-  isSearchOpen?: boolean;     // When true, let Escape propagate to close search
+  isSearchOpen?: boolean;     // When true, Escape closes search instead of exiting edit mode
+  onCloseSearch?: () => void; // Close search bar (called when Escape pressed with search open)
   onFocus?: () => void;
   onBlur?: () => void;
   placeholder?: string;
@@ -372,6 +373,7 @@ export const CodeEditor: React.FC<Props> = ({
   onEscape,
   onSave,
   isSearchOpen = false,
+  onCloseSearch,
   onFocus,
   onBlur,
   placeholder,
@@ -484,8 +486,13 @@ export const CodeEditor: React.FC<Props> = ({
       });
     }
 
-    // Only handle Escape when search is closed - otherwise let it propagate to close search
-    if (onEscape && !isSearchOpen) {
+    // Escape: close search if open, otherwise exit edit mode
+    if (isSearchOpen && onCloseSearch) {
+      keymapEntries.push({
+        key: 'Escape',
+        run: () => { onCloseSearch(); return true; },
+      });
+    } else if (onEscape && !isSearchOpen) {
       keymapEntries.push({
         key: 'Escape',
         run: (view) => { onEscape(); view.contentDOM.blur(); return true; },
@@ -521,7 +528,7 @@ export const CodeEditor: React.FC<Props> = ({
 
     return exts;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language, onShiftEnter, onModEnter, onEscape, onSave, isSearchOpen, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, currentMatchStart, currentMatchEnd, indentConfig]);
+  }, [language, onShiftEnter, onModEnter, onEscape, onSave, isSearchOpen, onCloseSearch, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, currentMatchStart, currentMatchEnd, indentConfig]);
 
   const handleChange = useCallback(
     (val: string) => {

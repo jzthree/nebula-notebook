@@ -42,6 +42,7 @@ interface Props {
   requestedFocusMode?: 'cell' | 'editor' | null; // Focus mode requested by Notebook
   onFocusModeApplied?: () => void; // Callback when focus mode has been applied
   isSearchOpen?: boolean; // When true, Escape closes search instead of exiting edit mode
+  onCloseSearch?: () => void; // Close search bar
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -70,6 +71,7 @@ const CellComponent: React.FC<Props> = ({
   requestedFocusMode,
   onFocusModeApplied,
   isSearchOpen = false,
+  onCloseSearch,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -464,6 +466,7 @@ const CellComponent: React.FC<Props> = ({
           onEscape={() => { focusCellAfterBlurRef.current = true; }}
           onSave={() => onSaveRef.current?.()}
           isSearchOpen={isSearchOpen}
+          onCloseSearch={onCloseSearch}
           onFocus={handleEditorFocus}
           onBlur={handleEditorBlur}
           placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}

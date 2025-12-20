@@ -1742,6 +1742,7 @@ export const Notebook: React.FC = () => {
                   requestedFocusMode={pendingFocus?.cellId === cell.id ? pendingFocus.mode : null}
                   onFocusModeApplied={clearPendingFocus}
                   isSearchOpen={isSearchOpen}
+                  onCloseSearch={handleSearchClose}
                 />
               )}
             />
