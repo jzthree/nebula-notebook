@@ -442,15 +442,14 @@ export const CodeEditor: React.FC<Props> = ({
       );
     }
 
-    // Add keymap to intercept Shift+Enter and Ctrl/Cmd+Enter BEFORE CodeMirror's default newline handling
+    // Add keymap to intercept shortcuts BEFORE CodeMirror's default handling
     if (onKeyDown) {
       exts.push(
         Prec.highest(
           keymap.of([
             {
               key: 'Shift-Enter',
-              run: (view) => {
-                // Create a synthetic keyboard event to pass to our handler
+              run: () => {
                 const event = new KeyboardEvent('keydown', {
                   key: 'Enter',
                   shiftKey: true,
@@ -464,13 +463,39 @@ export const CodeEditor: React.FC<Props> = ({
             },
             {
               key: 'Mod-Enter',
-              run: (view) => {
+              run: () => {
                 const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
                 const event = new KeyboardEvent('keydown', {
                   key: 'Enter',
                   shiftKey: false,
                   ctrlKey: !isMac,
                   metaKey: isMac,
+                  bubbles: true,
+                  cancelable: true,
+                });
+                return onKeyDown(event);
+              },
+            },
+            {
+              key: 'Mod-s',
+              run: () => {
+                const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+                const event = new KeyboardEvent('keydown', {
+                  key: 's',
+                  shiftKey: false,
+                  ctrlKey: !isMac,
+                  metaKey: isMac,
+                  bubbles: true,
+                  cancelable: true,
+                });
+                return onKeyDown(event);
+              },
+            },
+            {
+              key: 'Escape',
+              run: () => {
+                const event = new KeyboardEvent('keydown', {
+                  key: 'Escape',
                   bubbles: true,
                   cancelable: true,
                 });
