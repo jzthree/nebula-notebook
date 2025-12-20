@@ -416,10 +416,12 @@ class FilesystemService:
 
                 elif output_type == "error":
                     traceback = output.get("traceback", [])
+                    # Jupyter traceback lines often end with \n, so just concatenate them
+                    # (don't add extra \n between lines)
                     outputs.append({
                         "id": f"output-{i}-{len(outputs)}",
                         "type": "error",
-                        "content": "\n".join(traceback),
+                        "content": "".join(traceback),
                         "timestamp": datetime.now().timestamp() * 1000
                     })
 
