@@ -535,52 +535,9 @@ export const Notebook: React.FC = () => {
   const deleteCellRef = useRef<((id: string) => void) | null>(null);
   const runAndAdvanceRef = useRef<((id: string, focusMode: 'cell' | 'editor') => void) | null>(null);
   const queueExecutionRef = useRef<((id: string) => void) | null>(null);
-  // Track pending focus for next cell (handles virtualization by polling for DOM element)
+  // Track pending focus for next cell - Cell component handles the actual focusing
   const [pendingFocus, setPendingFocus] = useState<{ cellId: string; mode: 'cell' | 'editor' } | null>(null);
-  const pendingFocusRef = useRef(pendingFocus);
-  pendingFocusRef.current = pendingFocus;
-
-  // Effect to handle pending focus - polls for DOM element to handle virtualization delay
-  useEffect(() => {
-    if (!pendingFocus) return;
-
-    const { cellId, mode } = pendingFocus;
-    let cancelled = false;
-    let attempts = 0;
-    const maxAttempts = 20; // ~320ms max wait
-
-    const tryFocus = () => {
-      if (cancelled || attempts >= maxAttempts) {
-        setPendingFocus(null);
-        return;
-      }
-      attempts++;
-
-      const cellEl = document.querySelector(`[data-cell-id="${cellId}"]`) as HTMLElement;
-      if (!cellEl) {
-        // Cell element not yet rendered by Virtuoso, retry
-        requestAnimationFrame(tryFocus);
-        return;
-      }
-
-      if (mode === 'editor') {
-        const editorEl = cellEl.querySelector('.cm-content') as HTMLElement;
-        if (!editorEl) {
-          // Editor not yet rendered, retry
-          requestAnimationFrame(tryFocus);
-          return;
-        }
-        editorEl.focus();
-      } else {
-        cellEl.focus();
-      }
-      setPendingFocus(null);
-    };
-
-    requestAnimationFrame(tryFocus);
-
-    return () => { cancelled = true; };
-  }, [pendingFocus]);
+  const clearPendingFocus = useCallback(() => setPendingFocus(null), []);
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -1782,6 +1739,8 @@ export const Notebook: React.FC = () => {
                   searchHighlight={searchQuery}
                   queuePosition={executionQueue.indexOf(cell.id)}
                   indentConfig={indentConfig}
+                  requestedFocusMode={pendingFocus?.cellId === cell.id ? pendingFocus.mode : null}
+                  onFocusModeApplied={clearPendingFocus}
                 />
               )}
             />

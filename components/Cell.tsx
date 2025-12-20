@@ -39,6 +39,8 @@ interface Props {
   searchHighlight?: SearchHighlight | null;
   queuePosition?: number; // Position in execution queue (-1 or undefined = not queued)
   indentConfig?: IndentationConfig; // Detected indentation configuration
+  requestedFocusMode?: 'cell' | 'editor' | null; // Focus mode requested by Notebook
+  onFocusModeApplied?: () => void; // Callback when focus mode has been applied
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -64,6 +66,8 @@ const CellComponent: React.FC<Props> = ({
   searchHighlight,
   queuePosition,
   indentConfig = DEFAULT_INDENTATION,
+  requestedFocusMode,
+  onFocusModeApplied,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -102,6 +106,17 @@ const CellComponent: React.FC<Props> = ({
   const cellRef = useRef<HTMLDivElement>(null);
   // Track if we should focus cell div after blur (e.g., after Escape)
   const focusCellAfterBlurRef = useRef(false);
+
+  // Apply requested focus mode from Notebook (handles virtualization properly)
+  useEffect(() => {
+    if (requestedFocusMode === 'editor') {
+      setFocusState('editor');
+      onFocusModeApplied?.();
+    } else if (requestedFocusMode === 'cell') {
+      cellRef.current?.focus();
+      onFocusModeApplied?.();
+    }
+  }, [requestedFocusMode, onFocusModeApplied]);
 
   // Handle focus/blur to track focus state
   const handleEditorFocus = useCallback(() => {
@@ -507,6 +522,7 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     prevProps.isHighlighted === nextProps.isHighlighted &&
     prevProps.searchHighlight === nextProps.searchHighlight &&
     prevProps.queuePosition === nextProps.queuePosition &&
-    prevProps.indentConfig === nextProps.indentConfig
+    prevProps.indentConfig === nextProps.indentConfig &&
+    prevProps.requestedFocusMode === nextProps.requestedFocusMode
   );
 });
