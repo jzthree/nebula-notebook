@@ -382,11 +382,14 @@ export const CodeEditor: React.FC<Props> = ({
   // Focus editor when shouldFocus becomes true
   useEffect(() => {
     if (shouldFocus) {
-      // Don't steal focus from other inputs (e.g., search bar, dialogs)
+      // Don't steal focus from non-CodeMirror inputs (e.g., search bar, dialogs)
       const activeElement = document.activeElement;
-      const isOtherInputFocused = activeElement instanceof HTMLInputElement ||
+      const isCodeMirrorEditor = activeElement?.closest('.cm-editor') !== null;
+      const isOtherInputFocused = (
+        activeElement instanceof HTMLInputElement ||
         activeElement instanceof HTMLTextAreaElement ||
-        activeElement?.getAttribute('role') === 'textbox';
+        activeElement?.getAttribute('role') === 'textbox'
+      ) && !isCodeMirrorEditor;
 
       if (isOtherInputFocused) {
         return; // Don't steal focus from other inputs

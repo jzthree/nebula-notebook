@@ -30,6 +30,7 @@ interface Props {
   onMove: (id: string, direction: 'up' | 'down') => void;
   onChangeType: (id: string, type: CellType) => void;
   onClick: (id: string, event: React.MouseEvent) => void;
+  onActivate: (id: string) => void; // Set as active cell without multi-select logic
   onAddCell: (afterIndex: number) => void;
   onSave?: () => void;
   searchHighlight?: SearchHighlight | null;
@@ -53,6 +54,7 @@ const CellComponent: React.FC<Props> = ({
   onMove,
   onChangeType,
   onClick,
+  onActivate,
   onAddCell,
   onSave,
   searchHighlight,
@@ -76,6 +78,7 @@ const CellComponent: React.FC<Props> = ({
   const onRunAndAdvanceRef = useRef(onRunAndAdvance);
   const onSaveRef = useRef(onSave);
   const onFlushRef = useRef(onFlush);
+  const onActivateRef = useRef(onActivate);
   const cellIdRef = useRef(cell.id);
   const cellContentRef = useRef(cell.content);
 
@@ -85,6 +88,7 @@ const CellComponent: React.FC<Props> = ({
     onRunAndAdvanceRef.current = onRunAndAdvance;
     onSaveRef.current = onSave;
     onFlushRef.current = onFlush;
+    onActivateRef.current = onActivate;
     cellIdRef.current = cell.id;
     cellContentRef.current = cell.content;
   });
@@ -92,6 +96,9 @@ const CellComponent: React.FC<Props> = ({
   // Handle focus/blur to track edit mode
   const handleEditorFocus = useCallback(() => {
     setIsEditing(true);
+    // Ensure this cell becomes active when editor is focused
+    // This keeps active cell in sync with editor focus
+    onActivateRef.current(cellIdRef.current);
   }, []);
 
   const handleEditorBlur = useCallback(() => {
