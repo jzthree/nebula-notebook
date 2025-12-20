@@ -29,6 +29,7 @@ import { KernelManager } from './KernelManager';
 import { NotebookSearch } from './NotebookSearch';
 import { NotebookBreadcrumb } from './NotebookBreadcrumb';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
+import { useRecoveryBanner } from '../hooks/useRecoveryBanner';
 import { useNotification } from './NotificationSystem';
 import { detectIndentationFromCells, IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 import { getNotebookAvatar, updateFavicon, resetFavicon } from '../utils/notebookAvatar';
@@ -127,9 +128,16 @@ export const Notebook: React.FC = () => {
   } = useUndoRedo([]);  // Start with empty cells
 
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
-  const [showRecoveryBanner, setShowRecoveryBanner] = useState(false);
-  const [recoveryData, setRecoveryData] = useState<{ cells: Cell[]; timestamp: number } | null>(null);
   const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
+
+  // Recovery banner hook - manages crash recovery UI state
+  const {
+    showBanner: showRecoveryBanner,
+    recoveryData,
+    checkForRecovery,
+    recoverChanges,
+    discardRecovery,
+  } = useRecoveryBanner(currentFileId, resetHistory);
 
   // Clipboard for cut/copy/paste cells
   const [cellClipboard, setCellClipboard] = useState<{ cell: Cell; isCut: boolean } | null>(null);
@@ -262,7 +270,7 @@ export const Notebook: React.FC = () => {
     }
   }, [getFullHistory, lastKnownMtime, resetHistory, currentKernel]);
 
-  const { status: autosaveStatus, saveNow, getBackup, clearBackup } = useAutosave({
+  const { status: autosaveStatus, saveNow } = useAutosave({
     fileId: currentFileId,
     cells,
     onSave: performSaveToFile,
@@ -647,26 +655,8 @@ export const Notebook: React.FC = () => {
     const detectedIndent = detectIndentationFromCells(content);
     setIndentConfig(detectedIndent);
 
-    // Check for crash recovery
-    const backup = getBackup(id);
-    if (backup) {
-      const backupAge = Date.now() - backup.timestamp;
-      const oneHour = 60 * 60 * 1000;
-
-      // If backup is less than 1 hour old and different from loaded content
-      if (backupAge < oneHour) {
-        const backupContent = JSON.stringify(backup.cells.map(c => ({ id: c.id, type: c.type, content: c.content })));
-        const loadedContent = JSON.stringify(content.map(c => ({ id: c.id, type: c.type, content: c.content })));
-
-        if (backupContent !== loadedContent) {
-          setRecoveryData(backup);
-          setShowRecoveryBanner(true);
-        }
-      } else {
-        // Clear old backups
-        clearBackup(id);
-      }
-    }
+    // Check for crash recovery using the recovery banner hook
+    checkForRecovery(id, content);
 
     resetHistory(content);
 
@@ -721,23 +711,9 @@ export const Notebook: React.FC = () => {
     }
   };
 
-  // Handle recovery actions
-  const handleRecoverChanges = () => {
-    if (recoveryData && currentFileId) {
-      resetHistory(recoveryData.cells);
-      clearBackup(currentFileId);
-    }
-    setShowRecoveryBanner(false);
-    setRecoveryData(null);
-  };
-
-  const handleDiscardRecovery = () => {
-    if (currentFileId) {
-      clearBackup(currentFileId);
-    }
-    setShowRecoveryBanner(false);
-    setRecoveryData(null);
-  };
+  // Recovery actions are now handled by useRecoveryBanner hook:
+  // - recoverChanges(): restores backup cells and clears backup
+  // - discardRecovery(): clears backup without restoring
 
   const loadFile = async (id: string) => {
     setIsLoadingFile(true);
@@ -1276,13 +1252,13 @@ export const Notebook: React.FC = () => {
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <button
-                  onClick={handleDiscardRecovery}
+                  onClick={discardRecovery}
                   className="px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 rounded transition-colors"
                 >
                   Discard
                 </button>
                 <button
-                  onClick={handleRecoverChanges}
+                  onClick={recoverChanges}
                   className="px-3 py-1.5 text-xs font-medium bg-amber-600 text-white hover:bg-amber-700 rounded transition-colors"
                 >
                   Restore Changes
