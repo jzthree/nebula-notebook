@@ -18,9 +18,11 @@ interface Props {
   cell: ICell;
   index: number;
   isActive: boolean;
+  isHighlighted?: boolean; // Visual feedback for undo/redo
   allCells: ICell[];
   onUpdate: (id: string, content: string) => void;
   onAIUpdate?: (id: string, content: string) => void; // For AI edits (tracked in undo history)
+  onFlush?: (id: string, content: string) => void; // Flush pending content on blur
   onRun: (id: string) => void;
   onRunAndAdvance: (id: string) => void;
   onDelete: (id: string) => void;
@@ -38,9 +40,11 @@ const CellComponent: React.FC<Props> = ({
   cell,
   index,
   isActive,
+  isHighlighted = false,
   allCells,
   onUpdate,
   onAIUpdate,
+  onFlush,
   onRun,
   onRunAndAdvance,
   onDelete,
@@ -82,7 +86,11 @@ const CellComponent: React.FC<Props> = ({
 
   const handleEditorBlur = useCallback(() => {
     setIsEditing(false);
-  }, []);
+    // Flush pending content on blur (keyframe for undo history)
+    if (onFlush) {
+      onFlush(cell.id, cell.content);
+    }
+  }, [cell.id, cell.content, onFlush]);
 
   // Handle keyboard shortcuts in the editor - uses refs so callback is stable
   const handleEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
@@ -192,7 +200,7 @@ const CellComponent: React.FC<Props> = ({
     <div
       data-cell-id={cell.id}
       onClick={() => onClick(cell.id)}
-      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()}`}
+      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()} ${isHighlighted ? 'cell-highlight-animation' : ''}`}
     >
       {/* Top Toolbar */}
       <div className="flex items-center gap-1 px-2 py-1 bg-slate-50 border-b border-slate-100 rounded-t-lg">
@@ -375,13 +383,14 @@ const CellComponent: React.FC<Props> = ({
 // but cells only need to re-render when their actual data changes.
 export const Cell = memo(CellComponent, (prevProps, nextProps) => {
   // Return true if props are equal (skip re-render)
-  // Only check: cell data, index, active state, search highlighting, queue position, and indent config
+  // Only check: cell data, index, active state, highlight state, search highlighting, queue position, and indent config
   // Don't check callbacks - they change on every parent render but
   // don't affect what the cell displays
   return (
     prevProps.cell === nextProps.cell &&
     prevProps.index === nextProps.index &&
     prevProps.isActive === nextProps.isActive &&
+    prevProps.isHighlighted === nextProps.isHighlighted &&
     prevProps.searchHighlight === nextProps.searchHighlight &&
     prevProps.queuePosition === nextProps.queuePosition &&
     prevProps.indentConfig === nextProps.indentConfig

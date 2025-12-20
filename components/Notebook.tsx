@@ -114,8 +114,9 @@ export const Notebook: React.FC = () => {
     updateContent,
     changeType,
     saveCheckpoint,
-    undo,
-    redo,
+    flushCell,
+    undo: rawUndo,
+    redo: rawRedo,
     canUndo,
     canRedo,
     resetHistory,
@@ -131,8 +132,70 @@ export const Notebook: React.FC = () => {
   // Clipboard for cut/copy/paste cells
   const [cellClipboard, setCellClipboard] = useState<{ cell: Cell; isCut: boolean } | null>(null);
 
+  // Flush active cell's pending content changes before keyframe operations
+  const flushActiveCell = useCallback(() => {
+    if (activeCellId) {
+      const cell = cells.find(c => c.id === activeCellId);
+      if (cell) {
+        flushCell(activeCellId, cell.content);
+      }
+    }
+  }, [activeCellId, cells, flushCell]);
+
+  // Visual feedback for undo/redo
+  const [highlightedCellIds, setHighlightedCellIds] = useState<Set<string>>(new Set());
+  const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // Virtuoso Handle for programmatic scrolling
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+
+  // Helper to show visual feedback for undo/redo
+  const showUndoRedoFeedback = useCallback((affectedCellIds: string[], operationType: string) => {
+    // Clear any pending highlight timeout
+    if (highlightTimeoutRef.current) {
+      clearTimeout(highlightTimeoutRef.current);
+    }
+
+    // Set highlighted cells
+    setHighlightedCellIds(new Set(affectedCellIds));
+
+    // Scroll to first affected cell if it exists in current cells
+    if (affectedCellIds.length > 0) {
+      // For delete operations, the cell won't exist anymore, so we skip scroll
+      // For other operations, find and scroll to the cell
+      const firstCellId = affectedCellIds[0];
+      const cellIndex = cells.findIndex(c => c.id === firstCellId);
+      if (cellIndex >= 0) {
+        virtuosoRef.current?.scrollToIndex({
+          index: cellIndex,
+          align: 'center',
+          behavior: 'smooth'
+        });
+      }
+    }
+
+    // Clear highlights after animation
+    highlightTimeoutRef.current = setTimeout(() => {
+      setHighlightedCellIds(new Set());
+    }, 1500); // Match CSS animation duration
+  }, [cells]);
+
+  // Wrapped undo/redo that flush active cell first and show visual feedback
+  const undo = useCallback(() => {
+    flushActiveCell();
+    const result = rawUndo();
+    if (result && result.affectedCellIds.length > 0) {
+      showUndoRedoFeedback(result.affectedCellIds, result.operationType);
+    }
+  }, [flushActiveCell, rawUndo, showUndoRedoFeedback]);
+
+  const redo = useCallback(() => {
+    flushActiveCell();
+    const result = rawRedo();
+    if (result && result.affectedCellIds.length > 0) {
+      showUndoRedoFeedback(result.affectedCellIds, result.operationType);
+    }
+  }, [flushActiveCell, rawRedo, showUndoRedoFeedback]);
 
   // Debounced scroll to handle height changes during execution
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -692,6 +755,8 @@ export const Notebook: React.FC = () => {
 
   const loadFileAsync = async (id: string, content: Cell[], notebookKernel?: string) => {
     if (currentFileId && currentFileId !== id) {
+      // Keyframe: flush active cell before switching files
+      flushActiveCell();
       saveNow(); // Save current file before switching
     }
 
@@ -777,9 +842,11 @@ export const Notebook: React.FC = () => {
   };
 
   const saveCurrentNotebook = useCallback(async () => {
+    // Keyframe: flush active cell before save
+    flushActiveCell();
     await saveNow();
     await refreshFileList();
-  }, [saveNow]);
+  }, [flushActiveCell, saveNow]);
 
   // --- KERNEL OPERATIONS ---
 
@@ -850,6 +917,9 @@ export const Notebook: React.FC = () => {
   // --- CELL OPERATIONS ---
 
   const addCell = (type: CellType = 'code', content: string = '', afterIndex?: number, noScroll?: boolean) => {
+    // Keyframe: flush active cell before insert
+    flushActiveCell();
+
     const newCell: Cell = {
       id: crypto.randomUUID(),
       type,
@@ -936,10 +1006,15 @@ export const Notebook: React.FC = () => {
   };
 
   const changeCellType = (id: string, type: CellType) => {
+    // Keyframe: flush active cell before type change
+    flushActiveCell();
     changeType(id, type);
   };
 
   const deleteCell = (id: string) => {
+    // Keyframe: flush active cell before delete
+    flushActiveCell();
+
     const idx = cells.findIndex(c => c.id === id);
     if (idx === -1) return;
 
@@ -965,6 +1040,9 @@ export const Notebook: React.FC = () => {
   deleteCellRef.current = deleteCell;
 
   const moveCell = (id: string, direction: 'up' | 'down') => {
+    // Keyframe: flush active cell before move
+    flushActiveCell();
+
     const idx = cells.findIndex(c => c.id === id);
     if (idx === -1) return;
     if (direction === 'up' && idx === 0) return;
@@ -984,7 +1062,9 @@ export const Notebook: React.FC = () => {
   };
 
   const queueExecution = (id: string) => {
-    saveCheckpoint();
+    // Keyframe: flush active cell before execution
+    flushActiveCell();
+
     setExecutionQueue(prev => [...prev, id]);
     // Log cell run for history
     // Note: content is NOT stored here - it's reconstructed from edit history + snapshot
@@ -1599,9 +1679,11 @@ export const Notebook: React.FC = () => {
                   cell={cell}
                   index={idx}
                   isActive={activeCellId === cell.id}
+                  isHighlighted={highlightedCellIds.has(cell.id)}
                   allCells={cells}
                   onUpdate={handleUpdateCell}
                   onAIUpdate={handleAIUpdateCell}
+                  onFlush={flushCell}
                   onRun={queueExecution}
                   onRunAndAdvance={runAndAdvance}
                   onDelete={deleteCell}

@@ -46,6 +46,12 @@ export type TimestampedOperation = BaseOperation & (UndoableOperation | LogOpera
 // Legacy Operation type for backwards compatibility with undo/redo logic
 export type Operation = UndoableOperation;
 
+// Result from undo/redo operations for visual feedback
+export interface UndoRedoResult {
+  affectedCellIds: string[];  // Cell IDs that were modified
+  operationType: string;       // Type of operation (for potential animation variants)
+}
+
 interface UseUndoRedoResult {
   cells: Cell[];
   setCells: (newCells: Cell[] | ((prev: Cell[]) => Cell[])) => void;
@@ -58,9 +64,11 @@ interface UseUndoRedoResult {
   changeType: (cellId: string, newType: CellType) => void;
   // Batch operations (for compound actions)
   batch: (operations: Operation[]) => void;
-  // Undo/Redo
-  undo: () => void;
-  redo: () => void;
+  // Flush pending content for a single cell (O(1) - call before keyframe operations)
+  flushCell: (cellId: string, currentContent: string) => void;
+  // Undo/Redo - returns affected cells for visual feedback
+  undo: () => UndoRedoResult | null;
+  redo: () => UndoRedoResult | null;
   canUndo: boolean;
   canRedo: boolean;
   // Reset
@@ -162,6 +170,34 @@ function reverseOperation(op: Operation): Operation {
   }
 }
 
+// Extract affected cell IDs from an operation
+function getAffectedCellIds(op: Operation): string[] {
+  switch (op.type) {
+    case 'insertCell':
+    case 'deleteCell':
+      return [op.cell.id];
+    case 'moveCell':
+      // moveCell doesn't have a cell ID directly, we'd need the cells array
+      // For now, return empty - the caller can handle this case
+      return [];
+    case 'updateContent':
+    case 'updateContentPatch':
+    case 'changeType':
+      return [op.cellId];
+    case 'batch':
+      // Collect all unique cell IDs from batch operations
+      const ids = new Set<string>();
+      for (const subOp of op.operations) {
+        for (const id of getAffectedCellIds(subOp)) {
+          ids.add(id);
+        }
+      }
+      return Array.from(ids);
+    default:
+      return [];
+  }
+}
+
 // Maximum operations to keep in full history
 const MAX_FULL_HISTORY = 10000;
 
@@ -211,6 +247,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
 
   // Insert a cell at index
   const insertCell = useCallback((index: number, cell: Cell) => {
+    // Initialize content tracking for the new cell
+    lastContentRef.current.set(cell.id, cell.content);
     executeOperation({ type: 'insertCell', index, cell });
   }, [executeOperation]);
 
@@ -315,9 +353,75 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     }
   }, [executeOperation]);
 
+  // Flush pending content for a single cell - O(1)
+  // Call this before keyframe operations (undo, insert, delete, move, run, save)
+  const flushCell = useCallback((cellId: string, currentContent: string) => {
+    const lastContent = lastContentRef.current.get(cellId);
+    // Only record if content actually changed
+    if (lastContent !== undefined && lastContent !== currentContent) {
+      const op: Operation = {
+        type: 'updateContent',
+        cellId,
+        oldContent: lastContent,
+        newContent: currentContent,
+        source: 'user'
+      };
+      // Update tracking
+      lastContentRef.current.set(cellId, currentContent);
+      // Add to undo stack
+      setUndoStack(prev => {
+        const newStack = [...prev, op];
+        if (newStack.length > MAX_HISTORY) {
+          newStack.shift();
+        }
+        return newStack;
+      });
+      setRedoStack([]);
+      addToFullHistory(op);
+    }
+  }, [addToFullHistory]);
+
+  // Helper to update lastContentRef after undoing an operation
+  const updateContentTrackingAfterUndo = useCallback((op: Operation) => {
+    if (op.type === 'updateContent') {
+      lastContentRef.current.set(op.cellId, op.oldContent);
+    } else if (op.type === 'insertCell') {
+      // Undoing an insert means the cell is removed
+      lastContentRef.current.delete(op.cell.id);
+    } else if (op.type === 'deleteCell') {
+      // Undoing a delete means the cell is restored
+      lastContentRef.current.set(op.cell.id, op.cell.content);
+    } else if (op.type === 'batch') {
+      // Undo batch in reverse order
+      for (let i = op.operations.length - 1; i >= 0; i--) {
+        updateContentTrackingAfterUndo(op.operations[i]);
+      }
+    }
+  }, []);
+
+  // Helper to update lastContentRef after applying an operation
+  const updateContentTrackingAfterOp = useCallback((op: Operation) => {
+    if (op.type === 'updateContent') {
+      lastContentRef.current.set(op.cellId, op.newContent);
+    } else if (op.type === 'insertCell') {
+      // When redoing an insert, initialize content tracking for the cell
+      lastContentRef.current.set(op.cell.id, op.cell.content);
+    } else if (op.type === 'deleteCell') {
+      // When redoing a delete, remove from content tracking
+      lastContentRef.current.delete(op.cell.id);
+    } else if (op.type === 'batch') {
+      for (const subOp of op.operations) {
+        updateContentTrackingAfterOp(subOp);
+      }
+    }
+  }, []);
+
   // Undo last operation
-  const undo = useCallback(() => {
-    if (undoStack.length === 0) return;
+  // Note: Caller should call flushCell(activeCellId, content) before undo
+  // to capture any pending content changes in the active cell
+  // Returns affected cell IDs for visual feedback
+  const undo = useCallback((): UndoRedoResult | null => {
+    if (undoStack.length === 0) return null;
 
     const op = undoStack[undoStack.length - 1];
     const reversedOp = reverseOperation(op);
@@ -326,15 +430,20 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     setUndoStack(prev => prev.slice(0, -1));
     setRedoStack(prev => [...prev, op]);
 
-    // Update content tracking for content operations
-    if (op.type === 'updateContent') {
-      lastContentRef.current.set(op.cellId, op.oldContent);
-    }
-  }, [undoStack]);
+    // Update content tracking after undo
+    updateContentTrackingAfterUndo(op);
+
+    // Return affected cells for visual feedback
+    return {
+      affectedCellIds: getAffectedCellIds(op),
+      operationType: op.type
+    };
+  }, [undoStack, updateContentTrackingAfterUndo]);
 
   // Redo last undone operation
-  const redo = useCallback(() => {
-    if (redoStack.length === 0) return;
+  // Returns affected cell IDs for visual feedback
+  const redo = useCallback((): UndoRedoResult | null => {
+    if (redoStack.length === 0) return null;
 
     const op = redoStack[redoStack.length - 1];
 
@@ -342,11 +451,15 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     setRedoStack(prev => prev.slice(0, -1));
     setUndoStack(prev => [...prev, op]);
 
-    // Update content tracking for content operations
-    if (op.type === 'updateContent') {
-      lastContentRef.current.set(op.cellId, op.newContent);
-    }
-  }, [redoStack]);
+    // Update content tracking
+    updateContentTrackingAfterOp(op);
+
+    // Return affected cells for visual feedback
+    return {
+      affectedCellIds: getAffectedCellIds(op),
+      operationType: op.type
+    };
+  }, [redoStack, updateContentTrackingAfterOp]);
 
   // Direct setCells for non-undoable changes (like execution outputs)
   const setCells = useCallback((newCells: Cell[] | ((prev: Cell[]) => Cell[])) => {
@@ -482,6 +595,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     updateContentAI,
     changeType,
     batch,
+    flushCell,
     undo,
     redo,
     canUndo,
