@@ -40,6 +40,9 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
   // Ref for executeEffect to avoid stale closure in dispatch
   const executeEffectRef = useRef<(effect: AutosaveEffect) => void>(() => {});
 
+  // Track if current save is manual (show "Saving..." only for manual saves)
+  const isManualSaveRef = useRef(false);
+
   // Serialize cells for comparison (includes outputs to trigger save after execution)
   const serializeCells = useCallback((cells: Cell[]) => {
     return JSON.stringify(cells.map(c => ({
@@ -106,7 +109,10 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
       return;
     }
 
-    setUiStatus(prev => ({ status: 'saving', lastSaved: prev.lastSaved }));
+    // Only show "Saving..." for manual saves - autosave is silent
+    if (isManualSaveRef.current) {
+      setUiStatus(prev => ({ status: 'saving', lastSaved: prev.lastSaved }));
+    }
 
     try {
       await onSave(fileId, cells);
@@ -117,6 +123,9 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
       console.error('Autosave failed:', error);
       setUiStatus(prev => ({ status: 'error', lastSaved: prev.lastSaved }));
       dispatch({ type: 'SAVE_ERROR', error: error instanceof Error ? error : new Error(String(error)) });
+    } finally {
+      // Reset manual save flag
+      isManualSaveRef.current = false;
     }
   }, [fileId, cells, enabled, onSave, serializeCells, dispatch]);
 
@@ -205,6 +214,8 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
       return;
     }
 
+    // Mark as manual save to show "Saving..." indicator
+    isManualSaveRef.current = true;
     dispatch({ type: 'MANUAL_SAVE' });
   }, [cancelPendingOperations, cells, serializeCells, dispatch]);
 
