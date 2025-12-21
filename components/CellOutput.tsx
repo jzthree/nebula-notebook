@@ -71,7 +71,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibility
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [collapsedHeight, setCollapsedHeight] = useState(DEFAULT_COLLAPSED_HEIGHT);
   const [isResizing, setIsResizing] = useState(false);
-  const [wrapText, setWrapText] = useState(true); // Default to wrap
+  const [wrapText, setWrapText] = useState(false); // Default to scroll (horizontal) for long outputs
   const contentRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
