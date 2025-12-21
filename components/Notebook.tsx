@@ -1589,18 +1589,21 @@ export const Notebook: React.FC = () => {
             elapsedMs: durationMs
           });
         } else {
-          // Check if this is the last cell in the queue
-          const remainingQueue = executionQueue.slice(1);
-          if (remainingQueue.length === 0) {
-            // Queue complete - show success indicator
-            setLastExecutionResult({
-              cellId,
-              cellIndex,
-              status: 'completed',
-              elapsedMs: durationMs
-            });
-          }
-          setExecutionQueue(remainingQueue);
+          // Use functional update to get current queue state (not stale closure)
+          // This ensures cells added during execution aren't lost
+          setExecutionQueue(prev => {
+            const remainingQueue = prev.slice(1);
+            if (remainingQueue.length === 0) {
+              // Queue complete - show success indicator
+              setLastExecutionResult({
+                cellId,
+                cellIndex,
+                status: 'completed',
+                elapsedMs: durationMs
+              });
+            }
+            return remainingQueue;
+          });
         }
       } else {
         // Non-code cell or cell not found, just mark as done

@@ -475,8 +475,8 @@ const CellComponent: React.FC<Props> = ({
         />
       </div>
 
-      {/* Output Area */}
-      {(cell.outputs.length > 0 || cell.isExecuting) && (
+      {/* Output Area - show if has outputs, is executing, or has execution time */}
+      {(cell.outputs.length > 0 || cell.isExecuting || cell.lastExecutionMs !== undefined) && (
          <CellOutput outputs={cell.outputs} executionMs={cell.lastExecutionMs} />
       )}
     </div>

@@ -216,7 +216,17 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibility
     document.addEventListener('mouseup', handleMouseUp);
   }, [collapsedHeight]);
 
-  if (outputs.length === 0) return null;
+  // Show minimal output area with just execution time if no outputs
+  if (outputs.length === 0) {
+    if (executionMs === undefined) return null;
+    return (
+      <div className="relative border-t border-slate-100 rounded-b-lg bg-white px-4 py-2">
+        <span className="text-xs text-slate-400 tabular-nums" title="Execution time">
+          {formatExecutionTime(executionMs)}
+        </span>
+      </div>
+    );
+  }
 
   // Check if any output has long lines that might benefit from scroll toggle
   const hasTextOutput = displayOutputs.some(o => o.type === 'stdout' || o.type === 'stderr' || o.type === 'error');
