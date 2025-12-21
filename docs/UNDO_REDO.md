@@ -79,7 +79,8 @@ type UndoableOperation =
 ```typescript
 type LogOperation =
   | { type: 'runCell'; cellId: string; cellIndex: number }
-  | { type: 'executionComplete'; cellId: string; success: boolean; ... }
+  | { type: 'runAllCells'; cellCount: number }
+  | { type: 'executionComplete'; cellId: string; cellIndex: number; durationMs: number; success: boolean; output?: string }
   | { type: 'interruptKernel' }
   | { type: 'restartKernel' }
 ```
@@ -91,6 +92,27 @@ type SnapshotOperation = { type: 'snapshot'; cells: Cell[] }
 ```
 
 A snapshot captures the complete notebook state at a point in time. Used at the start of a session for reconstruction.
+
+### User Operations vs Atomic Operations
+
+The undo/redo system only tracks **atomic operations** (insertCell, deleteCell, moveCell, updateContent, changeType). User-facing keyboard shortcuts are **composite operations** that decompose into these atoms:
+
+| User Action | Keyboard | Atomic Operation(s) |
+|-------------|----------|---------------------|
+| Cut cell | `X` | Stores in clipboard, then `deleteCell` |
+| Copy cell | `C` | Stores in clipboard only (no history entry) |
+| Paste cell | `V` | `insertCell` |
+| Enqueue cell | `E` | Stores in queue, then `deleteCell` |
+| Dequeue cell | `D` | `insertCell` |
+| Move cell up/down | `Cmd+Shift+↑/↓` | `moveCell` |
+
+**Key insight:** Cut, copy, paste, enqueue, and dequeue are not visible as distinct operations in the history. The history only sees the underlying atomic operations. For example:
+
+- Cutting a cell records a `deleteCell` operation
+- Pasting records an `insertCell` operation
+- The clipboard/queue state is ephemeral and not persisted
+
+This means undoing a "paste" will undo the `insertCell`, but the clipboard remains unchanged. Similarly, undoing an "enqueue" restores the deleted cell but doesn't remove it from the queue.
 
 ## History Structure
 

@@ -141,9 +141,14 @@ export const FileBrowser: React.FC<Props> = ({
     const name = prompt('Enter notebook name:');
     if (name) {
       try {
-        await createNotebook(name, [], currentPath);
+        const result = await createNotebook(name, [], currentPath);
         loadDirectory(currentPath);
         onRefresh();
+        // Open the newly created notebook immediately
+        if (result?.id) {
+          onSelect(result.id);
+          if (window.innerWidth < 1024) onClose();
+        }
       } catch (err: any) {
         toast(err.message || 'Failed to create notebook', 'error');
       }

@@ -1,10 +1,10 @@
 
-import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo, startTransition } from 'react';
 import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
-import { getSettings, saveSettings } from '../services/llmService';
-import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X } from 'lucide-react';
+import { getSettings, saveSettings, IndentationPreference } from '../services/llmService';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -41,6 +41,22 @@ const INITIAL_CELL: Cell = {
   isExecuting: false
 };
 
+// Output limits - shared between execution and loading
+const MAX_OUTPUT_LINES = 10000; // Max lines of text output
+const MAX_OUTPUT_CHARS = 100000000; // 100MB - generous for images
+
+// Convert user indentation preference to config
+function getIndentConfigFromPreference(pref: IndentationPreference): IndentationConfig | null {
+  switch (pref) {
+    case 'auto': return null; // Use autodetection
+    case '2': return { useTabs: false, tabSize: 2, indentSize: 2 };
+    case '4': return { useTabs: false, tabSize: 4, indentSize: 4 };
+    case '8': return { useTabs: false, tabSize: 8, indentSize: 8 };
+    case 'tab': return { useTabs: true, tabSize: 4, indentSize: 1 };
+    default: return null;
+  }
+}
+
 type CellClipboardItem = {
   type: CellType;
   content: string;
@@ -63,6 +79,20 @@ function getInitialFileId(): string | null {
 
   // Fall back to saved active file
   return getActiveFileId();
+}
+
+// Format elapsed time in a compact form (e.g., "1.2s", "1m 23s")
+function formatElapsedTime(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const tenths = Math.floor((ms % 1000) / 100);
+
+  if (seconds < 60) {
+    return `${seconds}.${tenths}s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}m ${remainingSeconds}s`;
 }
 
 export const Notebook: React.FC = () => {
@@ -104,9 +134,6 @@ export const Notebook: React.FC = () => {
   const [pendingSave, setPendingSave] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
-  // Multi-select state
-  const [selectedCellIds, setSelectedCellIds] = useState<Set<string>>(new Set());
-  const lastClickedCellIdRef = useRef<string | null>(null);
 
   // Kernel State
   const [isKernelMenuOpen, setIsKernelMenuOpen] = useState(false);
@@ -165,15 +192,18 @@ export const Notebook: React.FC = () => {
   // Clipboard for cut/copy/paste cells
   const [cellClipboard, setCellClipboard] = useState<CellClipboardItem | null>(null);
 
+  // FIFO queue for cells (separate from clipboard) - enqueue with 'e', dequeue with 'd'
+  const [cellQueue, setCellQueue] = useState<CellClipboardItem[]>([]);
+  const cellQueueRef = useRef<CellClipboardItem[]>([]);
+
   const cellsRef = useRef<Cell[]>(cells);
   const activeCellIdRef = useRef<string | null>(activeCellId);
-  const selectedCellIdsRef = useRef<Set<string>>(selectedCellIds);
   const cellClipboardRef = useRef<CellClipboardItem | null>(cellClipboard);
 
   cellsRef.current = cells;
   activeCellIdRef.current = activeCellId;
-  selectedCellIdsRef.current = selectedCellIds;
   cellClipboardRef.current = cellClipboard;
+  cellQueueRef.current = cellQueue;
 
   // Flush active cell's pending content changes before keyframe operations
   const flushActiveCell = useCallback(() => {
@@ -468,6 +498,16 @@ export const Notebook: React.FC = () => {
   const [kernelExecutionCount, setKernelExecutionCount] = useState(0); // Global execution counter
   const executionStartTimeRef = useRef<number | null>(null); // Track when queue execution started
 
+  // Execution indicator state - persists after completion until dismissed
+  const [executionElapsedMs, setExecutionElapsedMs] = useState(0);
+  const [lastExecutionResult, setLastExecutionResult] = useState<{
+    cellId: string;
+    cellIndex: number;
+    status: 'completed' | 'error';
+    elapsedMs: number;
+  } | null>(null);
+  const cellExecutionStartRef = useRef<number | null>(null); // Track when current cell started
+
   // Memoize execution indicator state to avoid O(N) findIndex on every render
   const executionIndicator = useMemo(() => {
     if (executionQueue.length === 0) return null;
@@ -475,6 +515,33 @@ export const Notebook: React.FC = () => {
     const executingCellIndex = cells.findIndex(c => c.id === executingCellId);
     return { cellId: executingCellId, cellIndex: executingCellIndex, queueLength: executionQueue.length };
   }, [executionQueue, cells]);
+
+  // Timer to update elapsed time while execution is in progress
+  useEffect(() => {
+    if (!isProcessingQueue || !cellExecutionStartRef.current) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      if (cellExecutionStartRef.current) {
+        setExecutionElapsedMs(Date.now() - cellExecutionStartRef.current);
+      }
+    }, 100); // Update every 100ms for smooth display
+
+    return () => clearInterval(interval);
+  }, [isProcessingQueue]);
+
+  // Clear last result when new execution starts
+  useEffect(() => {
+    if (executionQueue.length > 0 && !isProcessingQueue) {
+      setLastExecutionResult(null);
+    }
+  }, [executionQueue.length, isProcessingQueue]);
+
+  // Dismiss execution result indicator
+  const dismissExecutionResult = useCallback(() => {
+    setLastExecutionResult(null);
+  }, []);
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
@@ -578,11 +645,13 @@ export const Notebook: React.FC = () => {
 
   // Refs for functions used in keyboard handler (defined later in component)
   const lastKeyRef = useRef<{ key: string; time: number } | null>(null);
-  const deleteCellRef = useRef<((id: string, ignoreSelection?: boolean) => void) | null>(null);
+  const deleteCellRef = useRef<((id: string) => void) | null>(null);
   const addCellRef = useRef<((type: CellType, content?: string, afterIndex?: number) => void) | null>(null);
   const changeCellTypeRef = useRef<((id: string, type: CellType) => void) | null>(null);
   const runAndAdvanceRef = useRef<((id: string, focusMode: 'cell' | 'editor') => void) | null>(null);
   const queueExecutionRef = useRef<((id: string) => void) | null>(null);
+  const kernelStatusRef = useRef<string>(kernelStatus);
+  const interruptKernelRef = useRef<(() => void) | null>(null);
   // Track pending focus for next cell - Cell component handles the actual focusing
   const [pendingFocus, setPendingFocus] = useState<{ cellId: string; mode: 'cell' | 'editor' } | null>(null);
   const clearPendingFocus = useCallback(() => setPendingFocus(null), []);
@@ -598,6 +667,14 @@ export const Notebook: React.FC = () => {
       if ((e.metaKey || e.ctrlKey) && key === 's') {
         e.preventDefault();
         handleManualSaveRef.current();
+        return;
+      }
+
+      // Ctrl+C: Interrupt kernel when busy (global override)
+      // When kernel is idle, Ctrl+C works as normal copy
+      if ((e.metaKey || e.ctrlKey) && key === 'c' && kernelStatusRef.current === 'busy') {
+        e.preventDefault();
+        interruptKernelRef.current?.();
         return;
       }
 
@@ -675,8 +752,8 @@ export const Notebook: React.FC = () => {
       if (key === 'x' && deleteCellRef.current) {
         e.preventDefault();
         const cellToCut = currentCells.find(c => c.id === focusedCellId);
-        if (cellToCut && currentCells.length > 1) {
-          // Copy to clipboard first, then delete
+        if (cellToCut) {
+          // Copy to clipboard first, then delete (last cell will be cleared, not deleted)
           const clipboardItem: CellClipboardItem = {
             type: cellToCut.type,
             content: cellToCut.content,
@@ -685,8 +762,7 @@ export const Notebook: React.FC = () => {
           };
           cellClipboardRef.current = clipboardItem;
           setCellClipboard(clipboardItem);
-          // Delete this specific cell (ignoreSelection=true to bypass multi-select)
-          deleteCellRef.current(focusedCellId, true);
+          deleteCellRef.current(focusedCellId);
         }
         return;
       }
@@ -720,6 +796,53 @@ export const Notebook: React.FC = () => {
         // For paste above: afterIndex = currentIdx - 1 (inserts at currentIdx)
         const afterIdx = pasteAbove ? baseIdx - 1 : baseIdx;
         addCellRef.current(clipboard.type, clipboard.content, afterIdx);
+        return;
+      }
+
+      // E - Enqueue cell (cut to FIFO queue), then focus next cell
+      if (key === 'e' && deleteCellRef.current) {
+        e.preventDefault();
+        const currentIdx = currentCells.findIndex(c => c.id === focusedCellId);
+        const cellToQueue = currentIdx >= 0 ? currentCells[currentIdx] : null;
+        if (cellToQueue) {
+          const queueItem: CellClipboardItem = {
+            type: cellToQueue.type,
+            content: cellToQueue.content,
+            sourceId: cellToQueue.id,
+            isCut: true
+          };
+          setCellQueue(prev => [...prev, queueItem]);
+          cellQueueRef.current = [...cellQueueRef.current, queueItem];
+
+          // Determine next cell to focus (prefer next, fallback to same cell if last one)
+          const nextIdx = currentIdx < currentCells.length - 1 ? currentIdx + 1 : currentIdx - 1;
+          const nextCellId = nextIdx >= 0 ? currentCells[nextIdx]?.id : focusedCellId;
+
+          // Delete the cell (last cell will be cleared, not deleted)
+          deleteCellRef.current(focusedCellId);
+
+          // Explicitly focus the next cell in cell mode
+          if (nextCellId) {
+            setActiveCellId(nextCellId);
+            setPendingFocus({ cellId: nextCellId, mode: 'cell' });
+          }
+        }
+        return;
+      }
+
+      // D - Dequeue cell (paste oldest from FIFO queue below current cell)
+      if (key === 'd' && addCellRef.current) {
+        e.preventDefault();
+        const queue = cellQueueRef.current;
+        if (queue.length > 0) {
+          const [first, ...rest] = queue;
+          setCellQueue(rest);
+          cellQueueRef.current = rest;
+          // Insert below current cell
+          const currentIdx = currentCells.findIndex(c => c.id === focusedCellId);
+          const afterIdx = currentIdx >= 0 ? currentIdx : currentCells.length - 1;
+          addCellRef.current(first.type, first.content, afterIdx);
+        }
         return;
       }
 
@@ -805,9 +928,16 @@ export const Notebook: React.FC = () => {
       saveNow(); // Save current file before switching
     }
 
-    // Detect indentation from loaded cells
-    const detectedIndent = detectIndentationFromCells(content);
-    setIndentConfig(detectedIndent);
+    // Set indentation based on user preference or autodetect
+    const settings = getSettings();
+    const userIndent = getIndentConfigFromPreference(settings.indentation || 'auto');
+    if (userIndent) {
+      setIndentConfig(userIndent);
+    } else {
+      // Autodetect from file content
+      const detectedIndent = detectIndentationFromCells(content);
+      setIndentConfig(detectedIndent);
+    }
 
     resetHistory(content);
 
@@ -1078,13 +1208,17 @@ export const Notebook: React.FC = () => {
 
   // Text edits - not individually undoable (too many operations)
   // Use setCells directly for per-keystroke updates
+  // Wrapped in startTransition to mark as low-priority - character already rendered by CodeMirror
   const handleUpdateCell = useCallback((id: string, content: string) => {
     // First edit while redo stack is non-empty is a keyframe
     // This commits the redo history before the new edit timeline begins
     if (hasRedoToFlush()) {
       flushCell(id, content);
     }
-    setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
+    // Use startTransition: React state sync is non-urgent since CodeMirror already rendered the keystroke
+    startTransition(() => {
+      setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
+    });
   }, [setCells, hasRedoToFlush, flushCell]);
 
   // AI/bulk update with undo tracking - for AI edits, annotated as AI source
@@ -1099,43 +1233,10 @@ export const Notebook: React.FC = () => {
     }
   };
 
-  // Handle cell click with multi-select support
-  const handleCellClick = useCallback((id: string, event: React.MouseEvent) => {
-    const clickedIndex = cells.findIndex(c => c.id === id);
-
-    if (event.shiftKey && lastClickedCellIdRef.current) {
-      // Shift+Click: range select from last clicked to current
-      event.preventDefault(); // Prevent browser text selection
-      const lastIndex = cells.findIndex(c => c.id === lastClickedCellIdRef.current);
-      if (lastIndex !== -1 && clickedIndex !== -1) {
-        const start = Math.min(lastIndex, clickedIndex);
-        const end = Math.max(lastIndex, clickedIndex);
-        const newSelection = new Set<string>();
-        for (let i = start; i <= end; i++) {
-          newSelection.add(cells[i].id);
-        }
-        setSelectedCellIds(newSelection);
-      }
-    } else if (event.metaKey || event.ctrlKey) {
-      event.preventDefault(); // Prevent browser default
-      // Cmd/Ctrl+Click: toggle selection
-      setSelectedCellIds(prev => {
-        const newSet = new Set(prev);
-        if (newSet.has(id)) {
-          newSet.delete(id);
-        } else {
-          newSet.add(id);
-        }
-        return newSet;
-      });
-      lastClickedCellIdRef.current = id;
-    } else {
-      // Normal click: clear selection and set active
-      setSelectedCellIds(new Set());
-      setActiveCellId(id);
-      lastClickedCellIdRef.current = id;
-    }
-  }, [cells, setActiveCellId]);
+  // Handle cell click - set as active cell
+  const handleCellClick = useCallback((id: string, _event: React.MouseEvent) => {
+    setActiveCellId(id);
+  }, [setActiveCellId]);
 
   const handleDeleteCellByIndex = async (index: number) => {
     if (index >= 0 && index < cells.length) {
@@ -1159,44 +1260,30 @@ export const Notebook: React.FC = () => {
     changeType(id, type);
   };
 
-  const deleteCell = (id: string, ignoreSelection = false) => {
+  const deleteCell = (id: string) => {
     // Keyframe: flush active cell before delete
     flushActiveCell();
 
     const currentCells = cellsRef.current;
-    const currentSelection = selectedCellIdsRef.current;
 
-    // If there are selected cells, delete all of them (unless ignoreSelection is true)
-    const idsToDelete = (!ignoreSelection && currentSelection.size > 0) ? Array.from(currentSelection) : [id];
-
-    // Can't delete all cells - keep at least one
-    if (idsToDelete.length >= currentCells.length) {
-      // Clear the first cell instead
+    // Can't delete the last cell - clear it instead
+    if (currentCells.length <= 1) {
       updateContent(currentCells[0].id, '');
-      setSelectedCellIds(new Set());
       setActiveCellId(currentCells[0].id);
       return;
     }
 
-    // Delete in reverse order (highest index first) to avoid index shifting issues
-    const indicesToDelete = idsToDelete
-      .map(cellId => currentCells.findIndex(c => c.id === cellId))
-      .filter(idx => idx !== -1)
-      .sort((a, b) => b - a);
+    const idx = currentCells.findIndex(c => c.id === id);
+    if (idx === -1) return;
 
-    // Find the cell to select after deletion (first cell after all deleted ones)
-    const minIdx = Math.min(...indicesToDelete);
-    const remainingCells = currentCells.filter(c => !idsToDelete.includes(c.id));
-    const nextCellId = remainingCells[Math.min(minIdx, remainingCells.length - 1)]?.id;
+    // Find the next cell to select after deletion
+    const nextCellId = currentCells[Math.min(idx + 1, currentCells.length - 1) === idx
+      ? Math.max(idx - 1, 0)
+      : Math.min(idx + 1, currentCells.length - 1)]?.id;
 
-    // Delete each cell
-    for (const idx of indicesToDelete) {
-      undoableDeleteCell(idx);
-    }
+    undoableDeleteCell(idx);
 
-    // Clear selection and set next active cell
-    setSelectedCellIds(new Set());
-    if (nextCellId) {
+    if (nextCellId && nextCellId !== id) {
       setActiveCellId(nextCellId);
     }
   };
@@ -1204,6 +1291,8 @@ export const Notebook: React.FC = () => {
   deleteCellRef.current = deleteCell;
   addCellRef.current = addCell;
   changeCellTypeRef.current = changeCellType;
+  kernelStatusRef.current = kernelStatus;
+  interruptKernelRef.current = interruptKernel;
 
   const moveCell = (id: string, direction: 'up' | 'down') => {
     // Keyframe: flush active cell before move
@@ -1352,10 +1441,53 @@ export const Notebook: React.FC = () => {
       const cellIndex = cells.findIndex(c => c.id === cellId);
       const cell = cellIndex >= 0 ? cells[cellIndex] : null;
 
+      // Start timing for this cell
+      const cellStartTime = Date.now();
+      cellExecutionStartRef.current = cellStartTime;
+      setExecutionElapsedMs(0);
+
       if (cell && cell.type === 'code') {
-        const cellStartTime = Date.now();
         let hasError = false;
         const collectedOutputs: string[] = []; // Track outputs for history
+
+        // Output limits (uses module-level constants)
+        let totalOutputChars = 0;
+        let totalOutputLines = 0;
+        let outputLimitReached = false;
+
+        // Accumulate outputs and flush periodically to update UI
+        // Key: We never clear this array - each flush replaces cell.outputs entirely
+        // This avoids race conditions with React's async state updates
+        const allOutputs: typeof cell.outputs = [];
+        let lastFlushTime = 0; // Start at 0 so first output flushes immediately
+        const FLUSH_INTERVAL_MS = 100; // Flush at most every 100ms
+        let pendingFlush: number | null = null;
+
+        const flushToCell = () => {
+          pendingFlush = null;
+          if (allOutputs.length === 0) return;
+          // Copy current accumulated outputs - don't clear, keep accumulating
+          const snapshot = [...allOutputs];
+          lastFlushTime = Date.now();
+
+          // Replace entire outputs array - this is idempotent and race-condition-free
+          setCells(prev => prev.map(c => {
+            if (c.id !== cellId) return c;
+            return { ...c, outputs: snapshot };
+          }));
+        };
+
+        const scheduleFlush = () => {
+          if (pendingFlush !== null) return;
+          const timeSinceLastFlush = Date.now() - lastFlushTime;
+          if (timeSinceLastFlush >= FLUSH_INTERVAL_MS) {
+            // Flush immediately
+            flushToCell();
+          } else {
+            // Schedule flush for later
+            pendingFlush = window.setTimeout(flushToCell, FLUSH_INTERVAL_MS - timeSinceLastFlush);
+          }
+        };
 
         setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: true, outputs: [] } : c));
 
@@ -1364,18 +1496,59 @@ export const Notebook: React.FC = () => {
             if (output.type === 'error') {
               hasError = true;
             }
-            // Collect text outputs for history (skip images/html)
+
+            // Check output limits
+            if (outputLimitReached) return;
+
+            const outputSize = output.content?.length || 0;
+            totalOutputChars += outputSize;
+
+            // Count lines for text outputs
             if (output.type === 'stdout' || output.type === 'stderr' || output.type === 'error') {
+              const lineCount = (output.content?.match(/\n/g) || []).length + 1;
+              totalOutputLines += lineCount;
               collectedOutputs.push(output.content);
             }
-            setCells(prev => prev.map(c => {
-              if (c.id !== cellId) return c;
-              return { ...c, outputs: [...c.outputs, output] };
-            }));
+
+            // Add to accumulated outputs
+            allOutputs.push(output);
+
+            // Check if we've hit any limit (lines or size)
+            if (totalOutputLines >= MAX_OUTPUT_LINES || totalOutputChars >= MAX_OUTPUT_CHARS) {
+              outputLimitReached = true;
+              allOutputs.push({
+                id: `limit-${Date.now()}`,
+                type: 'stderr',
+                content: `\n⚠️ Output limit reached (${totalOutputLines.toLocaleString()} lines). Additional output not displayed.`
+              });
+              // Cancel any pending flush and flush immediately
+              if (pendingFlush !== null) {
+                clearTimeout(pendingFlush);
+                pendingFlush = null;
+              }
+              flushToCell();
+              return;
+            }
+
+            // Schedule a throttled flush to update UI
+            scheduleFlush();
           });
+
+          // Cancel any pending flush and do final flush
+          if (pendingFlush !== null) {
+            clearTimeout(pendingFlush);
+            pendingFlush = null;
+          }
+          flushToCell();
         } catch (error) {
           console.error('Execution error:', error);
           hasError = true;
+          // Cancel any pending flush and flush what we have
+          if (pendingFlush !== null) {
+            clearTimeout(pendingFlush);
+            pendingFlush = null;
+          }
+          flushToCell();
         }
 
         // Log execution completion for history
@@ -1401,16 +1574,42 @@ export const Notebook: React.FC = () => {
           setCells(cells => cells.map(c => c.id === cellId ? {
             ...c,
             isExecuting: false,
-            executionCount: newCount
+            executionCount: newCount,
+            lastExecutionMs: durationMs
           } : c));
           return newCount;
         });
+
+        // Handle error: clear queue and show error indicator
+        if (hasError) {
+          setExecutionQueue([]); // Clear remaining queue on error
+          setLastExecutionResult({
+            cellId,
+            cellIndex,
+            status: 'error',
+            elapsedMs: durationMs
+          });
+        } else {
+          // Check if this is the last cell in the queue
+          const remainingQueue = executionQueue.slice(1);
+          if (remainingQueue.length === 0) {
+            // Queue complete - show success indicator
+            setLastExecutionResult({
+              cellId,
+              cellIndex,
+              status: 'completed',
+              elapsedMs: durationMs
+            });
+          }
+          setExecutionQueue(remainingQueue);
+        }
       } else {
         // Non-code cell or cell not found, just mark as done
         setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: false } : c));
+        setExecutionQueue(prev => prev.slice(1));
       }
 
-      setExecutionQueue(prev => prev.slice(1));
+      cellExecutionStartRef.current = null;
       setIsProcessingQueue(false);
       setKernelStatus('idle');
     };
@@ -1608,6 +1807,29 @@ export const Notebook: React.FC = () => {
                              </button>
                           </div>
 
+                          {/* Kernel Actions */}
+                          <div className="border-b border-slate-100 py-1">
+                            <button
+                              onClick={interruptKernel}
+                              disabled={kernelStatus !== 'busy'}
+                              className="w-full text-left px-3 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-2 disabled:opacity-40 disabled:hover:bg-transparent"
+                            >
+                              <Square className="w-3 h-3" /> Interrupt
+                            </button>
+                            <button
+                              onClick={restartKernel}
+                              className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                            >
+                              <RotateCw className="w-3 h-3" /> Restart Kernel
+                            </button>
+                            <button
+                              onClick={() => { setIsKernelMenuOpen(false); setIsKernelManagerOpen(true); }}
+                              className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                            >
+                              <Cpu className="w-3 h-3" /> Manage All Kernels
+                            </button>
+                          </div>
+
                           <div className="overflow-y-auto flex-1">
                             {/* Registered Kernels */}
                             <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50">
@@ -1681,28 +1903,6 @@ export const Notebook: React.FC = () => {
                             )}
                           </div>
 
-                          <div className="border-t border-slate-100 mt-1 pt-1">
-                            <button
-                              onClick={restartKernel}
-                              className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                            >
-                              <RotateCw className="w-3 h-3" /> Restart Kernel
-                            </button>
-                            {kernelStatus === 'busy' && (
-                              <button
-                                onClick={interruptKernel}
-                                className="w-full text-left px-3 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-2"
-                              >
-                                <Square className="w-3 h-3" /> Interrupt
-                              </button>
-                            )}
-                            <button
-                              onClick={() => { setIsKernelMenuOpen(false); setIsKernelManagerOpen(true); }}
-                              className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                            >
-                              <Cpu className="w-3 h-3" /> Manage All Kernels
-                            </button>
-                          </div>
                         </div>
                       )}
                       </div>
@@ -1753,8 +1953,8 @@ export const Notebook: React.FC = () => {
                         )}
                       </span>
 
-                      {/* Execution Indicator - subtle shortcut to jump to running cell */}
-                      {executionIndicator && (
+                      {/* Execution Indicator - shows running cell or last result */}
+                      {executionIndicator ? (
                           <button
                             onClick={() => {
                               if (executionIndicator.cellIndex >= 0) {
@@ -1768,13 +1968,43 @@ export const Notebook: React.FC = () => {
                               }
                             }}
                             className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
-                            title={`Jump to cell ${executionIndicator.cellIndex + 1}${executionIndicator.queueLength > 1 ? ` (${executionIndicator.queueLength - 1} more queued)` : ''}`}
+                            title={`Running cell ${executionIndicator.cellIndex + 1}${executionIndicator.queueLength > 1 ? ` (${executionIndicator.queueLength - 1} more queued)` : ''} - Click to jump`}
                           >
                             <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
                             <span className="tabular-nums">[{executionIndicator.cellIndex + 1}]</span>
+                            <span className="text-gray-400 tabular-nums">{formatElapsedTime(executionElapsedMs)}</span>
                             {executionIndicator.queueLength > 1 && (
                               <span className="text-gray-400">+{executionIndicator.queueLength - 1}</span>
                             )}
+                          </button>
+                      ) : lastExecutionResult && (
+                          <button
+                            onClick={() => {
+                              if (lastExecutionResult.cellIndex >= 0) {
+                                setActiveCellId(lastExecutionResult.cellId);
+                                virtuosoRef.current?.scrollToIndex({
+                                  index: lastExecutionResult.cellIndex,
+                                  align: 'start',
+                                  behavior: 'smooth',
+                                  offset: -80
+                                });
+                              }
+                              dismissExecutionResult();
+                            }}
+                            className={`flex items-center gap-1 px-1.5 py-0.5 text-xs rounded transition-colors ${
+                              lastExecutionResult.status === 'error'
+                                ? 'text-red-600 hover:text-red-700 hover:bg-red-50'
+                                : 'text-green-600 hover:text-green-700 hover:bg-green-50'
+                            }`}
+                            title={`${lastExecutionResult.status === 'error' ? 'Error in' : 'Completed'} cell ${lastExecutionResult.cellIndex + 1} - Click to jump and dismiss`}
+                          >
+                            {lastExecutionResult.status === 'error' ? (
+                              <XCircle className="w-3 h-3" />
+                            ) : (
+                              <CheckCircle className="w-3 h-3" />
+                            )}
+                            <span className="tabular-nums">[{lastExecutionResult.cellIndex + 1}]</span>
+                            <span className="tabular-nums opacity-70">{formatElapsedTime(lastExecutionResult.elapsedMs)}</span>
                           </button>
                       )}
                     </div>
@@ -1789,7 +2019,7 @@ export const Notebook: React.FC = () => {
                       onClick={undo}
                       disabled={!canUndo}
                       className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded disabled:opacity-30 transition-colors"
-                      title="Notebook Undo (cell insert/delete/move)"
+                      title="Notebook Undo"
                     >
                       <Undo2 className="w-4 h-4" />
                     </button>
@@ -1797,11 +2027,22 @@ export const Notebook: React.FC = () => {
                       onClick={redo}
                       disabled={!canRedo}
                       className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded disabled:opacity-30 transition-colors"
-                      title="Notebook Redo (cell insert/delete/move)"
+                      title="Notebook Redo"
                     >
                       <Redo2 className="w-4 h-4" />
                     </button>
                   </div>
+
+                  {/* Cell Queue Indicator */}
+                  {cellQueue.length > 0 && (
+                    <div
+                      className="flex items-center gap-1 px-2 py-1 text-xs text-indigo-600 bg-indigo-50 rounded-md border border-indigo-200"
+                      title={`${cellQueue.length} cell${cellQueue.length > 1 ? 's' : ''} in queue (E to add, D to paste)`}
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span className="font-medium tabular-nums">{cellQueue.length}</span>
+                    </div>
+                  )}
 
                   <button
                     onClick={() => setIsKeyboardHelpOpen(true)}
@@ -1871,7 +2112,6 @@ export const Notebook: React.FC = () => {
                   cell={cell}
                   index={idx}
                   isActive={activeCellId === cell.id}
-                  isSelected={selectedCellIds.has(cell.id)}
                   isHighlighted={highlightedCellIds.has(cell.id)}
                   allCells={cells}
                   onUpdate={handleUpdateCell}
@@ -1988,6 +2228,7 @@ export const Notebook: React.FC = () => {
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Run and advance (preserves mode)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Shift + Enter</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Run cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Ctrl/Cmd + Enter</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Interrupt (when busy)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Ctrl/Cmd + C</kbd></div>
                 </div>
               </div>
               <div>
@@ -1995,22 +2236,26 @@ export const Notebook: React.FC = () => {
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Navigate cells</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">↑ / ↓</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Enter edit mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Enter</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Insert cell above / below</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">A / B</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Delete cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Delete / Backspace</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Move cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↑/↓</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Move cell up / down</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↑/↓</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Cut / Copy / Paste cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">X / C / V</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Enqueue / Dequeue cell (FIFO)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">E / D</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Convert to Markdown / Code</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">M / Y</kbd></div>
                 </div>
               </div>
               <div>
                 <h3 className="text-sm font-medium text-slate-600 mb-2">Edit Mode (blue border)</h3>
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Exit to cell mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Escape</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Save</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + S</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Undo / Redo (text only)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Z / Y</kbd></div>
                 </div>
               </div>
               <div>
-                <h3 className="text-sm font-medium text-slate-600 mb-2">Selection</h3>
+                <h3 className="text-sm font-medium text-slate-600 mb-2">Global (works everywhere)</h3>
                 <div className="space-y-1 text-sm">
-                  <div className="flex justify-between"><span className="text-slate-600">Select range</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Shift + Click</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Toggle select</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Click</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Save</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + S</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Search</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + F</kbd></div>
                 </div>
               </div>
             </div>

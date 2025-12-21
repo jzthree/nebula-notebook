@@ -17,21 +17,27 @@ export const DEFAULT_INDENTATION: IndentationConfig = {
 };
 
 /**
+ * Find the greatest common divisor of two numbers
+ */
+function gcd(a: number, b: number): number {
+  while (b !== 0) {
+    const t = b;
+    b = a % b;
+    a = t;
+  }
+  return a;
+}
+
+/**
  * Detect indentation style from code content
- * Returns the most commonly used indentation pattern
+ * Uses the GCD of all indentation levels to find the base indent size
  */
 export function detectIndentationFromContent(content: string): IndentationConfig | null {
   const lines = content.split('\n');
 
-  // Count leading whitespace patterns
-  const indentCounts = {
-    tabs: 0,
-    spaces2: 0,
-    spaces4: 0,
-    spaces8: 0,
-  };
-
-  let linesWithIndent = 0;
+  let hasTabs = false;
+  let hasSpaces = false;
+  const indentLevels: number[] = [];
 
   for (const line of lines) {
     // Skip empty lines
@@ -42,59 +48,63 @@ export function detectIndentationFromContent(content: string): IndentationConfig
     if (!match) continue;
 
     const whitespace = match[1];
-    linesWithIndent++;
 
     // Check if it's tabs
     if (whitespace.includes('\t')) {
-      indentCounts.tabs++;
+      hasTabs = true;
       continue;
     }
 
-    // Count spaces
+    hasSpaces = true;
     const spaceCount = whitespace.length;
-
-    // Detect indent size by finding what divides evenly
-    if (spaceCount % 2 === 0 && spaceCount % 4 !== 0) {
-      indentCounts.spaces2++;
-    } else if (spaceCount % 4 === 0) {
-      // Could be 4-space or 8-space, need more context
-      if (spaceCount === 4 || spaceCount === 12 || spaceCount === 20) {
-        indentCounts.spaces4++;
-      } else if (spaceCount % 8 === 0) {
-        indentCounts.spaces8++;
-      } else {
-        indentCounts.spaces4++;
-      }
+    if (spaceCount > 0) {
+      indentLevels.push(spaceCount);
     }
   }
 
-  // Need at least some indented lines to make a decision
-  if (linesWithIndent < 2) {
-    return null;
-  }
-
-  // Determine winner
-  const maxCount = Math.max(
-    indentCounts.tabs,
-    indentCounts.spaces2,
-    indentCounts.spaces4,
-    indentCounts.spaces8
-  );
-
-  if (maxCount === 0) {
-    return null;
-  }
-
-  if (indentCounts.tabs === maxCount) {
+  // If we have tabs, use tabs
+  if (hasTabs && !hasSpaces) {
     return { useTabs: true, tabSize: 4, indentSize: 1 };
   }
-  if (indentCounts.spaces2 === maxCount) {
+
+  // Need at least some indented lines to detect space-based indentation
+  if (indentLevels.length < 2) {
+    return null;
+  }
+
+  // Find GCD of all indentation levels
+  let indentGcd = indentLevels[0];
+  for (let i = 1; i < indentLevels.length; i++) {
+    indentGcd = gcd(indentGcd, indentLevels[i]);
+    if (indentGcd === 1) break; // Can't get smaller
+  }
+
+  // Validate the detected indent size
+  // Only accept 2, 4, or 8 as valid indent sizes
+  // Default to 4 if we get something unusual
+  if (indentGcd === 2) {
     return { useTabs: false, tabSize: 2, indentSize: 2 };
   }
-  if (indentCounts.spaces8 === maxCount) {
+  if (indentGcd === 4) {
+    return { useTabs: false, tabSize: 4, indentSize: 4 };
+  }
+  if (indentGcd === 8) {
+    // 8-space indent is unusual - only accept if we have strong evidence
+    // (i.e., we see indentation at exactly 8, not 4)
+    const hasSmallIndent = indentLevels.some(level => level < 8 && level > 0);
+    if (hasSmallIndent) {
+      // If there's any indent smaller than 8, use that as the base
+      const smallIndents = indentLevels.filter(level => level < 8 && level > 0);
+      const smallGcd = smallIndents.reduce((a, b) => gcd(a, b), smallIndents[0] || 4);
+      if (smallGcd === 2) {
+        return { useTabs: false, tabSize: 2, indentSize: 2 };
+      }
+      return { useTabs: false, tabSize: 4, indentSize: 4 };
+    }
     return { useTabs: false, tabSize: 8, indentSize: 8 };
   }
-  // Default to 4 spaces
+
+  // Default to 4 spaces for any other case
   return { useTabs: false, tabSize: 4, indentSize: 4 };
 }
 

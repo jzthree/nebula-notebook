@@ -14,6 +14,7 @@ export interface Cell {
   outputs: CellOutput[];
   isExecuting: boolean;
   executionCount?: number;
+  lastExecutionMs?: number;
 }
 
 export interface NotebookMetadata {

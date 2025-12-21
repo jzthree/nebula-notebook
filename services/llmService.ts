@@ -351,6 +351,8 @@ export const chatWithNotebook = async (
 // Settings storage
 const SETTINGS_KEY = 'nebula-settings';
 
+export type IndentationPreference = 'auto' | '2' | '4' | '8' | 'tab';
+
 export interface NebulaSettings {
   rootDirectory: string;
   llmProvider: LLMProvider;
@@ -360,6 +362,7 @@ export interface NebulaSettings {
   notifyOnLongRun?: boolean; // Send browser notification when long-running jobs complete
   notifyThresholdSeconds?: number; // Threshold in seconds for "long-running" (default 60)
   notifySoundEnabled?: boolean; // Play sound when long-running jobs complete
+  indentation?: IndentationPreference; // Indentation style: 'auto' (detect), '2', '4', '8', or 'tab'
 }
 
 export const getSettings = (): NebulaSettings => {
@@ -380,7 +383,8 @@ export const getSettings = (): NebulaSettings => {
     lastKernel: 'python3',
     notifyOnLongRun: true,
     notifySoundEnabled: true,
-    notifyThresholdSeconds: 60
+    notifyThresholdSeconds: 60,
+    indentation: 'auto'
   };
 };
 

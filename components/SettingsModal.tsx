@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { X, Folder, Bot, Check, Palette, Bell, Volume2 } from 'lucide-react';
+import { X, Folder, Bot, Check, Palette, Bell, Volume2, AlignLeft } from 'lucide-react';
 import {
   getSettings,
   saveSettings,
   getAvailableProviders,
   LLMProvider,
   NebulaSettings,
-  DEFAULT_MODELS
+  DEFAULT_MODELS,
+  IndentationPreference
 } from '../services/llmService';
 
 interface Props {
@@ -262,6 +263,28 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                   />
                 </button>
               </div>
+            </div>
+
+            {/* Indentation */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                <AlignLeft className="w-4 h-4" />
+                Indentation
+              </label>
+              <select
+                value={settings.indentation || 'auto'}
+                onChange={(e) => setSettings({ ...settings, indentation: e.target.value as IndentationPreference })}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+              >
+                <option value="auto">Auto-detect</option>
+                <option value="2">2 spaces</option>
+                <option value="4">4 spaces</option>
+                <option value="8">8 spaces</option>
+                <option value="tab">Tabs</option>
+              </select>
+              <p className="mt-1 text-xs text-slate-500">
+                Auto-detect analyzes file content. Default is 4 spaces when content is ambiguous.
+              </p>
             </div>
           </div>
 

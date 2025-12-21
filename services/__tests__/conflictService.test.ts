@@ -58,13 +58,24 @@ describe('conflictService', () => {
       expect(result.remoteMtime).toBe(900);
     });
 
-    it('should detect conflict when remote mtime is newer', async () => {
+    it('should detect conflict when remote mtime is significantly newer', async () => {
       mockGetFileMtime.mockResolvedValue({ mtime: 2000 });
 
       const result = await checkForConflict('/path/to/file.ipynb', 1000);
 
       expect(result.hasConflict).toBe(true);
       expect(result.remoteMtime).toBe(2000);
+    });
+
+    it('should NOT detect conflict for small mtime differences (within tolerance)', async () => {
+      // Small differences can occur due to floating-point precision or filesystem timing
+      // These should NOT trigger a false positive conflict
+      mockGetFileMtime.mockResolvedValue({ mtime: 1000.3 });
+
+      const result = await checkForConflict('/path/to/file.ipynb', 1000);
+
+      expect(result.hasConflict).toBe(false);
+      expect(result.remoteMtime).toBe(1000.3);
     });
 
     it('should handle network errors gracefully', async () => {

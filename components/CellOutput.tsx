@@ -1,25 +1,48 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { CellOutput as ICellOutput } from '../types';
-import { ChevronDown, ChevronRight, GripHorizontal } from 'lucide-react';
+import { ChevronDown, ChevronRight, GripHorizontal, WrapText, ArrowRightLeft } from 'lucide-react';
+
+// Display limits to prevent UI freeze from huge outputs
+// Note: Full data is preserved in state for saving - only display is truncated
+const MAX_DISPLAY_LINES = 10000;
+const MAX_DISPLAY_CHARS = 100000000; // 100MB - generous for images
 
 interface Props {
   outputs: ICellOutput[];
+  executionMs?: number; // Execution time in milliseconds
+  onVisibilityChange?: () => void; // Called when collapse state changes, for scroll adjustment
 }
+
+// Format execution time compactly
+const formatExecutionTime = (ms: number): string => {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.floor(seconds % 60);
+  return `${minutes}m ${remainingSeconds}s`;
+};
 
 // Collapse multiple consecutive blank lines into one
 const compactOutput = (text: string): string => {
   return text.replace(/\n{3,}/g, '\n\n').trim();
 };
 
-const OutputItem: React.FC<{ output: ICellOutput }> = ({ output }) => {
+const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean }> = ({ output, wrapText }) => {
+  const textClass = wrapText ? 'whitespace-pre-wrap break-words' : 'whitespace-pre overflow-x-auto';
+
   switch (output.type) {
     case 'stdout':
-      return <div className="font-mono text-sm text-slate-700 whitespace-pre-wrap mb-1">{output.content}</div>;
+      return <div className={`font-mono text-sm text-slate-700 mb-1 ${textClass}`}>{output.content}</div>;
     case 'stderr':
-      return <div className="font-mono text-sm text-red-600 bg-red-50 p-2 rounded mb-1 whitespace-pre-wrap">{compactOutput(output.content)}</div>;
+      return <div className={`font-mono text-sm text-red-600 bg-red-50 p-2 rounded mb-1 ${textClass}`}>{compactOutput(output.content)}</div>;
     case 'error':
       return (
-        <div className="font-mono text-sm text-red-700 bg-red-100 border-l-4 border-red-500 p-2 mb-2 rounded-r overflow-x-auto whitespace-pre-wrap">
+        <div className={`font-mono text-sm text-red-700 bg-red-100 border-l-4 border-red-500 p-2 mb-2 rounded-r ${textClass}`}>
           {compactOutput(output.content)}
         </div>
       );
@@ -34,7 +57,7 @@ const OutputItem: React.FC<{ output: ICellOutput }> = ({ output }) => {
         </div>
       );
     case 'html':
-      return <div dangerouslySetInnerHTML={{ __html: output.content }} className="my-2" />;
+      return <div dangerouslySetInnerHTML={{ __html: output.content }} className="my-2 overflow-x-auto" />;
     default:
       return null;
   }
@@ -44,22 +67,129 @@ const MIN_HEIGHT = 50;
 const DEFAULT_COLLAPSED_HEIGHT = 200;
 const MAX_HEIGHT = 600;
 
-export const CellOutput: React.FC<Props> = ({ outputs }) => {
+export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibilityChange }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [collapsedHeight, setCollapsedHeight] = useState(DEFAULT_COLLAPSED_HEIGHT);
   const [isResizing, setIsResizing] = useState(false);
+  const [wrapText, setWrapText] = useState(true); // Default to wrap
   const contentRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Track if this is the initial render to avoid resetting collapse state
+  const initialRenderRef = useRef(true);
+
+  // Truncate outputs for display only - full data preserved in parent state for saving
+  const displayOutputs = useMemo(() => {
+    // Quick check - count total lines and chars
+    let totalLines = 0;
+    let totalChars = 0;
+    for (const output of outputs) {
+      if (output.type === 'stdout' || output.type === 'stderr' || output.type === 'error') {
+        totalLines += (output.content?.match(/\n/g) || []).length + 1;
+      }
+      totalChars += output.content?.length || 0;
+    }
+
+    // No truncation needed if under limits
+    if (totalLines <= MAX_DISPLAY_LINES && totalChars <= MAX_DISPLAY_CHARS) {
+      return outputs;
+    }
+
+    // Need to truncate - count lines as we go
+    const truncated: ICellOutput[] = [];
+    let linesShown = 0;
+    let charsShown = 0;
+
+    for (const output of outputs) {
+      const outputSize = output.content?.length || 0;
+      let outputLines = 0;
+      if (output.type === 'stdout' || output.type === 'stderr' || output.type === 'error') {
+        outputLines = (output.content?.match(/\n/g) || []).length + 1;
+      }
+
+      // Check if adding this would exceed limits
+      if (linesShown + outputLines > MAX_DISPLAY_LINES || charsShown + outputSize > MAX_DISPLAY_CHARS) {
+        // For text outputs, show partial content up to the limit
+        if (output.type === 'stdout' || output.type === 'stderr' || output.type === 'error') {
+          const remainingLines = MAX_DISPLAY_LINES - linesShown;
+          if (remainingLines > 0 && output.content) {
+            // Split into lines and take what we can fit
+            const lines = output.content.split('\n');
+            const truncatedLines = lines.slice(0, remainingLines);
+            truncated.push({
+              ...output,
+              id: `${output.id}-truncated`,
+              content: truncatedLines.join('\n')
+            });
+            linesShown += truncatedLines.length;
+          }
+        }
+        // For images/html, include if size is ok
+        else if (output.type === 'image' || output.type === 'html') {
+          if (charsShown + outputSize <= MAX_DISPLAY_CHARS) {
+            truncated.push(output);
+            charsShown += outputSize;
+          }
+        }
+        break;
+      }
+
+      truncated.push(output);
+      linesShown += outputLines;
+      charsShown += outputSize;
+    }
+
+    // Add truncation warning
+    truncated.push({
+      id: `display-truncated-${Date.now()}`,
+      type: 'stderr',
+      content: `\n⚠️ Output limit reached (${linesShown.toLocaleString()} lines). Additional output not displayed.`
+    });
+
+    return truncated;
+  }, [outputs]);
 
   // Check if output is tall enough to warrant collapse option
   const [showCollapseOption, setShowCollapseOption] = useState(false);
 
-  useEffect(() => {
+  // Use useLayoutEffect to measure before paint, avoiding flicker
+  useLayoutEffect(() => {
     if (contentRef.current) {
       const contentHeight = contentRef.current.scrollHeight;
-      setShowCollapseOption(contentHeight > DEFAULT_COLLAPSED_HEIGHT);
+      const shouldShow = contentHeight > DEFAULT_COLLAPSED_HEIGHT;
+
+      // Only update if changed to avoid unnecessary re-renders
+      if (shouldShow !== showCollapseOption) {
+        setShowCollapseOption(shouldShow);
+      }
+
+      // On initial render with tall content, don't auto-collapse
+      // User explicitly toggles collapse state
+      if (initialRenderRef.current) {
+        initialRenderRef.current = false;
+      }
     }
-  }, [outputs]);
+  }, [outputs, showCollapseOption]);
+
+  // Handle collapse toggle with scroll into view
+  const handleCollapseToggle = useCallback(() => {
+    const newCollapsed = !isCollapsed;
+    setIsCollapsed(newCollapsed);
+
+    // After state change, ensure the output is visible
+    // Use requestAnimationFrame to wait for DOM update
+    requestAnimationFrame(() => {
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const isVisible = rect.top >= 0 && rect.bottom <= window.innerHeight;
+
+        if (!isVisible) {
+          containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }
+      onVisibilityChange?.();
+    });
+  }, [isCollapsed, onVisibilityChange]);
 
   // Handle resize drag
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -88,6 +218,9 @@ export const CellOutput: React.FC<Props> = ({ outputs }) => {
 
   if (outputs.length === 0) return null;
 
+  // Check if any output has long lines that might benefit from scroll toggle
+  const hasTextOutput = displayOutputs.some(o => o.type === 'stdout' || o.type === 'stderr' || o.type === 'error');
+
   return (
     <div
       ref={containerRef}
@@ -97,7 +230,7 @@ export const CellOutput: React.FC<Props> = ({ outputs }) => {
       {showCollapseOption && (
         <div
           className="absolute left-0 top-0 bottom-0 w-6 flex items-start pt-3 justify-center cursor-pointer hover:bg-slate-100 transition-colors z-10 border-r border-slate-100"
-          onClick={() => setIsCollapsed(!isCollapsed)}
+          onClick={handleCollapseToggle}
           title={isCollapsed ? "Expand output" : "Collapse output"}
         >
           {isCollapsed ? (
@@ -108,18 +241,44 @@ export const CellOutput: React.FC<Props> = ({ outputs }) => {
         </div>
       )}
 
+      {/* Top right controls: execution time and wrap toggle */}
+      <div className="absolute top-2 right-2 flex items-center gap-2 z-10">
+        {/* Execution time indicator */}
+        {executionMs !== undefined && (
+          <span className="text-xs text-slate-400 tabular-nums" title="Execution time">
+            {formatExecutionTime(executionMs)}
+          </span>
+        )}
+        {/* Wrap/scroll toggle button */}
+        {hasTextOutput && (
+          <button
+            className="p-1 rounded hover:bg-slate-100 transition-colors"
+            onClick={() => setWrapText(!wrapText)}
+            title={wrapText ? "Switch to horizontal scroll" : "Switch to text wrap"}
+          >
+            {wrapText ? (
+              <ArrowRightLeft className="w-4 h-4 text-slate-400" />
+            ) : (
+              <WrapText className="w-4 h-4 text-slate-400" />
+            )}
+          </button>
+        )}
+      </div>
+
       {/* Output content */}
       <div
         ref={contentRef}
-        className={`p-4 transition-all ${showCollapseOption ? 'pl-8' : ''}`}
+        className={`p-4 transition-all ${showCollapseOption ? 'pl-8' : ''} ${hasTextOutput ? 'pr-8' : ''}`}
         style={isCollapsed ? {
           maxHeight: collapsedHeight,
           overflowY: 'auto',
-          overflowX: 'hidden'
-        } : undefined}
+          overflowX: wrapText ? 'hidden' : 'auto'
+        } : {
+          overflowX: wrapText ? 'hidden' : 'auto'
+        }}
       >
-        {outputs.map((out) => (
-          <OutputItem key={out.id} output={out} />
+        {displayOutputs.map((out) => (
+          <OutputItem key={out.id} output={out} wrapText={wrapText} />
         ))}
       </div>
 

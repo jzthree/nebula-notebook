@@ -58,6 +58,8 @@ const lightTheme = EditorView.theme({
   },
   '.cm-line': {
     padding: '0',
+    whiteSpace: 'pre-wrap',  // Preserve leading whitespace, allow wrapping
+    wordBreak: 'break-all',  // Break long tokens at any character
   },
   '.cm-gutters': {
     display: 'none', // Hide line numbers (we show cell numbers in sidebar)

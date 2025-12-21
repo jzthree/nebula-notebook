@@ -122,26 +122,30 @@ The notebook supports Jupyter-style keyboard shortcuts with two modes:
 | `Ctrl/Cmd+Enter` | Run current cell only |
 | `Escape` | Exit edit mode (enter command mode) |
 
-### Command Mode (when not editing)
+### Cell Mode (green border, when not editing)
 | Shortcut | Action |
 |----------|--------|
 | `Enter` | Enter edit mode (focus cell editor) |
-| `A` | Insert new cell above current |
-| `B` | Insert new cell below current |
-| `M` | Convert cell to Markdown |
-| `Y` | Convert cell to Code |
-| `X` | Cut cell |
-| `C` | Copy cell |
-| `V` | Paste cell below |
+| `A` / `B` | Insert new cell above / below current |
+| `M` / `Y` | Convert cell to Markdown / Code |
+| `X` / `C` / `V` | Cut / Copy / Paste cell |
 | `Shift+V` | Paste cell above |
-| `dd` | Delete active cell (vim-style, press 'd' twice quickly) |
+| `E` / `D` | Enqueue / Dequeue cell (FIFO queue) |
+| `Delete/Backspace` | Delete active cell |
 | `Arrow Up/Down` | Navigate between cells |
+| `Ctrl/Cmd+Shift+↑/↓` | Move cell up / down |
 
-### Global (works in both modes)
+### Edit Mode (blue border, when editing)
+| Shortcut | Action |
+|----------|--------|
+| `Escape` | Exit to cell mode |
+| `Ctrl/Cmd+Z` / `Y` | Undo / Redo (text only, per-cell) |
+
+### Global (works everywhere)
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl/Cmd+S` | Save notebook |
 | `Ctrl/Cmd+F` | Open search |
-| `Ctrl/Cmd+Z` | Undo |
-| `Ctrl/Cmd+Shift+Z` or `Ctrl/Cmd+Y` | Redo |
-- don't run my server in the background for me as it becomes hard to troubleshoot. let me restart it myself.
+| `Ctrl/Cmd+C` | Interrupt kernel (when busy, otherwise copy) |
+| `Shift+Enter` | Run cell and advance |
+| `Ctrl/Cmd+Enter` | Run cell |

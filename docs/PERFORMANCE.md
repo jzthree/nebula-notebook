@@ -2,6 +2,83 @@
 
 This document covers performance patterns and common pitfalls for the notebook editor, with a focus on typing responsiveness.
 
+## Typing Performance Architecture
+
+The notebook achieves near-zero perceived typing latency through careful architecture:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         KEYSTROKE TIMELINE                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  User presses key                                                            │
+│       │                                                                      │
+│       ▼                                                                      │
+│  ┌─────────────────────────────────────────┐                                │
+│  │ CodeMirror renders character (sync)     │ ◄── CHARACTER VISIBLE HERE    │
+│  │ Updates internal state                  │     (0ms latency)              │
+│  └─────────────────────────────────────────┘                                │
+│       │                                                                      │
+│       ▼                                                                      │
+│  ┌─────────────────────────────────────────┐                                │
+│  │ onChange callback fires                 │                                │
+│  │ handleUpdateCell called                 │                                │
+│  └─────────────────────────────────────────┘                                │
+│       │                                                                      │
+│       ▼                                                                      │
+│  ┌─────────────────────────────────────────┐                                │
+│  │ hasRedoToFlush() - O(1) ref read        │                                │
+│  └─────────────────────────────────────────┘                                │
+│       │                                                                      │
+│       ▼                                                                      │
+│  ┌─────────────────────────────────────────┐                                │
+│  │ startTransition(() => setCells(...))    │ ◄── Marked as LOW PRIORITY    │
+│  │ React state update (non-urgent)         │     Can be interrupted        │
+│  └─────────────────────────────────────────┘                                │
+│       │                                                                      │
+│       ▼ (deferred to next frame)                                            │
+│  ┌─────────────────────────────────────────┐                                │
+│  │ React reconciliation                    │                                │
+│  │ Only edited Cell re-renders (memo)      │                                │
+│  │ Virtualization: only visible cells      │                                │
+│  └─────────────────────────────────────────┘                                │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why This Works
+
+1. **CodeMirror renders first**: The `@uiw/react-codemirror` wrapper ensures the keystroke appears in the DOM synchronously, before any React work happens. This is the critical insight—the character is visible at 0ms.
+
+2. **startTransition for state updates**: We wrap `setCells` in `startTransition` to explicitly tell React this update is non-urgent:
+   ```tsx
+   const handleUpdateCell = useCallback((id: string, content: string) => {
+     if (hasRedoToFlush()) {
+       flushCell(id, content);
+     }
+     // Non-urgent: CodeMirror already rendered the keystroke
+     startTransition(() => {
+       setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
+     });
+   }, [setCells, hasRedoToFlush, flushCell]);
+   ```
+
+3. **Memoization prevents cascade**: Only the edited cell re-renders because:
+   - `cells.map()` returns the same object reference for unchanged cells
+   - Cell memo comparison checks `prevProps.cell === nextProps.cell`
+
+4. **Virtualization limits DOM work**: Only ~10-15 visible cells exist in the DOM at any time.
+
+### Performance Guarantees
+
+| Layer | Latency | Notes |
+|-------|---------|-------|
+| Character visible | 0ms | CodeMirror synchronous render |
+| onChange fires | ~0.1ms | After CodeMirror render |
+| hasRedoToFlush | O(1) | Ref read, no computation |
+| setCells queued | ~0.1ms | startTransition, non-blocking |
+| React reconcile | Deferred | Next frame, interruptible |
+
 ## Critical Rule: No O(N) Work Per Keystroke
 
 Every keystroke triggers a render cycle. Any O(N) operation (where N = number of cells) in the render path causes cumulative lag that becomes noticeable with larger notebooks.

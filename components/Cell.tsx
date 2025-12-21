@@ -20,7 +20,6 @@ interface Props {
   cell: ICell;
   index: number;
   isActive: boolean;
-  isSelected?: boolean; // Part of multi-selection
   isHighlighted?: boolean; // Visual feedback for undo/redo
   allCells: ICell[];
   onUpdate: (id: string, content: string) => void;
@@ -32,7 +31,7 @@ interface Props {
   onMove: (id: string, direction: 'up' | 'down') => void;
   onChangeType: (id: string, type: CellType) => void;
   onClick: (id: string, event: React.MouseEvent) => void;
-  onActivate: (id: string) => void; // Set as active cell without multi-select logic
+  onActivate: (id: string) => void; // Set as active cell
   onNavigateCell: (direction: 'up' | 'down') => void; // Navigate to adjacent cell (handles virtualization)
   onAddCell: (afterIndex: number) => void;
   onSave?: () => void;
@@ -49,7 +48,6 @@ const CellComponent: React.FC<Props> = ({
   cell,
   index,
   isActive,
-  isSelected = false,
   isHighlighted = false,
   allCells,
   onUpdate,
@@ -225,7 +223,6 @@ const CellComponent: React.FC<Props> = ({
     if (hasError) return 'border-red-200';
     if (focusState === 'editor') return 'border-blue-400 ring-1 ring-blue-100';
     if (focusState === 'cell') return 'border-green-500 ring-1 ring-green-100';
-    if (isSelected) return 'border-purple-400 ring-1 ring-purple-100 bg-purple-50/30';
     return 'border-slate-200 hover:border-slate-300';
   };
 
@@ -480,7 +477,7 @@ const CellComponent: React.FC<Props> = ({
 
       {/* Output Area */}
       {(cell.outputs.length > 0 || cell.isExecuting) && (
-         <CellOutput outputs={cell.outputs} />
+         <CellOutput outputs={cell.outputs} executionMs={cell.lastExecutionMs} />
       )}
     </div>
   );
@@ -497,7 +494,6 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     prevProps.cell === nextProps.cell &&
     prevProps.index === nextProps.index &&
     prevProps.isActive === nextProps.isActive &&
-    prevProps.isSelected === nextProps.isSelected &&
     prevProps.isHighlighted === nextProps.isHighlighted &&
     prevProps.searchHighlight === nextProps.searchHighlight &&
     prevProps.queuePosition === nextProps.queuePosition &&

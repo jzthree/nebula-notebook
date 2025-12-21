@@ -8,6 +8,18 @@
 import { getFileMtime, getFileContentWithMtime, saveFileContentWithMtime } from './fileService';
 import { Cell } from '../types';
 
+/**
+ * Tolerance for mtime comparison in seconds.
+ *
+ * This tolerance prevents false positive conflicts caused by:
+ * - Floating-point precision issues during JSON serialization
+ * - Sub-second filesystem timing differences (APFS has nanosecond precision)
+ * - Slight mtime variations between read operations
+ *
+ * A real external modification would typically be at least 1+ seconds after our save.
+ */
+const MTIME_TOLERANCE_SECONDS = 0.5;
+
 export interface ConflictCheckResult {
   hasConflict: boolean;
   remoteMtime: number | null;
@@ -41,7 +53,8 @@ export async function checkForConflict(
 
   try {
     const remoteMtimeData = await getFileMtime(fileId);
-    const hasConflict = remoteMtimeData.mtime > lastKnownMtime;
+    // Use tolerance to avoid false positives from floating-point precision issues
+    const hasConflict = (remoteMtimeData.mtime - lastKnownMtime) > MTIME_TOLERANCE_SECONDS;
 
     return {
       hasConflict,
