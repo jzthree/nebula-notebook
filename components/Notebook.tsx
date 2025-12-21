@@ -1,5 +1,5 @@
 
-import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo, startTransition } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
@@ -1208,17 +1208,16 @@ export const Notebook: React.FC = () => {
 
   // Text edits - not individually undoable (too many operations)
   // Use setCells directly for per-keystroke updates
-  // Wrapped in startTransition to mark as low-priority - character already rendered by CodeMirror
+  // Note: We previously used startTransition here, but it caused a bug where deferred
+  // state updates would overwrite CodeMirror's current content when typing fast.
+  // CodeMirror renders synchronously, so we don't need startTransition for perceived performance.
   const handleUpdateCell = useCallback((id: string, content: string) => {
     // First edit while redo stack is non-empty is a keyframe
     // This commits the redo history before the new edit timeline begins
     if (hasRedoToFlush()) {
       flushCell(id, content);
     }
-    // Use startTransition: React state sync is non-urgent since CodeMirror already rendered the keystroke
-    startTransition(() => {
-      setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
-    });
+    setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
   }, [setCells, hasRedoToFlush, flushCell]);
 
   // AI/bulk update with undo tracking - for AI edits, annotated as AI source

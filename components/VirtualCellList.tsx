@@ -31,7 +31,7 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
       useWindowScroll={false}
       totalCount={cells.length}
       itemContent={(index, cell) => renderCell(cell, index)}
-      overscan={500}
+      overscan={1000}
       components={{
         List: ListContainer,
         Footer

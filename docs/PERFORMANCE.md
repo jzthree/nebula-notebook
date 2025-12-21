@@ -50,18 +50,17 @@ The notebook achieves near-zero perceived typing latency through careful archite
 
 1. **CodeMirror renders first**: The `@uiw/react-codemirror` wrapper ensures the keystroke appears in the DOM synchronously, before any React work happens. This is the critical insight—the character is visible at 0ms.
 
-2. **startTransition for state updates**: We wrap `setCells` in `startTransition` to explicitly tell React this update is non-urgent:
+2. **Synchronous state updates**: We update React state immediately after CodeMirror renders:
    ```tsx
    const handleUpdateCell = useCallback((id: string, content: string) => {
      if (hasRedoToFlush()) {
        flushCell(id, content);
      }
-     // Non-urgent: CodeMirror already rendered the keystroke
-     startTransition(() => {
-       setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
-     });
+     setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
    }, [setCells, hasRedoToFlush, flushCell]);
    ```
+
+   **Note**: We previously used `startTransition` here to defer state updates, but this caused a bug where deferred updates would overwrite CodeMirror's current content when typing fast. Since CodeMirror already renders synchronously, `startTransition` provided no perceived performance benefit.
 
 3. **Memoization prevents cascade**: Only the edited cell re-renders because:
    - `cells.map()` returns the same object reference for unchanged cells
@@ -76,8 +75,8 @@ The notebook achieves near-zero perceived typing latency through careful archite
 | Character visible | 0ms | CodeMirror synchronous render |
 | onChange fires | ~0.1ms | After CodeMirror render |
 | hasRedoToFlush | O(1) | Ref read, no computation |
-| setCells queued | ~0.1ms | startTransition, non-blocking |
-| React reconcile | Deferred | Next frame, interruptible |
+| setCells called | ~0.1ms | Synchronous, minimal work |
+| React reconcile | Next frame | Batched, only edited cell re-renders |
 
 ## Critical Rule: No O(N) Work Per Keystroke
 
