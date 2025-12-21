@@ -220,8 +220,8 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibility
   if (outputs.length === 0) {
     if (executionMs === undefined) return null;
     return (
-      <div className="relative border-t border-slate-100 rounded-b-lg bg-white px-4 py-2">
-        <span className="text-xs text-slate-400 tabular-nums" title="Execution time">
+      <div className="relative border-t border-slate-100 rounded-b-lg bg-white h-8">
+        <span className="absolute top-2 right-2 text-xs text-slate-400 tabular-nums" title="Execution time">
           {formatExecutionTime(executionMs)}
         </span>
       </div>
