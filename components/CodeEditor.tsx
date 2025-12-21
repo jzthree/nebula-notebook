@@ -42,7 +42,7 @@ interface Props {
   cellId?: string;
   shouldFocus?: boolean; // When true, focus the editor
   indentConfig?: IndentationConfig; // Detected indentation configuration
-  allCellsContent?: string[]; // Content of all cells for variable extraction
+  allCellsRef?: React.RefObject<Array<{ type: string; content: string }>>; // Ref to all cells for lazy autocomplete
 }
 
 // Light theme that matches our existing style
@@ -313,8 +313,8 @@ const dataScienceCompletions = [
   { label: 'seaborn', detail: 'as sns' },
 ];
 
-// Create completion source for Python - uses ref to avoid extension rebuilds
-function createPythonCompletionSource(allCellsContentRef: React.RefObject<string[]>) {
+// Create completion source for Python - uses ref to compute content lazily (only when autocomplete triggers)
+function createPythonCompletionSource(allCellsRef: React.RefObject<Array<{ type: string; content: string }> | null>) {
   return (context: CompletionContext): CompletionResult | null => {
     // Get the word before cursor
     const word = context.matchBefore(/[a-zA-Z_][a-zA-Z0-9_]*/);
@@ -322,8 +322,11 @@ function createPythonCompletionSource(allCellsContentRef: React.RefObject<string
     // Don't show completions if we're not typing a word and not explicitly requested
     if (!word && !context.explicit) return null;
 
-    // Read current content from ref (fresh on each completion request)
-    const allCellsContent = allCellsContentRef.current || [];
+    // Compute content lazily from ref - only runs when autocomplete triggers, not on every keystroke
+    const allCells = allCellsRef.current || [];
+    const allCellsContent = allCells
+      .filter(c => c.type === 'code')
+      .map(c => c.content);
 
     // Extract identifiers from all cells
     const identifiers = new Set<string>();
@@ -382,13 +385,13 @@ export const CodeEditor: React.FC<Props> = ({
   cellId,
   shouldFocus = false,
   indentConfig = DEFAULT_INDENTATION,
-  allCellsContent = [],
+  allCellsRef,
 }) => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
 
-  // Use ref for allCellsContent to avoid extension rebuilds on every keystroke
-  const allCellsContentRef = useRef<string[]>(allCellsContent);
-  allCellsContentRef.current = allCellsContent; // Update ref on each render
+  // Fallback ref if none provided (for standalone usage)
+  const fallbackRef = useRef<Array<{ type: string; content: string }>>([]);
+  const effectiveAllCellsRef = allCellsRef || fallbackRef;
 
   // Focus editor when shouldFocus becomes true
   useEffect(() => {
@@ -449,7 +452,7 @@ export const CodeEditor: React.FC<Props> = ({
     if (language === 'python') {
       exts.push(
         autocompletion({
-          override: [createPythonCompletionSource(allCellsContentRef)],
+          override: [createPythonCompletionSource(effectiveAllCellsRef)],
           activateOnTyping: true,
           defaultKeymap: true,
         })

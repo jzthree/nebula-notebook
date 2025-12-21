@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
@@ -13,7 +13,9 @@ import {
   saveActiveFileId,
   updateNotebookMetadata,
   renameFile,
-  loadNotebookHistory
+  loadNotebookHistory,
+  loadNotebookSession,
+  saveNotebookSession
 } from '../services/fileService';
 import { FileBrowser } from './FileBrowser';
 import { AIChatSidebar } from './AIChatSidebar';
@@ -37,6 +39,13 @@ const INITIAL_CELL: Cell = {
   content: '',
   outputs: [],
   isExecuting: false
+};
+
+type CellClipboardItem = {
+  type: CellType;
+  content: string;
+  sourceId: string;
+  isCut: boolean;
 };
 
 // Helper to extract filename from path
@@ -82,10 +91,16 @@ export const Notebook: React.FC = () => {
   const [renameValue, setRenameValue] = useState('');
 
   // Conflict detection state
-  const [lastKnownMtime, setLastKnownMtime] = useState<number | null>(null);
+  const [lastKnownMtime, setLastKnownMtimeState] = useState<number | null>(null);
   const lastKnownMtimeRef = useRef<number | null>(null);
   // Keep ref in sync to avoid stale closures in save callbacks
   lastKnownMtimeRef.current = lastKnownMtime;
+
+  // Helper to update both state AND ref synchronously to prevent race conditions
+  const setLastKnownMtime = useCallback((mtime: number | null) => {
+    lastKnownMtimeRef.current = mtime;  // Update ref immediately
+    setLastKnownMtimeState(mtime);      // Update state for re-render
+  }, []);
   const [pendingSave, setPendingSave] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -124,7 +139,12 @@ export const Notebook: React.FC = () => {
     getFullHistory,
     loadHistory,
     logOperation,
-    updateContentAI
+    updateContentAI,
+    redoStackLength,
+    commitHistoryBeforeKeyframe,
+    hasRedoToFlush,
+    getUnflushedState,
+    setUnflushedState,
   } = useUndoRedo([]);  // Start with empty cells
 
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
@@ -143,17 +163,27 @@ export const Notebook: React.FC = () => {
   );
 
   // Clipboard for cut/copy/paste cells
-  const [cellClipboard, setCellClipboard] = useState<{ cell: Cell; isCut: boolean } | null>(null);
+  const [cellClipboard, setCellClipboard] = useState<CellClipboardItem | null>(null);
+
+  const cellsRef = useRef<Cell[]>(cells);
+  const activeCellIdRef = useRef<string | null>(activeCellId);
+  const selectedCellIdsRef = useRef<Set<string>>(selectedCellIds);
+  const cellClipboardRef = useRef<CellClipboardItem | null>(cellClipboard);
+
+  cellsRef.current = cells;
+  activeCellIdRef.current = activeCellId;
+  selectedCellIdsRef.current = selectedCellIds;
+  cellClipboardRef.current = cellClipboard;
 
   // Flush active cell's pending content changes before keyframe operations
   const flushActiveCell = useCallback(() => {
-    if (activeCellId) {
-      const cell = cells.find(c => c.id === activeCellId);
-      if (cell) {
-        flushCell(activeCellId, cell.content);
-      }
+    const activeId = activeCellIdRef.current;
+    if (!activeId) return;
+    const cell = cellsRef.current.find(c => c.id === activeId);
+    if (cell) {
+      flushCell(activeId, cell.content);
     }
-  }, [activeCellId, cells, flushCell]);
+  }, [flushCell]);
 
   // Visual feedback for undo/redo
   const [highlightedCellIds, setHighlightedCellIds] = useState<Set<string>>(new Set());
@@ -318,6 +348,8 @@ export const Notebook: React.FC = () => {
 
   // Ref for saveNow to avoid stale closures in keyboard handler
   const saveNowRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  // Ref for handleManualSave to avoid stale closures in keyboard handler
+  const handleManualSaveRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   // Autosave hook with conflict detection
   const performSaveToFile = useCallback(async (fileId: string, cellsToSave: Cell[]) => {
@@ -341,8 +373,14 @@ export const Notebook: React.FC = () => {
       }
 
       if (result.success) {
+        // Note: setLastKnownMtime is called by saveWithCheck in the hook,
+        // which now updates both state AND ref synchronously
         setPendingSave(false);
         await updateNotebookMetadata(fileId, {});
+
+        // Save session state (unflushed edits) alongside notebook
+        const unflushedState = getUnflushedState(activeCellIdRef.current, cellsToSave);
+        await saveNotebookSession(fileId, { unflushedEdit: unflushedState ?? undefined });
       } else if (result.error) {
         throw new Error(result.error);
       }
@@ -352,13 +390,14 @@ export const Notebook: React.FC = () => {
       setPendingSave(true);
       throw error; // Re-throw so autosave knows it failed
     }
-  }, [getFullHistory, currentKernel, saveWithCheck]);
+  }, [getFullHistory, currentKernel, saveWithCheck, getUnflushedState]);
 
   const { status: autosaveStatus, saveNow } = useAutosave({
     fileId: currentFileId,
     cells,
     onSave: performSaveToFile,
     enabled: true,
+    hasRedoHistory: canRedo, // Block autosave when redo history exists
   });
 
   // Keep saveNow ref updated synchronously (not in useEffect which runs after render)
@@ -429,6 +468,13 @@ export const Notebook: React.FC = () => {
   const [kernelExecutionCount, setKernelExecutionCount] = useState(0); // Global execution counter
   const executionStartTimeRef = useRef<number | null>(null); // Track when queue execution started
 
+  // Memoize execution indicator state to avoid O(N) findIndex on every render
+  const executionIndicator = useMemo(() => {
+    if (executionQueue.length === 0) return null;
+    const executingCellId = executionQueue[0];
+    const executingCellIndex = cells.findIndex(c => c.id === executingCellId);
+    return { cellId: executingCellId, cellIndex: executingCellIndex, queueLength: executionQueue.length };
+  }, [executionQueue, cells]);
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
@@ -530,9 +576,11 @@ export const Notebook: React.FC = () => {
     }
   }, [currentFileId]);
 
-  // Ref for tracking 'dd' vim-style delete
+  // Refs for functions used in keyboard handler (defined later in component)
   const lastKeyRef = useRef<{ key: string; time: number } | null>(null);
-  const deleteCellRef = useRef<((id: string) => void) | null>(null);
+  const deleteCellRef = useRef<((id: string, ignoreSelection?: boolean) => void) | null>(null);
+  const addCellRef = useRef<((type: CellType, content?: string, afterIndex?: number) => void) | null>(null);
+  const changeCellTypeRef = useRef<((id: string, type: CellType) => void) | null>(null);
   const runAndAdvanceRef = useRef<((id: string, focusMode: 'cell' | 'editor') => void) | null>(null);
   const queueExecutionRef = useRef<((id: string) => void) | null>(null);
   // Track pending focus for next cell - Cell component handles the actual focusing
@@ -544,101 +592,142 @@ export const Notebook: React.FC = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 
-      // Ctrl+S: Save (works everywhere)
-      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      // Ctrl+S: Save (works everywhere) - uses handleManualSave for redo confirmation
+      if ((e.metaKey || e.ctrlKey) && key === 's') {
         e.preventDefault();
-        saveNowRef.current();
+        handleManualSaveRef.current();
         return;
       }
 
       // Ctrl+F: Search (works everywhere)
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+      if ((e.metaKey || e.ctrlKey) && key === 'f') {
         e.preventDefault();
         setIsSearchOpen(true);
         return;
       }
 
-      // Ctrl+Z / Ctrl+Shift+Z are handled by CodeMirror for per-cell undo/redo
-      // Notebook-level undo/redo is available via toolbar buttons
+      // DUAL UNDO/REDO ARCHITECTURE (intentional design):
+      //
+      // 1. Keyboard Ctrl/Cmd+Z → CodeMirror's per-cell text history
+      //    - Fine-grained character-level undo for text edits
+      //    - Each cell has its own independent undo stack
+      //    - Optimal for fixing typos and local text changes
+      //
+      // 2. Toolbar Undo/Redo → Notebook-level structural history (useUndoRedo hook)
+      //    - Coarse-grained operations: add/delete/move cells, type changes
+      //    - Content updates are batched at keyframe boundaries
+      //    - Preserves full notebook trajectory for session replay
+      //
+      // This separation is intentional - users get both fine-grained text
+      // editing and structural notebook operations at appropriate granularities.
+      // Keyboard shortcuts go to CodeMirror; toolbar buttons access notebook history.
 
-      // Cell-related shortcuts are handled by Cell.tsx when cell/editor is focused
-      // Skip here if event is from a cell (has data-cell-id or is inside one)
-      const isFromCell = (target as HTMLElement).closest?.('[data-cell-id]') !== null;
-      if (isInput || isFromCell) return;
+      // Determine focus context:
+      // - Edit mode: CodeMirror editor is focused (let CM handle shortcuts)
+      // - Cell mode: Cell div is focused (Notebook handles Jupyter-style shortcuts)
+      const isInEditor = target.closest?.('.cm-editor') !== null;
+      const focusedCellId = target.getAttribute?.('data-cell-id') ?? null;
 
-      // Jupyter-style shortcuts (command mode only - not in input fields)
-      const currentIndex = activeCellId ? cells.findIndex(c => c.id === activeCellId) : -1;
+      // Skip if typing in input fields or editing in CodeMirror
+      if (isInput || isInEditor) return;
+
+      // Jupyter-style shortcuts (cell mode only - when cell div itself is focused)
+      if (!focusedCellId) return;
+
+      const currentCells = cellsRef.current;
+      const currentIndex = currentCells.findIndex(c => c.id === focusedCellId);
 
       // A - Insert cell above
-      if (e.key === 'a') {
+      if (key === 'a' && addCellRef.current) {
         e.preventDefault();
-        const idx = currentIndex !== -1 ? currentIndex : 0;
-        addCell('code', '', idx, 'above');
+        // Insert above = insert after (currentIndex - 1), so new cell appears at currentIndex
+        const afterIdx = currentIndex === -1 ? undefined : currentIndex - 1;
+        addCellRef.current('code', '', afterIdx);
         return;
       }
 
       // B - Insert cell below
-      if (e.key === 'b') {
+      if (key === 'b' && addCellRef.current) {
         e.preventDefault();
-        const idx = currentIndex !== -1 ? currentIndex : cells.length - 1;
-        addCell('code', '', idx, 'below');
+        // Insert below = insert after currentIndex
+        const afterIdx = currentIndex !== -1 ? currentIndex : currentCells.length - 1;
+        addCellRef.current('code', '', afterIdx);
         return;
       }
 
       // M - Convert cell to Markdown
-      if (e.key === 'm' && activeCellId) {
+      if (key === 'm' && changeCellTypeRef.current) {
         e.preventDefault();
-        changeCellType(activeCellId, 'markdown');
+        changeCellTypeRef.current(focusedCellId, 'markdown');
         return;
       }
 
       // Y - Convert cell to Code
-      if (e.key === 'y' && activeCellId) {
+      if (key === 'y' && changeCellTypeRef.current) {
         e.preventDefault();
-        changeCellType(activeCellId, 'code');
+        changeCellTypeRef.current(focusedCellId, 'code');
         return;
       }
 
-      // X - Cut cell
-      if (e.key === 'x' && activeCellId && deleteCellRef.current) {
+      // X - Cut cell (copy to clipboard + delete)
+      if (key === 'x' && deleteCellRef.current) {
         e.preventDefault();
-        const cellToCut = cells.find(c => c.id === activeCellId);
-        if (cellToCut) {
-          setCellClipboard({ cell: { ...cellToCut }, isCut: true });
-          deleteCellRef.current(activeCellId);
+        const cellToCut = currentCells.find(c => c.id === focusedCellId);
+        if (cellToCut && currentCells.length > 1) {
+          // Copy to clipboard first, then delete
+          const clipboardItem: CellClipboardItem = {
+            type: cellToCut.type,
+            content: cellToCut.content,
+            sourceId: cellToCut.id,
+            isCut: true
+          };
+          cellClipboardRef.current = clipboardItem;
+          setCellClipboard(clipboardItem);
+          // Delete this specific cell (ignoreSelection=true to bypass multi-select)
+          deleteCellRef.current(focusedCellId, true);
         }
         return;
       }
 
       // C - Copy cell
-      if (e.key === 'c' && activeCellId) {
+      if (key === 'c') {
         e.preventDefault();
-        const cellToCopy = cells.find(c => c.id === activeCellId);
+        const cellToCopy = currentCells.find(c => c.id === focusedCellId);
         if (cellToCopy) {
-          setCellClipboard({ cell: { ...cellToCopy }, isCut: false });
+          const clipboardItem: CellClipboardItem = {
+            type: cellToCopy.type,
+            content: cellToCopy.content,
+            sourceId: cellToCopy.id,
+            isCut: false
+          };
+          cellClipboardRef.current = clipboardItem;
+          setCellClipboard(clipboardItem);
         }
         return;
       }
 
       // V - Paste cell below, Shift+V - Paste cell above
-      if (e.key === 'v' && cellClipboard) {
+      const clipboard = cellClipboardRef.current;
+      if (key === 'v' && clipboard && addCellRef.current) {
         e.preventDefault();
-        const position = e.shiftKey ? 'above' : 'below';
-        const idx = currentIndex !== -1 ? currentIndex : cells.length - 1;
-        addCell(cellClipboard.cell.type, cellClipboard.cell.content, idx, position);
-        // Clear clipboard if it was a cut operation
-        if (cellClipboard.isCut) {
-          setCellClipboard(null);
-        }
+        const pasteAbove = e.shiftKey;
+        // Use activeCellId to find current position, fallback to start/end
+        const currentIdx = currentCells.findIndex(c => c.id === focusedCellId);
+        const baseIdx = currentIdx >= 0 ? currentIdx : (pasteAbove ? -1 : currentCells.length - 1);
+        // For paste below: afterIndex = currentIdx (inserts at currentIdx + 1)
+        // For paste above: afterIndex = currentIdx - 1 (inserts at currentIdx)
+        const afterIdx = pasteAbove ? baseIdx - 1 : baseIdx;
+        addCellRef.current(clipboard.type, clipboard.content, afterIdx);
         return;
       }
 
       // Enter - Focus active cell editor (enter edit mode)
-      if (e.key === 'Enter' && activeCellId) {
+      if (key === 'Enter') {
         e.preventDefault();
         // Find and focus the CodeMirror editor for the active cell
-        const cellElement = document.querySelector(`[data-cell-id="${activeCellId}"] .cm-content`);
+        const cellElement = document.querySelector(`[data-cell-id="${focusedCellId}"] .cm-content`);
         if (cellElement instanceof HTMLElement) {
           cellElement.focus();
         }
@@ -648,7 +737,7 @@ export const Notebook: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, cells, activeCellId, cellClipboard]);
+  }, []);
 
   const refreshFileList = async () => {
     const updatedFiles = await getFiles();
@@ -728,15 +817,31 @@ export const Notebook: React.FC = () => {
     setActiveCellId(content.length > 0 ? content[0].id : null);
     setIsLoadingFile(false);
 
-    // Load persisted history in background (non-blocking)
-    loadNotebookHistory(id)
-      .then(savedHistory => {
+    // Load persisted history and session state in background (non-blocking)
+    Promise.all([
+      loadNotebookHistory(id),
+      loadNotebookSession(id)
+    ])
+      .then(([savedHistory, savedSession]) => {
         if (savedHistory.length > 0) {
           loadHistory(savedHistory);
         }
+        // Restore unflushed edit state so undo can capture pending changes
+        // Also navigate to the cell with unflushed edits so flushActiveCell works
+        if (savedSession.unflushedEdit) {
+          setUnflushedState(savedSession.unflushedEdit);
+          const cellId = savedSession.unflushedEdit.cellId;
+          const cellIndex = content.findIndex(c => c.id === cellId);
+          if (cellIndex >= 0) {
+            // Enter edit mode - this triggers focus which calls onActivate to set active cell
+            // The blur when leaving this cell will flush the unflushed edits
+            setPendingFocus({ cellId, mode: 'editor' });
+            virtuosoRef.current?.scrollToIndex({ index: cellIndex, align: 'start' });
+          }
+        }
       })
       .catch(() => {
-        // Silently ignore history load failures
+        // Silently ignore history/session load failures
       });
 
     const meta = files.find(f => f.id === id);
@@ -803,6 +908,31 @@ export const Notebook: React.FC = () => {
     await saveNow();
     await refreshFileList();
   }, [flushActiveCell, saveNow]);
+
+  // Manual save with confirmation when redo history exists
+  // This function is called by both the Save button and Ctrl+S keyboard shortcut
+  const handleManualSave = useCallback(async () => {
+    if (canRedo) {
+      const confirmed = await confirm({
+        title: 'Save will clear redo history',
+        message: 'You have undone changes. Saving now will permanently remove your ability to redo those changes.',
+        confirmLabel: 'Save Anyway',
+        variant: 'warning',
+      });
+      if (!confirmed) return;
+    }
+
+    // Keyframe: flush active cell and commit history before save
+    flushActiveCell();
+    commitHistoryBeforeKeyframe();
+    await saveNow();
+    await refreshFileList();
+  }, [canRedo, confirm, flushActiveCell, commitHistoryBeforeKeyframe, saveNow]);
+
+  // Update ref synchronously (useLayoutEffect runs before browser paint and event handlers)
+  useLayoutEffect(() => {
+    handleManualSaveRef.current = handleManualSave;
+  }, [handleManualSave]);
 
   // --- KERNEL OPERATIONS ---
 
@@ -876,8 +1006,15 @@ export const Notebook: React.FC = () => {
     // Keyframe: flush active cell before insert
     flushActiveCell();
 
+    const currentCells = cellsRef.current;
+    const existingIds = new Set(currentCells.map(c => c.id));
+    let newId = crypto.randomUUID();
+    while (existingIds.has(newId)) {
+      newId = crypto.randomUUID();
+    }
+
     const newCell: Cell = {
-      id: crypto.randomUUID(),
+      id: newId,
       type,
       content,
       outputs: [],
@@ -885,9 +1022,12 @@ export const Notebook: React.FC = () => {
     };
 
     // Calculate insertion index
-    const insertIndex = (afterIndex !== undefined && afterIndex >= 0 && afterIndex < cells.length)
-      ? afterIndex + 1
-      : cells.length;
+    const insertIndex = (() => {
+      if (afterIndex === undefined) return currentCells.length;
+      if (afterIndex < 0) return 0;
+      if (afterIndex >= currentCells.length) return currentCells.length;
+      return afterIndex + 1;
+    })();
 
     undoableInsertCell(insertIndex, newCell);
     setActiveCellId(newCell.id);
@@ -939,8 +1079,13 @@ export const Notebook: React.FC = () => {
   // Text edits - not individually undoable (too many operations)
   // Use setCells directly for per-keystroke updates
   const handleUpdateCell = useCallback((id: string, content: string) => {
+    // First edit while redo stack is non-empty is a keyframe
+    // This commits the redo history before the new edit timeline begins
+    if (hasRedoToFlush()) {
+      flushCell(id, content);
+    }
     setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
-  }, [setCells]);
+  }, [setCells, hasRedoToFlush, flushCell]);
 
   // AI/bulk update with undo tracking - for AI edits, annotated as AI source
   const handleAIUpdateCell = useCallback((id: string, content: string) => {
@@ -1014,31 +1159,34 @@ export const Notebook: React.FC = () => {
     changeType(id, type);
   };
 
-  const deleteCell = (id: string) => {
+  const deleteCell = (id: string, ignoreSelection = false) => {
     // Keyframe: flush active cell before delete
     flushActiveCell();
 
-    // If there are selected cells, delete all of them
-    const idsToDelete = selectedCellIds.size > 0 ? Array.from(selectedCellIds) : [id];
+    const currentCells = cellsRef.current;
+    const currentSelection = selectedCellIdsRef.current;
+
+    // If there are selected cells, delete all of them (unless ignoreSelection is true)
+    const idsToDelete = (!ignoreSelection && currentSelection.size > 0) ? Array.from(currentSelection) : [id];
 
     // Can't delete all cells - keep at least one
-    if (idsToDelete.length >= cells.length) {
+    if (idsToDelete.length >= currentCells.length) {
       // Clear the first cell instead
-      updateContent(cells[0].id, '');
+      updateContent(currentCells[0].id, '');
       setSelectedCellIds(new Set());
-      setActiveCellId(cells[0].id);
+      setActiveCellId(currentCells[0].id);
       return;
     }
 
     // Delete in reverse order (highest index first) to avoid index shifting issues
     const indicesToDelete = idsToDelete
-      .map(cellId => cells.findIndex(c => c.id === cellId))
+      .map(cellId => currentCells.findIndex(c => c.id === cellId))
       .filter(idx => idx !== -1)
       .sort((a, b) => b - a);
 
     // Find the cell to select after deletion (first cell after all deleted ones)
     const minIdx = Math.min(...indicesToDelete);
-    const remainingCells = cells.filter(c => !idsToDelete.includes(c.id));
+    const remainingCells = currentCells.filter(c => !idsToDelete.includes(c.id));
     const nextCellId = remainingCells[Math.min(minIdx, remainingCells.length - 1)]?.id;
 
     // Delete each cell
@@ -1052,8 +1200,10 @@ export const Notebook: React.FC = () => {
       setActiveCellId(nextCellId);
     }
   };
-  // Update ref for keyboard shortcut handler
+  // Update refs for keyboard shortcut handler
   deleteCellRef.current = deleteCell;
+  addCellRef.current = addCell;
+  changeCellTypeRef.current = changeCellType;
 
   const moveCell = (id: string, direction: 'up' | 'down') => {
     // Keyframe: flush active cell before move
@@ -1583,10 +1733,16 @@ export const Notebook: React.FC = () => {
                             <span className="text-slate-400">{formatLastSaved(autosaveStatus.lastSaved)}</span>
                           </span>
                         )}
-                        {autosaveStatus.status === 'unsaved' && !pendingSave && (
+                        {autosaveStatus.status === 'unsaved' && !pendingSave && !canRedo && (
                           <span className="flex items-center gap-1 text-amber-600" title="Unsaved changes">
                             <Cloud className="w-3 h-3" />
                             <span className="text-slate-400">Unsaved</span>
+                          </span>
+                        )}
+                        {canRedo && (
+                          <span className="flex items-center gap-1 text-amber-600" title="Autosave paused while redo history exists. Saving will clear redo history.">
+                            <Undo2 className="w-3 h-3" />
+                            <span>Autosave paused</span>
                           </span>
                         )}
                         {autosaveStatus.status === 'error' && !pendingSave && (
@@ -1598,17 +1754,13 @@ export const Notebook: React.FC = () => {
                       </span>
 
                       {/* Execution Indicator - subtle shortcut to jump to running cell */}
-                      {executionQueue.length > 0 && (() => {
-                        const executingCellId = executionQueue[0];
-                        const executingCellIndex = cells.findIndex(c => c.id === executingCellId);
-                        const queueLength = executionQueue.length;
-                        return (
+                      {executionIndicator && (
                           <button
                             onClick={() => {
-                              if (executingCellIndex >= 0) {
-                                setActiveCellId(executingCellId);
+                              if (executionIndicator.cellIndex >= 0) {
+                                setActiveCellId(executionIndicator.cellId);
                                 virtuosoRef.current?.scrollToIndex({
-                                  index: executingCellIndex,
+                                  index: executionIndicator.cellIndex,
                                   align: 'start',
                                   behavior: 'smooth',
                                   offset: -80
@@ -1616,16 +1768,15 @@ export const Notebook: React.FC = () => {
                               }
                             }}
                             className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
-                            title={`Jump to cell ${executingCellIndex + 1}${queueLength > 1 ? ` (${queueLength - 1} more queued)` : ''}`}
+                            title={`Jump to cell ${executionIndicator.cellIndex + 1}${executionIndicator.queueLength > 1 ? ` (${executionIndicator.queueLength - 1} more queued)` : ''}`}
                           >
                             <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
-                            <span className="tabular-nums">[{executingCellIndex + 1}]</span>
-                            {queueLength > 1 && (
-                              <span className="text-gray-400">+{queueLength - 1}</span>
+                            <span className="tabular-nums">[{executionIndicator.cellIndex + 1}]</span>
+                            {executionIndicator.queueLength > 1 && (
+                              <span className="text-gray-400">+{executionIndicator.queueLength - 1}</span>
                             )}
                           </button>
-                        );
-                      })()}
+                      )}
                     </div>
 
                  </div>
@@ -1665,7 +1816,7 @@ export const Notebook: React.FC = () => {
                   >
                     <Settings className="w-4 h-4" />
                   </button>
-                  <button onClick={saveCurrentNotebook} className="btn-secondary hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors">
+                  <button onClick={handleManualSave} className="btn-secondary hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors">
                       <Save className="w-4 h-4" /> Save
                   </button>
                   <button onClick={() => {
@@ -1735,7 +1886,7 @@ export const Notebook: React.FC = () => {
                   onActivate={setActiveCellId}
                   onNavigateCell={(direction) => navigateCellRelative(cell.id, direction)}
                   onAddCell={(afterIndex) => addCell('code', '', afterIndex, true)}
-                  onSave={saveNow}
+                  onSave={handleManualSave}
                   searchHighlight={searchQuery}
                   queuePosition={executionQueue.indexOf(cell.id)}
                   indentConfig={indentConfig}

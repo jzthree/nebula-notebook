@@ -1,14 +1,57 @@
+/**
+ * NOTEBOOK-LEVEL UNDO/REDO SYSTEM
+ *
+ * This hook manages the structural history of the notebook - operations that
+ * affect the notebook as a whole rather than individual text edits.
+ *
+ * ## Dual Undo Architecture
+ *
+ * The notebook uses two complementary undo systems:
+ *
+ * 1. **CodeMirror (keyboard Ctrl/Cmd+Z)**: Fine-grained per-cell text history
+ *    - Character-level undo for each cell's content
+ *    - Each cell has independent undo stacks
+ *    - Optimal for typos and local text editing
+ *
+ * 2. **This hook (toolbar buttons)**: Coarse-grained notebook operations
+ *    - Structural: insertCell, deleteCell, moveCell, changeType
+ *    - Content: updateContent (batched at keyframe boundaries)
+ *    - Batch: compound operations as single undo step
+ *
+ * This separation is intentional - users get fine-grained text editing via
+ * keyboard and structural notebook changes via toolbar, each at the appropriate
+ * granularity level.
+ *
+ * ## Keyframe Pattern
+ *
+ * Content changes are NOT tracked on every keystroke. Instead, we use "keyframes":
+ * - Before structural operations (add/delete/move cell)
+ * - Before execution (run cell)
+ * - On save
+ * - On explicit flush calls
+ *
+ * Call `flushCell(cellId, content)` before keyframe operations to capture
+ * pending content changes.
+ *
+ * ## Full History
+ *
+ * Beyond undo/redo, this hook maintains a complete timestamped operation log
+ * (fullHistoryRef) for session replay, AI training data, and debugging.
+ */
 
 import { useState, useCallback, useRef } from 'react';
 import { Cell, CellType } from '../types';
 import { createDiff, diffToPatch, applyPatch, reversePatch, hashText, Patch } from '../lib/diffUtils';
 
-// Maximum number of operations to keep in history
-const MAX_HISTORY = 100;
+// No limit on undo history - operations are lightweight (just metadata + diffs)
+// The full history is intended to be essentially unlimited for session replay
 
 // Base operation data shared by all operations
 interface BaseOperation {
   timestamp: number; // Unix timestamp in milliseconds
+  operationId?: string; // Unique ID for pairing undo ops with original ops
+  isUndo?: boolean; // True if this is an undo-generated op (for history filtering)
+  undoesOperationId?: string; // ID of the operation being undone (for pairing)
 }
 
 // Source of content edit (for tracking AI vs user edits)
@@ -52,6 +95,12 @@ export interface UndoRedoResult {
   operationType: string;       // Type of operation (for potential animation variants)
 }
 
+// Unflushed edit state for session persistence
+export interface UnflushedState {
+  cellId: string;
+  lastFlushedContent: string;
+}
+
 interface UseUndoRedoResult {
   cells: Cell[];
   setCells: (newCells: Cell[] | ((prev: Cell[]) => Cell[])) => void;
@@ -83,6 +132,22 @@ interface UseUndoRedoResult {
   loadHistory: (history: TimestampedOperation[]) => void;
   // Log non-undoable operations (for history tracking)
   logOperation: (op: LogOperation) => void;
+  // New for autosave integration
+  redoStackLength: number;
+  commitHistoryBeforeKeyframe: () => void;
+  // Check if editing should trigger a keyframe (redo stack non-empty)
+  // Uses ref for immediate reads after state updates
+  hasRedoToFlush: () => boolean;
+  // Session state for unflushed edits
+  getUnflushedState: (activeCellId: string | null, cells: Cell[]) => UnflushedState | null;
+  setUnflushedState: (state: UnflushedState | null) => void;
+}
+
+function cloneCell(cell: Cell): Cell {
+  return {
+    ...cell,
+    outputs: cell.outputs.map(output => ({ ...output }))
+  };
 }
 
 // Apply an operation to cells (forward)
@@ -92,7 +157,7 @@ function applyOperation(cells: Cell[], op: Operation): Cell[] {
       const newCells = [...cells];
       // Create new object to ensure React memo comparisons detect the change
       // (important for undo - the stored cell object might be the same reference)
-      newCells.splice(op.index, 0, { ...op.cell });
+      newCells.splice(op.index, 0, cloneCell(op.cell));
       return newCells;
     }
     case 'deleteCell': {
@@ -206,16 +271,45 @@ function getAffectedCellIds(op: Operation, cells?: Cell[]): string[] {
   }
 }
 
-// Maximum operations to keep in full history
-const MAX_FULL_HISTORY = 10000;
-
 export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Current state
   const [cells, setCellsInternal] = useState<Cell[]>(initialCells);
 
   // Operation history stacks
-  const [undoStack, setUndoStack] = useState<Operation[]>([]);
-  const [redoStack, setRedoStack] = useState<Operation[]>([]);
+  const [undoStack, setUndoStackState] = useState<Operation[]>([]);
+  const [redoStack, setRedoStackState] = useState<Operation[]>([]);
+
+  // Refs to mirror stacks for immediate reads after writes (React batches state updates)
+  const undoStackRef = useRef<Operation[]>([]);
+  const redoStackRef = useRef<Operation[]>([]);
+
+  // Helper that updates both state and ref for undoStack
+  const setUndoStack = useCallback((update: Operation[] | ((prev: Operation[]) => Operation[])) => {
+    if (typeof update === 'function') {
+      setUndoStackState(prev => {
+        const newStack = update(prev);
+        undoStackRef.current = newStack;
+        return newStack;
+      });
+    } else {
+      undoStackRef.current = update;
+      setUndoStackState(update);
+    }
+  }, []);
+
+  // Helper that updates both state and ref for redoStack
+  const setRedoStack = useCallback((update: Operation[] | ((prev: Operation[]) => Operation[])) => {
+    if (typeof update === 'function') {
+      setRedoStackState(prev => {
+        const newStack = update(prev);
+        redoStackRef.current = newStack;
+        return newStack;
+      });
+    } else {
+      redoStackRef.current = update;
+      setRedoStackState(update);
+    }
+  }, []);
 
   // Track last content per cell for updateContent operations
   const lastContentRef = useRef<Map<string, string>>(new Map());
@@ -223,57 +317,74 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Full timestamped history for persistence (includes both undoable and log operations)
   const fullHistoryRef = useRef<TimestampedOperation[]>([]);
 
+  // Track redo stack length for keyframe detection (first undo, first edit after undo)
+  const prevRedoLengthRef = useRef<number>(0);
+
   const canUndo = undoStack.length > 0;
   const canRedo = redoStack.length > 0;
 
-  // Helper to add operation to full history
-  const addToFullHistory = useCallback((op: UndoableOperation | LogOperation) => {
+  // Helper to add operation to full history (unlimited - for session replay)
+  // Returns the generated operationId for linking undo ops
+  const addToFullHistory = useCallback((op: UndoableOperation | LogOperation): string => {
+    const operationId = crypto.randomUUID();
     const timestampedOp: TimestampedOperation = {
       ...op,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      operationId,
     };
     fullHistoryRef.current.push(timestampedOp);
-    // Trim if exceeds max
-    if (fullHistoryRef.current.length > MAX_FULL_HISTORY) {
-      fullHistoryRef.current = fullHistoryRef.current.slice(-MAX_FULL_HISTORY);
-    }
+    return operationId;
+  }, []);
+
+  // Convert redo stack entries to undo ops in history (for keyframe events)
+  // This records the undo steps in history while keeping history append-only
+  const convertRedoStackToHistory = useCallback((redoOps: Operation[]) => {
+    redoOps.forEach(op => {
+      const reversedOp = reverseOperation(op);
+      const timestampedOp: TimestampedOperation = {
+        ...reversedOp,
+        timestamp: Date.now(),
+        operationId: crypto.randomUUID(),
+        isUndo: true,
+        undoesOperationId: (op as any).operationId,
+      };
+      fullHistoryRef.current.push(timestampedOp);
+    });
   }, []);
 
   // Execute an operation and push to undo stack
   const executeOperation = useCallback((op: Operation) => {
     setCellsInternal(prev => applyOperation(prev, op));
-    setUndoStack(prev => {
-      const newStack = [...prev, op];
-      if (newStack.length > MAX_HISTORY) {
-        newStack.shift();
+    // Keyframe: first edit after undo - convert redo stack to history before clearing
+    setRedoStack(prev => {
+      if (prev.length > 0) {
+        convertRedoStackToHistory(prev);
       }
-      return newStack;
+      return [];
     });
-    setRedoStack([]); // Clear redo stack on new operation
-    addToFullHistory(op); // Track in full history
-  }, [addToFullHistory]);
+    // Add to history first to get the operationId
+    const operationId = addToFullHistory(op);
+    // Store operationId on the op for later linking when it moves to redo stack
+    const opWithId = { ...op, operationId } as Operation;
+    setUndoStack(prev => [...prev, opWithId]);
+  }, [addToFullHistory, convertRedoStackToHistory]);
 
   // Insert a cell at index
   const insertCell = useCallback((index: number, cell: Cell) => {
+    const snapshot = cloneCell(cell);
     // Initialize content tracking for the new cell
-    lastContentRef.current.set(cell.id, cell.content);
-    executeOperation({ type: 'insertCell', index, cell });
+    lastContentRef.current.set(snapshot.id, snapshot.content);
+    executeOperation({ type: 'insertCell', index, cell: snapshot });
   }, [executeOperation]);
 
   // Delete a cell at index, returns the deleted cell
   const deleteCell = useCallback((index: number): Cell | null => {
-    let deletedCell: Cell | null = null;
-    setCellsInternal(prev => {
-      if (index < 0 || index >= prev.length) return prev;
-      deletedCell = prev[index];
-      return prev;
-    });
-
-    if (deletedCell) {
-      executeOperation({ type: 'deleteCell', index, cell: deletedCell });
-    }
-    return deletedCell;
-  }, [executeOperation]);
+    const cellToDelete = cells[index];
+    if (!cellToDelete) return null;
+    const snapshot = cloneCell(cellToDelete);
+    executeOperation({ type: 'deleteCell', index, cell: snapshot });
+    return snapshot;
+  }, [cells, executeOperation]);
 
   // Move a cell from one index to another
   const moveCell = useCallback((fromIndex: number, toIndex: number) => {
@@ -295,6 +406,14 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
         // Update last known content
         lastContentRef.current.set(cellId, newContent);
 
+        // Keyframe: first edit after undo - convert redo stack to history before clearing
+        setRedoStack(prevRedo => {
+          if (prevRedo.length > 0) {
+            convertRedoStackToHistory(prevRedo);
+          }
+          return [];
+        });
+
         const op: Operation = {
           type: 'updateContent',
           cellId,
@@ -303,21 +422,16 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
           source
         };
 
-        // Push operation to undo stack
-        setUndoStack(prevStack => {
-          const newStack = [...prevStack, op];
-          if (newStack.length > MAX_HISTORY) {
-            newStack.shift();
-          }
-          return newStack;
-        });
-        setRedoStack([]);
-        addToFullHistory(op); // Track in full history
+        // Add to history first to get the operationId
+        const operationId = addToFullHistory(op);
+        // Store operationId on the op for later linking
+        const opWithId = { ...op, operationId } as Operation;
+        setUndoStack(prevStack => [...prevStack, opWithId]);
       }
 
       return prev.map(c => c.id === cellId ? { ...c, content: newContent } : c);
     });
-  }, [addToFullHistory]);
+  }, [addToFullHistory, convertRedoStackToHistory]);
 
   // Convenience function for AI edits - automatically marks source as 'ai'
   const updateContentAI = useCallback((cellId: string, newContent: string) => {
@@ -330,6 +444,14 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       const cell = prev.find(c => c.id === cellId);
       if (!cell || cell.type === newType) return prev;
 
+      // Keyframe: first edit after undo - convert redo stack to history before clearing
+      setRedoStack(prevRedo => {
+        if (prevRedo.length > 0) {
+          convertRedoStackToHistory(prevRedo);
+        }
+        return [];
+      });
+
       const op: Operation = {
         type: 'changeType',
         cellId,
@@ -337,19 +459,15 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
         newType
       };
 
-      setUndoStack(prevStack => {
-        const newStack = [...prevStack, op];
-        if (newStack.length > MAX_HISTORY) {
-          newStack.shift();
-        }
-        return newStack;
-      });
-      setRedoStack([]);
-      addToFullHistory(op); // Track in full history
+      // Add to history first to get the operationId
+      const operationId = addToFullHistory(op);
+      // Store operationId on the op for later linking
+      const opWithId = { ...op, operationId } as Operation;
+      setUndoStack(prevStack => [...prevStack, opWithId]);
 
       return prev.map(c => c.id === cellId ? { ...c, type: newType } : c);
     });
-  }, [addToFullHistory]);
+  }, [addToFullHistory, convertRedoStackToHistory]);
 
   // Execute a batch of operations as a single undoable action
   const batch = useCallback((operations: Operation[]) => {
@@ -367,6 +485,15 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     const lastContent = lastContentRef.current.get(cellId);
     // Only record if content actually changed
     if (lastContent !== undefined && lastContent !== currentContent) {
+      // Keyframe: first edit after undo (redo stack about to become empty)
+      // Convert redo stack to history before clearing
+      setRedoStack(prev => {
+        if (prev.length > 0) {
+          convertRedoStackToHistory(prev);
+        }
+        return [];
+      });
+
       const op: Operation = {
         type: 'updateContent',
         cellId,
@@ -376,18 +503,13 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       };
       // Update tracking
       lastContentRef.current.set(cellId, currentContent);
-      // Add to undo stack
-      setUndoStack(prev => {
-        const newStack = [...prev, op];
-        if (newStack.length > MAX_HISTORY) {
-          newStack.shift();
-        }
-        return newStack;
-      });
-      setRedoStack([]);
-      addToFullHistory(op);
+      // Add to history first to get operationId
+      const operationId = addToFullHistory(op);
+      // Store operationId on the op for later linking
+      const opWithId = { ...op, operationId } as Operation;
+      setUndoStack(prev => [...prev, opWithId]);
     }
-  }, [addToFullHistory]);
+  }, [addToFullHistory, convertRedoStackToHistory]);
 
   // Helper to update lastContentRef after undoing an operation
   const updateContentTrackingAfterUndo = useCallback((op: Operation) => {
@@ -425,9 +547,11 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   }, []);
 
   // Peek at what the next undo would affect (without applying)
+  // Uses ref instead of state for immediate reads after flushCell writes
   const peekUndo = useCallback((): UndoRedoResult | null => {
-    if (undoStack.length === 0) return null;
-    const op = undoStack[undoStack.length - 1];
+    const stack = undoStackRef.current;
+    if (stack.length === 0) return null;
+    const op = stack[stack.length - 1];
     const reversedOp = reverseOperation(op);
     // For moveCell, we need to simulate where the cell will be after undo
     // The reversed op's toIndex is where the cell will end up
@@ -435,7 +559,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       affectedCellIds: getAffectedCellIds(reversedOp, cells),
       operationType: op.type
     };
-  }, [undoStack, cells]);
+  }, [cells]);
 
   // Peek at what the next redo would affect (without applying)
   const peekRedo = useCallback((): UndoRedoResult | null => {
@@ -452,10 +576,12 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Note: Caller should call flushCell(activeCellId, content) before undo
   // to capture any pending content changes in the active cell
   // Returns affected cell IDs for visual feedback
+  // Uses ref instead of state for immediate reads after flushCell writes
   const undo = useCallback((): UndoRedoResult | null => {
-    if (undoStack.length === 0) return null;
+    const stack = undoStackRef.current;
+    if (stack.length === 0) return null;
 
-    const op = undoStack[undoStack.length - 1];
+    const op = stack[stack.length - 1];
     const reversedOp = reverseOperation(op);
 
     let newCells: Cell[] = [];
@@ -474,7 +600,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       affectedCellIds: getAffectedCellIds(reversedOp, newCells),
       operationType: op.type
     };
-  }, [undoStack, updateContentTrackingAfterUndo]);
+  }, [setUndoStack, updateContentTrackingAfterUndo]);
 
   // Redo last undone operation
   // Returns affected cell IDs for visual feedback
@@ -518,7 +644,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     // Start fresh history with a snapshot (required for trajectory reconstruction)
     fullHistoryRef.current = [{
       type: 'snapshot',
-      cells: newCells.map(c => ({ ...c })), // Deep copy
+      cells: newCells.map(cloneCell), // Deep copy
       timestamp: Date.now()
     }];
   }, []);
@@ -556,7 +682,11 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
         oldHash: hashText(op.oldContent),
         newHash: hashText(op.newContent),
         timestamp: op.timestamp,
-        ...(op.source && { source: op.source }) // Preserve AI annotation
+        ...(op.source && { source: op.source }), // Preserve AI annotation
+        // Preserve undo/redo tracking metadata
+        ...(op.operationId && { operationId: op.operationId }),
+        ...(op.isUndo && { isUndo: op.isUndo }),
+        ...(op.undoesOperationId && { undoesOperationId: op.undoesOperationId }),
       };
     }
     if (op.type === 'insertCell') {
@@ -592,6 +722,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
 
   // Load history from persistence (e.g., when loading a notebook)
   // Rebuilds undoStack from loaded operations so undo works
+  // Filters out undo ops and their canceled counterparts (history remains append-only)
   const loadHistory = useCallback((history: TimestampedOperation[]) => {
     // If loaded history starts with a snapshot, use it entirely
     if (history.length > 0 && history[0].type === 'snapshot') {
@@ -606,13 +737,27 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       }
     }
 
-    // Rebuild undoStack from the loaded history (only undoable operations)
+    // Build set of operation IDs that have been undone
+    const undoneIds = new Set<string>();
+    for (const op of fullHistoryRef.current) {
+      if ((op as any).isUndo && (op as any).undoesOperationId) {
+        undoneIds.add((op as any).undoesOperationId);
+      }
+    }
+
+    // Rebuild undoStack from the loaded history
+    // Filter out: undo ops (isUndo=true) and their canceled counterparts (undoneIds)
     const undoableOps: Operation[] = [];
     for (const op of fullHistoryRef.current) {
+      // Skip undo ops themselves
+      if ((op as any).isUndo) continue;
+      // Skip operations that were undone
+      if ((op as any).operationId && undoneIds.has((op as any).operationId)) continue;
+
       if (op.type === 'insertCell' || op.type === 'deleteCell' ||
           op.type === 'moveCell' || op.type === 'updateContent' ||
           op.type === 'updateContentPatch' || op.type === 'changeType' || op.type === 'batch') {
-        const { timestamp, ...operation } = op as any;
+        const { timestamp, operationId, isUndo, undoesOperationId, ...operation } = op as any;
         undoableOps.push(operation as Operation);
       }
     }
@@ -624,6 +769,50 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   const logOperation = useCallback((op: LogOperation) => {
     addToFullHistory(op);
   }, [addToFullHistory]);
+
+  // Commit history before keyframe events (e.g., save)
+  // Converts redo stack to undo ops in history and clears redo stack
+  const commitHistoryBeforeKeyframe = useCallback(() => {
+    setRedoStack(prev => {
+      if (prev.length > 0) {
+        convertRedoStackToHistory(prev);
+      }
+      return [];
+    });
+  }, [convertRedoStackToHistory]);
+
+  // Get unflushed state for session persistence
+  // Returns the active cell's unflushed edit state if there are pending changes
+  const getUnflushedState = useCallback((activeCellId: string | null, currentCells: Cell[]): UnflushedState | null => {
+    if (!activeCellId) return null;
+
+    const cell = currentCells.find(c => c.id === activeCellId);
+    if (!cell) return null;
+
+    const lastFlushedContent = lastContentRef.current.get(activeCellId);
+    if (lastFlushedContent === undefined) return null;
+
+    // Only return state if there are actual unflushed changes
+    if (lastFlushedContent === cell.content) return null;
+
+    return {
+      cellId: activeCellId,
+      lastFlushedContent
+    };
+  }, []);
+
+  // Restore unflushed state from session persistence
+  // Sets the lastContentRef for a cell to recreate the unflushed edit boundary
+  const setUnflushedState = useCallback((state: UnflushedState | null) => {
+    if (!state) return;
+    lastContentRef.current.set(state.cellId, state.lastFlushedContent);
+  }, []);
+
+  // Check if editing should trigger a keyframe (redo stack non-empty)
+  // Uses ref for immediate reads - first edit after undo should flush
+  const hasRedoToFlush = useCallback(() => {
+    return redoStackRef.current.length > 0;
+  }, []);
 
   return {
     cells,
@@ -647,5 +836,12 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     getFullHistory,
     loadHistory,
     logOperation,
+    // New exports for autosave integration
+    redoStackLength: redoStack.length,
+    commitHistoryBeforeKeyframe,
+    hasRedoToFlush,
+    // Session state for unflushed edits
+    getUnflushedState,
+    setUnflushedState,
   };
 };

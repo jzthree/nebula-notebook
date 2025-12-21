@@ -474,3 +474,66 @@ export const saveNotebookHistory = async (
     return false;
   }
 };
+
+// --- Session State Persistence ---
+
+/**
+ * Session state structure for unflushed edits
+ */
+export interface SessionState {
+  unflushedEdit?: {
+    cellId: string;
+    lastFlushedContent: string;
+  };
+}
+
+/**
+ * Load session state for a notebook from .nebula directory
+ */
+export const loadNotebookSession = async (notebookPath: string): Promise<SessionState> => {
+  try {
+    const response = await fetch(
+      `${API_BASE}/notebook/session?notebook_path=${encodeURIComponent(notebookPath)}`
+    );
+
+    if (!response.ok) {
+      console.warn('Failed to load session:', await response.text());
+      return {};
+    }
+
+    const data = await response.json();
+    return data.session || {};
+  } catch (error) {
+    console.warn('Failed to load notebook session:', error);
+    return {};
+  }
+};
+
+/**
+ * Save session state for a notebook to .nebula directory
+ */
+export const saveNotebookSession = async (
+  notebookPath: string,
+  session: SessionState
+): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE}/notebook/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        notebook_path: notebookPath,
+        session
+      })
+    });
+
+    if (!response.ok) {
+      console.warn('Failed to save session:', await response.text());
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.warn('Failed to save notebook session:', error);
+    return false;
+  }
+};

@@ -18,9 +18,10 @@ export interface UseAutosaveOptions {
   cells: Cell[];
   onSave: (fileId: string, cells: Cell[]) => Promise<void>;
   enabled?: boolean;
+  hasRedoHistory?: boolean; // Block autosave when redo history exists (user has undone)
 }
 
-export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosaveOptions) {
+export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHistory = false }: UseAutosaveOptions) {
   // UI status (derived from machine state)
   const [uiStatus, setUiStatus] = useState<AutosaveStatus>({
     status: 'saved',
@@ -183,6 +184,8 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
   // React to cells changes
   useEffect(() => {
     if (!fileId || !enabled) return;
+    // Block autosave when redo history exists (user has undone)
+    if (hasRedoHistory) return;
 
     // Quick reference check - if cells array reference hasn't changed, skip
     if (cells === cellsRef.current) return;
@@ -193,7 +196,7 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
 
     // Dispatch cells changed event
     dispatch({ type: 'CELLS_CHANGED' });
-  }, [cells, fileId, enabled, dispatch]);
+  }, [cells, fileId, enabled, hasRedoHistory, dispatch]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -243,16 +246,17 @@ export function useAutosave({ fileId, cells, onSave, enabled = true }: UseAutosa
   }, [hasUnsavedChanges]);
 
   // Save on visibility change (tab switch)
+  // Block when redo history exists to avoid losing redo on tab switch
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden' && hasUnsavedChanges()) {
+      if (document.visibilityState === 'hidden' && hasUnsavedChanges() && !hasRedoHistory) {
         dispatch({ type: 'MANUAL_SAVE' });
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [hasUnsavedChanges, dispatch]);
+  }, [hasUnsavedChanges, hasRedoHistory, dispatch]);
 
   return {
     status: uiStatus,

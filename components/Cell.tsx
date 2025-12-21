@@ -474,7 +474,7 @@ const CellComponent: React.FC<Props> = ({
           cellId={cell.id}
           shouldFocus={focusState === 'editor'}
           indentConfig={indentConfig}
-          allCellsContent={allCells.filter(c => c.type === 'code').map(c => c.content)}
+          allCellsRef={allCellsRef}
         />
       </div>
 

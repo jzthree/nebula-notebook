@@ -128,14 +128,19 @@ describe('Cell', () => {
   });
 
   describe('command/edit mode visual distinction', () => {
-    it('shows command mode (green) border when active but not editing', () => {
-      const { container } = renderCell({ ...defaultProps, isActive: true });
+    it('shows command mode (green) border when cell div is focused', () => {
+      const { container } = renderCell({ ...defaultProps, isActive: true, onActivate: vi.fn() });
       const cellDiv = container.querySelector('[data-cell-id]') as HTMLElement;
+
+      // Focus the cell div itself to enter command mode
+      fireEvent.focus(cellDiv);
+
+      // Should have green border for command mode
       expect(cellDiv.className).toContain('border-green');
     });
 
-    it('shows edit mode (blue) border when editing', () => {
-      const { container } = renderCell({ ...defaultProps, isActive: true });
+    it('shows edit mode (blue) border when editor is focused', () => {
+      const { container } = renderCell({ ...defaultProps, isActive: true, onActivate: vi.fn() });
       const cellDiv = container.querySelector('[data-cell-id]') as HTMLElement;
 
       // Focus the CodeMirror editor to enter edit mode
@@ -146,11 +151,14 @@ describe('Cell', () => {
       expect(cellDiv.className).toContain('border-blue');
     });
 
-    it('shows mode indicator in gutter', () => {
-      renderCell({ ...defaultProps, isActive: true });
+    it('shows default border when not focused', () => {
+      const { container } = renderCell({ ...defaultProps, isActive: false });
+      const cellDiv = container.querySelector('[data-cell-id]') as HTMLElement;
 
-      // Should show command mode indicator
-      expect(screen.getByText('Cmd')).toBeInTheDocument();
+      // Should have default slate border when not focused
+      expect(cellDiv.className).toContain('border-slate');
+      expect(cellDiv.className).not.toContain('border-green');
+      expect(cellDiv.className).not.toContain('border-blue');
     });
   });
 

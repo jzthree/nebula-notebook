@@ -89,6 +89,11 @@ class SaveHistoryRequest(BaseModel):
     history: List[Dict[str, Any]]
 
 
+class SaveSessionRequest(BaseModel):
+    notebook_path: str
+    session: Dict[str, Any]
+
+
 class InstallKernelRequest(BaseModel):
     python_path: str
     kernel_name: Optional[str] = None
@@ -559,6 +564,28 @@ async def save_notebook_history(request: SaveHistoryRequest):
     """Save operation history for a notebook to .nebula directory"""
     try:
         fs_service.save_history(request.notebook_path, request.history)
+        return {"status": "ok", "notebook_path": request.notebook_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Session State Persistence Endpoints ---
+
+@app.get("/api/notebook/session")
+async def get_notebook_session(notebook_path: str):
+    """Load session state for a notebook from .nebula directory"""
+    try:
+        session = fs_service.load_session(notebook_path)
+        return {"notebook_path": notebook_path, "session": session}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notebook/session")
+async def save_notebook_session(request: SaveSessionRequest):
+    """Save session state for a notebook to .nebula directory"""
+    try:
+        fs_service.save_session(request.notebook_path, request.session)
         return {"status": "ok", "notebook_path": request.notebook_path}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
