@@ -274,12 +274,90 @@ Before merging code that touches the typing path:
 - [ ] Autocomplete-related code uses refs, not computed arrays
 - [ ] No new O(N) operations in `handleUpdateCell` or `onChange` handlers
 
+## Large Output Handling
+
+Code execution can produce massive output (e.g., `for i in range(100000): print(i)`). Without limits, this can freeze the browser. We use a two-tier system:
+
+### Tier 1: Execution-Time Limiting (Notebook.tsx)
+
+During execution, we limit what we collect from the kernel:
+
+```typescript
+const MAX_OUTPUT_LINES = 10000;  // Max lines of text output
+const MAX_OUTPUT_CHARS = 100000000;  // 100MB - generous for images
+```
+
+**Why line-based, not item-based?**
+The kernel buffers output and sends it in chunks. A loop printing 50,000 lines might arrive as 50 WebSocket messages or 5—we can't control this. Counting lines ensures consistent behavior regardless of how the kernel batches messages.
+
+**Throttled UI updates:**
+```typescript
+const FLUSH_INTERVAL_MS = 100;  // Update UI at most every 100ms
+
+const flushToCell = () => {
+  const snapshot = [...allOutputs];  // Take snapshot
+  setCells(prev => prev.map(c =>
+    c.id === cellId ? { ...c, outputs: snapshot } : c
+  ));
+};
+```
+
+We accumulate outputs in a local array and flush to React state every 100ms. This prevents thousands of state updates from rapid output.
+
+**Idempotent updates:**
+Each flush replaces the entire outputs array rather than appending. This avoids race conditions with React's async batching—if two flushes overlap, the later one simply wins with a complete snapshot.
+
+### Tier 2: Display-Time Truncation (CellOutput.tsx)
+
+When loading a saved notebook, we preserve full data (for re-saving) but truncate the display:
+
+```typescript
+const displayOutputs = useMemo(() => {
+  // Quick check - if under limits, return as-is
+  if (totalLines <= MAX_DISPLAY_LINES && totalChars <= MAX_DISPLAY_CHARS) {
+    return outputs;
+  }
+
+  // Truncate individual text outputs to fit remaining budget
+  const remainingLines = MAX_DISPLAY_LINES - linesShown;
+  const lines = output.content.split('\n');
+  const truncatedLines = lines.slice(0, remainingLines);
+  // ...
+}, [outputs]);
+```
+
+**Key insight:** When a single output chunk exceeds limits (e.g., 50,000 lines in one buffer), we show the first N lines rather than skipping the entire output. This ensures users always see something.
+
+### Size Limits: Text vs Images
+
+| Content | Limit | Rationale |
+|---------|-------|-----------|
+| Text lines | 10,000 | Each line = DOM node, 50k lines freezes browser |
+| Total size | 100MB | Images are few DOM elements, text is many |
+
+A 20MB image is 1 DOM element. 20MB of text is ~1 million lines = 1 million DOM elements. The line limit protects against text; the size limit is generous for images.
+
+### Execution Time Display
+
+Each cell shows its execution time in the output area (top right). The timing uses browser timestamps:
+
+```typescript
+const cellStartTime = Date.now();
+// ... execution ...
+const durationMs = Date.now() - cellStartTime;
+setCells(cells => cells.map(c => c.id === cellId ? {
+  ...c,
+  lastExecutionMs: durationMs
+} : c));
+```
+
 ## File Reference
 
 | File | Performance Concern |
 |------|---------------------|
-| `components/Notebook.tsx` | Main render, effects, callbacks |
+| `components/Notebook.tsx` | Main render, effects, callbacks, output limiting |
 | `components/Cell.tsx` | Memo comparison, ref usage |
+| `components/CellOutput.tsx` | Display truncation, large output rendering |
 | `components/CodeEditor.tsx` | Extensions, autocomplete |
 | `hooks/useAutosave.ts` | Debounced change detection |
 | `hooks/useUndoRedo.ts` | Stack operations, refs |
