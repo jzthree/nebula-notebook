@@ -1104,8 +1104,8 @@ export const Notebook: React.FC = () => {
         await kernelService.restartKernel(kernelSessionId);
       }
       setKernelStatus('idle');
-      // Clear all cell outputs and reset execution counter
-      setCells(prev => prev.map(c => ({ ...c, outputs: [], executionCount: undefined })));
+      // Reset execution counter but preserve outputs
+      setCells(prev => prev.map(c => ({ ...c, executionCount: undefined })));
       setKernelExecutionCount(0);
       // Log kernel restart for history
       logOperation({ type: 'restartKernel' });
