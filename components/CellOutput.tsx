@@ -204,16 +204,16 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibility
     // Persist the collapsed state via onScrolledChange
     onScrolledChange?.(newCollapsed);
 
-    // After state change, ensure the output is visible
+    // After state change, scroll to keep context visible
     // Use requestAnimationFrame to wait for DOM update
     requestAnimationFrame(() => {
       if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        const isVisible = rect.top >= 0 && rect.bottom <= window.innerHeight;
-
-        if (!isVisible) {
-          containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
+        // When collapsing, scroll to end of cell so user sees the collapsed output
+        // When expanding, scroll to make content visible
+        containerRef.current.scrollIntoView({ 
+          behavior: 'smooth', 
+          block: newCollapsed ? 'end' : 'nearest' 
+        });
       }
       onVisibilityChange?.();
     });

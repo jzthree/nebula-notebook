@@ -164,6 +164,56 @@ async def list_kernels():
     return {"kernels": kernel_service.get_available_kernels()}
 
 
+@app.get("/api/kernels/debug")
+async def debug_kernels():
+    """Debug endpoint to show kernel discovery paths and environment"""
+    import os
+    from pathlib import Path
+    from jupyter_client import kernelspec
+
+    # Get paths jupyter_client is searching
+    jupyter_paths = []
+    try:
+        from jupyter_core.paths import jupyter_data_dir, jupyter_path
+        jupyter_paths = jupyter_path()
+    except Exception as e:
+        jupyter_paths = [f"Error getting paths: {e}"]
+
+    # Check common kernel locations
+    common_paths = [
+        Path.home() / ".local" / "share" / "jupyter" / "kernels",
+        Path("/usr/local/share/jupyter/kernels"),
+        Path("/usr/share/jupyter/kernels"),
+    ]
+
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        common_paths.append(Path(conda_prefix) / "share" / "jupyter" / "kernels")
+
+    path_status = {}
+    for p in common_paths:
+        if p.exists():
+            try:
+                kernels = [d.name for d in p.iterdir() if d.is_dir() and (d / "kernel.json").exists()]
+                path_status[str(p)] = {"exists": True, "kernels": kernels}
+            except Exception as e:
+                path_status[str(p)] = {"exists": True, "error": str(e)}
+        else:
+            path_status[str(p)] = {"exists": False}
+
+    return {
+        "python_executable": os.sys.executable,
+        "jupyter_data_paths": jupyter_paths,
+        "common_paths": path_status,
+        "env": {
+            "JUPYTER_PATH": os.environ.get("JUPYTER_PATH", "(not set)"),
+            "CONDA_PREFIX": os.environ.get("CONDA_PREFIX", "(not set)"),
+            "HOME": os.environ.get("HOME", "(not set)"),
+        },
+        "discovered_kernels": kernel_service.get_available_kernels(),
+    }
+
+
 @app.get("/api/kernels/sessions")
 async def list_kernel_sessions():
     """List all active kernel sessions with memory usage"""

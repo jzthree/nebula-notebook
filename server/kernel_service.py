@@ -54,8 +54,14 @@ class KernelService:
 
     def _discover_kernels_sync(self) -> list[dict]:
         """Synchronously discover available kernels (can be slow)"""
+        import os
+        import json
+        from pathlib import Path
+
+        # Start with jupyter_client's built-in discovery
         specs = kernelspec.find_kernel_specs()
         result = []
+        seen_names = set()
 
         for name, path in specs.items():
             try:
@@ -66,8 +72,59 @@ class KernelService:
                     "language": spec.language,
                     "path": path
                 })
+                seen_names.add(name)
             except Exception as e:
                 print(f"Error loading kernelspec {name}: {e}")
+
+        # Also search additional common locations that jupyter_client might miss
+        # This helps when server runs in a different env than where kernels are installed
+        additional_paths = [
+            Path.home() / ".local" / "share" / "jupyter" / "kernels",
+            Path("/usr/local/share/jupyter/kernels"),
+            Path("/usr/share/jupyter/kernels"),
+        ]
+
+        # Add conda envs kernel paths if CONDA_PREFIX is set
+        conda_prefix = os.environ.get("CONDA_PREFIX")
+        if conda_prefix:
+            additional_paths.append(Path(conda_prefix) / "share" / "jupyter" / "kernels")
+
+        # Add paths from JUPYTER_PATH env var
+        jupyter_path = os.environ.get("JUPYTER_PATH", "")
+        for p in jupyter_path.split(os.pathsep):
+            if p:
+                additional_paths.append(Path(p) / "kernels")
+
+        for kernels_dir in additional_paths:
+            if not kernels_dir.exists():
+                continue
+
+            for kernel_dir in kernels_dir.iterdir():
+                if not kernel_dir.is_dir():
+                    continue
+
+                kernel_json = kernel_dir / "kernel.json"
+                if not kernel_json.exists():
+                    continue
+
+                name = kernel_dir.name
+                if name in seen_names:
+                    continue  # Already found via jupyter_client
+
+                try:
+                    with open(kernel_json, 'r') as f:
+                        spec_data = json.load(f)
+
+                    result.append({
+                        "name": name,
+                        "display_name": spec_data.get("display_name", name),
+                        "language": spec_data.get("language", "python"),
+                        "path": str(kernel_dir)
+                    })
+                    seen_names.add(name)
+                    print(f"Found kernel '{name}' at {kernel_dir}")
+                except Exception as e:
+                    print(f"Error loading kernel from {kernel_dir}: {e}")
 
         return result
 

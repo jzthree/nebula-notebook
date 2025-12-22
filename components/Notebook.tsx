@@ -529,6 +529,13 @@ export const Notebook: React.FC = () => {
     return { cellId: executingCellId, cellIndex: executingCellIndex, queueLength: executionQueue.length };
   }, [executionQueue, cells]);
 
+  // Memoize queue position lookup to avoid O(N) indexOf for each cell during render
+  const queuePositionMap = useMemo(() => {
+    const map = new Map<string, number>();
+    executionQueue.forEach((id, idx) => map.set(id, idx));
+    return map;
+  }, [executionQueue]);
+
   // Timer to update elapsed time while execution is in progress
   useEffect(() => {
     if (!isProcessingQueue || !cellExecutionStartRef.current) {
@@ -1510,7 +1517,7 @@ export const Notebook: React.FC = () => {
           }
         };
 
-        setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: true, outputs: [] } : c));
+        setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: true, outputs: [], lastExecutionMs: undefined } : c));
 
         try {
           await kernelService.executeCode(kernelSessionId, cell.content, (output) => {
@@ -2154,7 +2161,7 @@ export const Notebook: React.FC = () => {
                   onSetCellScrolled={setCellScrolled}
                   onSetCellScrolledHeight={setCellScrolledHeight}
                   searchHighlight={searchQuery}
-                  queuePosition={executionQueue.indexOf(cell.id)}
+                  queuePosition={queuePositionMap.get(cell.id) ?? -1}
                   indentConfig={indentConfig}
                   requestedFocusMode={pendingFocus?.cellId === cell.id ? pendingFocus.mode : null}
                   onFocusModeApplied={clearPendingFocus}
