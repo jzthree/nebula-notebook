@@ -48,13 +48,13 @@ function getInitials(name: string): string {
 
 
 /**
- * Generate gradient colors based on hash - variations on the nebula theme
+ * Generate gradient colors based on hash - wide color variations
  * Returns [startColor, midColor, endColor]
  */
 function hashToGradient(hash: number): [string, string, string] {
-  // Base hues in the purple-blue spectrum (240-280 range)
-  // Shift based on hash to create variation while staying in nebula palette
-  const hueShift = (hash % 60) - 30; // -30 to +30 degree shift
+  // Wide hue shift for more dramatic color variety
+  // Range: ±90 degrees allows gradients from warm (reds/oranges) to cool (teals/greens)
+  const hueShift = (hash % 180) - 90; // -90 to +90 degree shift
 
   const baseHues = [270, 240, 210]; // purple, indigo, blue
   const hues = baseHues.map(h => (h + hueShift + 360) % 360);
