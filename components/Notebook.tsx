@@ -121,14 +121,16 @@ export const Notebook: React.FC = () => {
   const [renameValue, setRenameValue] = useState('');
 
   // Conflict detection state
+  // IMPORTANT: The ref is the source of truth for mtime during save operations.
+  // We DON'T sync ref from state on every render, because that could overwrite
+  // a freshly saved mtime with stale state due to React's batched updates.
+  // The state is only for triggering re-renders when needed.
   const [lastKnownMtime, setLastKnownMtimeState] = useState<number | null>(null);
   const lastKnownMtimeRef = useRef<number | null>(null);
-  // Keep ref in sync to avoid stale closures in save callbacks
-  lastKnownMtimeRef.current = lastKnownMtime;
 
   // Helper to update both state AND ref synchronously to prevent race conditions
   const setLastKnownMtime = useCallback((mtime: number | null) => {
-    lastKnownMtimeRef.current = mtime;  // Update ref immediately
+    lastKnownMtimeRef.current = mtime;  // Update ref immediately (source of truth)
     setLastKnownMtimeState(mtime);      // Update state for re-render
   }, []);
   const [pendingSave, setPendingSave] = useState(false);
@@ -137,6 +139,7 @@ export const Notebook: React.FC = () => {
 
   // Kernel State
   const [isKernelMenuOpen, setIsKernelMenuOpen] = useState(false);
+  const [isExecutionQueueOpen, setIsExecutionQueueOpen] = useState(false);
   const [availableKernels, setAvailableKernels] = useState<KernelSpec[]>([]);
   const [pythonEnvironments, setPythonEnvironments] = useState<PythonEnvironment[]>([]);
   const [currentKernel, setCurrentKernel] = useState<string>('python3');
@@ -520,6 +523,13 @@ export const Notebook: React.FC = () => {
     elapsedMs: number;
   } | null>(null);
   const cellExecutionStartRef = useRef<number | null>(null); // Track when current cell started
+
+  // Close execution queue dropdown when queue becomes empty
+  useEffect(() => {
+    if (executionQueue.length === 0) {
+      setIsExecutionQueueOpen(false);
+    }
+  }, [executionQueue.length]);
 
   // Memoize execution indicator state to avoid O(N) findIndex on every render
   const executionIndicator = useMemo(() => {
@@ -1986,28 +1996,120 @@ export const Notebook: React.FC = () => {
 
                       {/* Execution Indicator - shows running cell or last result */}
                       {executionIndicator ? (
-                          <button
-                            onClick={() => {
-                              if (executionIndicator.cellIndex >= 0) {
-                                setActiveCellId(executionIndicator.cellId);
-                                virtuosoRef.current?.scrollToIndex({
-                                  index: executionIndicator.cellIndex,
-                                  align: 'start',
-                                  behavior: 'smooth',
-                                  offset: -80
-                                });
-                              }
-                            }}
-                            className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
-                            title={`Running cell ${executionIndicator.cellIndex + 1}${executionIndicator.queueLength > 1 ? ` (${executionIndicator.queueLength - 1} more queued)` : ''} - Click to jump`}
-                          >
-                            <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
-                            <span className="tabular-nums">[{executionIndicator.cellIndex + 1}]</span>
-                            <span className="text-gray-400 tabular-nums">{formatElapsedTime(executionElapsedMs)}</span>
-                            {executionIndicator.queueLength > 1 && (
-                              <span className="text-gray-400">+{executionIndicator.queueLength - 1}</span>
+                          <div className="relative">
+                            <div
+                              className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-gray-500 hover:bg-gray-100 rounded transition-colors cursor-pointer"
+                              onClick={() => setIsExecutionQueueOpen(!isExecutionQueueOpen)}
+                              title={`Running cell ${executionIndicator.cellIndex + 1}${executionIndicator.queueLength > 1 ? ` (${executionIndicator.queueLength - 1} more queued)` : ''} - Click to manage queue`}
+                            >
+                              <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
+                              <span 
+                                className="tabular-nums hover:text-blue-600 cursor-pointer"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (executionIndicator.cellIndex >= 0) {
+                                    setActiveCellId(executionIndicator.cellId);
+                                    virtuosoRef.current?.scrollToIndex({
+                                      index: executionIndicator.cellIndex,
+                                      align: 'start',
+                                      behavior: 'smooth',
+                                      offset: -80
+                                    });
+                                  }
+                                }}
+                                title="Jump to cell"
+                              >
+                                #{executionIndicator.cellIndex + 1}
+                              </span>
+                              <span className="text-gray-400 tabular-nums">{formatElapsedTime(executionElapsedMs)}</span>
+                              {executionIndicator.queueLength > 1 && (
+                                <span className="text-gray-400">+{executionIndicator.queueLength - 1}</span>
+                              )}
+                            </div>
+                            {/* Execution Queue Dropdown - click to toggle */}
+                            {isExecutionQueueOpen && executionQueue.length > 0 && (
+                              <div 
+                                className="absolute top-full right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl z-50 min-w-[200px] py-1"
+                                onMouseLeave={() => setIsExecutionQueueOpen(false)}
+                              >
+                                {/* Header */}
+                                <div className="px-3 py-2 border-b border-slate-100">
+                                  <div className="text-xs font-semibold text-slate-900">Execution Queue</div>
+                                  <div className="text-[10px] text-slate-500">{executionQueue.length} cell{executionQueue.length > 1 ? 's' : ''} queued</div>
+                                </div>
+                                
+                                {/* Queue Items */}
+                                <div className="max-h-[300px] overflow-y-auto">
+                                  {executionQueue.map((cellId, queueIndex) => {
+                                    const cellIndex = cells.findIndex(c => c.id === cellId);
+                                    const isExecuting = queueIndex === 0;
+                                    const cellContent = cells[cellIndex]?.content.split('\n')[0].slice(0, 20) || 'Empty';
+                                    return (
+                                      <div
+                                        key={`${cellId}-${queueIndex}`}
+                                        className={`flex items-center justify-between px-3 py-1.5 text-xs ${isExecuting ? 'bg-amber-50' : 'hover:bg-slate-50'}`}
+                                      >
+                                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                                          <span className="w-3 h-3 flex items-center justify-center flex-shrink-0">
+                                            {isExecuting ? (
+                                              <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
+                                            ) : (
+                                              <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                                            )}
+                                          </span>
+                                          <span
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              if (cellIndex >= 0) {
+                                                setActiveCellId(cellId);
+                                                virtuosoRef.current?.scrollToIndex({
+                                                  index: cellIndex,
+                                                  align: 'start',
+                                                  behavior: 'smooth',
+                                                  offset: -80
+                                                });
+                                                setIsExecutionQueueOpen(false);
+                                              }
+                                            }}
+                                            className="tabular-nums font-medium text-slate-700 hover:text-blue-600 cursor-pointer"
+                                            title="Jump to cell"
+                                          >
+                                            #{cellIndex + 1}
+                                          </span>
+                                          <span className="text-slate-400 truncate">{cellContent}</span>
+                                        </div>
+                                        {!isExecuting && (
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setExecutionQueue(prev => prev.filter((_, idx) => idx !== queueIndex));
+                                            }}
+                                            className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded flex-shrink-0 ml-1"
+                                            title="Remove from queue"
+                                          >
+                                            <X className="w-3 h-3" />
+                                          </button>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                
+                                {/* Clear All Button */}
+                                {executionQueue.length > 1 && (
+                                  <div className="border-t border-slate-100 py-1">
+                                    <button
+                                      onClick={() => setExecutionQueue(prev => [prev[0]])}
+                                      className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                                    >
+                                      <X className="w-3 h-3" />
+                                      <span>Clear Queued</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             )}
-                          </button>
+                          </div>
                       ) : lastExecutionResult && (
                           <button
                             onClick={() => {
@@ -2034,7 +2136,7 @@ export const Notebook: React.FC = () => {
                             ) : (
                               <CheckCircle className="w-3 h-3" />
                             )}
-                            <span className="tabular-nums">[{lastExecutionResult.cellIndex + 1}]</span>
+                            <span className="tabular-nums">#{lastExecutionResult.cellIndex + 1}</span>
                             <span className="tabular-nums opacity-70">{formatElapsedTime(lastExecutionResult.elapsedMs)}</span>
                           </button>
                       )}

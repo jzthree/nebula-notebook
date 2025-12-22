@@ -45,13 +45,14 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
   const isManualSaveRef = useRef(false);
 
   // Serialize cells for comparison (includes outputs to trigger save after execution)
-  // Also includes scrolled and _metadata to trigger save when metadata changes
+  // Also includes scrolled, scrolledHeight and _metadata to trigger save when metadata changes
   const serializeCells = useCallback((cells: Cell[]) => {
     return JSON.stringify(cells.map(c => ({
       id: c.id,
       type: c.type,
       content: c.content,
       scrolled: c.scrolled,
+      scrolledHeight: c.scrolledHeight,
       _metadata: c._metadata,
       outputs: c.outputs?.map(o => ({
         id: o.id,

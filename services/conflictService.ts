@@ -15,10 +15,13 @@ import { Cell } from '../types';
  * - Floating-point precision issues during JSON serialization
  * - Sub-second filesystem timing differences (APFS has nanosecond precision)
  * - Slight mtime variations between read operations
+ * - Filesystem journaling/syncing delays
  *
- * A real external modification would typically be at least 1+ seconds after our save.
+ * A real external modification would typically be at least 2+ seconds after our save.
+ * Using 1.5s tolerance to account for various filesystem behaviors while still
+ * catching real conflicts reliably.
  */
-const MTIME_TOLERANCE_SECONDS = 0.5;
+const MTIME_TOLERANCE_SECONDS = 1.5;
 
 export interface ConflictCheckResult {
   hasConflict: boolean;
@@ -54,7 +57,13 @@ export async function checkForConflict(
   try {
     const remoteMtimeData = await getFileMtime(fileId);
     // Use tolerance to avoid false positives from floating-point precision issues
-    const hasConflict = (remoteMtimeData.mtime - lastKnownMtime) > MTIME_TOLERANCE_SECONDS;
+    const mtimeDiff = remoteMtimeData.mtime - lastKnownMtime;
+    const hasConflict = mtimeDiff > MTIME_TOLERANCE_SECONDS;
+
+    // Log for debugging false positives
+    if (hasConflict) {
+      console.warn(`Conflict detected: remote=${remoteMtimeData.mtime}, local=${lastKnownMtime}, diff=${mtimeDiff.toFixed(3)}s`);
+    }
 
     return {
       hasConflict,
