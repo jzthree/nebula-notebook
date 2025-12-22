@@ -124,7 +124,7 @@ const CellComponent: React.FC<Props> = ({
       // (the focus will happen async via CodeEditor's useEffect)
       setTimeout(() => onFocusModeApplied?.(), 0);
     } else if (requestedFocusMode === 'cell') {
-      cellRef.current?.focus();
+      cellRef.current?.focus({ preventScroll: true });
       // For cell mode, focus is synchronous, so clear immediately
       onFocusModeApplied?.();
     }
@@ -168,7 +168,7 @@ const CellComponent: React.FC<Props> = ({
     // Focus cell div if requested (e.g., after Escape key) to enter command mode
     if (focusCellAfterBlurRef.current) {
       focusCellAfterBlurRef.current = false;
-      setTimeout(() => cellRef.current?.focus(), 0);
+      setTimeout(() => cellRef.current?.focus({ preventScroll: true }), 0);
     }
   }, []);
 
@@ -259,7 +259,8 @@ const CellComponent: React.FC<Props> = ({
   const handleTopbarClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     // Focus the cell div - this will trigger handleCellFocus
-    cellRef.current?.focus();
+    // Use preventScroll to avoid unwanted page scrolling
+    cellRef.current?.focus({ preventScroll: true });
   }, []);
 
   // Handle keyboard shortcuts when cell div has focus (command mode)

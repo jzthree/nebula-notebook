@@ -414,7 +414,11 @@ export const CodeEditor: React.FC<Props> = ({
       // Use requestAnimationFrame to ensure the editor is fully rendered
       const focusEditor = () => {
         if (editorRef.current?.view) {
+          // Use scrollTo: 'nearest' to prevent unwanted scroll jumps
+          // This keeps focus without forcing the editor into view
           editorRef.current.view.focus();
+          // Prevent any delayed scroll that might occur
+          editorRef.current.view.scrollDOM.style.scrollBehavior = 'auto';
         } else {
           // Editor not ready yet, try again next frame
           requestAnimationFrame(focusEditor);

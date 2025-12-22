@@ -144,10 +144,11 @@ export const FileBrowser: React.FC<Props> = ({
         const result = await createNotebook(name, [], currentPath);
         loadDirectory(currentPath);
         onRefresh();
-        // Open the newly created notebook immediately
+        // Open the newly created notebook in a new browser tab
         if (result?.id) {
-          onSelect(result.id);
-          if (window.innerWidth < 1024) onClose();
+          const url = new URL(window.location.href);
+          url.searchParams.set('file', result.id);
+          window.open(url.toString(), '_blank');
         }
       } catch (err: any) {
         toast(err.message || 'Failed to create notebook', 'error');

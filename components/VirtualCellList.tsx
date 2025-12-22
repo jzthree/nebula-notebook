@@ -31,6 +31,8 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
       useWindowScroll={false}
       totalCount={cells.length}
       itemContent={(index, cell) => renderCell(cell, index)}
+      // Use stable cell IDs as keys to prevent scroll jumps when cells update
+      computeItemKey={(index, cell) => cell.id}
       overscan={1000}
       components={{
         List: ListContainer,
