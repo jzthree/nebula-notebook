@@ -30,8 +30,10 @@ import { Cell } from '../../types';
 // Test Helpers
 // ============================================================================
 
-function makeCell(id: string, content: string, type: 'code' | 'markdown' = 'code'): Cell {
-  return { id, type, content, outputs: [], isExecuting: false };
+function makeCell(id: string, content: string, type: 'code' | 'markdown' = 'code', scrolled?: boolean): Cell {
+  const cell: Cell = { id, type, content, outputs: [], isExecuting: false };
+  if (scrolled !== undefined) cell.scrolled = scrolled;
+  return cell;
 }
 
 function makeState(cells: Cell[]): NotebookState {
@@ -166,17 +168,95 @@ describe('applyOperation', () => {
     });
   });
 
-  describe('changeType', () => {
+  describe('updateMetadata', () => {
     it('changes cell type', () => {
       const state = makeState([makeCell('a', '# Title', 'code')]);
       const result = applyOperation(state, {
-        type: 'changeType',
+        type: 'updateMetadata',
         cellId: 'a',
-        oldType: 'code',
-        newType: 'markdown'
+        changes: { type: { old: 'code', new: 'markdown' } }
       });
 
       expect(result.cells[0].type).toBe('markdown');
+    });
+
+    it('changes multiple properties at once', () => {
+      const state = makeState([makeCell('a', 'content', 'code')]);
+      const result = applyOperation(state, {
+        type: 'updateMetadata',
+        cellId: 'a',
+        changes: {
+          type: { old: 'code', new: 'markdown' },
+          scrolled: { old: true, new: false }
+        }
+      });
+
+      expect(result.cells[0].type).toBe('markdown');
+      expect(result.cells[0].scrolled).toBe(false);
+    });
+
+    it('sets scrolled from undefined to false', () => {
+      const state = makeState([makeCell('a', 'content', 'code')]); // scrolled is undefined
+      const result = applyOperation(state, {
+        type: 'updateMetadata',
+        cellId: 'a',
+        changes: { scrolled: { old: undefined, new: false } }
+      });
+
+      expect(result.cells[0].scrolled).toBe(false);
+    });
+
+    it('sets scrolled from undefined to true', () => {
+      const state = makeState([makeCell('a', 'content', 'code')]); // scrolled is undefined
+      const result = applyOperation(state, {
+        type: 'updateMetadata',
+        cellId: 'a',
+        changes: { scrolled: { old: undefined, new: true } }
+      });
+
+      expect(result.cells[0].scrolled).toBe(true);
+    });
+
+    it('preserves scrolled through insertCell', () => {
+      const state = makeState([]);
+      const cellWithScrolled = makeCell('a', 'content', 'code', false);
+      const result = applyOperation(state, {
+        type: 'insertCell',
+        index: 0,
+        cell: cellWithScrolled
+      });
+
+      expect(result.cells[0].scrolled).toBe(false);
+    });
+
+    it('preserves scrolled when other properties change', () => {
+      const state = makeState([makeCell('a', 'content', 'code', false)]);
+      const result = applyOperation(state, {
+        type: 'updateContent',
+        cellId: 'a',
+        oldContent: 'content',
+        newContent: 'new content'
+      });
+
+      expect(result.cells[0].scrolled).toBe(false);
+      expect(result.cells[0].content).toBe('new content');
+    });
+
+    it('only modifies target cell scrolled, not others', () => {
+      const state = makeState([
+        makeCell('a', 'a', 'code', false),
+        makeCell('b', 'b', 'code', true),
+        makeCell('c', 'c', 'code') // undefined
+      ]);
+      const result = applyOperation(state, {
+        type: 'updateMetadata',
+        cellId: 'b',
+        changes: { scrolled: { old: true, new: false } }
+      });
+
+      expect(result.cells[0].scrolled).toBe(false); // unchanged
+      expect(result.cells[1].scrolled).toBe(false); // changed
+      expect(result.cells[2].scrolled).toBeUndefined(); // unchanged
     });
   });
 
@@ -249,20 +329,24 @@ describe('reverseOperation', () => {
     });
   });
 
-  it('changeType swaps old and new', () => {
+  it('updateMetadata swaps old and new for all changes', () => {
     const op: EditOperation = {
-      type: 'changeType',
+      type: 'updateMetadata',
       cellId: 'a',
-      oldType: 'code',
-      newType: 'markdown'
+      changes: {
+        type: { old: 'code', new: 'markdown' },
+        scrolled: { old: true, new: false }
+      }
     };
     const reversed = reverseOperation(op);
 
     expect(reversed).toEqual({
-      type: 'changeType',
+      type: 'updateMetadata',
       cellId: 'a',
-      oldType: 'markdown',
-      newType: 'code'
+      changes: {
+        type: { old: 'markdown', new: 'code' },
+        scrolled: { old: false, new: true }
+      }
     });
   });
 

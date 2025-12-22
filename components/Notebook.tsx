@@ -154,6 +154,8 @@ export const Notebook: React.FC = () => {
     moveCell: undoableMoveCell,
     updateContent,
     changeType,
+    setCellScrolled,
+    setCellScrolledHeight,
     saveCheckpoint,
     flushCell,
     peekUndo,
@@ -228,12 +230,13 @@ export const Notebook: React.FC = () => {
   // Pending scroll after cell changes (for undo/redo of insert/delete)
   const pendingScrollCellIdRef = useRef<string | null>(null);
 
-  // Helper to check if a cell index is currently visible
+  // Helper to check if ANY part of a cell is currently visible
+  // If any part of the cell (code or output) can be seen, it's considered visible
   const isCellVisible = useCallback((cellIndex: number): boolean => {
-    // Add a small buffer to avoid scrolling for cells just barely off-screen
-    const buffer = 1;
-    return cellIndex >= visibleRange.startIndex - buffer &&
-           cellIndex <= visibleRange.endIndex + buffer;
+    // Virtuoso's rangeChanged gives us the indices of cells that are rendered/visible
+    // A cell is visible if its index falls within the visible range (inclusive)
+    // No buffer needed - if ANY part of the cell is visible, we don't scroll
+    return cellIndex >= visibleRange.startIndex && cellIndex <= visibleRange.endIndex;
   }, [visibleRange]);
 
   // Effect to handle pending scroll after cells change (for undo/redo of insert/delete)
@@ -244,8 +247,9 @@ export const Notebook: React.FC = () => {
       if (index >= 0) {
         virtuosoRef.current?.scrollToIndex({
           index,
-          align: 'center',
-          behavior: 'smooth'
+          align: 'start',    // Scroll to start of cell so user sees from the top
+          behavior: 'smooth',
+          offset: -80        // Small offset so cell isn't flush with top (accounts for header)
         });
         pendingScrollCellIdRef.current = null;
       }
@@ -270,7 +274,7 @@ export const Notebook: React.FC = () => {
 
   // Helper to apply undo/redo with scroll and feedback
   // - If operation DELETES a cell: scroll first (so user sees the cell), then operate
-  // - Otherwise: operate first, then scroll and highlight
+  // - Otherwise: operate first, then scroll (only if cell not visible) and highlight
   const applyWithScrollFeedback = useCallback((
     peekFn: () => { affectedCellIds: string[]; operationType: string } | null,
     applyFn: () => { affectedCellIds: string[] } | null,
@@ -287,22 +291,31 @@ export const Notebook: React.FC = () => {
     const firstCellId = peek.affectedCellIds[0];
     const cellIndex = cells.findIndex(c => c.id === firstCellId);
     const cellExists = cellIndex >= 0;
+    // Only scroll if no part of the cell is currently visible
     const needsScroll = cellExists && !isCellVisible(cellIndex);
 
     if (willDeleteCell && needsScroll) {
       // Scroll to cell first so user sees it before deletion
-      virtuosoRef.current?.scrollToIndex({ index: cellIndex, align: 'center', behavior: 'smooth' });
+      virtuosoRef.current?.scrollToIndex({
+        index: cellIndex,
+        align: 'start',
+        behavior: 'smooth',
+        offset: -80
+      });
       setTimeout(() => {
         const result = applyFn();
         if (result?.affectedCellIds.length) showUndoRedoFeedback(result.affectedCellIds);
       }, 300);
     } else {
-      // Apply first, then scroll and highlight
+      // Apply first, then scroll (only if not visible) and highlight
       const result = applyFn();
       if (result?.affectedCellIds.length) {
         showUndoRedoFeedback(result.affectedCellIds);
-        // Schedule scroll for after cells update (handles new cells or moved cells)
-        pendingScrollCellIdRef.current = result.affectedCellIds[0];
+        // Only schedule scroll if cell is not visible (or is a new cell that needs finding)
+        // For operations on existing visible cells (like metadata changes), don't scroll
+        if (!cellExists || !isCellVisible(cellIndex)) {
+          pendingScrollCellIdRef.current = result.affectedCellIds[0];
+        }
       }
     }
   }, [flushActiveCell, cells, isCellVisible, showUndoRedoFeedback]);
@@ -666,7 +679,9 @@ export const Notebook: React.FC = () => {
       // Ctrl+S: Save (works everywhere) - uses handleManualSave for redo confirmation
       if ((e.metaKey || e.ctrlKey) && key === 's') {
         e.preventDefault();
-        handleManualSaveRef.current();
+        handleManualSaveRef.current().catch(err => {
+          console.error('Save failed:', err);
+        });
         return;
       }
 
@@ -712,6 +727,11 @@ export const Notebook: React.FC = () => {
 
       // Jupyter-style shortcuts (cell mode only - when cell div itself is focused)
       if (!focusedCellId) return;
+
+      // Skip single-letter shortcuts when Cmd/Ctrl is pressed
+      // This allows Cmd+C to work as native copy instead of cell copy
+      // Note: Shift is allowed for Shift+V (paste above)
+      if (e.metaKey || e.ctrlKey) return;
 
       const currentCells = cellsRef.current;
       const currentIndex = currentCells.findIndex(c => c.id === focusedCellId);
@@ -858,8 +878,10 @@ export const Notebook: React.FC = () => {
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    // Use capture phase to intercept shortcuts before they're handled by child components
+    // This is especially important for Cmd+S which browsers might try to handle natively
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
   }, []);
 
   const refreshFileList = async () => {
@@ -2129,6 +2151,8 @@ export const Notebook: React.FC = () => {
                   onNavigateCell={(direction) => navigateCellRelative(cell.id, direction)}
                   onAddCell={(afterIndex) => addCell('code', '', afterIndex, true)}
                   onSave={handleManualSave}
+                  onSetCellScrolled={setCellScrolled}
+                  onSetCellScrolledHeight={setCellScrolledHeight}
                   searchHighlight={searchQuery}
                   queuePosition={executionQueue.indexOf(cell.id)}
                   indentConfig={indentConfig}

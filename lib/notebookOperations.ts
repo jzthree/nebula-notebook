@@ -28,6 +28,13 @@ export interface NotebookState {
 }
 
 /**
+ * Generic metadata change - each key maps to old/new values
+ * This is intentionally typed as unknown to be maximally extensible.
+ * The operation system never needs to change when new cell properties are added.
+ */
+export type MetadataChanges = Record<string, { old: unknown; new: unknown }>;
+
+/**
  * Undoable operations that modify notebook state
  *
  * updateContent supports two formats:
@@ -40,7 +47,7 @@ export type EditOperation =
   | { type: 'moveCell'; fromIndex: number; toIndex: number }
   | { type: 'updateContent'; cellId: string; oldContent: string; newContent: string }
   | { type: 'updateContentPatch'; cellId: string; patch: Patch; oldHash: string; newHash: string }
-  | { type: 'changeType'; cellId: string; oldType: CellType; newType: CellType }
+  | { type: 'updateMetadata'; cellId: string; changes: MetadataChanges }
   | { type: 'batch'; operations: EditOperation[] };
 
 /**
@@ -126,12 +133,18 @@ export function applyOperation(state: NotebookState, op: EditOperation): Noteboo
         })
       };
     }
-    case 'changeType': {
+    case 'updateMetadata': {
+      // Generic metadata update - applies any key/value changes
       return {
         ...state,
-        cells: state.cells.map(c =>
-          c.id === op.cellId ? { ...c, type: op.newType } : c
-        )
+        cells: state.cells.map(c => {
+          if (c.id !== op.cellId) return c;
+          const updated = { ...c };
+          for (const [key, change] of Object.entries(op.changes)) {
+            (updated as Record<string, unknown>)[key] = change.new;
+          }
+          return updated as Cell;
+        })
       };
     }
     case 'batch': {
@@ -168,13 +181,14 @@ export function reverseOperation(op: EditOperation): EditOperation {
         oldHash: op.newHash,
         newHash: op.oldHash
       };
-    case 'changeType':
-      return {
-        type: 'changeType',
-        cellId: op.cellId,
-        oldType: op.newType,
-        newType: op.oldType
-      };
+    case 'updateMetadata': {
+      // Generic reversal - swap old/new for each change
+      const reversed: MetadataChanges = {};
+      for (const [key, change] of Object.entries(op.changes)) {
+        reversed[key] = { old: change.new, new: change.old };
+      }
+      return { type: 'updateMetadata', cellId: op.cellId, changes: reversed };
+    }
     case 'batch':
       return {
         type: 'batch',
@@ -254,7 +268,7 @@ export function getCellContentAt(
  * Type guard for edit operations
  */
 export function isEditOperation(entry: HistoryEntry): entry is { timestamp: number } & EditOperation {
-  return ['insertCell', 'deleteCell', 'moveCell', 'updateContent', 'updateContentPatch', 'changeType', 'batch'].includes(entry.type);
+  return ['insertCell', 'deleteCell', 'moveCell', 'updateContent', 'updateContentPatch', 'updateMetadata', 'batch'].includes(entry.type);
 }
 
 /**

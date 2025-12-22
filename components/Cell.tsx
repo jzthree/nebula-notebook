@@ -35,6 +35,8 @@ interface Props {
   onNavigateCell: (direction: 'up' | 'down') => void; // Navigate to adjacent cell (handles virtualization)
   onAddCell: (afterIndex: number) => void;
   onSave?: () => void;
+  onSetCellScrolled?: (id: string, scrolled: boolean) => void; // Toggle output scroll/wrap mode
+  onSetCellScrolledHeight?: (id: string, height: number) => void; // Set output area height in scroll mode
   searchHighlight?: SearchHighlight | null;
   queuePosition?: number; // Position in execution queue (-1 or undefined = not queued)
   indentConfig?: IndentationConfig; // Detected indentation configuration
@@ -63,6 +65,8 @@ const CellComponent: React.FC<Props> = ({
   onNavigateCell,
   onAddCell,
   onSave,
+  onSetCellScrolled,
+  onSetCellScrolledHeight,
   searchHighlight,
   queuePosition,
   indentConfig = DEFAULT_INDENTATION,
@@ -90,6 +94,7 @@ const CellComponent: React.FC<Props> = ({
   const onSaveRef = useRef(onSave);
   const onFlushRef = useRef(onFlush);
   const onActivateRef = useRef(onActivate);
+  const onUpdateRef = useRef(onUpdate);
   const cellIdRef = useRef(cell.id);
   const cellContentRef = useRef(cell.content);
 
@@ -100,6 +105,7 @@ const CellComponent: React.FC<Props> = ({
     onSaveRef.current = onSave;
     onFlushRef.current = onFlush;
     onActivateRef.current = onActivate;
+    onUpdateRef.current = onUpdate;
     cellIdRef.current = cell.id;
     cellContentRef.current = cell.content;
   });
@@ -128,6 +134,29 @@ const CellComponent: React.FC<Props> = ({
   const handleEditorFocus = useCallback(() => {
     setFocusState('editor');
     onActivateRef.current(cellIdRef.current);
+  }, []);
+
+  // ⚠️ CRITICAL: These callbacks MUST be stable (empty deps) to prevent CodeEditor
+  // from rebuilding extensions on every render. Use refs to access current values.
+  const handleShiftEnter = useCallback(() => {
+    onRunAndAdvanceRef.current(cellIdRef.current, 'editor');
+  }, []);
+
+  const handleModEnter = useCallback(() => {
+    onRunRef.current(cellIdRef.current);
+  }, []);
+
+  const handleEditorEscape = useCallback(() => {
+    focusCellAfterBlurRef.current = true;
+  }, []);
+
+  const handleEditorSave = useCallback(() => {
+    onSaveRef.current?.();
+  }, []);
+
+  // Stable onChange handler for CodeEditor
+  const handleEditorChange = useCallback((value: string) => {
+    onUpdateRef.current(cellIdRef.current, value);
   }, []);
 
   const handleEditorBlur = useCallback(() => {
@@ -456,12 +485,12 @@ const CellComponent: React.FC<Props> = ({
       <div onClick={(e) => { e.stopPropagation(); onClick(cell.id, e); }}>
         <CodeEditor
           value={cell.content}
-          onChange={(value) => onUpdate(cell.id, value)}
+          onChange={handleEditorChange}
           language={cell.type === 'code' ? 'python' : 'markdown'}
-          onShiftEnter={() => onRunAndAdvanceRef.current(cell.id, 'editor')}
-          onModEnter={() => onRunRef.current(cell.id)}
-          onEscape={() => { focusCellAfterBlurRef.current = true; }}
-          onSave={() => onSaveRef.current?.()}
+          onShiftEnter={handleShiftEnter}
+          onModEnter={handleModEnter}
+          onEscape={handleEditorEscape}
+          onSave={handleEditorSave}
           isSearchOpen={isSearchOpen}
           onCloseSearch={onCloseSearch}
           onFocus={handleEditorFocus}
@@ -477,7 +506,14 @@ const CellComponent: React.FC<Props> = ({
 
       {/* Output Area - show if has outputs, is executing, or has execution time */}
       {(cell.outputs.length > 0 || cell.isExecuting || cell.lastExecutionMs !== undefined) && (
-         <CellOutput outputs={cell.outputs} executionMs={cell.lastExecutionMs} />
+         <CellOutput
+           outputs={cell.outputs}
+           executionMs={cell.lastExecutionMs}
+           scrolled={cell.scrolled}
+           onScrolledChange={onSetCellScrolled ? (scrolled) => onSetCellScrolled(cell.id, scrolled) : undefined}
+           scrolledHeight={cell.scrolledHeight}
+           onScrolledHeightChange={onSetCellScrolledHeight ? (height) => onSetCellScrolledHeight(cell.id, height) : undefined}
+         />
       )}
     </div>
   );

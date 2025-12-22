@@ -508,17 +508,27 @@ export const CodeEditor: React.FC<Props> = ({
       exts.push(Prec.highest(keymap.of(keymapEntries)));
     }
 
-    // Add focus/blur handlers
-    if (onFocus || onBlur) {
-      exts.push(
-        Prec.highest(
-          EditorView.domEventHandlers({
-            focus: onFocus ? () => { onFocus(); return false; } : undefined,
-            blur: onBlur ? () => { onBlur(); return false; } : undefined,
-          })
-        )
-      );
-    }
+    // Add focus/blur handlers and clipboard fix
+    exts.push(
+      Prec.highest(
+        EditorView.domEventHandlers({
+          focus: onFocus ? () => { onFocus(); return false; } : undefined,
+          blur: onBlur ? () => { onBlur(); return false; } : undefined,
+          // Ensure copy writes to system clipboard on HTTP localhost
+          copy: (event, view) => {
+            const selection = view.state.sliceDoc(
+              view.state.selection.main.from,
+              view.state.selection.main.to
+            );
+            if (selection && event.clipboardData) {
+              event.clipboardData.setData('text/plain', selection);
+              event.preventDefault();
+            }
+            return false;
+          },
+        })
+      )
+    );
 
     // Add search highlighting if active
     if (searchQuery) {

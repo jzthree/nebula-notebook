@@ -15,6 +15,9 @@ export interface Cell {
   isExecuting: boolean;
   executionCount?: number;
   lastExecutionMs?: number;
+  scrolled?: boolean; // Output collapsed state: true = collapsed with scrollbar (Jupyter standard)
+  scrolledHeight?: number; // Height of output area when in scrolled mode (pixels)
+  _metadata?: Record<string, unknown>; // Preserve unknown metadata from external tools
 }
 
 export interface NotebookMetadata {

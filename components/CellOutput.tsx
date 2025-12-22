@@ -11,6 +11,10 @@ interface Props {
   outputs: ICellOutput[];
   executionMs?: number; // Execution time in milliseconds
   onVisibilityChange?: () => void; // Called when collapse state changes, for scroll adjustment
+  scrolled?: boolean; // Jupyter standard: true = collapsed with max-height, false/undefined = expanded
+  onScrolledChange?: (scrolled: boolean) => void; // Called when user toggles collapse/expand
+  scrolledHeight?: number; // Persisted height of output area in scroll mode
+  onScrolledHeightChange?: (height: number) => void; // Called when user resizes the output area
 }
 
 // Format execution time compactly
@@ -67,16 +71,37 @@ const MIN_HEIGHT = 50;
 const DEFAULT_COLLAPSED_HEIGHT = 200;
 const MAX_HEIGHT = 600;
 
-export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibilityChange }) => {
-  const [isCollapsed, setIsCollapsed] = useState(false);
-  const [collapsedHeight, setCollapsedHeight] = useState(DEFAULT_COLLAPSED_HEIGHT);
+export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibilityChange, scrolled, onScrolledChange, scrolledHeight, onScrolledHeightChange }) => {
+  // scrolled prop controls collapse state (Jupyter standard: true = collapsed with scrollbar)
+  // Use prop if provided, otherwise default to false (expanded)
+  const isCollapsed = scrolled === true;
+  // Use persisted height if available, otherwise use default
+  const [collapsedHeight, setCollapsedHeight] = useState(scrolledHeight ?? DEFAULT_COLLAPSED_HEIGHT);
   const [isResizing, setIsResizing] = useState(false);
-  const [wrapText, setWrapText] = useState(false); // Default to scroll (horizontal) for long outputs
+  // wrapText is local state for horizontal scroll vs text wrap (not persisted)
+  const [wrapText, setWrapText] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Track if this is the initial render to avoid resetting collapse state
   const initialRenderRef = useRef(true);
+
+  // Store resize cleanup function for unmount
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+
+  // Cleanup resize listeners on unmount
+  useEffect(() => {
+    return () => {
+      resizeCleanupRef.current?.();
+    };
+  }, []);
+
+  // Sync local collapsed height with prop when it changes (e.g., from undo/redo)
+  useEffect(() => {
+    if (scrolledHeight !== undefined) {
+      setCollapsedHeight(scrolledHeight);
+    }
+  }, [scrolledHeight]);
 
   // Truncate outputs for display only - full data preserved in parent state for saving
   const displayOutputs = useMemo(() => {
@@ -172,9 +197,12 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibility
   }, [outputs, showCollapseOption]);
 
   // Handle collapse toggle with scroll into view
+  // Calls onScrolledChange to persist the collapsed state (Jupyter standard)
   const handleCollapseToggle = useCallback(() => {
     const newCollapsed = !isCollapsed;
-    setIsCollapsed(newCollapsed);
+
+    // Persist the collapsed state via onScrolledChange
+    onScrolledChange?.(newCollapsed);
 
     // After state change, ensure the output is visible
     // Use requestAnimationFrame to wait for DOM update
@@ -189,7 +217,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibility
       }
       onVisibilityChange?.();
     });
-  }, [isCollapsed, onVisibilityChange]);
+  }, [isCollapsed, onScrolledChange, onVisibilityChange]);
 
   // Handle resize drag
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -199,22 +227,34 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibility
 
     const startY = e.clientY;
     const startHeight = collapsedHeight;
+    let finalHeight = startHeight;
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       const deltaY = moveEvent.clientY - startY;
-      const newHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + deltaY));
-      setCollapsedHeight(newHeight);
+      finalHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + deltaY));
+      setCollapsedHeight(finalHeight);
     };
 
     const handleMouseUp = () => {
       setIsResizing(false);
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      resizeCleanupRef.current = null;
+      // Persist the final height if it changed
+      if (finalHeight !== startHeight) {
+        onScrolledHeightChange?.(finalHeight);
+      }
+    };
+
+    // Store cleanup for unmount
+    resizeCleanupRef.current = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
     };
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [collapsedHeight]);
+  }, [collapsedHeight, onScrolledHeightChange]);
 
   // Show minimal output area with just execution time if no outputs
   if (outputs.length === 0) {
@@ -259,7 +299,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibility
             {formatExecutionTime(executionMs)}
           </span>
         )}
-        {/* Wrap/scroll toggle button */}
+        {/* Wrap/scroll toggle button - local state only */}
         {hasTextOutput && (
           <button
             className="p-1 rounded hover:bg-slate-100 transition-colors"

@@ -57,6 +57,13 @@ interface BaseOperation {
 // Source of content edit (for tracking AI vs user edits)
 export type EditSource = 'user' | 'ai';
 
+/**
+ * Generic metadata change - each key maps to old/new values
+ * This is intentionally typed as unknown to be maximally extensible.
+ * The operation system never needs to change when new cell properties are added.
+ */
+export type MetadataChanges = Record<string, { old: unknown; new: unknown }>;
+
 // Undoable operations - can be reversed
 export type UndoableOperation =
   | { type: 'insertCell'; index: number; cell: Cell }
@@ -64,7 +71,7 @@ export type UndoableOperation =
   | { type: 'moveCell'; fromIndex: number; toIndex: number }
   | { type: 'updateContent'; cellId: string; oldContent: string; newContent: string; source?: EditSource }
   | { type: 'updateContentPatch'; cellId: string; patch: Patch; oldHash: string; newHash: string; source?: EditSource }
-  | { type: 'changeType'; cellId: string; oldType: CellType; newType: CellType }
+  | { type: 'updateMetadata'; cellId: string; changes: MetadataChanges }
   | { type: 'batch'; operations: UndoableOperation[] };
 
 // Non-undoable operations - for tracking/logging only
@@ -110,7 +117,12 @@ interface UseUndoRedoResult {
   moveCell: (fromIndex: number, toIndex: number) => void;
   updateContent: (cellId: string, newContent: string, source?: EditSource) => void;
   updateContentAI: (cellId: string, newContent: string) => void; // Convenience for AI edits
+  // Generic metadata update - stable API that never needs to change
+  updateMetadata: (cellId: string, changes: MetadataChanges) => void;
+  // Convenience wrappers (call updateMetadata internally)
   changeType: (cellId: string, newType: CellType) => void;
+  setCellScrolled: (cellId: string, scrolled: boolean) => void;
+  setCellScrolledHeight: (cellId: string, height: number) => void;
   // Batch operations (for compound actions)
   batch: (operations: Operation[]) => void;
   // Flush pending content for a single cell (O(1) - call before keyframe operations)
@@ -185,10 +197,16 @@ function applyOperation(cells: Cell[], op: Operation): Cell[] {
         return { ...c, content: result };
       });
     }
-    case 'changeType': {
-      return cells.map(c =>
-        c.id === op.cellId ? { ...c, type: op.newType } : c
-      );
+    case 'updateMetadata': {
+      // Generic metadata update - applies any key/value changes
+      return cells.map(c => {
+        if (c.id !== op.cellId) return c;
+        const updated = { ...c };
+        for (const [key, change] of Object.entries(op.changes)) {
+          (updated as Record<string, unknown>)[key] = change.new;
+        }
+        return updated as Cell;
+      });
     }
     case 'batch': {
       return op.operations.reduce((acc, subOp) => applyOperation(acc, subOp), cells);
@@ -222,13 +240,14 @@ function reverseOperation(op: Operation): Operation {
         oldHash: op.newHash,
         newHash: op.oldHash
       };
-    case 'changeType':
-      return {
-        type: 'changeType',
-        cellId: op.cellId,
-        oldType: op.newType,
-        newType: op.oldType
-      };
+    case 'updateMetadata': {
+      // Generic reversal - swap old/new for each change
+      const reversed: MetadataChanges = {};
+      for (const [key, change] of Object.entries(op.changes)) {
+        reversed[key] = { old: change.new, new: change.old };
+      }
+      return { type: 'updateMetadata', cellId: op.cellId, changes: reversed };
+    }
     case 'batch':
       // Reverse batch operations in reverse order
       return {
@@ -255,7 +274,7 @@ function getAffectedCellIds(op: Operation, cells?: Cell[]): string[] {
       return [];
     case 'updateContent':
     case 'updateContentPatch':
-    case 'changeType':
+    case 'updateMetadata':
       return [op.cellId];
     case 'batch':
       // Collect all unique cell IDs from batch operations
@@ -273,7 +292,24 @@ function getAffectedCellIds(op: Operation, cells?: Cell[]): string[] {
 
 export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Current state
-  const [cells, setCellsInternal] = useState<Cell[]>(initialCells);
+  const [cells, setCellsState] = useState<Cell[]>(initialCells);
+
+  // Ref to track current cells for synchronous reads (avoids stale closures and Strict Mode issues)
+  const cellsRef = useRef<Cell[]>(initialCells);
+
+  // Wrapper that updates both state and ref for cells
+  const setCellsInternal = useCallback((update: Cell[] | ((prev: Cell[]) => Cell[])) => {
+    if (typeof update === 'function') {
+      setCellsState(prev => {
+        const newCells = update(prev);
+        cellsRef.current = newCells;
+        return newCells;
+      });
+    } else {
+      cellsRef.current = update;
+      setCellsState(update);
+    }
+  }, []);
 
   // Operation history stacks
   const [undoStack, setUndoStackState] = useState<Operation[]>([]);
@@ -439,35 +475,86 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   }, [updateContent]);
 
   // Change cell type
-  const changeType = useCallback((cellId: string, newType: CellType) => {
+  // Generic metadata update - the stable core that never needs to change
+  // New cell properties just need to be passed in the changes object
+  const updateMetadata = useCallback((cellId: string, changes: MetadataChanges) => {
+    // Read current cells to compute changes (this is a synchronous read, not inside a state updater)
+    const currentCells = cellsRef.current;
+    const cell = currentCells.find(c => c.id === cellId);
+    if (!cell) return;
+
+    // Build the actual changes, filtering out no-ops
+    const actualChanges: MetadataChanges = {};
+    let hasChanges = false;
+    for (const [key, change] of Object.entries(changes)) {
+      const currentValue = (cell as unknown as Record<string, unknown>)[key];
+      // Use nullish coalescing for properties that default to a value
+      const effectiveOld = currentValue ?? change.old;
+      if (effectiveOld !== change.new) {
+        actualChanges[key] = { old: effectiveOld, new: change.new };
+        hasChanges = true;
+      }
+    }
+    if (!hasChanges) return;
+
+    // Keyframe: first edit after undo - convert redo stack to history before clearing
+    setRedoStack(prevRedo => {
+      if (prevRedo.length > 0) {
+        convertRedoStackToHistory(prevRedo);
+      }
+      return [];
+    });
+
+    const op: Operation = {
+      type: 'updateMetadata',
+      cellId,
+      changes: actualChanges
+    };
+
+    // Add to history first to get the operationId (side effect, but only runs once per call)
+    const operationId = addToFullHistory(op);
+    // Store operationId on the op for later linking
+    const opWithId = { ...op, operationId } as Operation;
+    setUndoStack(prevStack => [...prevStack, opWithId]);
+
+    // Apply the changes - pure state updater
     setCellsInternal(prev => {
-      const cell = prev.find(c => c.id === cellId);
-      if (!cell || cell.type === newType) return prev;
-
-      // Keyframe: first edit after undo - convert redo stack to history before clearing
-      setRedoStack(prevRedo => {
-        if (prevRedo.length > 0) {
-          convertRedoStackToHistory(prevRedo);
+      return prev.map(c => {
+        if (c.id !== cellId) return c;
+        const updated = { ...c };
+        for (const [key, change] of Object.entries(actualChanges)) {
+          (updated as Record<string, unknown>)[key] = change.new;
         }
-        return [];
+        return updated as Cell;
       });
-
-      const op: Operation = {
-        type: 'changeType',
-        cellId,
-        oldType: cell.type,
-        newType
-      };
-
-      // Add to history first to get the operationId
-      const operationId = addToFullHistory(op);
-      // Store operationId on the op for later linking
-      const opWithId = { ...op, operationId } as Operation;
-      setUndoStack(prevStack => [...prevStack, opWithId]);
-
-      return prev.map(c => c.id === cellId ? { ...c, type: newType } : c);
     });
   }, [addToFullHistory, convertRedoStackToHistory]);
+
+  // Convenience wrapper: change cell type (code/markdown)
+  const changeType = useCallback((cellId: string, newType: CellType) => {
+    const cell = cells.find(c => c.id === cellId);
+    if (!cell) return;
+    updateMetadata(cellId, { type: { old: cell.type, new: newType } });
+  }, [cells, updateMetadata]);
+
+  // Convenience wrapper: set cell scrolled state (Jupyter standard: collapsed output)
+  const setCellScrolled = useCallback((cellId: string, scrolled: boolean) => {
+    const cell = cells.find(c => c.id === cellId);
+    if (!cell) return;
+    // Default scrolled to false if undefined (expanded by default)
+    const oldScrolled = cell.scrolled ?? false;
+    if (oldScrolled === scrolled) return; // No-op guard
+    updateMetadata(cellId, { scrolled: { old: oldScrolled, new: scrolled } });
+  }, [cells, updateMetadata]);
+
+  // Convenience wrapper: set cell scrolled height (output area height in scroll mode)
+  const setCellScrolledHeight = useCallback((cellId: string, height: number) => {
+    const cell = cells.find(c => c.id === cellId);
+    if (!cell) return;
+    const oldHeight = cell.scrolledHeight;
+    if (oldHeight === height) return; // No-op guard
+    updateMetadata(cellId, { scrolledHeight: { old: oldHeight, new: height } });
+  }, [cells, updateMetadata]);
 
   // Execute a batch of operations as a single undoable action
   const batch = useCallback((operations: Operation[]) => {
@@ -822,7 +909,10 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     moveCell,
     updateContent,
     updateContentAI,
+    updateMetadata,
     changeType,
+    setCellScrolled,
+    setCellScrolledHeight,
     batch,
     flushCell,
     peekUndo,

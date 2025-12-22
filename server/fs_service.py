@@ -425,14 +425,35 @@ class FilesystemService:
                         "timestamp": datetime.now().timestamp() * 1000
                     })
 
-            cells.append({
+            # Read scrolled property from cell metadata (Jupyter standard)
+            scrolled = cell_metadata.get("scrolled")
+            scrolled_height = cell_metadata.get("scrolled_height")
+
+            cell_data = {
                 "id": cell_id,
                 "type": "markdown" if cell_type == "markdown" else "code",
                 "content": content,
                 "outputs": outputs,
                 "isExecuting": False,
                 "executionCount": nb_cell.get("execution_count")
-            })
+            }
+
+            # Only include scrolled if explicitly set (preserve undefined for default behavior)
+            if scrolled is not None:
+                cell_data["scrolled"] = scrolled
+
+            # Only include scrolledHeight if explicitly set
+            if scrolled_height is not None:
+                cell_data["scrolledHeight"] = scrolled_height
+
+            # Preserve unknown metadata from external tools
+            # Exclude keys we handle specially (nebula_id, scrolled, scrolled_height)
+            unknown_metadata = {k: v for k, v in cell_metadata.items()
+                              if k not in ("nebula_id", "scrolled", "scrolled_height")}
+            if unknown_metadata:
+                cell_data["_metadata"] = unknown_metadata
+
+            cells.append(cell_data)
 
         # Get file mtime
         stat = os.stat(path)
@@ -527,12 +548,27 @@ class FilesystemService:
             else:
                 source = []
 
+            # Build cell metadata - start with preserved unknown metadata
+            preserved_metadata = cell.get("_metadata", {})
+            cell_metadata = {
+                **preserved_metadata,  # Merge preserved metadata first
+                "nebula_id": cell.get("id")  # Preserve cell ID for undo/redo history
+            }
+
+            # Include scrolled if explicitly set (Jupyter standard)
+            scrolled = cell.get("scrolled")
+            if scrolled is not None:
+                cell_metadata["scrolled"] = scrolled
+
+            # Include scrolledHeight if explicitly set (Nebula extension)
+            scrolled_height = cell.get("scrolledHeight")
+            if scrolled_height is not None:
+                cell_metadata["scrolled_height"] = scrolled_height
+
             nb_cell = {
                 "cell_type": cell_type,
                 "source": source,
-                "metadata": {
-                    "nebula_id": cell.get("id")  # Preserve cell ID for undo/redo history
-                }
+                "metadata": cell_metadata
             }
 
             if cell_type == "code":

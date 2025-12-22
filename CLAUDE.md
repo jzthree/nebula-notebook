@@ -149,3 +149,72 @@ The notebook supports Jupyter-style keyboard shortcuts with two modes:
 | `Ctrl/Cmd+C` | Interrupt kernel (when busy, otherwise copy) |
 | `Shift+Enter` | Run cell and advance |
 | `Ctrl/Cmd+Enter` | Run cell |
+
+## Undo/Redo System
+
+Nebula uses a **dual undo/redo architecture** intentionally designed for optimal user experience:
+
+### 1. Text-Level Undo (CodeMirror)
+- **Keyboard**: `Ctrl/Cmd+Z` and `Ctrl/Cmd+Shift+Z` in edit mode
+- Fine-grained, character-level undo for text edits
+- Each cell has its own independent undo stack
+- Optimal for fixing typos and local text changes
+- Handled by CodeMirror's built-in history
+
+### 2. Notebook-Level Undo (useUndoRedo hook)
+- **Toolbar**: Undo/Redo buttons in the toolbar
+- Coarse-grained structural operations:
+  - Insert/delete/move cells
+  - Cell type changes (code ↔ markdown)
+  - Cell metadata changes (collapse state)
+  - Content updates batched at keyframe boundaries
+- Uses operation-based history with `updateMetadata` for extensibility
+- Full notebook trajectory preserved for session replay
+
+### Operation Types
+```typescript
+type UndoableOperation =
+  | { type: 'insertCell'; index: number; cell: Cell }
+  | { type: 'deleteCell'; index: number; cell: Cell }
+  | { type: 'moveCell'; fromIndex: number; toIndex: number }
+  | { type: 'updateContent'; cellId: string; oldContent: string; newContent: string }
+  | { type: 'updateMetadata'; cellId: string; changes: MetadataChanges }
+  | { type: 'batch'; operations: UndoableOperation[] };
+
+// Generic metadata - stable API that never needs changes for new properties
+type MetadataChanges = Record<string, { old: unknown; new: unknown }>;
+```
+
+### Key Files
+- `hooks/useUndoRedo.ts` - Main undo/redo hook with operation-based history
+- `lib/notebookOperations.ts` - Pure functions for state transformations
+- `lib/diffUtils.ts` - Patch-based diff utilities for compact storage
+
+## Performance
+
+### Virtualization
+- **React Virtuoso** (`VirtualCellList.tsx`) renders only visible cells
+- `overscan={1000}` pixels above/below viewport for smooth scrolling
+- Cells mount/unmount as they scroll in/out of view
+- `key={cell.id}` ensures correct component identity
+
+### Autosave
+- Debounced 1-second delay after changes
+- State machine in `hooks/autosaveStateMachine.ts`
+- Visibility-triggered save on tab switch
+- Conflict detection with mtime comparison
+
+### Cell Output
+- `scrolled` property (Jupyter standard): collapse/expand state
+- Large outputs truncated for display (data preserved for save)
+- Resize handle for collapsed output height
+
+## Metadata Preservation
+
+Cell metadata is preserved across load/save:
+- `nebula_id`: Internal cell ID for undo/redo history tracking
+- `scrolled`: Jupyter-standard collapsed output state (true = collapsed)
+- `_metadata`: Unknown metadata from external tools is preserved
+
+When cells are loaded, any unrecognized metadata fields are stored in `_metadata`
+and merged back when saving, ensuring compatibility with external notebook tools.

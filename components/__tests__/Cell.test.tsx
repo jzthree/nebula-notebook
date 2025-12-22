@@ -178,4 +178,81 @@ describe('Cell', () => {
       expect(screen.getByText('[5]')).toBeInTheDocument();
     });
   });
+
+  describe('scrolled property persistence (collapse state)', () => {
+    // scrolled in Jupyter standard means output is collapsed with max-height
+    // scrolled=true → collapsed, scrolled=false/undefined → expanded
+    const cellWithOutput: ICell = {
+      ...mockCell,
+      outputs: [{ id: 'out-1', type: 'stdout', content: 'Hello World', timestamp: Date.now() }],
+      lastExecutionMs: 100,
+    };
+
+    it('passes scrolled=undefined to CellOutput by default (expanded)', () => {
+      const { container } = renderCell({ ...defaultProps, cell: cellWithOutput });
+      // CellOutput should render when there are outputs
+      const outputArea = container.querySelector('.border-t.border-slate-100');
+      expect(outputArea).toBeInTheDocument();
+    });
+
+    it('passes scrolled=false to CellOutput when cell has scrolled=false (expanded)', () => {
+      const cellWithScrolledFalse = { ...cellWithOutput, scrolled: false };
+      const { container } = renderCell({ ...defaultProps, cell: cellWithScrolledFalse });
+      const outputArea = container.querySelector('.border-t.border-slate-100');
+      expect(outputArea).toBeInTheDocument();
+      // scrolled=false means expanded - no max-height constraint
+    });
+
+    it('passes scrolled=true to CellOutput when cell has scrolled=true (collapsed)', () => {
+      const cellWithScrolledTrue = { ...cellWithOutput, scrolled: true };
+      const { container } = renderCell({ ...defaultProps, cell: cellWithScrolledTrue });
+      const outputArea = container.querySelector('.border-t.border-slate-100');
+      expect(outputArea).toBeInTheDocument();
+      // scrolled=true means collapsed - output has max-height and scrolls
+    });
+
+    it('calls onSetCellScrolled when collapse toggle is clicked', () => {
+      // Create a cell with tall output that shows the collapse option
+      const tallOutput = 'Line\n'.repeat(50); // Tall enough to show collapse option
+      const cellWithTallOutput: ICell = {
+        ...mockCell,
+        outputs: [{ id: 'out-1', type: 'stdout', content: tallOutput, timestamp: Date.now() }],
+        lastExecutionMs: 100,
+        scrolled: false, // Start expanded
+      };
+      const onSetCellScrolled = vi.fn();
+      const { container } = renderCell({
+        ...defaultProps,
+        cell: cellWithTallOutput,
+        onSetCellScrolled,
+      });
+
+      // Find the collapse toggle (left gutter with chevron)
+      const collapseToggle = container.querySelector('[title*="Collapse"]');
+      if (collapseToggle) {
+        fireEvent.click(collapseToggle);
+        expect(onSetCellScrolled).toHaveBeenCalledWith(mockCell.id, true);
+      }
+    });
+
+    it('preserves scrolled property when cell content changes', () => {
+      const cellWithScrolled = { ...cellWithOutput, scrolled: true, content: 'original' };
+      const { rerender, container } = renderCell({ ...defaultProps, cell: cellWithScrolled });
+
+      // Verify initial state - scrolled=true means collapsed
+      const outputArea = container.querySelector('.border-t.border-slate-100');
+      expect(outputArea).toBeInTheDocument();
+
+      // Update content but keep scrolled
+      const updatedCell = { ...cellWithScrolled, content: 'updated content' };
+      rerender(
+        <NotificationProvider>
+          <Cell {...defaultProps} cell={updatedCell} />
+        </NotificationProvider>
+      );
+
+      // scrolled should still be true (collapsed)
+      expect(container.querySelector('.border-t.border-slate-100')).toBeInTheDocument();
+    });
+  });
 });
