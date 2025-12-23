@@ -10,7 +10,6 @@ const MAX_DISPLAY_CHARS = 100000000; // 100MB - generous for images
 interface Props {
   outputs: ICellOutput[];
   executionMs?: number; // Execution time in milliseconds
-  onVisibilityChange?: () => void; // Called when collapse state changes, for scroll adjustment
   scrolled?: boolean; // Jupyter standard: true = collapsed with max-height, false/undefined = expanded
   onScrolledChange?: (scrolled: boolean) => void; // Called when user toggles collapse/expand
   scrolledHeight?: number; // Persisted height of output area in scroll mode
@@ -71,7 +70,7 @@ const MIN_HEIGHT = 50;
 const DEFAULT_COLLAPSED_HEIGHT = 200;
 const MAX_HEIGHT = 600;
 
-export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibilityChange, scrolled, onScrolledChange, scrolledHeight, onScrolledHeightChange }) => {
+export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, onScrolledChange, scrolledHeight, onScrolledHeightChange }) => {
   // scrolled prop controls collapse state (Jupyter standard: true = collapsed with scrollbar)
   // Use prop if provided, otherwise default to false (expanded)
   const isCollapsed = scrolled === true;
@@ -196,28 +195,16 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, onVisibility
     }
   }, [outputs, showCollapseOption]);
 
-  // Handle collapse toggle with scroll into view
+  // Handle collapse toggle
   // Calls onScrolledChange to persist the collapsed state (Jupyter standard)
-  const handleCollapseToggle = useCallback(() => {
+  const handleCollapseToggle = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent bubbling to cell container (avoids scroll jumps)
+
     const newCollapsed = !isCollapsed;
-
-    // Persist the collapsed state via onScrolledChange
     onScrolledChange?.(newCollapsed);
-
-    // After state change, scroll to keep context visible
-    // Use requestAnimationFrame to wait for DOM update
-    requestAnimationFrame(() => {
-      if (containerRef.current) {
-        // When collapsing, scroll to end of cell so user sees the collapsed output
-        // When expanding, scroll to make content visible
-        containerRef.current.scrollIntoView({ 
-          behavior: 'smooth', 
-          block: newCollapsed ? 'end' : 'nearest' 
-        });
-      }
-      onVisibilityChange?.();
-    });
-  }, [isCollapsed, onScrolledChange, onVisibilityChange]);
+    // Note: Don't call onVisibilityChange here - Virtuoso handles scroll position
+    // during height changes. Triggering scroll during state transition causes jumps.
+  }, [isCollapsed, onScrolledChange]);
 
   // Handle resize drag
   const handleResizeStart = useCallback((e: React.MouseEvent) => {

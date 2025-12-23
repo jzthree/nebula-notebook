@@ -226,12 +226,96 @@ export const Notebook: React.FC = () => {
 
   // Track visible cell range for smart scrolling
   const [visibleRange, setVisibleRange] = useState<{ startIndex: number; endIndex: number }>({ startIndex: 0, endIndex: 10 });
+  
+  // Memoize range change handler to prevent Virtuoso from resetting scroll
+  const handleRangeChange = useCallback((range: { startIndex: number; endIndex: number }) => {
+    setVisibleRange(range);
+  }, []);
 
   // Virtuoso Handle for programmatic scrolling
   const virtuosoRef = useRef<VirtuosoHandle>(null);
 
   // Pending scroll after cell changes (for undo/redo of insert/delete)
   const pendingScrollCellIdRef = useRef<string | null>(null);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UNIFIED SCROLL UTILITY
+  // All scroll operations should use this to work properly with Virtuoso
+  // ═══════════════════════════════════════════════════════════════════════════
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingScrollRef = useRef<{ index: number; attempts: number; id: number } | null>(null);
+  const scrollIdRef = useRef(0); // Unique ID to prevent double-scrolling in Strict Mode
+
+  // Unified scroll function - ALL scroll operations should use this
+  const scrollToCell = useCallback((
+    index: number, 
+    options?: { 
+      behavior?: 'smooth' | 'auto';
+      delay?: number;      // Delay before scrolling (for debouncing)
+      retryOnce?: boolean; // Retry after heights settle (for dynamic content)
+    }
+  ) => {
+    const { behavior = 'smooth', delay = 0, retryOnce = false } = options || {};
+    
+    // Cancel any pending scroll
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+
+    // Generate unique ID for this scroll request (prevents double-scroll in Strict Mode)
+    const scrollId = ++scrollIdRef.current;
+    pendingScrollRef.current = { index, attempts: 0, id: scrollId };
+
+    const performScroll = () => {
+      // Abort if a newer scroll was requested or this scroll was cancelled
+      if (!pendingScrollRef.current || 
+          pendingScrollRef.current.index !== index ||
+          pendingScrollRef.current.id !== scrollId) {
+        return;
+      }
+
+      virtuosoRef.current?.scrollToIndex({
+        index,
+        align: 'start',
+        behavior,
+        offset: -80 // Account for header
+      });
+
+      // Optionally retry after heights settle (for dynamic content)
+      if (retryOnce && pendingScrollRef.current.attempts === 0) {
+        pendingScrollRef.current.attempts = 1;
+        scrollTimeoutRef.current = setTimeout(() => {
+          if (pendingScrollRef.current?.index === index && 
+              pendingScrollRef.current?.id === scrollId) {
+            virtuosoRef.current?.scrollToIndex({
+              index,
+              align: 'start',
+              behavior: 'auto', // Instant adjustment
+              offset: -80
+            });
+            pendingScrollRef.current = null;
+          }
+        }, 150);
+      } else {
+        pendingScrollRef.current = null;
+      }
+    };
+
+    if (delay > 0) {
+      scrollTimeoutRef.current = setTimeout(performScroll, delay);
+    } else {
+      performScroll();
+    }
+  }, []);
+
+  // Cleanup scroll timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Helper to check if ANY part of a cell is currently visible
   // If any part of the cell (code or output) can be seen, it's considered visible
@@ -243,21 +327,18 @@ export const Notebook: React.FC = () => {
   }, [visibleRange]);
 
   // Effect to handle pending scroll after cells change (for undo/redo of insert/delete)
+  // Clear the ref BEFORE scrolling to prevent double-scroll in Strict Mode
   useEffect(() => {
-    if (pendingScrollCellIdRef.current) {
-      const cellId = pendingScrollCellIdRef.current;
+    const cellId = pendingScrollCellIdRef.current;
+    if (cellId) {
+      // Clear immediately to prevent double-invocation in Strict Mode
+      pendingScrollCellIdRef.current = null;
       const index = cells.findIndex(c => c.id === cellId);
       if (index >= 0) {
-        virtuosoRef.current?.scrollToIndex({
-          index,
-          align: 'start',    // Scroll to start of cell so user sees from the top
-          behavior: 'smooth',
-          offset: -80        // Small offset so cell isn't flush with top (accounts for header)
-        });
-        pendingScrollCellIdRef.current = null;
+        scrollToCell(index);
       }
     }
-  }, [cells]);
+  }, [cells, scrollToCell]);
 
   // Helper to show visual feedback for undo/redo (highlight only, no scrolling)
   const showUndoRedoFeedback = useCallback((affectedCellIds: string[]) => {
@@ -299,12 +380,7 @@ export const Notebook: React.FC = () => {
 
     if (willDeleteCell && needsScroll) {
       // Scroll to cell first so user sees it before deletion
-      virtuosoRef.current?.scrollToIndex({
-        index: cellIndex,
-        align: 'start',
-        behavior: 'smooth',
-        offset: -80
-      });
+      scrollToCell(cellIndex);
       setTimeout(() => {
         const result = applyFn();
         if (result?.affectedCellIds.length) showUndoRedoFeedback(result.affectedCellIds);
@@ -321,7 +397,7 @@ export const Notebook: React.FC = () => {
         }
       }
     }
-  }, [flushActiveCell, cells, isCellVisible, showUndoRedoFeedback]);
+  }, [flushActiveCell, cells, isCellVisible, showUndoRedoFeedback, scrollToCell]);
 
   // Undo: deleteCell restores a cell, insertCell removes it
   const undo = useCallback(() => {
@@ -336,61 +412,6 @@ export const Notebook: React.FC = () => {
     const willDelete = peek?.operationType === 'deleteCell'; // Redo delete = delete
     applyWithScrollFeedback(peekRedo, rawRedo, willDelete);
   }, [peekRedo, rawRedo, applyWithScrollFeedback]);
-
-  // Debounced scroll to handle height changes during execution
-  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const pendingScrollRef = useRef<{ index: number; attempts: number } | null>(null);
-
-  // Smart scroll that debounces rapid requests and retries on height changes
-  const scrollToCellDebounced = useCallback((index: number, delay: number = 50) => {
-    // Cancel any pending scroll
-    if (scrollTimeoutRef.current) {
-      clearTimeout(scrollTimeoutRef.current);
-    }
-
-    // Track this scroll request
-    pendingScrollRef.current = { index, attempts: 0 };
-
-    const performScroll = () => {
-      if (!pendingScrollRef.current || pendingScrollRef.current.index !== index) {
-        return; // Another scroll was requested, abort this one
-      }
-
-      virtuosoRef.current?.scrollToIndex({
-        index,
-        align: 'start',
-        behavior: 'smooth',
-        offset: -80
-      });
-
-      // After initial scroll, do one more adjustment after heights settle
-      if (pendingScrollRef.current.attempts === 0) {
-        pendingScrollRef.current.attempts = 1;
-        scrollTimeoutRef.current = setTimeout(() => {
-          if (pendingScrollRef.current?.index === index) {
-            virtuosoRef.current?.scrollToIndex({
-              index,
-              align: 'start',
-              behavior: 'auto', // Instant adjustment, no jarring smooth scroll
-              offset: -80
-            });
-            pendingScrollRef.current = null;
-          }
-        }, 150); // Wait for output clearing to complete
-      }
-    };
-
-    scrollTimeoutRef.current = setTimeout(performScroll, delay);
-  }, []);
-
-  // Cleanup scroll timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current);
-      }
-    };
-  }, []);
 
   // Ref for saveNow to avoid stale closures in keyboard handler
   const saveNowRef = useRef<() => Promise<void>>(() => Promise.resolve());
@@ -1005,7 +1026,7 @@ export const Notebook: React.FC = () => {
             // Enter edit mode - this triggers focus which calls onActivate to set active cell
             // The blur when leaving this cell will flush the unflushed edits
             setPendingFocus({ cellId, mode: 'editor' });
-            virtuosoRef.current?.scrollToIndex({ index: cellIndex, align: 'start' });
+            scrollToCell(cellIndex, { behavior: 'auto' });
           }
         }
       })
@@ -1015,10 +1036,7 @@ export const Notebook: React.FC = () => {
 
     const meta = files.find(f => f.id === id);
     if (meta) setCurrentFileMetadata(meta);
-
-    requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollTo({ top: 0 });
-    });
+    // Note: No need to scroll to top - Virtuoso resets when key={currentFileId} changes
 
     // Use kernel from notebook file if available, otherwise use current kernel preference
     // Also verify the kernel exists in available kernels
@@ -1212,14 +1230,7 @@ export const Notebook: React.FC = () => {
 
     // Only scroll if not explicitly disabled (e.g., toolbar plus button shouldn't scroll)
     if (shouldScroll) {
-      requestAnimationFrame(() => {
-        virtuosoRef.current?.scrollToIndex({
-          index: insertIndex,
-          align: 'start',
-          behavior: 'smooth',
-          offset: -80
-        });
-      });
+      scrollToCell(insertIndex);
     }
   };
 
@@ -1375,7 +1386,7 @@ export const Notebook: React.FC = () => {
       const nextIndex = currentIndex + 1;
       const nextCellId = cells[nextIndex].id;
       setActiveCellId(nextCellId);
-      scrollToCellDebounced(nextIndex);
+      scrollToCell(nextIndex, { delay: 50, retryOnce: true });
       // Set pending focus - will poll for DOM element after virtualization renders
       setPendingFocus({ cellId: nextCellId, mode: focusMode });
     } else {
@@ -1391,13 +1402,8 @@ export const Notebook: React.FC = () => {
   // Navigate to a specific cell (used by search)
   const navigateToCell = useCallback((cellIndex: number, cellId: string) => {
     setActiveCellId(cellId);
-    virtuosoRef.current?.scrollToIndex({
-      index: cellIndex,
-      align: 'start',    // Start alignment ensures code editor (at top of cell) is visible
-      behavior: 'smooth',
-      offset: -80        // Small offset so cell isn't flush with top (accounts for header)
-    });
-  }, []);
+    scrollToCell(cellIndex);
+  }, [scrollToCell]);
 
   // Navigate to adjacent cell with virtualization support (used by arrow keys in cell mode)
   const navigateCellRelative = useCallback((fromCellId: string, direction: 'up' | 'down') => {
@@ -1409,10 +1415,10 @@ export const Notebook: React.FC = () => {
 
     const targetCellId = cells[targetIndex].id;
     setActiveCellId(targetCellId);
-    scrollToCellDebounced(targetIndex);
+    scrollToCell(targetIndex, { delay: 50, retryOnce: true });
     // Use polling to wait for virtualization to render the target cell
     setPendingFocus({ cellId: targetCellId, mode: 'cell' });
-  }, [cells, scrollToCellDebounced]);
+  }, [cells, scrollToCell]);
 
   // Handle search query changes for highlighting
   const handleSearchChange = useCallback((
@@ -2009,12 +2015,7 @@ export const Notebook: React.FC = () => {
                                   e.stopPropagation();
                                   if (executionIndicator.cellIndex >= 0) {
                                     setActiveCellId(executionIndicator.cellId);
-                                    virtuosoRef.current?.scrollToIndex({
-                                      index: executionIndicator.cellIndex,
-                                      align: 'start',
-                                      behavior: 'smooth',
-                                      offset: -80
-                                    });
+                                    scrollToCell(executionIndicator.cellIndex);
                                   }
                                 }}
                                 title="Jump to cell"
@@ -2062,12 +2063,7 @@ export const Notebook: React.FC = () => {
                                               e.stopPropagation();
                                               if (cellIndex >= 0) {
                                                 setActiveCellId(cellId);
-                                                virtuosoRef.current?.scrollToIndex({
-                                                  index: cellIndex,
-                                                  align: 'start',
-                                                  behavior: 'smooth',
-                                                  offset: -80
-                                                });
+                                                scrollToCell(cellIndex);
                                                 setIsExecutionQueueOpen(false);
                                               }
                                             }}
@@ -2115,12 +2111,7 @@ export const Notebook: React.FC = () => {
                             onClick={() => {
                               if (lastExecutionResult.cellIndex >= 0) {
                                 setActiveCellId(lastExecutionResult.cellId);
-                                virtuosoRef.current?.scrollToIndex({
-                                  index: lastExecutionResult.cellIndex,
-                                  align: 'start',
-                                  behavior: 'smooth',
-                                  offset: -80
-                                });
+                                scrollToCell(lastExecutionResult.cellIndex);
                               }
                               dismissExecutionResult();
                             }}
@@ -2238,7 +2229,7 @@ export const Notebook: React.FC = () => {
               cells={cells}
               virtuosoRef={virtuosoRef}
               className="h-full"
-              onRangeChange={(range) => setVisibleRange(range)}
+              onRangeChange={handleRangeChange}
               renderCell={(cell, idx) => (
                   <CellComponent
                   key={cell.id}
