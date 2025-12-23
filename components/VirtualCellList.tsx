@@ -34,6 +34,10 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
       // Use stable cell IDs as keys to prevent scroll jumps when cells update
       computeItemKey={(index, cell) => cell.id}
       overscan={1000}
+      // Increase viewport by 2000px in each direction to render cells earlier
+      // This prevents scroll jumps when scrolling back to long cells that were
+      // previously estimated but now need to be measured
+      increaseViewportBy={{ top: 2000, bottom: 2000 }}
       components={{
         List: ListContainer,
         Footer
