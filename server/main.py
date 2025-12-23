@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -564,6 +564,23 @@ async def rename_file(request: RenameFileRequest):
         raise HTTPException(status_code=404, detail=str(e))
     except FileExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/fs/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    path: str = Form(...)
+):
+    """Upload a file to the specified directory"""
+    try:
+        info = await fs_service.upload_file(path, file)
+        return {"status": "ok", "file": info}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

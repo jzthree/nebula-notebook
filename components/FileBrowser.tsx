@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { NotebookMetadata } from '../types';
 import {
   File,
@@ -20,7 +20,8 @@ import {
   ExternalLink,
   ArrowDownAZ,
   Clock,
-  Download
+  Download,
+  Upload
 } from 'lucide-react';
 import {
   listDirectory,
@@ -29,6 +30,7 @@ import {
   deleteFile,
   renameFile,
   downloadFile,
+  uploadFile,
   FileItem,
   DirectoryListing
 } from '../services/fileService';
@@ -69,6 +71,10 @@ export const FileBrowser: React.FC<Props> = ({
   const [showNotebooksOnly, setShowNotebooksOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'modified'>('modified');
+
+  // Upload state
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
 
   // Load directory on first open or when path changes
   useEffect(() => {
@@ -225,6 +231,29 @@ export const FileBrowser: React.FC<Props> = ({
     }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        await uploadFile(currentPath, file);
+      }
+      toast(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}`, 'success');
+      loadDirectory(currentPath);
+      onRefresh();
+    } catch (err: any) {
+      toast(err.message || 'Failed to upload file', 'error');
+    } finally {
+      setIsUploading(false);
+      // Reset input so same file can be uploaded again
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   const getFileIcon = (item: FileItem) => {
     if (item.isDirectory) return <Folder className="w-4 h-4 text-blue-500" />;
     if (item.extension === '.ipynb') return <Book className="w-4 h-4 text-orange-500" />;
@@ -280,6 +309,15 @@ export const FileBrowser: React.FC<Props> = ({
         fixed top-0 left-0 h-full w-72 bg-slate-50 border-r border-slate-200 shadow-xl z-40 transform transition-transform duration-300 ease-in-out flex flex-col
         ${isOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
+        {/* Hidden file input for upload */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          className="hidden"
+          onChange={handleFileUpload}
+          multiple
+        />
+
         {/* Header */}
         <div className="p-4 border-b border-slate-200 bg-white flex justify-between items-center">
           <h2 className="font-semibold text-slate-800 flex items-center gap-2 text-sm uppercase tracking-wider">
@@ -293,6 +331,14 @@ export const FileBrowser: React.FC<Props> = ({
               title="New Notebook"
             >
               <Plus className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading}
+              className="p-1.5 hover:bg-slate-100 rounded text-slate-600 disabled:opacity-50"
+              title="Upload files"
+            >
+              <Upload className={`w-4 h-4 ${isUploading ? 'animate-pulse' : ''}`} />
             </button>
             <button
               onClick={() => loadDirectory(currentPath)}

@@ -201,6 +201,28 @@ export const renameFile = async (oldPath: string, newPath: string): Promise<File
 };
 
 /**
+ * Upload a file to a directory
+ */
+export const uploadFile = async (directory: string, file: File): Promise<FileItem> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('path', directory);
+
+  const response = await fetch(`${API_BASE}/fs/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to upload file');
+  }
+
+  const data = await response.json();
+  return data.file;
+};
+
+/**
  * Notebook data including cells and metadata
  */
 export interface NotebookData {

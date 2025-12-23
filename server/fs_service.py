@@ -329,6 +329,49 @@ class FilesystemService:
 
         return self._get_file_info(new_path).__dict__
 
+    async def upload_file(self, directory: str, file) -> Dict[str, Any]:
+        """
+        Upload a file to the specified directory.
+
+        Args:
+            directory: Target directory path
+            file: FastAPI UploadFile object
+
+        Returns:
+            File info dict for the uploaded file
+        """
+        dir_path = self._normalize_path(directory)
+
+        if not os.path.exists(dir_path):
+            raise FileNotFoundError(f"Directory not found: {dir_path}")
+
+        if not os.path.isdir(dir_path):
+            raise NotADirectoryError(f"Not a directory: {dir_path}")
+
+        # Build full file path
+        file_path = os.path.join(dir_path, file.filename)
+
+        # Read file content
+        content = await file.read()
+
+        # Write to disk
+        with open(file_path, 'wb') as f:
+            f.write(content)
+
+        # Return file info
+        info = self._get_file_info(file_path)
+        return {
+            "id": file_path,
+            "name": info.name,
+            "path": info.path,
+            "isDirectory": info.is_directory,
+            "size": self._format_size(info.size),
+            "sizeBytes": info.size,
+            "modified": info.modified,
+            "extension": info.extension,
+            "fileType": self._get_file_type(info.extension)
+        }
+
     def get_notebook_cells(self, path: str) -> Dict[str, Any]:
         """
         Read a notebook and convert to internal cell format
