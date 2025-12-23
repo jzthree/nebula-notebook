@@ -44,6 +44,9 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
   // Track if current save is manual (show "Saving..." only for manual saves)
   const isManualSaveRef = useRef(false);
 
+  // Guard against concurrent saves - prevents race conditions with mtime updates
+  const saveInProgressRef = useRef(false);
+
   // Serialize cells for comparison (includes outputs to trigger save after execution)
   // Also includes scrolled, scrolledHeight and _metadata to trigger save when metadata changes
   const serializeCells = useCallback((cells: Cell[]) => {
@@ -108,6 +111,14 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
       return;
     }
 
+    // Guard against concurrent saves - wait for current save to complete
+    // This prevents race conditions where multiple saves could cause false conflicts
+    if (saveInProgressRef.current) {
+      console.log('[AUTOSAVE] Save already in progress, skipping');
+      dispatch({ type: 'SAVE_SUCCESS' }); // Treat as success, will re-trigger if still dirty
+      return;
+    }
+
     const currentContent = serializeCells(cells);
     if (currentContent === lastSavedContentRef.current) {
       dispatch({ type: 'SAVE_SUCCESS' }); // No actual changes
@@ -119,6 +130,7 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
       setUiStatus(prev => ({ status: 'saving', lastSaved: prev.lastSaved }));
     }
 
+    saveInProgressRef.current = true;
     try {
       await onSave(fileId, cells);
       lastSavedContentRef.current = currentContent;
@@ -129,7 +141,8 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
       setUiStatus(prev => ({ status: 'error', lastSaved: prev.lastSaved }));
       dispatch({ type: 'SAVE_ERROR', error: error instanceof Error ? error : new Error(String(error)) });
     } finally {
-      // Reset manual save flag
+      // Reset flags
+      saveInProgressRef.current = false;
       isManualSaveRef.current = false;
     }
   }, [fileId, cells, enabled, onSave, serializeCells, dispatch]);

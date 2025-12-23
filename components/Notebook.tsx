@@ -317,6 +317,42 @@ export const Notebook: React.FC = () => {
     };
   }, []);
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PERFORMANCE STATS LOGGER
+  // Logs accumulating data structures every 10 seconds to debug progressive lag
+  // ═══════════════════════════════════════════════════════════════════════════
+  const keystrokeCountRef = useRef(0);
+  const sessionStartRef = useRef(Date.now());
+
+  // Use ref for cells to avoid recreating interval on every keystroke
+  const cellsRefForStats = useRef(cells);
+  cellsRefForStats.current = cells;
+
+  useEffect(() => {
+    const logStats = () => {
+      const currentCells = cellsRefForStats.current;
+      const history = getFullHistory();
+      const totalContentSize = currentCells.reduce((acc, c) => acc + c.content.length, 0);
+      const totalOutputSize = currentCells.reduce((acc, c) => {
+        return acc + c.outputs.reduce((sum, o) => sum + (o.content?.length || 0), 0);
+      }, 0);
+      const sessionDuration = ((Date.now() - sessionStartRef.current) / 1000 / 60).toFixed(1);
+
+      console.log(`[STATS] session: ${sessionDuration}min, keystrokes: ${keystrokeCountRef.current}`);
+      console.log(`[STATS] cells: ${currentCells.length}, content: ${(totalContentSize/1024).toFixed(1)}KB, outputs: ${(totalOutputSize/1024).toFixed(1)}KB`);
+      console.log(`[STATS] history: ${history.length} ops, canUndo: ${canUndo}, redoStack: ${redoStackLength}`);
+    };
+
+    // Log immediately on mount
+    logStats();
+
+    // Log every 10 seconds
+    const interval = setInterval(logStats, 10000);
+
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run once on mount - uses refs for current values
+
   // Helper to check if ANY part of a cell is currently visible
   // If any part of the cell (code or output) can be seen, it's considered visible
   const isCellVisible = useCallback((cellIndex: number): boolean => {
@@ -445,9 +481,12 @@ export const Notebook: React.FC = () => {
         setPendingSave(false);
         await updateNotebookMetadata(fileId, {});
 
-        // Save session state (unflushed edits) alongside notebook
+        // Save session state (unflushed edits and active cell) alongside notebook
         const unflushedState = getUnflushedState(activeCellIdRef.current, cellsToSave);
-        await saveNotebookSession(fileId, { unflushedEdit: unflushedState ?? undefined });
+        await saveNotebookSession(fileId, {
+          unflushedEdit: unflushedState ?? undefined,
+          activeCellId: activeCellIdRef.current ?? undefined,
+        });
       } else if (result.error) {
         throw new Error(result.error);
       }
@@ -910,7 +949,7 @@ export const Notebook: React.FC = () => {
         // Find and focus the CodeMirror editor for the active cell
         const cellElement = document.querySelector(`[data-cell-id="${focusedCellId}"] .cm-content`);
         if (cellElement instanceof HTMLElement) {
-          cellElement.focus();
+          cellElement.focus({ preventScroll: true });
         }
         return;
       }
@@ -1026,6 +1065,14 @@ export const Notebook: React.FC = () => {
             // Enter edit mode - this triggers focus which calls onActivate to set active cell
             // The blur when leaving this cell will flush the unflushed edits
             setPendingFocus({ cellId, mode: 'editor' });
+            scrollToCell(cellIndex, { behavior: 'auto' });
+          }
+        } else if (savedSession.activeCellId) {
+          // No unflushed edits, but restore last focused cell position
+          const cellId = savedSession.activeCellId;
+          const cellIndex = content.findIndex(c => c.id === cellId);
+          if (cellIndex >= 0) {
+            setActiveCellId(cellId);
             scrollToCell(cellIndex, { behavior: 'auto' });
           }
         }
@@ -1262,13 +1309,19 @@ export const Notebook: React.FC = () => {
   // state updates would overwrite CodeMirror's current content when typing fast.
   // CodeMirror renders synchronously, so we don't need startTransition for perceived performance.
   const handleUpdateCell = useCallback((id: string, content: string) => {
+    keystrokeCountRef.current++;
+    const start = performance.now();
     // First edit while redo stack is non-empty is a keyframe
     // This commits the redo history before the new edit timeline begins
     if (hasRedoToFlush()) {
       flushCell(id, content);
     }
     setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
-  }, [setCells, hasRedoToFlush, flushCell]);
+    const elapsed = performance.now() - start;
+    if (elapsed > 5) {
+      console.log(`[PERF] Notebook.handleUpdateCell took ${elapsed.toFixed(1)}ms, cells: ${cells.length}, keystroke: ${keystrokeCountRef.current}`);
+    }
+  }, [setCells, hasRedoToFlush, flushCell, cells.length]);
 
   // AI/bulk update with undo tracking - for AI edits, annotated as AI source
   const handleAIUpdateCell = useCallback((id: string, content: string) => {

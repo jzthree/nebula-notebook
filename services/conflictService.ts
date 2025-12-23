@@ -11,17 +11,14 @@ import { Cell } from '../types';
 /**
  * Tolerance for mtime comparison in seconds.
  *
- * This tolerance prevents false positive conflicts caused by:
+ * This small tolerance handles only:
  * - Floating-point precision issues during JSON serialization
- * - Sub-second filesystem timing differences (APFS has nanosecond precision)
- * - Slight mtime variations between read operations
- * - Filesystem journaling/syncing delays
+ * - Sub-second filesystem timing differences
  *
- * A real external modification would typically be at least 2+ seconds after our save.
- * Using 1.5s tolerance to account for various filesystem behaviors while still
- * catching real conflicts reliably.
+ * We use exact mtime comparison from our last save, so we only need
+ * tolerance for precision issues, not for slow saves or race conditions.
  */
-const MTIME_TOLERANCE_SECONDS = 1.5;
+const MTIME_TOLERANCE_SECONDS = 0.5;
 
 export interface ConflictCheckResult {
   hasConflict: boolean;

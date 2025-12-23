@@ -46,6 +46,9 @@ interface Props {
   onCloseSearch?: () => void; // Close search bar
 }
 
+// Render counter for performance debugging
+const cellRenderCountRef = { current: new Map<string, number>() };
+
 const CellComponent: React.FC<Props> = ({
   cell,
   index,
@@ -75,6 +78,13 @@ const CellComponent: React.FC<Props> = ({
   isSearchOpen = false,
   onCloseSearch,
 }) => {
+  // Track render count for this cell
+  const renderCount = (cellRenderCountRef.current.get(cell.id) || 0) + 1;
+  cellRenderCountRef.current.set(cell.id, renderCount);
+  if (renderCount % 10 === 0) {
+    console.log(`[RENDER] Cell ${cell.id.slice(0,8)} rendered ${renderCount} times`);
+  }
+
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -156,7 +166,12 @@ const CellComponent: React.FC<Props> = ({
 
   // Stable onChange handler for CodeEditor
   const handleEditorChange = useCallback((value: string) => {
+    const start = performance.now();
     onUpdateRef.current(cellIdRef.current, value);
+    const elapsed = performance.now() - start;
+    if (elapsed > 5) {
+      console.log(`[PERF] Cell.handleEditorChange took ${elapsed.toFixed(1)}ms`);
+    }
   }, []);
 
   const handleEditorBlur = useCallback(() => {

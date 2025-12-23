@@ -478,13 +478,14 @@ export const saveNotebookHistory = async (
 // --- Session State Persistence ---
 
 /**
- * Session state structure for unflushed edits
+ * Session state structure for restoring user's editing context
  */
 export interface SessionState {
   unflushedEdit?: {
     cellId: string;
     lastFlushedContent: string;
   };
+  activeCellId?: string; // Last focused cell - scroll here on refresh
 }
 
 /**

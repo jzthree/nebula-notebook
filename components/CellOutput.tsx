@@ -248,7 +248,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
     if (executionMs === undefined) return null;
     return (
       <div className="relative border-t border-slate-100 rounded-b-lg bg-white h-8">
-        <span className="absolute top-2 right-2 text-xs text-slate-400 tabular-nums" title="Execution time">
+        <span className="absolute top-1.5 right-2 text-xs text-slate-400 tabular-nums" title="Execution time">
           {formatExecutionTime(executionMs)}
         </span>
       </div>
@@ -279,7 +279,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
       )}
 
       {/* Top right controls: execution time and wrap toggle */}
-      <div className="absolute top-2 right-2 flex items-center gap-2 z-10">
+      <div className="absolute top-1 right-2 flex items-center gap-2 z-10">
         {/* Execution time indicator */}
         {executionMs !== undefined && (
           <span className="text-xs text-slate-400 tabular-nums" title="Execution time">
