@@ -85,6 +85,18 @@ const CellComponent: React.FC<Props> = ({
     console.log(`[RENDER] Cell ${cell.id.slice(0,8)} rendered ${renderCount} times`);
   }
 
+  // Track mount/unmount for performance debugging
+  useEffect(() => {
+    const mountedCount = (window as any).__cellMountCount || 0;
+    (window as any).__cellMountCount = mountedCount + 1;
+    console.log(`[MOUNT] Cell ${cell.id.slice(0,8)} mounted (total: ${mountedCount + 1})`);
+    return () => {
+      const count = (window as any).__cellMountCount || 1;
+      (window as any).__cellMountCount = count - 1;
+      console.log(`[UNMOUNT] Cell ${cell.id.slice(0,8)} unmounted (remaining: ${count - 1})`);
+    };
+  }, [cell.id]);
+
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');

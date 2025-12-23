@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback, useState, useEffect } from 'react';
+import React, { forwardRef, useCallback, useState, useEffect, useRef } from 'react';
 import { Cell } from '../types';
 import { Virtuoso, VirtuosoHandle, ListRange } from 'react-virtuoso';
 
@@ -28,14 +28,22 @@ const Footer = () => <div className="h-32" />;
 
 export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRef, className, onRangeChange }) => {
   // Track window height to dynamically size the viewport extension
+  // Using 1x window height as a balance between smooth scrolling and memory usage
+  // Too large (3x) causes too many cells to stay mounted, increasing lag over time
   const [viewportExtension, setViewportExtension] = useState(() =>
-    typeof window !== 'undefined' ? window.innerHeight * 3 : 3000
+    typeof window !== 'undefined' ? window.innerHeight : 1000
   );
+
+  // ⚠️ PERFORMANCE CRITICAL: Use ref for renderCell to keep itemContent stable
+  // This prevents Virtuoso from re-calling itemContent for all visible cells
+  // when the parent re-renders with a new function reference.
+  const renderCellRef = useRef(renderCell);
+  renderCellRef.current = renderCell;
 
   useEffect(() => {
     const updateExtension = () => {
-      // Extend by 3x window height to handle cells up to 3 screens tall
-      setViewportExtension(window.innerHeight * 3);
+      // Extend by 1x window height - enough for smooth scrolling without excess memory
+      setViewportExtension(window.innerHeight);
     };
     window.addEventListener('resize', updateExtension);
     return () => window.removeEventListener('resize', updateExtension);
@@ -54,13 +62,14 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
   }, []);
 
   // Wrapper that adds data-cell-id for height tracking
+  // Uses ref to avoid recreating when renderCell prop changes
   const wrappedRenderCell = useCallback((cell: Cell, index: number) => {
     return (
       <div data-cell-id={cell.id}>
-        {renderCell(cell, index)}
+        {renderCellRef.current(cell, index)}
       </div>
     );
-  }, [renderCell]);
+  }, []);
 
   return (
     <Virtuoso
@@ -74,9 +83,8 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
       computeItemKey={(index, cell) => cell.id}
       // Default height estimate - used for cells not yet measured
       defaultItemHeight={150}
-      // Extend viewport by 3x window height in each direction
-      // This ensures cells are rendered and measured well before becoming visible,
-      // preventing scroll jumps from height estimation mismatches
+      // Extend viewport by 1x window height in each direction
+      // Balance between smooth scrolling and memory usage (too large = too many mounted cells)
       increaseViewportBy={{ top: viewportExtension, bottom: viewportExtension }}
       components={{
         List: ListContainer,

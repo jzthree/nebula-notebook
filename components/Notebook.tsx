@@ -205,10 +205,21 @@ export const Notebook: React.FC = () => {
   const activeCellIdRef = useRef<string | null>(activeCellId);
   const cellClipboardRef = useRef<CellClipboardItem | null>(cellClipboard);
 
+  // ⚠️ PERFORMANCE CRITICAL: Refs for renderCell callback stability
+  // These allow the memoized renderCell to access current values without recreating
+  // Note: Initialized with defaults, updated on each render after state is defined
+  const highlightedCellIdsRef = useRef<Set<string>>(new Set());
+  const searchQueryRef = useRef<typeof searchQuery>(null);
+  const indentConfigRef = useRef<IndentationConfig>(DEFAULT_INDENTATION);
+  const pendingFocusRef = useRef<{ cellId: string; mode: 'cell' | 'editor' } | null>(null);
+  const isSearchOpenRef = useRef(false);
+  const queuePositionMapRef = useRef<Map<string, number>>(new Map());
+
   cellsRef.current = cells;
   activeCellIdRef.current = activeCellId;
   cellClipboardRef.current = cellClipboard;
   cellQueueRef.current = cellQueue;
+  // Note: Other ref updates for renderCell stability are done after their state is defined
 
   // Flush active cell's pending content changes before keyframe operations
   const flushActiveCell = useCallback(() => {
@@ -223,6 +234,11 @@ export const Notebook: React.FC = () => {
   // Visual feedback for undo/redo
   const [highlightedCellIds, setHighlightedCellIds] = useState<Set<string>>(new Set());
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Update refs for renderCell stability (state must be defined before these)
+  highlightedCellIdsRef.current = highlightedCellIds;
+  searchQueryRef.current = searchQuery;
+  indentConfigRef.current = indentConfig;
+  isSearchOpenRef.current = isSearchOpen;
 
   // Track visible cell range for smart scrolling
   const [visibleRange, setVisibleRange] = useState<{ startIndex: number; endIndex: number }>({ startIndex: 0, endIndex: 10 });
@@ -605,6 +621,7 @@ export const Notebook: React.FC = () => {
     executionQueue.forEach((id, idx) => map.set(id, idx));
     return map;
   }, [executionQueue]);
+  queuePositionMapRef.current = queuePositionMap;
 
   // Timer to update elapsed time while execution is in progress
   useEffect(() => {
@@ -745,6 +762,7 @@ export const Notebook: React.FC = () => {
   // Track pending focus for next cell - Cell component handles the actual focusing
   const [pendingFocus, setPendingFocus] = useState<{ cellId: string; mode: 'cell' | 'editor' } | null>(null);
   const clearPendingFocus = useCallback(() => setPendingFocus(null), []);
+  pendingFocusRef.current = pendingFocus;
 
   // Keyboard Shortcuts
   useEffect(() => {
