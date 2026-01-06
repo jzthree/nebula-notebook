@@ -9,8 +9,9 @@ from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File, Form
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -23,6 +24,7 @@ from fs_service import fs_service
 from python_discovery import python_discovery
 from session_store import session_store
 from config import SESSION_MAX_AGE_HOURS, BACKEND_SHUTDOWN_TIMEOUT_SECONDS
+from errors import NebulaError, convert_sdk_error
 
 
 # --- Pydantic Models ---
@@ -155,6 +157,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --- Exception Handlers ---
+
+@app.exception_handler(NebulaError)
+async def nebula_error_handler(request: Request, exc: NebulaError):
+    """Handle NebulaError exceptions with structured error responses."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=exc.to_dict()
+    )
 
 
 # --- Kernel Endpoints ---
@@ -427,8 +440,10 @@ async def generate(request: GenerateRequest):
             images=request.images
         )
         return {"response": response}
+    except NebulaError:
+        raise  # Let the exception handler handle it
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise convert_sdk_error(e, request.provider)
 
 
 @app.post("/api/llm/generate-structured")
@@ -446,8 +461,10 @@ async def generate_structured(request: GenerateStructuredRequest):
             config=config
         )
         return {"response": response}
+    except NebulaError:
+        raise  # Let the exception handler handle it
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise convert_sdk_error(e, request.provider)
 
 
 @app.post("/api/llm/chat")
@@ -467,8 +484,10 @@ async def chat(request: ChatRequest):
             images=request.images
         )
         return {"response": response}
+    except NebulaError:
+        raise  # Let the exception handler handle it
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise convert_sdk_error(e, request.provider)
 
 
 # --- Filesystem Endpoints ---

@@ -207,3 +207,61 @@ class ValidationError(NebulaError):
     status_code = 400
     error_code = "VALIDATION_ERROR"
     user_message = "Invalid request data"
+
+
+# =============================================================================
+# Error Conversion Utilities
+# =============================================================================
+
+def convert_llm_sdk_error(error: Exception, provider: str) -> NebulaError:
+    """
+    Convert SDK-specific errors to Nebula error types.
+
+    Maps provider SDK errors to appropriate NebulaError subclasses
+    with proper HTTP status codes for the frontend to handle.
+
+    Args:
+        error: The original SDK exception
+        provider: The LLM provider ("openai", "anthropic", "google")
+
+    Returns:
+        A NebulaError subclass with appropriate status code and message
+    """
+    error_class_name = error.__class__.__name__
+    error_message = str(error)
+
+    # Check for missing API key (ValueError from our code)
+    if isinstance(error, ValueError) and "API_KEY" in error_message and "not found" in error_message:
+        return LLMAuthenticationError(detail=error_message)
+
+    # OpenAI and Anthropic share similar error class names
+    if error_class_name == "AuthenticationError":
+        return LLMAuthenticationError(detail=error_message)
+
+    if error_class_name == "RateLimitError":
+        return LLMRateLimitError(detail=error_message)
+
+    if error_class_name in ("APITimeoutError", "ReadTimeout", "Timeout", "TimeoutError"):
+        return LLMTimeoutError(detail=error_message)
+
+    if error_class_name == "BadRequestError":
+        return LLMInvalidRequestError(detail=error_message)
+
+    if error_class_name in ("InternalServerError", "APIError", "ServiceUnavailableError"):
+        return LLMProviderError(detail=error_message)
+
+    # Google-specific error handling (string matching)
+    if provider == "google":
+        if "RESOURCE_EXHAUSTED" in error_message or "429" in error_message:
+            return LLMRateLimitError(detail=error_message)
+        if "API key not valid" in error_message or "UNAUTHENTICATED" in error_message:
+            return LLMAuthenticationError(detail=error_message)
+        if "timeout" in error_message.lower():
+            return LLMTimeoutError(detail=error_message)
+
+    # Default to provider error for unknown errors
+    return LLMProviderError(detail=error_message)
+
+
+# Alias for backwards compatibility
+convert_sdk_error = convert_llm_sdk_error

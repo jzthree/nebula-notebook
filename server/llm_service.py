@@ -12,6 +12,7 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 from config import LLM_DEFAULT_MAX_TOKENS, LLM_DEFAULT_TEMPERATURE
+from errors import convert_sdk_error, NebulaError
 
 
 # --- JSON Repair Utilities ---
