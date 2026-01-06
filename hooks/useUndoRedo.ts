@@ -43,8 +43,28 @@ import { useState, useCallback, useRef } from 'react';
 import { Cell, CellType } from '../types';
 import { createDiff, diffToPatch, applyPatch, reversePatch, hashText, Patch } from '../lib/diffUtils';
 
-// No limit on undo history - operations are lightweight (just metadata + diffs)
-// The full history is intended to be essentially unlimited for session replay
+// History size limits to prevent unbounded memory growth
+export const MAX_UNDO_STACK_SIZE = 100;
+export const MAX_REDO_STACK_SIZE = 50;
+export const MAX_FULL_HISTORY_SIZE = 500;
+
+// Options for configuring history limits (useful for testing)
+export interface UseUndoRedoOptions {
+  maxUndoStackSize?: number;
+  maxRedoStackSize?: number;
+  maxFullHistorySize?: number;
+}
+
+/**
+ * Prune a stack to the maximum size, keeping most recent entries.
+ * Emits a warning when evicting operations.
+ */
+function pruneStack<T>(stack: T[], maxSize: number, stackName: string): T[] {
+  if (stack.length <= maxSize) return stack;
+  const evictCount = stack.length - maxSize;
+  console.warn(`[useUndoRedo] Evicting ${evictCount} oldest operations from ${stackName} (limit: ${maxSize})`);
+  return stack.slice(evictCount);
+}
 
 // Base operation data shared by all operations
 interface BaseOperation {
@@ -290,7 +310,14 @@ function getAffectedCellIds(op: Operation, cells?: Cell[]): string[] {
   }
 }
 
-export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
+export const useUndoRedo = (
+  initialCells: Cell[],
+  options: UseUndoRedoOptions = {}
+): UseUndoRedoResult => {
+  // Use provided limits or fall back to defaults
+  const maxUndoStackSize = options.maxUndoStackSize ?? MAX_UNDO_STACK_SIZE;
+  const maxRedoStackSize = options.maxRedoStackSize ?? MAX_REDO_STACK_SIZE;
+  const maxFullHistorySize = options.maxFullHistorySize ?? MAX_FULL_HISTORY_SIZE;
   // Current state
   const [cells, setCellsState] = useState<Cell[]>(initialCells);
 
@@ -359,7 +386,27 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   const canUndo = undoStack.length > 0;
   const canRedo = redoStack.length > 0;
 
-  // Helper to add operation to full history (unlimited - for session replay)
+  // Helper to prune full history ref, preserving the initial snapshot
+  const pruneFullHistory = useCallback(() => {
+    const history = fullHistoryRef.current;
+    if (history.length <= maxFullHistorySize) return;
+
+    // Find the first snapshot (should be at index 0 after resetHistory)
+    const snapshotIndex = history.findIndex(op => op.type === 'snapshot');
+    const snapshot = snapshotIndex !== -1 ? history[snapshotIndex] : null;
+
+    // Calculate how many operations to keep (excluding snapshot)
+    const opsToKeep = maxFullHistorySize - (snapshot ? 1 : 0);
+    const evictCount = history.length - maxFullHistorySize;
+
+    console.warn(`[useUndoRedo] Evicting ${evictCount} oldest operations from full history (limit: ${maxFullHistorySize})`);
+
+    // Keep snapshot at the start, then the most recent operations
+    const recentOps = history.slice(-opsToKeep);
+    fullHistoryRef.current = snapshot ? [snapshot, ...recentOps.filter(op => op !== snapshot)] : recentOps;
+  }, [maxFullHistorySize]);
+
+  // Helper to add operation to full history
   // Returns the generated operationId for linking undo ops
   const addToFullHistory = useCallback((op: UndoableOperation | LogOperation): string => {
     const operationId = crypto.randomUUID();
@@ -369,8 +416,9 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       operationId,
     };
     fullHistoryRef.current.push(timestampedOp);
+    pruneFullHistory();
     return operationId;
-  }, []);
+  }, [pruneFullHistory]);
 
   // Convert redo stack entries to undo ops in history (for keyframe events)
   // This records the undo steps in history while keeping history append-only
@@ -386,7 +434,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       };
       fullHistoryRef.current.push(timestampedOp);
     });
-  }, []);
+    pruneFullHistory();
+  }, [pruneFullHistory]);
 
   // Execute an operation and push to undo stack
   const executeOperation = useCallback((op: Operation) => {
@@ -402,7 +451,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     const operationId = addToFullHistory(op);
     // Store operationId on the op for later linking when it moves to redo stack
     const opWithId = { ...op, operationId } as Operation;
-    setUndoStack(prev => [...prev, opWithId]);
+    setUndoStack(prev => pruneStack([...prev, opWithId], maxUndoStackSize, 'undo stack'));
   }, [addToFullHistory, convertRedoStackToHistory]);
 
   // Insert a cell at index
@@ -462,7 +511,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
         const operationId = addToFullHistory(op);
         // Store operationId on the op for later linking
         const opWithId = { ...op, operationId } as Operation;
-        setUndoStack(prevStack => [...prevStack, opWithId]);
+        setUndoStack(prevStack => pruneStack([...prevStack, opWithId], maxUndoStackSize, 'undo stack'));
       }
 
       return prev.map(c => c.id === cellId ? { ...c, content: newContent } : c);
@@ -594,7 +643,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       const operationId = addToFullHistory(op);
       // Store operationId on the op for later linking
       const opWithId = { ...op, operationId } as Operation;
-      setUndoStack(prev => [...prev, opWithId]);
+      setUndoStack(prev => pruneStack([...prev, opWithId], maxUndoStackSize, 'undo stack'));
     }
   }, [addToFullHistory, convertRedoStackToHistory]);
 
@@ -677,7 +726,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       return newCells;
     });
     setUndoStack(prev => prev.slice(0, -1));
-    setRedoStack(prev => [...prev, op]);
+    setRedoStack(prev => pruneStack([...prev, op], maxRedoStackSize, 'redo stack'));
 
     // Update content tracking after undo
     updateContentTrackingAfterUndo(op);
@@ -702,7 +751,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       return newCells;
     });
     setRedoStack(prev => prev.slice(0, -1));
-    setUndoStack(prev => [...prev, op]);
+    setUndoStack(prev => pruneStack([...prev, op], maxUndoStackSize, 'undo stack'));
 
     // Update content tracking
     updateContentTrackingAfterOp(op);
