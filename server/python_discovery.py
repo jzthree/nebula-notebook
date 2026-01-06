@@ -11,9 +11,18 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from config import (
+    DISCOVERY_CACHE_TTL_HOURS,
+    DISCOVERY_VERSION_CHECK_TIMEOUT_SECONDS,
+    DISCOVERY_IPYKERNEL_CHECK_TIMEOUT_SECONDS,
+    DISCOVERY_CONDA_LIST_TIMEOUT_SECONDS,
+    DISCOVERY_PARALLEL_WORKERS,
+    DISCOVERY_KERNEL_INSTALL_TIMEOUT_SECONDS,
+    DISCOVERY_REGISTRATION_TIMEOUT_SECONDS,
+)
+
 # Cache settings
 CACHE_FILE = Path.home() / ".nebula-notebook" / "python-cache.json"
-CACHE_TTL_HOURS = 24
 
 @dataclass
 class PythonEnvironment:
@@ -65,7 +74,7 @@ class PythonDiscoveryService:
         if not self._cache:
             return False
         age_hours = (time.time() - self._cache_time) / 3600
-        return age_hours < CACHE_TTL_HOURS
+        return age_hours < DISCOVERY_CACHE_TTL_HOURS
 
     def _get_python_version(self, python_path: str) -> Optional[str]:
         """Get Python version from executable"""
@@ -74,7 +83,7 @@ class PythonDiscoveryService:
                 [python_path, '--version'],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=DISCOVERY_VERSION_CHECK_TIMEOUT_SECONDS
             )
             # Output is like "Python 3.11.5"
             version = result.stdout.strip() or result.stderr.strip()
@@ -88,7 +97,7 @@ class PythonDiscoveryService:
             result = subprocess.run(
                 [python_path, '-c', 'import ipykernel'],
                 capture_output=True,
-                timeout=10
+                timeout=DISCOVERY_IPYKERNEL_CHECK_TIMEOUT_SECONDS
             )
             return result.returncode == 0
         except Exception:
@@ -122,7 +131,7 @@ class PythonDiscoveryService:
                     [conda_path, 'env', 'list', '--json'],
                     capture_output=True,
                     text=True,
-                    timeout=30
+                    timeout=DISCOVERY_CONDA_LIST_TIMEOUT_SECONDS
                 )
                 if result.returncode == 0:
                     import json
@@ -338,7 +347,7 @@ class PythonDiscoveryService:
 
         # Enrich in parallel for speed
         environments = []
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=DISCOVERY_PARALLEL_WORKERS) as executor:
             futures = {executor.submit(self._enrich_environment, env): env for env in candidates}
             for future in as_completed(futures):
                 try:
@@ -375,7 +384,7 @@ class PythonDiscoveryService:
             [python_path, '-m', 'pip', 'install', 'ipykernel', '-q'],
             capture_output=True,
             text=True,
-            timeout=120
+            timeout=DISCOVERY_KERNEL_INSTALL_TIMEOUT_SECONDS
         )
         if result.returncode != 0:
             raise RuntimeError(f"Failed to install ipykernel: {result.stderr}")
@@ -396,7 +405,7 @@ class PythonDiscoveryService:
             [python_path, '-m', 'ipykernel', 'install', '--user', '--name', kernel_name],
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=DISCOVERY_REGISTRATION_TIMEOUT_SECONDS
         )
         if result.returncode != 0:
             raise RuntimeError(f"Failed to register kernel: {result.stderr}")

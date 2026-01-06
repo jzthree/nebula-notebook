@@ -1,0 +1,54 @@
+/**
+ * Display Configuration
+ *
+ * Constants for output limits, cell dimensions, and animation durations.
+ * These control how content is rendered and user experience.
+ */
+
+// =============================================================================
+// Output Limits
+// =============================================================================
+
+/** Maximum lines of text output to display */
+export const MAX_OUTPUT_LINES = 10000;
+
+/** Maximum characters of output to display (100MB - generous for images) */
+export const MAX_OUTPUT_CHARS = 100_000_000;
+
+/** Truncation threshold for inline output display (characters) */
+export const OUTPUT_TRUNCATION_THRESHOLD = 2000;
+
+// =============================================================================
+// Cell Dimensions
+// =============================================================================
+
+/** Default estimated height for cells before measurement (pixels) */
+export const DEFAULT_CELL_HEIGHT_PX = 150;
+
+/** Minimum height for collapsed output (pixels) */
+export const OUTPUT_MIN_HEIGHT_PX = 50;
+
+/** Default height for collapsed output (pixels) */
+export const OUTPUT_DEFAULT_HEIGHT_PX = 200;
+
+/** Maximum height for collapsed output (pixels) */
+export const OUTPUT_MAX_HEIGHT_PX = 600;
+
+// =============================================================================
+// Animation Durations
+// =============================================================================
+
+/** Scroll animation duration (milliseconds) */
+export const SCROLL_ANIMATION_DURATION_MS = 150;
+
+/** Cell highlight animation duration (milliseconds) - matches CSS */
+export const HIGHLIGHT_ANIMATION_DURATION_MS = 1500;
+
+/** General transition duration (milliseconds) */
+export const TRANSITION_DURATION_MS = 300;
+
+/** Cell output flush/batch interval during execution (milliseconds) */
+export const OUTPUT_FLUSH_INTERVAL_MS = 100;
+
+/** Execution timer update interval for smooth display (milliseconds) */
+export const EXECUTION_TIMER_INTERVAL_MS = 100;

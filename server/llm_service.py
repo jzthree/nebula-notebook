@@ -11,6 +11,8 @@ from google.genai import types
 from openai import OpenAI
 from anthropic import Anthropic
 
+from config import LLM_DEFAULT_MAX_TOKENS, LLM_DEFAULT_TEMPERATURE
+
 
 # --- JSON Repair Utilities ---
 
@@ -69,8 +71,8 @@ class LLMConfig:
     """Configuration for LLM requests"""
     provider: str
     model: str
-    temperature: float = 0.2
-    max_tokens: int = 4096
+    temperature: float = LLM_DEFAULT_TEMPERATURE
+    max_tokens: int = LLM_DEFAULT_MAX_TOKENS
 
 
 class LLMService:

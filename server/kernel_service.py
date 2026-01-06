@@ -11,6 +11,12 @@ from jupyter_client import KernelManager, kernelspec
 from jupyter_client.asynchronous import AsyncKernelClient
 
 from session_store import session_store, PersistedSession
+from config import (
+    KERNEL_STARTUP_TIMEOUT_SECONDS,
+    KERNEL_SHUTDOWN_TIMEOUT_SECONDS,
+    KERNEL_MSG_TIMEOUT_SECONDS,
+    KERNEL_POLLING_INTERVAL_SECONDS,
+)
 
 
 @dataclass
@@ -289,7 +295,7 @@ class KernelService:
                 return session_id
         return None
 
-    async def _wait_for_ready(self, client: AsyncKernelClient, timeout: float = 30.0):
+    async def _wait_for_ready(self, client: AsyncKernelClient, timeout: float = KERNEL_STARTUP_TIMEOUT_SECONDS):
         """Wait for kernel to be ready"""
         start_time = asyncio.get_event_loop().time()
         while True:
@@ -297,15 +303,15 @@ class KernelService:
                 raise TimeoutError("Kernel did not start in time")
 
             try:
-                msg = client.get_shell_msg(timeout=0.5)
+                msg = client.get_shell_msg(timeout=KERNEL_MSG_TIMEOUT_SECONDS)
                 if msg.get('msg_type') == 'kernel_info_reply':
                     break
             except:
                 # Send kernel_info_request
                 client.kernel_info()
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(KERNEL_POLLING_INTERVAL_SECONDS)
 
-    async def _stop_kernel_internal(self, session_id: str, timeout: float = 5.0) -> bool:
+    async def _stop_kernel_internal(self, session_id: str, timeout: float = KERNEL_SHUTDOWN_TIMEOUT_SECONDS) -> bool:
         """Internal kernel stop - caller must hold self._lock
 
         Args:
@@ -331,7 +337,7 @@ class KernelService:
                         loop = asyncio.get_event_loop()
                         start_time = loop.time()
                         while session.manager.is_alive() and (loop.time() - start_time) < timeout:
-                            await asyncio.sleep(0.1)
+                            await asyncio.sleep(KERNEL_POLLING_INTERVAL_SECONDS)
                         if session.manager.is_alive():
                             print(f"Kernel {session_id} did not stop gracefully, forcing shutdown")
                             session.manager.shutdown_kernel(now=True)
@@ -346,12 +352,12 @@ class KernelService:
                 return False
         return False
 
-    async def stop_kernel(self, session_id: str, timeout: float = 5.0) -> bool:
+    async def stop_kernel(self, session_id: str, timeout: float = KERNEL_SHUTDOWN_TIMEOUT_SECONDS) -> bool:
         """Stop a kernel session with graceful shutdown
 
         Args:
             session_id: The kernel session ID
-            timeout: Seconds to wait for graceful shutdown before forcing (default 5.0)
+            timeout: Seconds to wait for graceful shutdown before forcing
 
         Returns:
             True if kernel was stopped successfully

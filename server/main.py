@@ -22,6 +22,7 @@ from llm_service import llm_service, LLMConfig
 from fs_service import fs_service
 from python_discovery import python_discovery
 from session_store import session_store
+from config import SESSION_MAX_AGE_HOURS, BACKEND_SHUTDOWN_TIMEOUT_SECONDS
 
 
 # --- Pydantic Models ---
@@ -119,8 +120,8 @@ async def lifespan(app: FastAPI):
     if orphaned_count > 0:
         print(f"Marked {orphaned_count} sessions as orphaned from previous run")
 
-    # Clean up old orphaned/terminated sessions (older than 24 hours)
-    cleaned_count = session_store.cleanup_old_sessions(max_age_hours=24.0)
+    # Clean up old orphaned/terminated sessions
+    cleaned_count = session_store.cleanup_old_sessions(max_age_hours=SESSION_MAX_AGE_HOURS)
     if cleaned_count > 0:
         print(f"Cleaned up {cleaned_count} old sessions")
 
@@ -131,7 +132,7 @@ async def lifespan(app: FastAPI):
     # Shutdown with timeout
     print("Shutting down... Cleaning up kernels...")
     try:
-        await asyncio.wait_for(kernel_service.cleanup(), timeout=5.0)
+        await asyncio.wait_for(kernel_service.cleanup(), timeout=BACKEND_SHUTDOWN_TIMEOUT_SECONDS)
         print("Cleanup complete.")
     except asyncio.TimeoutError:
         print("Cleanup timed out, forcing shutdown.")
