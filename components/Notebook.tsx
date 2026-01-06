@@ -333,42 +333,6 @@ export const Notebook: React.FC = () => {
     };
   }, []);
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // PERFORMANCE STATS LOGGER
-  // Logs accumulating data structures every 10 seconds to debug progressive lag
-  // ═══════════════════════════════════════════════════════════════════════════
-  const keystrokeCountRef = useRef(0);
-  const sessionStartRef = useRef(Date.now());
-
-  // Use ref for cells to avoid recreating interval on every keystroke
-  const cellsRefForStats = useRef(cells);
-  cellsRefForStats.current = cells;
-
-  useEffect(() => {
-    const logStats = () => {
-      const currentCells = cellsRefForStats.current;
-      const history = getFullHistory();
-      const totalContentSize = currentCells.reduce((acc, c) => acc + c.content.length, 0);
-      const totalOutputSize = currentCells.reduce((acc, c) => {
-        return acc + c.outputs.reduce((sum, o) => sum + (o.content?.length || 0), 0);
-      }, 0);
-      const sessionDuration = ((Date.now() - sessionStartRef.current) / 1000 / 60).toFixed(1);
-
-      console.log(`[STATS] session: ${sessionDuration}min, keystrokes: ${keystrokeCountRef.current}`);
-      console.log(`[STATS] cells: ${currentCells.length}, content: ${(totalContentSize/1024).toFixed(1)}KB, outputs: ${(totalOutputSize/1024).toFixed(1)}KB`);
-      console.log(`[STATS] history: ${history.length} ops, canUndo: ${canUndo}, redoStack: ${redoStackLength}`);
-    };
-
-    // Log immediately on mount
-    logStats();
-
-    // Log every 10 seconds
-    const interval = setInterval(logStats, 10000);
-
-    return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once on mount - uses refs for current values
-
   // Helper to check if ANY part of a cell is currently visible
   // If any part of the cell (code or output) can be seen, it's considered visible
   const isCellVisible = useCallback((cellIndex: number): boolean => {
@@ -1327,19 +1291,13 @@ export const Notebook: React.FC = () => {
   // state updates would overwrite CodeMirror's current content when typing fast.
   // CodeMirror renders synchronously, so we don't need startTransition for perceived performance.
   const handleUpdateCell = useCallback((id: string, content: string) => {
-    keystrokeCountRef.current++;
-    const start = performance.now();
     // First edit while redo stack is non-empty is a keyframe
     // This commits the redo history before the new edit timeline begins
     if (hasRedoToFlush()) {
       flushCell(id, content);
     }
     setCells(prev => prev.map(c => c.id === id ? { ...c, content } : c));
-    const elapsed = performance.now() - start;
-    if (elapsed > 5) {
-      console.log(`[PERF] Notebook.handleUpdateCell took ${elapsed.toFixed(1)}ms, cells: ${cells.length}, keystroke: ${keystrokeCountRef.current}`);
-    }
-  }, [setCells, hasRedoToFlush, flushCell, cells.length]);
+  }, [setCells, hasRedoToFlush, flushCell]);
 
   // AI/bulk update with undo tracking - for AI edits, annotated as AI source
   const handleAIUpdateCell = useCallback((id: string, content: string) => {

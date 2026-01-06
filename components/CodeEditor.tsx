@@ -369,10 +369,6 @@ function createPythonCompletionSource(allCellsRef: React.RefObject<Array<{ type:
   };
 }
 
-// Render counter for performance debugging
-const editorRenderCountRef = { current: new Map<string, number>() };
-const editorExtensionsCountRef = { current: new Map<string, number>() };
-
 export const CodeEditor: React.FC<Props> = ({
   value,
   onChange,
@@ -393,13 +389,6 @@ export const CodeEditor: React.FC<Props> = ({
   indentConfig = DEFAULT_INDENTATION,
   allCellsRef,
 }) => {
-  // Track render count for this editor
-  const renderCount = (editorRenderCountRef.current.get(cellId || 'unknown') || 0) + 1;
-  editorRenderCountRef.current.set(cellId || 'unknown', renderCount);
-  if (renderCount % 10 === 0) {
-    console.log(`[RENDER] CodeEditor ${cellId?.slice(0,8)} rendered ${renderCount} times`);
-  }
-
   const editorRef = useRef<ReactCodeMirrorRef>(null);
 
   // Fallback ref if none provided (for standalone usage)
@@ -452,13 +441,6 @@ export const CodeEditor: React.FC<Props> = ({
   // to avoid recreating them on every keystroke. If you see typing lag, check if
   // any callback dependency is changing on each render (e.g., cell.content).
   const extensions = useMemo(() => {
-    // Track extensions rebuild for performance debugging
-    const extCount = (editorExtensionsCountRef.current.get(cellId || 'unknown') || 0) + 1;
-    editorExtensionsCountRef.current.set(cellId || 'unknown', extCount);
-    if (extCount % 5 === 0) {
-      console.log(`[PERF] CodeEditor ${cellId?.slice(0,8)} extensions rebuilt ${extCount} times`);
-    }
-
     // Create indent string based on config
     const indentStr = indentConfig.useTabs ? '\t' : ' '.repeat(indentConfig.indentSize);
 
@@ -568,12 +550,7 @@ export const CodeEditor: React.FC<Props> = ({
 
   const handleChange = useCallback(
     (val: string) => {
-      const start = performance.now();
       onChange(val);
-      const elapsed = performance.now() - start;
-      if (elapsed > 5) {
-        console.log(`[PERF] CodeEditor.onChange took ${elapsed.toFixed(1)}ms`);
-      }
     },
     [onChange]
   );

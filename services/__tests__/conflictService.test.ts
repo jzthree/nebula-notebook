@@ -87,6 +87,35 @@ describe('conflictService', () => {
       expect(result.remoteMtime).toBeNull();
       expect(result.error).toBe('Network error');
     });
+
+    it('should detect conflict at exact tolerance boundary (0.5s)', async () => {
+      // Exactly at tolerance boundary (0.5s) should NOT be a conflict
+      mockGetFileMtime.mockResolvedValue({ mtime: 1000.5 });
+
+      const result = await checkForConflict('/path/to/file.ipynb', 1000);
+
+      expect(result.hasConflict).toBe(false);
+      expect(result.remoteMtime).toBe(1000.5);
+    });
+
+    it('should detect conflict just above tolerance boundary', async () => {
+      // Just over tolerance (0.51s) SHOULD be a conflict
+      mockGetFileMtime.mockResolvedValue({ mtime: 1000.51 });
+
+      const result = await checkForConflict('/path/to/file.ipynb', 1000);
+
+      expect(result.hasConflict).toBe(true);
+      expect(result.remoteMtime).toBe(1000.51);
+    });
+
+    it('should handle non-Error thrown values', async () => {
+      mockGetFileMtime.mockRejectedValue('string error');
+
+      const result = await checkForConflict('/path/to/file.ipynb', 1000);
+
+      expect(result.hasConflict).toBe(false);
+      expect(result.error).toBe('Unknown error');
+    });
   });
 
   describe('saveWithConflictCheck', () => {
@@ -157,6 +186,43 @@ describe('conflictService', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe('Save failed');
     });
+
+    it('should handle null response from save', async () => {
+      mockGetFileMtime.mockResolvedValue({ mtime: 1000 });
+      mockSaveFileContentWithMtime.mockResolvedValue(null);
+
+      const result = await saveWithConflictCheck(
+        '/path/to/file.ipynb',
+        mockCells,
+        1000,
+        'python3'
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Save returned no result');
+    });
+
+    it('should pass history to save function', async () => {
+      mockGetFileMtime.mockResolvedValue({ mtime: 1000 });
+      mockSaveFileContentWithMtime.mockResolvedValue({ mtime: 1001 });
+
+      const mockHistory = [{ type: 'insertCell', index: 0, cell: mockCells[0] }];
+
+      await saveWithConflictCheck(
+        '/path/to/file.ipynb',
+        mockCells,
+        1000,
+        'python3',
+        mockHistory
+      );
+
+      expect(mockSaveFileContentWithMtime).toHaveBeenCalledWith(
+        '/path/to/file.ipynb',
+        mockCells,
+        'python3',
+        mockHistory
+      );
+    });
   });
 
   describe('forceSaveLocal', () => {
@@ -182,6 +248,30 @@ describe('conflictService', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Disk full');
+    });
+
+    it('should handle null response from save', async () => {
+      mockSaveFileContentWithMtime.mockResolvedValue(null);
+
+      const result = await forceSaveLocal('/path/to/file.ipynb', mockCells, 'python3');
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Save returned no result');
+    });
+
+    it('should pass history to save function', async () => {
+      mockSaveFileContentWithMtime.mockResolvedValue({ mtime: 3000 });
+
+      const mockHistory = [{ type: 'insertCell', index: 0, cell: mockCells[0] }];
+
+      await forceSaveLocal('/path/to/file.ipynb', mockCells, 'python3', mockHistory);
+
+      expect(mockSaveFileContentWithMtime).toHaveBeenCalledWith(
+        '/path/to/file.ipynb',
+        mockCells,
+        'python3',
+        mockHistory
+      );
     });
   });
 

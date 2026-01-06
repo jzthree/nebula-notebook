@@ -114,7 +114,6 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
     // Guard against concurrent saves - wait for current save to complete
     // This prevents race conditions where multiple saves could cause false conflicts
     if (saveInProgressRef.current) {
-      console.log('[AUTOSAVE] Save already in progress, skipping');
       dispatch({ type: 'SAVE_SUCCESS' }); // Treat as success, will re-trigger if still dirty
       return;
     }
