@@ -7,18 +7,7 @@
  */
 import { getFileMtime, getFileContentWithMtime, saveFileContentWithMtime } from './fileService';
 import { Cell } from '../types';
-
-/**
- * Tolerance for mtime comparison in seconds.
- *
- * This small tolerance handles only:
- * - Floating-point precision issues during JSON serialization
- * - Sub-second filesystem timing differences
- *
- * We use exact mtime comparison from our last save, so we only need
- * tolerance for precision issues, not for slow saves or race conditions.
- */
-const MTIME_TOLERANCE_SECONDS = 0.5;
+import { MTIME_TOLERANCE_SECONDS } from '../config';
 
 export interface ConflictCheckResult {
   hasConflict: boolean;

@@ -1,6 +1,7 @@
 import React, { forwardRef, useCallback, useState, useEffect, useRef } from 'react';
 import { Cell } from '../types';
 import { Virtuoso, VirtuosoHandle, ListRange } from 'react-virtuoso';
+import { DEFAULT_CELL_HEIGHT_PX } from '../config';
 
 // Cache measured cell heights globally to persist across re-renders
 // Key: cell ID, Value: measured height in pixels
@@ -82,7 +83,7 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
       // Use stable cell IDs as keys to prevent scroll jumps when cells update
       computeItemKey={(index, cell) => cell.id}
       // Default height estimate - used for cells not yet measured
-      defaultItemHeight={150}
+      defaultItemHeight={DEFAULT_CELL_HEIGHT_PX}
       // Extend viewport by 1x window height in each direction
       // Balance between smooth scrolling and memory usage (too large = too many mounted cells)
       increaseViewportBy={{ top: viewportExtension, bottom: viewportExtension }}

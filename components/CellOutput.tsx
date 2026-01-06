@@ -1,11 +1,18 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { CellOutput as ICellOutput } from '../types';
 import { ChevronDown, ChevronRight, GripHorizontal, WrapText, ArrowRightLeft } from 'lucide-react';
+import {
+  MAX_OUTPUT_LINES,
+  MAX_OUTPUT_CHARS,
+  OUTPUT_MIN_HEIGHT_PX,
+  OUTPUT_DEFAULT_HEIGHT_PX,
+  OUTPUT_MAX_HEIGHT_PX,
+} from '../config';
 
 // Display limits to prevent UI freeze from huge outputs
 // Note: Full data is preserved in state for saving - only display is truncated
-const MAX_DISPLAY_LINES = 10000;
-const MAX_DISPLAY_CHARS = 100000000; // 100MB - generous for images
+const MAX_DISPLAY_LINES = MAX_OUTPUT_LINES;
+const MAX_DISPLAY_CHARS = MAX_OUTPUT_CHARS;
 
 interface Props {
   outputs: ICellOutput[];
@@ -66,9 +73,9 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean }> = ({ outp
   }
 };
 
-const MIN_HEIGHT = 50;
-const DEFAULT_COLLAPSED_HEIGHT = 200;
-const MAX_HEIGHT = 600;
+const MIN_HEIGHT = OUTPUT_MIN_HEIGHT_PX;
+const DEFAULT_COLLAPSED_HEIGHT = OUTPUT_DEFAULT_HEIGHT_PX;
+const MAX_HEIGHT = OUTPUT_MAX_HEIGHT_PX;
 
 export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, onScrolledChange, scrolledHeight, onScrolledHeightChange }) => {
   // scrolled prop controls collapse state (Jupyter standard: true = collapsed with scrollbar)

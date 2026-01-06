@@ -36,6 +36,7 @@ import {
 } from '../services/fileService';
 import { getSettings, saveSettings } from '../services/llmService';
 import { useNotification } from './NotificationSystem';
+import { DIRECTORY_POLL_INTERVAL_MS } from '../config';
 
 interface Props {
   files: NotebookMetadata[];
@@ -103,7 +104,7 @@ export const FileBrowser: React.FC<Props> = ({
       }
     };
 
-    const interval = setInterval(checkForChanges, 5000);
+    const interval = setInterval(checkForChanges, DIRECTORY_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [isOpen, currentPath, loadedMtime]);
 

@@ -11,11 +11,12 @@
  * without performing any side effects directly.
  */
 
-// Delay calculation constants
-const MIN_AUTOSAVE_DELAY = 1000; // 1 second minimum
-const MAX_AUTOSAVE_DELAY = 60000; // 60 seconds maximum
-const CHECK_DELAY = 300; // Debounce delay before checking for changes
-const RETRY_DELAY = 5000; // Delay before retrying after error
+import {
+  MIN_AUTOSAVE_DELAY_MS,
+  MAX_AUTOSAVE_DELAY_MS,
+  AUTOSAVE_CHECK_DELAY_MS,
+  AUTOSAVE_RETRY_DELAY_MS,
+} from '../config';
 
 /**
  * Calculate autosave delay based on content size.
@@ -30,15 +31,15 @@ export function getAutosaveDelay(sizeInBytes: number): number {
   const sizeInMB = sizeInKB / 1024;
 
   if (sizeInMB >= 100) {
-    return MAX_AUTOSAVE_DELAY;
+    return MAX_AUTOSAVE_DELAY_MS;
   } else if (sizeInMB >= 10) {
-    return Math.min(15000 + (sizeInMB - 10) * 500, MAX_AUTOSAVE_DELAY);
+    return Math.min(15000 + (sizeInMB - 10) * 500, MAX_AUTOSAVE_DELAY_MS);
   } else if (sizeInMB >= 1) {
     return 5000 + (sizeInMB - 1) * 1111;
   } else if (sizeInKB >= 100) {
     return 2000 + (sizeInKB - 100) * 3.33;
   } else {
-    return MIN_AUTOSAVE_DELAY + sizeInKB * 10;
+    return MIN_AUTOSAVE_DELAY_MS + sizeInKB * 10;
   }
 }
 
@@ -121,7 +122,7 @@ function handleIdleState(
     case 'CELLS_CHANGED':
       return {
         state: { status: 'checking' },
-        effects: [{ type: 'SCHEDULE_CHECK', delay: CHECK_DELAY }],
+        effects: [{ type: 'SCHEDULE_CHECK', delay: AUTOSAVE_CHECK_DELAY_MS }],
       };
 
     case 'MANUAL_SAVE':
@@ -159,7 +160,7 @@ function handleCheckingState(
         state: { status: 'checking' },
         effects: [
           { type: 'CANCEL_PENDING_OPERATIONS' },
-          { type: 'SCHEDULE_CHECK', delay: CHECK_DELAY },
+          { type: 'SCHEDULE_CHECK', delay: AUTOSAVE_CHECK_DELAY_MS },
         ],
       };
 
@@ -194,7 +195,7 @@ function handleWaitingState(
         state: { status: 'checking' },
         effects: [
           { type: 'CANCEL_PENDING_OPERATIONS' },
-          { type: 'SCHEDULE_CHECK', delay: CHECK_DELAY },
+          { type: 'SCHEDULE_CHECK', delay: AUTOSAVE_CHECK_DELAY_MS },
         ],
       };
 
@@ -224,7 +225,7 @@ function handleSavingState(
           state: { status: 'checking' },
           effects: [
             { type: 'UPDATE_SAVED_CONTENT' },
-            { type: 'SCHEDULE_CHECK', delay: CHECK_DELAY },
+            { type: 'SCHEDULE_CHECK', delay: AUTOSAVE_CHECK_DELAY_MS },
           ],
         };
       }
@@ -236,7 +237,7 @@ function handleSavingState(
     case 'SAVE_ERROR':
       return {
         state: { status: 'error', lastError: event.error },
-        effects: [{ type: 'SCHEDULE_RETRY', delay: RETRY_DELAY }],
+        effects: [{ type: 'SCHEDULE_RETRY', delay: AUTOSAVE_RETRY_DELAY_MS }],
       };
 
     case 'CELLS_CHANGED':
@@ -263,7 +264,7 @@ function handleErrorState(
     case 'RETRY':
       return {
         state: { status: 'checking' },
-        effects: [{ type: 'SCHEDULE_CHECK', delay: CHECK_DELAY }],
+        effects: [{ type: 'SCHEDULE_CHECK', delay: AUTOSAVE_CHECK_DELAY_MS }],
       };
 
     case 'CELLS_CHANGED':
@@ -272,7 +273,7 @@ function handleErrorState(
         state: { status: 'checking' },
         effects: [
           { type: 'CANCEL_PENDING_OPERATIONS' },
-          { type: 'SCHEDULE_CHECK', delay: CHECK_DELAY },
+          { type: 'SCHEDULE_CHECK', delay: AUTOSAVE_CHECK_DELAY_MS },
         ],
       };
 
