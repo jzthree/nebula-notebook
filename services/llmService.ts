@@ -3,8 +3,44 @@
  * Supports Google Gemini, OpenAI, and Anthropic
  */
 import { Cell } from '../types';
+import {
+  NebulaError,
+  withRetry,
+  DEFAULT_RETRY_CONFIG,
+  type RetryConfig,
+} from '../types/errors';
 
 const API_BASE = '/api';
+
+/**
+ * Parse error response from API and throw appropriate error
+ */
+const handleApiError = async (response: Response): Promise<never> => {
+  const error = await NebulaError.fromResponse(response);
+  throw error;
+};
+
+/**
+ * Fetch with retry for transient errors (rate limits, timeouts)
+ */
+const fetchWithRetry = async (
+  url: string,
+  options: RequestInit,
+  retryConfig: RetryConfig = DEFAULT_RETRY_CONFIG,
+  onRetry?: (attempt: number, delay: number) => void
+): Promise<Response> => {
+  return withRetry(
+    async () => {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        await handleApiError(response);
+      }
+      return response;
+    },
+    retryConfig,
+    onRetry ? (attempt, delay) => onRetry(attempt, delay) : undefined
+  );
+};
 
 export type LLMProvider = 'google' | 'openai' | 'anthropic';
 
@@ -41,10 +77,7 @@ export const DEFAULT_MODELS: Record<LLMProvider, string> = {
  * Get available providers and models from backend
  */
 export const getAvailableProviders = async (): Promise<ProvidersResponse> => {
-  const response = await fetch(`${API_BASE}/llm/providers`);
-  if (!response.ok) {
-    throw new Error('Failed to fetch providers');
-  }
+  const response = await fetchWithRetry(`${API_BASE}/llm/providers`, {});
   return response.json();
 };
 
@@ -109,22 +142,20 @@ export const generateCellContent = async (
     ${prompt}
   `;
 
-  const response = await fetch(`${API_BASE}/llm/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      prompt: userContent,
-      system_prompt: systemPrompt,
-      provider: config.provider,
-      model: config.model,
-      temperature: config.temperature || 0.2
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to generate content');
-  }
+  const response = await fetchWithRetry(
+    `${API_BASE}/llm/generate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: userContent,
+        system_prompt: systemPrompt,
+        provider: config.provider,
+        model: config.model,
+        temperature: config.temperature || 0.2
+      })
+    }
+  );
 
   const data = await response.json();
   return cleanResponse(data.response);
@@ -175,22 +206,20 @@ ${currentCellContent || '(empty)'}
 Request:
 ${prompt}`;
 
-  const response = await fetch(`${API_BASE}/llm/generate-structured`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      prompt: userContent,
-      system_prompt: systemPrompt,
-      provider: config.provider,
-      model: config.model,
-      temperature: config.temperature || 0.2
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to generate content');
-  }
+  const response = await fetchWithRetry(
+    `${API_BASE}/llm/generate-structured`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: userContent,
+        system_prompt: systemPrompt,
+        provider: config.provider,
+        model: config.model,
+        temperature: config.temperature || 0.2
+      })
+    }
+  );
 
   const data = await response.json();
   const result = data.response as CellGenerationResponse;
@@ -232,22 +261,20 @@ export const fixCellError = async (
     Please provide the fixed code.
   `;
 
-  const response = await fetch(`${API_BASE}/llm/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      prompt: userContent,
-      system_prompt: systemPrompt,
-      provider: config.provider,
-      model: config.model,
-      temperature: 0.1
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to fix error');
-  }
+  const response = await fetchWithRetry(
+    `${API_BASE}/llm/generate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: userContent,
+        system_prompt: systemPrompt,
+        provider: config.provider,
+        model: config.model,
+        temperature: 0.1
+      })
+    }
+  );
 
   const data = await response.json();
   return cleanResponse(data.response);
@@ -325,24 +352,22 @@ export const chatWithNotebook = async (
     content: h.content
   }));
 
-  const response = await fetch(`${API_BASE}/llm/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message: `Notebook Context:\n${context}\n\nUser Question: ${message}`,
-      history: historyFormatted,
-      system_prompt: systemPrompt,
-      provider: config.provider,
-      model: config.model,
-      temperature: config.temperature || 0.2,
-      images: images.length > 0 ? images : undefined
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to chat');
-  }
+  const response = await fetchWithRetry(
+    `${API_BASE}/llm/chat`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: `Notebook Context:\n${context}\n\nUser Question: ${message}`,
+        history: historyFormatted,
+        system_prompt: systemPrompt,
+        provider: config.provider,
+        model: config.model,
+        temperature: config.temperature || 0.2,
+        images: images.length > 0 ? images : undefined
+      })
+    }
+  );
 
   const data = await response.json();
   return data.response;
