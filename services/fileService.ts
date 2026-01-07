@@ -287,6 +287,123 @@ export const saveNotebookCells = async (
   return { success: true, mtime: data.mtime };
 };
 
+// --- Cell-Level CRUD Operations ---
+
+export interface UpdateCellParams {
+  path: string;
+  cellId?: string;
+  cellIndex?: number;
+  content?: string;
+  cellType?: 'code' | 'markdown';
+  metadata?: Record<string, unknown>;
+}
+
+export interface UpdateCellResponse {
+  cell_id: string;
+  cell_index: number;
+  mtime: number;
+}
+
+/**
+ * Update a single cell's content, type, or metadata
+ */
+export const updateCell = async (params: UpdateCellParams): Promise<UpdateCellResponse> => {
+  const response = await fetch(`${API_BASE}/notebook/cell`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      path: params.path,
+      cell_id: params.cellId,
+      cell_index: params.cellIndex,
+      content: params.content,
+      cell_type: params.cellType,
+      metadata: params.metadata,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to update cell');
+  }
+
+  return response.json();
+};
+
+export interface InsertCellParams {
+  path: string;
+  index: number;  // -1 to append
+  cellType?: 'code' | 'markdown';
+  content?: string;
+  cellId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface InsertCellResponse {
+  cell_id: string;
+  cell_index: number;
+  total_cells: number;
+  mtime: number;
+}
+
+/**
+ * Insert a new cell at the specified position
+ */
+export const insertCell = async (params: InsertCellParams): Promise<InsertCellResponse> => {
+  const response = await fetch(`${API_BASE}/notebook/cell`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      path: params.path,
+      index: params.index,
+      cell_type: params.cellType ?? 'code',
+      content: params.content ?? '',
+      cell_id: params.cellId,
+      metadata: params.metadata,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to insert cell');
+  }
+
+  return response.json();
+};
+
+export interface DeleteCellParams {
+  path: string;
+  cellId?: string;
+  cellIndex?: number;
+}
+
+export interface DeleteCellResponse {
+  deleted_cell_id: string;
+  total_cells: number;
+  mtime: number;
+}
+
+/**
+ * Delete a cell by ID or index
+ */
+export const deleteCellApi = async (params: DeleteCellParams): Promise<DeleteCellResponse> => {
+  const response = await fetch(`${API_BASE}/notebook/cell`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      path: params.path,
+      cell_id: params.cellId,
+      cell_index: params.cellIndex,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to delete cell');
+  }
+
+  return response.json();
+};
+
 // --- Compatibility layer for existing code ---
 
 /**

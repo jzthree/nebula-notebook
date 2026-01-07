@@ -110,6 +110,35 @@ class GenerateStructuredRequest(BaseModel):
     temperature: float = 0.2
 
 
+# --- Cell Operation Request Models ---
+
+class UpdateCellRequest(BaseModel):
+    """PATCH /api/notebook/cell - Update cell content/type/metadata"""
+    path: str
+    cell_id: Optional[str] = None
+    cell_index: Optional[int] = None
+    content: Optional[str] = None
+    cell_type: Optional[str] = None  # "code" | "markdown"
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class InsertCellRequest(BaseModel):
+    """POST /api/notebook/cell - Insert new cell"""
+    path: str
+    index: int  # Position to insert (-1 = append)
+    cell_type: str = "code"
+    content: str = ""
+    cell_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class DeleteCellRequest(BaseModel):
+    """DELETE /api/notebook/cell - Remove cell"""
+    path: str
+    cell_id: Optional[str] = None
+    cell_index: Optional[int] = None
+
+
 # --- Lifespan ---
 
 @asynccontextmanager
@@ -630,6 +659,72 @@ async def save_notebook(request: SaveNotebookRequest):
             fs_service.save_history(request.path, request.history)
 
         return {"status": "ok", "path": request.path, "mtime": result["mtime"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Cell-Level CRUD Endpoints ---
+
+@app.patch("/api/notebook/cell")
+async def update_cell(request: UpdateCellRequest):
+    """Update a single cell's content, type, or metadata"""
+    try:
+        result = fs_service.update_cell(
+            path=request.path,
+            cell_id=request.cell_id,
+            cell_index=request.cell_index,
+            content=request.content,
+            cell_type=request.cell_type,
+            metadata=request.metadata
+        )
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        error_msg = str(e)
+        if "Invalid cell_type" in error_msg:
+            raise HTTPException(status_code=422, detail=error_msg)
+        else:
+            raise HTTPException(status_code=400, detail=error_msg)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notebook/cell", status_code=201)
+async def insert_cell(request: InsertCellRequest):
+    """Insert a new cell at the specified position"""
+    try:
+        result = fs_service.insert_cell(
+            path=request.path,
+            index=request.index,
+            cell_type=request.cell_type,
+            content=request.content,
+            cell_id=request.cell_id,
+            metadata=request.metadata
+        )
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/notebook/cell")
+async def delete_cell(request: DeleteCellRequest):
+    """Delete a cell by ID or index"""
+    try:
+        result = fs_service.delete_cell(
+            path=request.path,
+            cell_id=request.cell_id,
+            cell_index=request.cell_index
+        )
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

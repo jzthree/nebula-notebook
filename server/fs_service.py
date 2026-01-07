@@ -647,6 +647,209 @@ class FilesystemService:
             "mtime": stat.st_mtime
         }
 
+    # --- Cell-level operations ---
+
+    def _find_cell_index(self, cells: List[Dict], cell_id: str = None, cell_index: int = None) -> int:
+        """
+        Find cell index by ID or validate provided index.
+
+        Args:
+            cells: List of cells in internal format
+            cell_id: Cell ID to find (preferred)
+            cell_index: Cell index to validate (alternative)
+
+        Returns:
+            The cell index
+
+        Raises:
+            ValueError: If neither cell_id nor cell_index provided
+            FileNotFoundError: If cell not found or index out of range
+        """
+        if cell_id is not None:
+            for i, cell in enumerate(cells):
+                if cell.get("id") == cell_id:
+                    return i
+            raise FileNotFoundError(f"Cell with id '{cell_id}' not found")
+
+        if cell_index is not None:
+            if cell_index < 0 or cell_index >= len(cells):
+                raise FileNotFoundError(f"Cell index {cell_index} out of range (0-{len(cells) - 1})")
+            return cell_index
+
+        raise ValueError("Either cell_id or cell_index must be provided")
+
+    def update_cell(
+        self,
+        path: str,
+        cell_id: str = None,
+        cell_index: int = None,
+        content: str = None,
+        cell_type: str = None,
+        metadata: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Update a single cell's content, type, or metadata.
+
+        Args:
+            path: Path to the notebook file
+            cell_id: Cell ID to update (preferred)
+            cell_index: Cell index to update (alternative)
+            content: New cell content (optional)
+            cell_type: New cell type - "code" or "markdown" (optional)
+            metadata: Metadata to merge with existing (optional)
+
+        Returns:
+            { cell_id, cell_index, mtime }
+
+        Raises:
+            FileNotFoundError: If notebook or cell not found
+            ValueError: If invalid cell_type or no identifier provided
+        """
+        # Validate cell_type if provided
+        if cell_type is not None and cell_type not in ("code", "markdown"):
+            raise ValueError(f"Invalid cell_type: {cell_type}. Must be 'code' or 'markdown'")
+
+        # Read the notebook
+        notebook_data = self.get_notebook_cells(path)
+        cells = notebook_data["cells"]
+
+        # Find the cell
+        idx = self._find_cell_index(cells, cell_id, cell_index)
+        cell = cells[idx]
+
+        # Update fields
+        if content is not None:
+            cell["content"] = content
+        if cell_type is not None:
+            cell["type"] = cell_type
+        if metadata is not None:
+            # Merge metadata with existing _metadata
+            existing_metadata = cell.get("_metadata", {})
+            existing_metadata.update(metadata)
+            cell["_metadata"] = existing_metadata
+
+        # Save the notebook
+        result = self.save_notebook_cells(path, cells, notebook_data.get("kernelspec"))
+
+        return {
+            "cell_id": cell["id"],
+            "cell_index": idx,
+            "mtime": result["mtime"]
+        }
+
+    def insert_cell(
+        self,
+        path: str,
+        index: int,
+        cell_type: str = "code",
+        content: str = "",
+        cell_id: str = None,
+        metadata: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Insert a new cell at the specified position.
+
+        Args:
+            path: Path to the notebook file
+            index: Position to insert (-1 = append)
+            cell_type: Cell type - "code" or "markdown" (default: "code")
+            content: Cell content (default: "")
+            cell_id: Optional client-provided cell ID
+            metadata: Optional cell metadata
+
+        Returns:
+            { cell_id, cell_index, total_cells, mtime }
+
+        Raises:
+            FileNotFoundError: If notebook not found
+            ValueError: If invalid cell_type or index
+        """
+        import uuid
+
+        # Validate cell_type
+        if cell_type not in ("code", "markdown"):
+            raise ValueError(f"Invalid cell_type: {cell_type}. Must be 'code' or 'markdown'")
+
+        # Read the notebook
+        notebook_data = self.get_notebook_cells(path)
+        cells = notebook_data["cells"]
+
+        # Handle append case (-1)
+        if index == -1:
+            index = len(cells)
+        elif index < 0 or index > len(cells):
+            raise ValueError(f"Invalid index {index} for notebook with {len(cells)} cells")
+
+        # Generate cell ID if not provided
+        if cell_id is None:
+            cell_id = str(uuid.uuid4())
+
+        # Create the new cell
+        new_cell = {
+            "id": cell_id,
+            "type": cell_type,
+            "content": content,
+            "outputs": [],
+            "isExecuting": False,
+            "executionCount": None
+        }
+
+        if metadata:
+            new_cell["_metadata"] = metadata
+
+        # Insert the cell
+        cells.insert(index, new_cell)
+
+        # Save the notebook
+        result = self.save_notebook_cells(path, cells, notebook_data.get("kernelspec"))
+
+        return {
+            "cell_id": cell_id,
+            "cell_index": index,
+            "total_cells": len(cells),
+            "mtime": result["mtime"]
+        }
+
+    def delete_cell(
+        self,
+        path: str,
+        cell_id: str = None,
+        cell_index: int = None
+    ) -> Dict[str, Any]:
+        """
+        Delete a cell by ID or index.
+
+        Args:
+            path: Path to the notebook file
+            cell_id: Cell ID to delete (preferred)
+            cell_index: Cell index to delete (alternative)
+
+        Returns:
+            { deleted_cell_id, total_cells, mtime }
+
+        Raises:
+            FileNotFoundError: If notebook or cell not found
+            ValueError: If no identifier provided
+        """
+        # Read the notebook
+        notebook_data = self.get_notebook_cells(path)
+        cells = notebook_data["cells"]
+
+        # Find the cell
+        idx = self._find_cell_index(cells, cell_id, cell_index)
+
+        # Remove the cell
+        deleted_cell = cells.pop(idx)
+
+        # Save the notebook
+        result = self.save_notebook_cells(path, cells, notebook_data.get("kernelspec"))
+
+        return {
+            "deleted_cell_id": deleted_cell["id"],
+            "total_cells": len(cells),
+            "mtime": result["mtime"]
+        }
+
     def _get_history_path(self, notebook_path: str) -> str:
         """
         Get the history file path for a notebook.
