@@ -21,6 +21,7 @@ import { FileBrowser } from './FileBrowser';
 import { AIChatSidebar } from './AIChatSidebar';
 import { VirtualCellList } from './VirtualCellList';
 import { useUndoRedo } from '../hooks/useUndoRedo';
+import { useOperationSync } from '../hooks/useOperationSync';
 import { SettingsModal } from './SettingsModal';
 import { KernelManager } from './KernelManager';
 import { NotebookSearch } from './NotebookSearch';
@@ -181,6 +182,7 @@ export const Notebook: React.FC = () => {
 
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
+  const [showLineNumbers, setShowLineNumbers] = useState<boolean>(() => getSettings().showLineNumbers ?? false);
 
   // Conflict resolution hook
   const {
@@ -193,6 +195,28 @@ export const Notebook: React.FC = () => {
     setLastKnownMtime,
     resetHistory
   );
+
+  // Helper to set cell outputs (for operation sync)
+  const setCellOutputs = useCallback((cellId: string, outputs: Cell['outputs'], executionCount?: number) => {
+    setCells(prevCells => prevCells.map(c =>
+      c.id === cellId
+        ? { ...c, outputs, executionCount: executionCount ?? c.executionCount }
+        : c
+    ));
+  }, [setCells]);
+
+  // Operation sync hook - real-time sync with MCP tools
+  const { isConnected: isOperationSyncConnected } = useOperationSync({
+    filePath: currentFileId,
+    cells,
+    insertCell: undoableInsertCell,
+    deleteCell: undoableDeleteCell,
+    moveCell: undoableMoveCell,
+    updateContent,
+    updateContentAI,
+    changeType,
+    setCellOutputs,
+  });
 
   // Clipboard for cut/copy/paste cells
   const [cellClipboard, setCellClipboard] = useState<CellClipboardItem | null>(null);
@@ -214,6 +238,7 @@ export const Notebook: React.FC = () => {
   const pendingFocusRef = useRef<{ cellId: string; mode: 'cell' | 'editor' } | null>(null);
   const isSearchOpenRef = useRef(false);
   const queuePositionMapRef = useRef<Map<string, number>>(new Map());
+  const showLineNumbersRef = useRef(showLineNumbers);
 
   cellsRef.current = cells;
   activeCellIdRef.current = activeCellId;
@@ -239,6 +264,7 @@ export const Notebook: React.FC = () => {
   searchQueryRef.current = searchQuery;
   indentConfigRef.current = indentConfig;
   isSearchOpenRef.current = isSearchOpen;
+  showLineNumbersRef.current = showLineNumbers;
 
   // Track visible cell range for smart scrolling
   const [visibleRange, setVisibleRange] = useState<{ startIndex: number; endIndex: number }>({ startIndex: 0, endIndex: 10 });
@@ -951,6 +977,13 @@ export const Notebook: React.FC = () => {
       if (current) setCurrentFileMetadata(current);
     }
   };
+
+  // Called when settings are saved - updates local state from settings
+  const handleSettingsChange = useCallback(() => {
+    refreshFileList();
+    const settings = getSettings();
+    setShowLineNumbers(settings.showLineNumbers ?? false);
+  }, []);
 
   // Get current notebook filename (without extension)
   const currentFilename = currentFileId
@@ -2289,6 +2322,7 @@ export const Notebook: React.FC = () => {
                   onFocusModeApplied={clearPendingFocus}
                   isSearchOpen={isSearchOpen}
                   onCloseSearch={handleSearchClose}
+                  showLineNumbers={showLineNumbers}
                 />
               )}
             />
@@ -2325,7 +2359,7 @@ export const Notebook: React.FC = () => {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-        onRefresh={refreshFileList}
+        onRefresh={handleSettingsChange}
       />
 
       {/* Kernel Manager Modal */}

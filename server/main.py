@@ -9,9 +9,10 @@ from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File, Form, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -25,6 +26,7 @@ from python_discovery import python_discovery
 from session_store import session_store
 from config import SESSION_MAX_AGE_HOURS, BACKEND_SHUTDOWN_TIMEOUT_SECONDS
 from errors import NebulaError, convert_sdk_error
+from operation_router import operation_router, HeadlessNotebookManager
 
 
 # --- Pydantic Models ---
@@ -110,12 +112,22 @@ class GenerateStructuredRequest(BaseModel):
     temperature: float = 0.2
 
 
+class NotebookOperationRequest(BaseModel):
+    """Unified notebook operation request from MCP tools"""
+    operation: Dict[str, Any]
+
+
 # --- Lifespan ---
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup - respond to requests immediately, initialize in background
     print("Starting Nebula Notebook Backend...")
+
+    # Initialize operation router with headless manager
+    headless_manager = HeadlessNotebookManager(fs_service)
+    operation_router.set_headless_manager(headless_manager)
+    print("Operation router initialized")
 
     # Mark any previously active sessions as orphaned (from crashed server)
     orphaned_count = session_store.mark_all_orphaned()
@@ -168,6 +180,43 @@ async def nebula_error_handler(request: Request, exc: NebulaError):
         status_code=exc.status_code,
         content=exc.to_dict()
     )
+
+
+# --- Cell Metadata Schema ---
+
+@app.get("/api/cell/metadata-schema")
+async def get_cell_metadata_schema():
+    """
+    Get the cell metadata schema.
+
+    Returns all metadata fields supported by Nebula cells,
+    including type information and whether agents can modify them.
+    Used by MCP servers to validate agent operations.
+    """
+    return {
+        "id": {
+            "type": "string",
+            "description": "Unique cell identifier. Agent-created cells should use human-readable IDs.",
+            "agentMutable": True,
+        },
+        "type": {
+            "type": "enum",
+            "values": ["code", "markdown"],
+            "description": "Cell type: code for executable cells, markdown for documentation.",
+            "agentMutable": True,
+        },
+        "scrolled": {
+            "type": "boolean",
+            "description": "Whether cell output is collapsed (Jupyter standard).",
+            "agentMutable": True,
+            "default": False,
+        },
+        "scrolledHeight": {
+            "type": "number",
+            "description": "Height in pixels when output is collapsed.",
+            "agentMutable": True,
+        },
+    }
 
 
 # --- Kernel Endpoints ---
@@ -357,6 +406,101 @@ async def kernel_websocket(websocket: WebSocket, session_id: str):
             await websocket.send_json({"type": "error", "error": str(e)})
         except:
             pass
+
+
+# --- Notebook Operation Endpoints ---
+
+@app.websocket("/api/notebook/{notebook_path:path}/ws")
+async def notebook_operations_websocket(websocket: WebSocket, notebook_path: str):
+    """
+    WebSocket endpoint for real-time notebook operations.
+
+    UI clients connect here to:
+    1. Receive operations from MCP tools
+    2. Send back operation results
+    3. Optionally push local changes for sync
+
+    Messages from server to UI:
+        - {"type": "operation", "operation": {...}, "requestId": "..."}
+        - {"type": "readNotebook", "requestId": "..."}
+
+    Messages from UI to server:
+        - {"type": "operationResult", "requestId": "...", "result": {...}}
+        - {"type": "notebookData", "requestId": "...", "data": {...}}
+    """
+    await websocket.accept()
+
+    # Resolve the path
+    from pathlib import Path
+    from urllib.parse import unquote
+    resolved_path = str(Path(unquote(notebook_path)).resolve())
+
+    # Register UI connection
+    await operation_router.register_ui(websocket, resolved_path)
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+
+            msg_type = data.get("type")
+
+            if msg_type == "operationResult":
+                # UI is responding to an operation we sent
+                operation_router.handle_ui_response(resolved_path, data)
+
+            elif msg_type == "notebookData":
+                # UI is responding to a readNotebook request
+                operation_router.handle_ui_response(resolved_path, data)
+
+            elif msg_type == "ping":
+                # Keep-alive
+                await websocket.send_json({"type": "pong"})
+
+    except WebSocketDisconnect:
+        print(f"Notebook WebSocket disconnected for: {resolved_path}")
+    except Exception as e:
+        print(f"Notebook WebSocket error: {e}")
+    finally:
+        operation_router.unregister_ui(resolved_path)
+
+
+@app.post("/api/notebook/operation")
+async def apply_notebook_operation(request: NotebookOperationRequest):
+    """
+    Apply a notebook operation (insert, delete, update, move, etc.)
+
+    This is the main entry point for MCP tools. Operations are routed to:
+    - Connected UI via WebSocket (if available)
+    - Headless manager (file-based) otherwise
+
+    From the agent's perspective, both modes behave identically.
+    """
+    try:
+        result = await operation_router.apply_operation(request.operation)
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/notebook/read")
+async def read_notebook_via_router(path: str):
+    """
+    Read notebook state via operation router.
+
+    If UI is connected, requests current state from UI.
+    Otherwise reads from file.
+    """
+    try:
+        result = await operation_router.read_notebook(path)
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/notebook/has-ui")
+async def check_notebook_has_ui(path: str):
+    """Check if a UI is connected for the given notebook path"""
+    return {"hasUI": operation_router.has_ui(path), "path": path}
 
 
 # --- Python Discovery Endpoints ---
@@ -702,6 +846,140 @@ async def ready_check():
     return {"status": "ready"}
 
 
+# --- Static File Serving ---
+# Serve frontend either from dist/ (production) or proxy to Vite (development)
+# This ensures port 3000 is always the single entry point
+
+import httpx
+
+# Global mode flag (set in main)
+_dev_mode = False
+_vite_url = "http://localhost:5173"
+
+
+def setup_static_serving(dev_mode: bool = False):
+    """Configure static file serving - either proxy to Vite (dev) or serve from dist (prod)"""
+    global _dev_mode
+    _dev_mode = dev_mode
+
+    server_dir = Path(__file__).parent
+    dist_dir = server_dir.parent / "dist"
+
+    if dev_mode:
+        # Development mode: proxy to Vite dev server for HMR
+        @app.get("/{full_path:path}")
+        async def proxy_to_vite(full_path: str):
+            """Proxy non-API requests to Vite dev server"""
+            if full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="Not found")
+
+            async with httpx.AsyncClient() as client:
+                try:
+                    url = f"{_vite_url}/{full_path}"
+                    response = await client.get(url, follow_redirects=True)
+
+                    # Get content type from response
+                    content_type = response.headers.get("content-type", "text/html")
+
+                    return Response(
+                        content=response.content,
+                        status_code=response.status_code,
+                        media_type=content_type
+                    )
+                except httpx.ConnectError:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Vite dev server not running. Start it with: npm run dev"
+                    )
+
+        # WebSocket proxy for Vite HMR
+        @app.websocket("/{full_path:path}")
+        async def proxy_ws_to_vite(websocket: WebSocket, full_path: str):
+            """Proxy WebSocket connections to Vite for HMR"""
+            # Skip API websockets - they're handled by earlier routes
+            if full_path.startswith("api/"):
+                await websocket.close()
+                return
+
+            await websocket.accept()
+
+            import websockets
+            vite_ws_url = f"ws://localhost:5173/{full_path}"
+
+            try:
+                async with websockets.connect(vite_ws_url) as vite_ws:
+                    async def forward_to_vite():
+                        try:
+                            while True:
+                                data = await websocket.receive_text()
+                                await vite_ws.send(data)
+                        except WebSocketDisconnect:
+                            pass
+
+                    async def forward_from_vite():
+                        try:
+                            async for message in vite_ws:
+                                await websocket.send_text(message)
+                        except:
+                            pass
+
+                    await asyncio.gather(forward_to_vite(), forward_from_vite())
+            except Exception:
+                await websocket.close()
+
+        print(f"Development mode: proxying frontend to Vite at {_vite_url}")
+        return True
+
+    else:
+        # Production mode: serve from dist directory
+        if not dist_dir.exists():
+            print(f"Warning: dist directory not found at {dist_dir}")
+            print("Run 'npm run build' to create the production build")
+            return False
+
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str):
+            """Serve index.html for all non-API routes (SPA routing)"""
+            if full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="Not found")
+
+            file_path = dist_dir / full_path
+            if file_path.is_file():
+                return FileResponse(file_path)
+
+            index_path = dist_dir / "index.html"
+            if index_path.exists():
+                return FileResponse(index_path)
+
+            raise HTTPException(status_code=404, detail="Not found")
+
+        print(f"Production mode: serving static files from {dist_dir}")
+        return True
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Nebula Notebook Backend Server")
+    parser.add_argument("--dev", action="store_true",
+                        help="Development mode (proxy to Vite for HMR)")
+    parser.add_argument("--port", type=int, default=3000,
+                        help="Port to run on (default: 3000)")
+    parser.add_argument("--host", default="0.0.0.0",
+                        help="Host to bind to (default: 0.0.0.0)")
+    parser.add_argument("--vite-port", type=int, default=5173,
+                        help="Vite dev server port (default: 5173)")
+    args = parser.parse_args()
+
+    # Update Vite URL if custom port
+    if args.vite_port != 5173:
+        _vite_url = f"http://localhost:{args.vite_port}"
+
+    # Setup static serving
+    setup_static_serving(dev_mode=args.dev)
+
+    mode = "development" if args.dev else "production"
+    print(f"Starting Nebula on port {args.port} ({mode} mode)")
+
+    uvicorn.run(app, host=args.host, port=args.port)

@@ -8,3 +8,5 @@ google-genai>=1.0.0
 websockets>=10.0
 ipykernel>=6.0.0
 psutil>=5.8.0
+httpx>=0.24.0
+python-multipart>=0.0.6

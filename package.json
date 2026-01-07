@@ -4,15 +4,17 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --port 5173",
     "build": "vite build",
     "preview": "vite preview",
-    "server": "cd server && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000",
-    "server:stable": "cd server && python -m uvicorn main:app --host 0.0.0.0 --port 8000",
+    "server": "cd server && python main.py --dev",
+    "server:reload": "cd server && python -m uvicorn main:app --reload --host 0.0.0.0 --port 3000",
     "setup": "node setup.cjs",
     "prestart": "node setup.cjs",
     "start": "concurrently --kill-others --kill-signal SIGTERM --raw \"npm run server\" \"npm run dev\"",
-    "stop": "lsof -ti:3000,8000 | xargs kill -9 2>/dev/null; echo 'Servers stopped'",
+    "start:prod": "cd server && python main.py",
+    "production": "npm run build && npm run start:prod",
+    "stop": "lsof -ti:3000,5173 | xargs kill -9 2>/dev/null; echo 'Servers stopped'",
     "test": "vitest",
     "test:run": "vitest run"
   },
@@ -24,7 +26,7 @@
     "lucide-react": "^0.561.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
-    "react-virtuoso": "4.10.4"
+    "react-virtuoso": "^4.17.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",
