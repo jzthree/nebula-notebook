@@ -474,7 +474,7 @@ export const FileBrowser: React.FC<Props> = ({
                   />
                 ) : (
                   <div className="flex flex-col truncate min-w-0">
-                    <span className="text-xs truncate">
+                    <span className="text-xs truncate" title={item.name}>
                       {item.name}
                     </span>
                     {!item.isDirectory && (
