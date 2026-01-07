@@ -150,10 +150,4 @@ describe('config index exports', () => {
     expect(config.MTIME_TOLERANCE_SECONDS).toBeDefined();
   });
 
-  it('should export history limits from useUndoRedo', async () => {
-    const config = await import('../index');
-    expect(config.MAX_UNDO_STACK_SIZE).toBeDefined();
-    expect(config.MAX_REDO_STACK_SIZE).toBeDefined();
-    expect(config.MAX_FULL_HISTORY_SIZE).toBeDefined();
-  });
 });

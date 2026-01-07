@@ -308,41 +308,12 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     }
   }, []);
 
-  // Operation history stacks
-  const [undoStack, setUndoStackState] = useState<Operation[]>([]);
-  const [redoStack, setRedoStackState] = useState<Operation[]>([]);
-
-  // Refs to mirror stacks for immediate reads after writes (React batches state updates)
+  // Operation history stacks - stored in refs for O(1) mutations
+  // Only boolean state triggers re-renders (for undo/redo button enabled state)
   const undoStackRef = useRef<Operation[]>([]);
   const redoStackRef = useRef<Operation[]>([]);
-
-  // Helper that updates both state and ref for undoStack
-  const setUndoStack = useCallback((update: Operation[] | ((prev: Operation[]) => Operation[])) => {
-    if (typeof update === 'function') {
-      setUndoStackState(prev => {
-        const newStack = update(prev);
-        undoStackRef.current = newStack;
-        return newStack;
-      });
-    } else {
-      undoStackRef.current = update;
-      setUndoStackState(update);
-    }
-  }, []);
-
-  // Helper that updates both state and ref for redoStack
-  const setRedoStack = useCallback((update: Operation[] | ((prev: Operation[]) => Operation[])) => {
-    if (typeof update === 'function') {
-      setRedoStackState(prev => {
-        const newStack = update(prev);
-        redoStackRef.current = newStack;
-        return newStack;
-      });
-    } else {
-      redoStackRef.current = update;
-      setRedoStackState(update);
-    }
-  }, []);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   // Track last content per cell for updateContent operations
   const lastContentRef = useRef<Map<string, string>>(new Map());
@@ -352,9 +323,6 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
 
   // Track redo stack length for keyframe detection (first undo, first edit after undo)
   const prevRedoLengthRef = useRef<number>(0);
-
-  const canUndo = undoStack.length > 0;
-  const canRedo = redoStack.length > 0;
 
   // Helper to add operation to full history
   // Returns the generated operationId for linking undo ops
@@ -389,17 +357,17 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   const executeOperation = useCallback((op: Operation) => {
     setCellsInternal(prev => applyOperation(prev, op));
     // Keyframe: first edit after undo - convert redo stack to history before clearing
-    setRedoStack(prev => {
-      if (prev.length > 0) {
-        convertRedoStackToHistory(prev);
-      }
-      return [];
-    });
+    if (redoStackRef.current.length > 0) {
+      convertRedoStackToHistory(redoStackRef.current);
+      redoStackRef.current.length = 0; // O(1) clear
+      setCanRedo(false);
+    }
     // Add to history first to get the operationId
     const operationId = addToFullHistory(op);
     // Store operationId on the op for later linking when it moves to redo stack
-    const opWithId = { ...op, operationId } as Operation;
-    setUndoStack(prev => [...prev, opWithId]);
+    const opWithId = { ...op, operationId } as unknown as Operation;
+    undoStackRef.current.push(opWithId); // O(1) push
+    setCanUndo(true);
   }, [addToFullHistory, convertRedoStackToHistory]);
 
   // Insert a cell at index
@@ -440,12 +408,11 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
         lastContentRef.current.set(cellId, newContent);
 
         // Keyframe: first edit after undo - convert redo stack to history before clearing
-        setRedoStack(prevRedo => {
-          if (prevRedo.length > 0) {
-            convertRedoStackToHistory(prevRedo);
-          }
-          return [];
-        });
+        if (redoStackRef.current.length > 0) {
+          convertRedoStackToHistory(redoStackRef.current);
+          redoStackRef.current.length = 0; // O(1) clear
+          setCanRedo(false);
+        }
 
         const op: Operation = {
           type: 'updateContent',
@@ -459,7 +426,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
         const operationId = addToFullHistory(op);
         // Store operationId on the op for later linking
         const opWithId = { ...op, operationId } as Operation;
-        setUndoStack(prevStack => [...prevStack, opWithId]);
+        undoStackRef.current.push(opWithId); // O(1) push
+        setCanUndo(true);
       }
 
       return prev.map(c => c.id === cellId ? { ...c, content: newContent } : c);
@@ -495,12 +463,11 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     if (!hasChanges) return;
 
     // Keyframe: first edit after undo - convert redo stack to history before clearing
-    setRedoStack(prevRedo => {
-      if (prevRedo.length > 0) {
-        convertRedoStackToHistory(prevRedo);
-      }
-      return [];
-    });
+    if (redoStackRef.current.length > 0) {
+      convertRedoStackToHistory(redoStackRef.current);
+      redoStackRef.current.length = 0; // O(1) clear
+      setCanRedo(false);
+    }
 
     const op: Operation = {
       type: 'updateMetadata',
@@ -512,7 +479,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     const operationId = addToFullHistory(op);
     // Store operationId on the op for later linking
     const opWithId = { ...op, operationId } as Operation;
-    setUndoStack(prevStack => [...prevStack, opWithId]);
+    undoStackRef.current.push(opWithId); // O(1) push
+    setCanUndo(true);
 
     // Apply the changes - pure state updater
     setCellsInternal(prev => {
@@ -571,12 +539,11 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     if (lastContent !== undefined && lastContent !== currentContent) {
       // Keyframe: first edit after undo (redo stack about to become empty)
       // Convert redo stack to history before clearing
-      setRedoStack(prev => {
-        if (prev.length > 0) {
-          convertRedoStackToHistory(prev);
-        }
-        return [];
-      });
+      if (redoStackRef.current.length > 0) {
+        convertRedoStackToHistory(redoStackRef.current);
+        redoStackRef.current.length = 0; // O(1) clear
+        setCanRedo(false);
+      }
 
       const op: Operation = {
         type: 'updateContent',
@@ -591,7 +558,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       const operationId = addToFullHistory(op);
       // Store operationId on the op for later linking
       const opWithId = { ...op, operationId } as Operation;
-      setUndoStack(prev => [...prev, opWithId]);
+      undoStackRef.current.push(opWithId); // O(1) push
+      setCanUndo(true);
     }
   }, [addToFullHistory, convertRedoStackToHistory]);
 
@@ -647,14 +615,15 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
 
   // Peek at what the next redo would affect (without applying)
   const peekRedo = useCallback((): UndoRedoResult | null => {
-    if (redoStack.length === 0) return null;
-    const op = redoStack[redoStack.length - 1];
+    const stack = redoStackRef.current;
+    if (stack.length === 0) return null;
+    const op = stack[stack.length - 1];
     // For moveCell, op.toIndex is where the cell will end up after redo
     return {
       affectedCellIds: getAffectedCellIds(op, cells),
       operationType: op.type
     };
-  }, [redoStack, cells]);
+  }, [cells]);
 
   // Undo last operation
   // Note: Caller should call flushCell(activeCellId, content) before undo
@@ -665,7 +634,9 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     const stack = undoStackRef.current;
     if (stack.length === 0) return null;
 
-    const op = stack[stack.length - 1];
+    const op = stack.pop()!; // O(1) pop
+    setCanUndo(stack.length > 0);
+
     const reversedOp = reverseOperation(op);
 
     let newCells: Cell[] = [];
@@ -673,8 +644,9 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       newCells = applyOperation(prev, reversedOp);
       return newCells;
     });
-    setUndoStack(prev => prev.slice(0, -1));
-    setRedoStack(prev => [...prev, op]);
+
+    redoStackRef.current.push(op); // O(1) push
+    setCanRedo(true);
 
     // Update content tracking after undo
     updateContentTrackingAfterUndo(op);
@@ -684,22 +656,25 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       affectedCellIds: getAffectedCellIds(reversedOp, newCells),
       operationType: op.type
     };
-  }, [setUndoStack, updateContentTrackingAfterUndo]);
+  }, [updateContentTrackingAfterUndo]);
 
   // Redo last undone operation
   // Returns affected cell IDs for visual feedback
   const redo = useCallback((): UndoRedoResult | null => {
-    if (redoStack.length === 0) return null;
+    const stack = redoStackRef.current;
+    if (stack.length === 0) return null;
 
-    const op = redoStack[redoStack.length - 1];
+    const op = stack.pop()!; // O(1) pop
+    setCanRedo(stack.length > 0);
 
     let newCells: Cell[] = [];
     setCellsInternal(prev => {
       newCells = applyOperation(prev, op);
       return newCells;
     });
-    setRedoStack(prev => prev.slice(0, -1));
-    setUndoStack(prev => [...prev, op]);
+
+    undoStackRef.current.push(op); // O(1) push
+    setCanUndo(true);
 
     // Update content tracking
     updateContentTrackingAfterOp(op);
@@ -709,7 +684,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       affectedCellIds: getAffectedCellIds(op, newCells),
       operationType: op.type
     };
-  }, [redoStack, updateContentTrackingAfterOp]);
+  }, [updateContentTrackingAfterOp]);
 
   // Direct setCells for non-undoable changes (like execution outputs)
   const setCells = useCallback((newCells: Cell[] | ((prev: Cell[]) => Cell[])) => {
@@ -719,8 +694,10 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Reset history (e.g., when loading a new file)
   const resetHistory = useCallback((newCells: Cell[]) => {
     setCellsInternal(newCells);
-    setUndoStack([]);
-    setRedoStack([]);
+    undoStackRef.current.length = 0; // O(1) clear
+    redoStackRef.current.length = 0; // O(1) clear
+    setCanUndo(false);
+    setCanRedo(false);
     lastContentRef.current.clear();
     // Initialize content tracking
     newCells.forEach(c => lastContentRef.current.set(c.id, c.content));
@@ -840,13 +817,15 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
 
       if (op.type === 'insertCell' || op.type === 'deleteCell' ||
           op.type === 'moveCell' || op.type === 'updateContent' ||
-          op.type === 'updateContentPatch' || op.type === 'changeType' || op.type === 'batch') {
+          op.type === 'updateContentPatch' || op.type === 'updateMetadata' || op.type === 'batch') {
         const { timestamp, operationId, isUndo, undoesOperationId, ...operation } = op as any;
         undoableOps.push(operation as Operation);
       }
     }
-    setUndoStack(undoableOps);
-    setRedoStack([]);
+    undoStackRef.current = undoableOps;
+    redoStackRef.current = [];
+    setCanUndo(undoableOps.length > 0);
+    setCanRedo(false);
   }, []);
 
   // Log a non-undoable operation (for history tracking)
@@ -857,12 +836,11 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Commit history before keyframe events (e.g., save)
   // Converts redo stack to undo ops in history and clears redo stack
   const commitHistoryBeforeKeyframe = useCallback(() => {
-    setRedoStack(prev => {
-      if (prev.length > 0) {
-        convertRedoStackToHistory(prev);
-      }
-      return [];
-    });
+    if (redoStackRef.current.length > 0) {
+      convertRedoStackToHistory(redoStackRef.current);
+      redoStackRef.current.length = 0; // O(1) clear
+      setCanRedo(false);
+    }
   }, [convertRedoStackToHistory]);
 
   // Get unflushed state for session persistence
@@ -924,7 +902,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     loadHistory,
     logOperation,
     // New exports for autosave integration
-    redoStackLength: redoStack.length,
+    redoStackLength: redoStackRef.current.length,
     commitHistoryBeforeKeyframe,
     hasRedoToFlush,
     // Session state for unflushed edits

@@ -38,10 +38,3 @@ export {
   WEBSOCKET_RECONNECT_INTERVAL_MS,
   MTIME_TOLERANCE_SECONDS,
 } from './polling.config';
-
-// Re-export history limits from useUndoRedo for convenience
-export {
-  MAX_UNDO_STACK_SIZE,
-  MAX_REDO_STACK_SIZE,
-  MAX_FULL_HISTORY_SIZE,
-} from '../hooks/useUndoRedo';
