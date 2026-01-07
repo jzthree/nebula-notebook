@@ -82,11 +82,63 @@ export const getAvailableProviders = async (): Promise<ProvidersResponse> => {
 };
 
 /**
+ * Truncate long text with head and tail
+ */
+const truncateWithHeadTail = (text: string, maxLines: number = 50): string => {
+  const lines = text.split('\n');
+  if (lines.length <= maxLines) return text;
+
+  const headLines = Math.floor(maxLines / 2);
+  const tailLines = maxLines - headLines;
+  const head = lines.slice(0, headLines).join('\n');
+  const tail = lines.slice(-tailLines).join('\n');
+  const omitted = lines.length - maxLines;
+
+  return `${head}\n... [${omitted} lines omitted] ...\n${tail}`;
+};
+
+/**
+ * Format cell outputs for context
+ */
+const formatCellOutputs = (outputs: Cell['outputs']): string => {
+  if (!outputs || outputs.length === 0) return '';
+
+  const parts: string[] = [];
+
+  for (const output of outputs) {
+    switch (output.type) {
+      case 'error':
+        // Always include full errors - they're critical for debugging
+        parts.push(`[ERROR]\n${truncateWithHeadTail(output.content, 300)}`);
+        break;
+      case 'stderr':
+        parts.push(`[STDERR]\n${truncateWithHeadTail(output.content, 200)}`);
+        break;
+      case 'stdout':
+        parts.push(`[OUTPUT]\n${truncateWithHeadTail(output.content, 300)}`);
+        break;
+      case 'html':
+        // Just note that HTML output exists, don't include raw HTML
+        parts.push(`[HTML OUTPUT: ${output.content.length} chars]`);
+        break;
+      case 'image':
+        parts.push(`[IMAGE OUTPUT]`);
+        break;
+    }
+  }
+
+  return parts.length > 0 ? '\n' + parts.join('\n') : '';
+};
+
+/**
  * Get notebook context for LLM
  */
 const getNotebookContext = (cells: Cell[]) => {
   return cells
-    .map((c, i) => `Cell ${i + 1} [Type: ${c.type}]:\n${c.content}`)
+    .map((c, i) => {
+      const outputs = formatCellOutputs(c.outputs);
+      return `Cell ${i + 1} [Type: ${c.type}]:\n${c.content}${outputs}`;
+    })
     .join('\n\n');
 };
 
@@ -388,6 +440,7 @@ export interface NebulaSettings {
   notifyThresholdSeconds?: number; // Threshold in seconds for "long-running" (default 60)
   notifySoundEnabled?: boolean; // Play sound when long-running jobs complete
   indentation?: IndentationPreference; // Indentation style: 'auto' (detect), '2', '4', '8', or 'tab'
+  showLineNumbers?: boolean; // Show line numbers in code cells
 }
 
 export const getSettings = (): NebulaSettings => {

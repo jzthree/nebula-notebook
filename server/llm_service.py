@@ -219,7 +219,7 @@ class LLMService:
             model=config.model,
             messages=messages,
             temperature=config.temperature,
-            max_tokens=config.max_tokens
+            max_completion_tokens=config.max_tokens
         )
 
         return response.choices[0].message.content
@@ -326,7 +326,7 @@ class LLMService:
                 {"role": "user", "content": prompt}
             ],
             temperature=config.temperature,
-            max_tokens=config.max_tokens,
+            max_completion_tokens=config.max_tokens,
             response_format={"type": "json_object"}  # Native JSON mode
         )
 
@@ -469,7 +469,7 @@ class LLMService:
             model=config.model,
             messages=messages,
             temperature=config.temperature,
-            max_tokens=config.max_tokens
+            max_completion_tokens=config.max_tokens
         )
 
         return response.choices[0].message.content
