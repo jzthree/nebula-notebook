@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Folder, Bot, Check, Palette, Bell, Volume2, AlignLeft } from 'lucide-react';
+import { X, Folder, Bot, Check, Palette, Bell, Volume2, AlignLeft, Hash } from 'lucide-react';
 import {
   getSettings,
   saveSettings,
@@ -285,6 +285,34 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
               <p className="mt-1 text-xs text-slate-500">
                 Auto-detect analyzes file content. Default is 4 spaces when content is ambiguous.
               </p>
+            </div>
+
+            {/* Line Numbers */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                <Hash className="w-4 h-4" />
+                Line Numbers
+              </label>
+              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                <div className="flex-1">
+                  <p className="text-sm text-slate-700">Show Line Numbers</p>
+                  <p className="text-xs text-slate-500">
+                    Display line numbers in code cells
+                  </p>
+                </div>
+                <button
+                  onClick={() => setSettings({ ...settings, showLineNumbers: !settings.showLineNumbers })}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    settings.showLineNumbers ? 'bg-blue-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      settings.showLineNumbers ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
           </div>
 

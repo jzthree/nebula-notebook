@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback, useState, useEffect, useRef } from 'react';
+import React, { forwardRef, useCallback, useState, useEffect, useRef, useMemo } from 'react';
 import { Cell } from '../types';
 import { Virtuoso, VirtuosoHandle, ListRange } from 'react-virtuoso';
 import { DEFAULT_CELL_HEIGHT_PX } from '../config';
@@ -6,6 +6,38 @@ import { DEFAULT_CELL_HEIGHT_PX } from '../config';
 // Cache measured cell heights globally to persist across re-renders
 // Key: cell ID, Value: measured height in pixels
 const cellHeightCache = new Map<string, number>();
+
+// Estimate cell height based on content (for cells not yet measured)
+// This prevents scroll jumps when scrolling up to tall cells
+function estimateCellHeight(cell: Cell): number {
+  // Base height: toolbar (40px) + padding (24px) + minimum content (40px)
+  let height = 104;
+
+  // Estimate code editor height: ~20px per line, min 40px
+  const lines = cell.content.split('\n').length;
+  height += Math.max(40, lines * 20);
+
+  // Estimate output height if present
+  if (cell.outputs && cell.outputs.length > 0) {
+    for (const output of cell.outputs) {
+      if (output.type === 'image') {
+        // Images are typically ~300px
+        height += 300;
+      } else if (output.content) {
+        // Text output: ~16px per line
+        const outputLines = output.content.split('\n').length;
+        // If cell is in scroll mode, cap at the scrolled height
+        if (cell.scrolled) {
+          height += Math.min(outputLines * 16, cell.scrolledHeight || 200);
+        } else {
+          height += Math.min(outputLines * 16, 600); // Cap for wrap mode
+        }
+      }
+    }
+  }
+
+  return height;
+}
 
 interface Props {
   cells: Cell[];
@@ -41,6 +73,10 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
   const renderCellRef = useRef(renderCell);
   renderCellRef.current = renderCell;
 
+  // Keep cells ref for height estimation
+  const cellsRef = useRef(cells);
+  cellsRef.current = cells;
+
   useEffect(() => {
     const updateExtension = () => {
       // Extend by 1x window height - enough for smooth scrolling without excess memory
@@ -50,16 +86,42 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
     return () => window.removeEventListener('resize', updateExtension);
   }, []);
 
-  // Cache measured heights when Virtuoso measures items
-  const itemSize = useCallback((el: HTMLElement) => {
-    const cellId = el.getAttribute('data-cell-id');
-    if (cellId) {
-      const height = el.getBoundingClientRect().height;
-      if (height > 0) {
-        cellHeightCache.set(cellId, height);
+  // Calculate smart default height based on cells content
+  // This reduces scroll jumps when scrolling up to unmeasured cells
+  const defaultHeight = useMemo(() => {
+    if (cells.length === 0) return 150;
+
+    // Use cached heights if available, otherwise estimate
+    let totalHeight = 0;
+    let count = 0;
+
+    for (const cell of cells) {
+      const cached = cellHeightCache.get(cell.id);
+      if (cached) {
+        totalHeight += cached;
+        count++;
+      } else {
+        // Include estimates for unmeasured cells too
+        totalHeight += estimateCellHeight(cell);
+        count++;
       }
     }
-    return el.getBoundingClientRect().height;
+
+    // Return average, with a minimum of 200 to avoid underestimating
+    return Math.max(200, Math.round(totalHeight / count));
+  }, [cells]);
+
+  // Cache measured heights when Virtuoso measures items
+  const itemSize = useCallback((el: HTMLElement) => {
+    // Virtuoso's wrapper contains our div with data-cell-id as first child
+    const wrapper = el.firstElementChild as HTMLElement | null;
+    const cellId = wrapper?.getAttribute('data-cell-id') || el.getAttribute('data-cell-id');
+    const height = el.getBoundingClientRect().height;
+
+    if (cellId && height > 0) {
+      cellHeightCache.set(cellId, height);
+    }
+    return height;
   }, []);
 
   // Wrapper that adds data-cell-id for height tracking
@@ -82,11 +144,15 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
       itemContent={(index, cell) => wrappedRenderCell(cell, index)}
       // Use stable cell IDs as keys to prevent scroll jumps when cells update
       computeItemKey={(index, cell) => cell.id}
-      // Default height estimate - used for cells not yet measured
-      defaultItemHeight={DEFAULT_CELL_HEIGHT_PX}
+      // Dynamic default height based on average cell size in this notebook
+      // Reduces scroll jumps when scrolling up to unmeasured cells
+      defaultItemHeight={defaultHeight}
       // Extend viewport by 1x window height in each direction
       // Balance between smooth scrolling and memory usage (too large = too many mounted cells)
       increaseViewportBy={{ top: viewportExtension, bottom: viewportExtension }}
+      // Ensure at least 3 items rendered above/below viewport
+      // This helps with tall cells where pixel-based overscan is insufficient
+      minOverscanItemCount={3}
       components={{
         List: ListContainer,
         Footer
@@ -94,6 +160,7 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
       followOutput={false}
       alignToBottom={false}
       rangeChanged={onRangeChange}
+      // itemSize measures AFTER render (caches actual heights)
       itemSize={itemSize}
     />
   );

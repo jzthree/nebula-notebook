@@ -44,6 +44,7 @@ interface Props {
   onFocusModeApplied?: () => void; // Callback when focus mode has been applied
   isSearchOpen?: boolean; // When true, Escape closes search instead of exiting edit mode
   onCloseSearch?: () => void; // Close search bar
+  showLineNumbers?: boolean; // Show line numbers in editor
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -74,6 +75,7 @@ const CellComponent: React.FC<Props> = ({
   onFocusModeApplied,
   isSearchOpen = false,
   onCloseSearch,
+  showLineNumbers = false,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -502,6 +504,7 @@ const CellComponent: React.FC<Props> = ({
           shouldFocus={focusState === 'editor'}
           indentConfig={indentConfig}
           allCellsRef={allCellsRef}
+          showLineNumbers={cell.type === 'code' && showLineNumbers}
         />
       </div>
 
