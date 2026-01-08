@@ -836,7 +836,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }));
         }
-      }, 30000); // Ping every 30 seconds
+      }, 10000); // Ping every 10 seconds (helps with SSH tunnels)
     };
 
     ws.onmessage = (event) => {
@@ -862,13 +862,13 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
         pingIntervalRef.current = null;
       }
 
-      // Attempt to reconnect after 5 seconds
+      // Attempt to reconnect after 1 second (fast reconnect for SSH tunnels)
       reconnectTimeoutRef.current = setTimeout(() => {
         if (filePath) {
           console.log('[OperationHandler] Attempting reconnect...');
           connect();
         }
-      }, 5000);
+      }, 1000);
     };
   }, [filePath, handleMessage]);
 
