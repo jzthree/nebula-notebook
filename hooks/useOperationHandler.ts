@@ -296,6 +296,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const intentionalCloseRef = useRef(false); // Track if we closed intentionally
 
   // Use refs for callbacks to avoid reconnecting when callbacks change
   const cellsRef = useRef(cells);
@@ -811,8 +812,9 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
       reconnectTimeoutRef.current = null;
     }
 
-    // Close existing connection
+    // Close existing connection (mark as intentional to prevent reconnect loop)
     if (wsRef.current) {
+      intentionalCloseRef.current = true;
       wsRef.current.close();
       wsRef.current = null;
     }
@@ -830,6 +832,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     ws.onopen = () => {
       console.log('[OperationHandler] Connected');
       setIsConnected(true);
+      intentionalCloseRef.current = false; // Reset flag on successful connect
 
       // Set up ping interval to keep connection alive
       pingIntervalRef.current = setInterval(() => {
@@ -862,13 +865,16 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
         pingIntervalRef.current = null;
       }
 
-      // Attempt to reconnect after 1 second (fast reconnect for SSH tunnels)
-      reconnectTimeoutRef.current = setTimeout(() => {
-        if (filePath) {
-          console.log('[OperationHandler] Attempting reconnect...');
-          connect();
-        }
-      }, 1000);
+      // Only auto-reconnect if this was NOT an intentional close
+      // (intentional closes happen when connect() replaces the connection)
+      if (!intentionalCloseRef.current) {
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (filePath) {
+            console.log('[OperationHandler] Attempting reconnect...');
+            connect();
+          }
+        }, 1000);
+      }
     };
   }, [filePath, handleMessage]);
 
@@ -888,8 +894,9 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
       pingIntervalRef.current = null;
     }
 
-    // Close WebSocket
+    // Close WebSocket (mark as intentional to prevent auto-reconnect)
     if (wsRef.current) {
+      intentionalCloseRef.current = true;
       wsRef.current.close();
       wsRef.current = null;
     }
