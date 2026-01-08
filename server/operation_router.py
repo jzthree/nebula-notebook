@@ -48,15 +48,15 @@ class OperationRouter:
         # Map of notebook_path -> UIConnection
         self._ui_connections: Dict[str, UIConnection] = {}
 
-        # Headless notebook state manager
-        self._headless_manager: Optional['HeadlessNotebookManager'] = None
+        # Headless operation handler (file-based fallback)
+        self._headless_manager: Optional['HeadlessOperationHandler'] = None
 
         # Operation timeout in seconds
         self._operation_timeout = 30.0
 
-    def set_headless_manager(self, manager: 'HeadlessNotebookManager'):
-        """Set the headless notebook manager for file-based operations"""
-        self._headless_manager = manager
+    def set_headless_handler(self, handler: 'HeadlessOperationHandler'):
+        """Set the headless operation handler for file-based operations"""
+        self._headless_manager = handler
 
     async def register_ui(self, websocket: WebSocket, notebook_path: str):
         """Register a UI connection for a notebook path"""
@@ -234,12 +234,14 @@ class OperationRouter:
         return await self._headless_manager.read_notebook(notebook_path)
 
 
-class HeadlessNotebookManager:
+class HeadlessOperationHandler:
     """
-    Manages notebook state when no UI is connected.
+    Handles notebook operations when no UI is connected.
 
     Reads from and writes to notebook files directly.
     This provides file-based fallback for MCP operations.
+
+    Mirrors useOperationHandler (React) but operates on files instead of UI state.
     """
 
     def __init__(self, fs_service):

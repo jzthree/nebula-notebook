@@ -26,7 +26,7 @@ from python_discovery import python_discovery
 from session_store import session_store
 from config import SESSION_MAX_AGE_HOURS, BACKEND_SHUTDOWN_TIMEOUT_SECONDS
 from errors import NebulaError, convert_sdk_error
-from operation_router import operation_router, HeadlessNotebookManager
+from operation_router import operation_router, HeadlessOperationHandler
 
 
 # --- Pydantic Models ---
@@ -124,9 +124,9 @@ async def lifespan(app: FastAPI):
     # Startup - respond to requests immediately, initialize in background
     print("Starting Nebula Notebook Backend...")
 
-    # Initialize operation router with headless manager
-    headless_manager = HeadlessNotebookManager(fs_service)
-    operation_router.set_headless_manager(headless_manager)
+    # Initialize operation router with headless handler
+    headless_handler = HeadlessOperationHandler(fs_service)
+    operation_router.set_headless_handler(headless_handler)
     print("Operation router initialized")
 
     # Mark any previously active sessions as orphaned (from crashed server)
