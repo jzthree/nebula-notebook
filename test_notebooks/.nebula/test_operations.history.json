@@ -1,0 +1,163 @@
+[
+  {
+    "type": "snapshot",
+    "cells": [
+      {
+        "id": "new-cell-1",
+        "type": "code",
+        "content": "y = 100\nprint(y)",
+        "outputs": [],
+        "isExecuting": false,
+        "executionCount": null
+      },
+      {
+        "id": "original-cell",
+        "type": "code",
+        "content": "print('hello')",
+        "outputs": [],
+        "isExecuting": false,
+        "executionCount": null
+      }
+    ],
+    "timestamp": 1767753509029
+  },
+  {
+    "type": "insertCell",
+    "index": 1,
+    "cell": {
+      "id": "realtime-test",
+      "type": "code",
+      "content": "# This cell was added via API\nz = 999",
+      "outputs": [],
+      "isExecuting": false
+    },
+    "timestamp": 1767753584208,
+    "operationId": "0c1fc3e9-2d57-4044-b511-1171e644ebd2"
+  },
+  {
+    "type": "runCell",
+    "cellId": "new-cell-1",
+    "cellIndex": 0,
+    "timestamp": 1767758194258,
+    "operationId": "b02e0a4a-43b6-4556-9f87-88b52c9b148c"
+  },
+  {
+    "type": "executionComplete",
+    "cellId": "new-cell-1",
+    "cellIndex": 0,
+    "durationMs": 276,
+    "success": true,
+    "output": "100\n",
+    "timestamp": 1767758194556,
+    "operationId": "a4f7dba5-c243-4925-b34e-2236c823391a"
+  },
+  {
+    "type": "runAllCells",
+    "cellCount": 3,
+    "timestamp": 1767758228906,
+    "operationId": "11fcdebb-5582-4ecb-82ca-5e21457f0be6"
+  },
+  {
+    "type": "runCell",
+    "cellId": "new-cell-1",
+    "cellIndex": 0,
+    "timestamp": 1767758228906,
+    "operationId": "86b121a1-a1fa-48e5-aa75-8bddce06ba73"
+  },
+  {
+    "type": "runCell",
+    "cellId": "realtime-test",
+    "cellIndex": 1,
+    "timestamp": 1767758228906,
+    "operationId": "907409ac-d458-497a-9aba-0d4c7cf455d6"
+  },
+  {
+    "type": "runCell",
+    "cellId": "original-cell",
+    "cellIndex": 2,
+    "timestamp": 1767758228906,
+    "operationId": "1b7bf752-f818-4e70-a159-9ff9f6f084b4"
+  },
+  {
+    "type": "executionComplete",
+    "cellId": "new-cell-1",
+    "cellIndex": 0,
+    "durationMs": 85,
+    "success": true,
+    "output": "100\n",
+    "timestamp": 1767758229002,
+    "operationId": "8746af29-715d-4d81-9a5f-995a5d786a77"
+  },
+  {
+    "type": "executionComplete",
+    "cellId": "realtime-test",
+    "cellIndex": 1,
+    "durationMs": 35,
+    "success": true,
+    "timestamp": 1767758229049,
+    "operationId": "63966ac4-60a2-4510-915b-733b44b3c3f7"
+  },
+  {
+    "type": "executionComplete",
+    "cellId": "original-cell",
+    "cellIndex": 2,
+    "durationMs": 58,
+    "success": true,
+    "output": "hello\n",
+    "timestamp": 1767758229120,
+    "operationId": "a7250ac9-b369-4417-a318-7f6cd817fe84"
+  },
+  {
+    "type": "insertCell",
+    "index": 3,
+    "cell": {
+      "id": "463ad25b-29e8-40c7-bfeb-c94000b17d93",
+      "type": "code",
+      "content": "",
+      "outputs": [],
+      "isExecuting": false
+    },
+    "timestamp": 1767758262231,
+    "operationId": "3f23c7c7-b36a-4927-aa55-6dd9f4f27c21"
+  },
+  {
+    "type": "updateContentPatch",
+    "cellId": "463ad25b-29e8-40c7-bfeb-c94000b17d93",
+    "patch": "@@ -0,0 +1,22 @@\n+print(f%22Sum: %7By + z%7D%22)\n",
+    "oldHash": "0",
+    "newHash": "59fd89c7",
+    "timestamp": 1767758315894,
+    "source": "user",
+    "operationId": "19aa923c-df19-424b-b74b-17b49a4e4064"
+  },
+  {
+    "type": "runCell",
+    "cellId": "463ad25b-29e8-40c7-bfeb-c94000b17d93",
+    "cellIndex": 3,
+    "timestamp": 1767758315895,
+    "operationId": "96da1438-09f3-4683-9a82-ea58eba70385"
+  },
+  {
+    "type": "insertCell",
+    "index": 4,
+    "cell": {
+      "id": "05cbc5f8-83cf-4392-823c-e0388580256d",
+      "type": "code",
+      "content": "",
+      "outputs": [],
+      "isExecuting": false
+    },
+    "timestamp": 1767758315895,
+    "operationId": "65d77c28-3d8b-4499-9730-45379e70d3f3"
+  },
+  {
+    "type": "executionComplete",
+    "cellId": "463ad25b-29e8-40c7-bfeb-c94000b17d93",
+    "cellIndex": 3,
+    "durationMs": 121,
+    "success": true,
+    "output": "Sum: 1099\n",
+    "timestamp": 1767758316030,
+    "operationId": "864186d0-e77a-465c-985b-8157bc027b7b"
+  }
+]

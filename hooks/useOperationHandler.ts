@@ -805,6 +805,12 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const connect = useCallback(() => {
     if (!filePath) return;
 
+    // Clear any pending reconnect before connecting
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
     // Close existing connection
     if (wsRef.current) {
       wsRef.current.close();
@@ -846,9 +852,8 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
       console.error('[OperationHandler] WebSocket error:', error);
     };
 
-    ws.onclose = (event) => {
-      console.log('[OperationHandler] Disconnected - code:', event.code, 'reason:', event.reason, 'wasClean:', event.wasClean);
-      console.trace('[OperationHandler] Disconnect stack trace');
+    ws.onclose = () => {
+      console.log('[OperationHandler] Disconnected');
       setIsConnected(false);
 
       // Clear ping interval
@@ -871,9 +876,6 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
    * Disconnect from WebSocket
    */
   const disconnect = useCallback(() => {
-    console.log('[OperationHandler] disconnect() called');
-    console.trace('[OperationHandler] disconnect() stack trace');
-
     // Clear reconnect timeout
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
@@ -897,8 +899,6 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
   // Connect when file path changes
   useEffect(() => {
-    console.log('[OperationHandler] useEffect triggered - filePath:', filePath);
-
     if (filePath) {
       connect();
     } else {
@@ -906,7 +906,6 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     }
 
     return () => {
-      console.log('[OperationHandler] useEffect cleanup running');
       disconnect();
     };
   }, [filePath, connect, disconnect]);

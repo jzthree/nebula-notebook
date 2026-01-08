@@ -45,6 +45,7 @@ interface Props {
   virtuosoRef?: React.RefObject<VirtuosoHandle>;
   className?: string;
   onRangeChange?: (range: ListRange) => void;
+  renderKey?: string | number;
 }
 
 // Custom Scroller to ensure layout matches previous design (Max width centered)
@@ -59,7 +60,7 @@ const ListContainer = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivEle
 // Footer component to add bottom padding so last cell isn't cut off
 const Footer = () => <div className="h-32" />;
 
-export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRef, className, onRangeChange }) => {
+export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRef, className, onRangeChange, renderKey }) => {
   // Track window height to dynamically size the viewport extension
   // Using 1x window height as a balance between smooth scrolling and memory usage
   // Too large (3x) causes too many cells to stay mounted, increasing lag over time
@@ -124,15 +125,17 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
     return height;
   }, []);
 
-  // Wrapper that adds data-cell-id for height tracking
-  // Uses ref to avoid recreating when renderCell prop changes
+  // Wrapper that adds data-cell-id for height tracking.
+  // renderKey forces a re-render when settings affect rendering (e.g., line numbers).
   const wrappedRenderCell = useCallback((cell: Cell, index: number) => {
     return (
-      <div data-cell-id={cell.id}>
+      <div data-cell-id={cell.id} data-render-key={renderKey ?? 0}>
         {renderCellRef.current(cell, index)}
       </div>
     );
-  }, []);
+  }, [renderKey]);
+
+  const itemContent = useCallback((index: number, cell: Cell) => wrappedRenderCell(cell, index), [wrappedRenderCell]);
 
   return (
     <Virtuoso
@@ -141,7 +144,7 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
       data={cells}
       useWindowScroll={false}
       totalCount={cells.length}
-      itemContent={(index, cell) => wrappedRenderCell(cell, index)}
+      itemContent={itemContent}
       // Use stable cell IDs as keys to prevent scroll jumps when cells update
       computeItemKey={(index, cell) => cell.id}
       // Dynamic default height based on average cell size in this notebook
