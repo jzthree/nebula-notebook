@@ -102,9 +102,22 @@ export interface ClearNotebookOp {
   notebookPath: string;
 }
 
+export interface StartAgentSessionOp {
+  type: 'startAgentSession';
+  notebookPath: string;
+  agentId?: string;  // Optional identifier for the agent
+}
+
+export interface EndAgentSessionOp {
+  type: 'endAgentSession';
+  notebookPath: string;
+}
+
 export type NotebookOperation =
   | InsertCellOp
   | DeleteCellOp
+  | StartAgentSessionOp
+  | EndAgentSessionOp
   | UpdateContentOp
   | UpdateMetadataOp
   | MoveCellOp
@@ -138,6 +151,10 @@ export interface OperationResult {
   executionCount?: number;
   // For clearNotebook operation
   deletedCount?: number;
+  // For session operations
+  warning?: string;
+  previousSession?: AgentSessionInfo;
+  sessionDuration?: number;
 }
 
 interface OperationMessage {
@@ -152,6 +169,20 @@ interface ReadNotebookMessage {
 }
 
 type IncomingMessage = OperationMessage | ReadNotebookMessage | { type: 'pong' };
+
+/** Info about an agent operation for UI display */
+export interface AgentOperationInfo {
+  type: NotebookOperation['type'];
+  cellIndex?: number;
+  cellId?: string;
+  timestamp: number;
+}
+
+/** Info about active agent session */
+export interface AgentSessionInfo {
+  agentId?: string;
+  startedAt: number;
+}
 
 interface UseOperationHandlerOptions {
   /** Current file path (null if no file open) */
@@ -183,6 +214,9 @@ interface UseOperationHandlerOptions {
 
   /** Create notebook callback - returns promise with mtime */
   createNotebook?: (path: string, overwrite: boolean, kernelName: string) => Promise<{ success: boolean; mtime?: number; error?: string }>;
+
+  /** Callback when an agent operation is applied (for toasts/notifications) */
+  onAgentOperation?: (operation: NotebookOperation, result: OperationResult) => void;
 }
 
 export function useOperationHandler(options: UseOperationHandlerOptions) {
@@ -197,6 +231,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     updateMetadata,
     setCellOutputs,
     createNotebook,
+    onAgentOperation,
   } = options;
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -213,6 +248,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const updateMetadataRef = useRef(updateMetadata);
   const setCellOutputsRef = useRef(setCellOutputs);
   const createNotebookRef = useRef(createNotebook);
+  const onAgentOperationRef = useRef(onAgentOperation);
 
   // Update refs on each render
   cellsRef.current = cells;
@@ -224,8 +260,18 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   updateMetadataRef.current = updateMetadata;
   setCellOutputsRef.current = setCellOutputs;
   createNotebookRef.current = createNotebook;
+  onAgentOperationRef.current = onAgentOperation;
 
   const [isConnected, setIsConnected] = useState(false);
+  const [activeOperation, setActiveOperation] = useState<AgentOperationInfo | null>(null);
+  const [agentSession, setAgentSessionState] = useState<AgentSessionInfo | null>(null);
+  const agentSessionRef = useRef<AgentSessionInfo | null>(null);
+
+  // Helper to update both ref and state for agentSession
+  const setAgentSession = useCallback((session: AgentSessionInfo | null) => {
+    agentSessionRef.current = session;
+    setAgentSessionState(session);
+  }, []);
 
   /**
    * Check if a cell ID is unique
@@ -565,6 +611,38 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           return { success: true, deletedCount };
         }
 
+        case 'startAgentSession': {
+          const { agentId } = operation;
+
+          // Check if there's already an active session
+          if (agentSessionRef.current) {
+            console.warn('[OperationHandler] Starting new agent session without ending previous one');
+            return {
+              success: true,
+              warning: 'Previous session was not ended. Starting new session.',
+              previousSession: agentSessionRef.current,
+            };
+          }
+
+          setAgentSession({
+            agentId,
+            startedAt: Date.now(),
+          });
+
+          return { success: true };
+        }
+
+        case 'endAgentSession': {
+          if (!agentSessionRef.current) {
+            return { success: true, warning: 'No active session to end' };
+          }
+
+          const sessionDuration = Date.now() - agentSessionRef.current.startedAt;
+          setAgentSession(null);
+
+          return { success: true, sessionDuration };
+        }
+
         default:
           return { success: false, error: `Unknown operation type: ${(operation as any).type}` };
       }
@@ -584,7 +662,30 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
     if (data.type === 'operation') {
       const { operation, requestId } = data;
+
+      // Extract cell info for UI display
+      const cellIndex = 'cellIndex' in operation ? operation.cellIndex :
+                        'index' in operation ? operation.index : undefined;
+      const cellId = 'cellId' in operation ? operation.cellId :
+                     'cell' in operation ? (operation as InsertCellOp).cell.id : undefined;
+
+      // Set active operation for UI indicator
+      setActiveOperation({
+        type: operation.type,
+        cellIndex,
+        cellId,
+        timestamp: Date.now(),
+      });
+
       const result = await applyOperation(operation);
+
+      // Clear active operation after a brief delay (for visual feedback)
+      setTimeout(() => setActiveOperation(null), 300);
+
+      // Call the notification callback if provided
+      if (onAgentOperationRef.current) {
+        onAgentOperationRef.current(operation, result);
+      }
 
       // Send result back
       if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -735,6 +836,8 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
   return {
     isConnected,
+    activeOperation,
+    agentSession,
     disconnect,
     reconnect: connect,
   };

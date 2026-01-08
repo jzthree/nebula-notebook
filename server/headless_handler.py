@@ -155,7 +155,7 @@ class HeadlessOperationHandler:
         notebook_path = operation.get('notebookPath', '')
 
         # Read-only operations (no flush needed)
-        read_only_ops = {'readCell', 'readCellOutput'}
+        read_only_ops = {'readCell', 'readCellOutput', 'startAgentSession', 'endAgentSession'}
 
         try:
             if op_type == 'insertCell':
@@ -180,6 +180,12 @@ class HeadlessOperationHandler:
                 result = await self._read_cell_output(operation)
             elif op_type == 'clearNotebook':
                 result = await self._clear_notebook(operation)
+            elif op_type == 'startAgentSession':
+                # No-op in headless mode (no UI to lock)
+                result = {'success': True}
+            elif op_type == 'endAgentSession':
+                # No-op in headless mode
+                result = {'success': True}
             else:
                 return {
                     'success': False,

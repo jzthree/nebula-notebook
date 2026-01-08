@@ -4,7 +4,7 @@ import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
 import { getSettings, saveSettings, IndentationPreference } from '../services/llmService';
-import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers } from 'lucide-react';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -277,8 +277,24 @@ export const Notebook: React.FC = () => {
     }
   }, [currentFileId, setLastKnownMtime]);
 
+  // Format agent operation for toast notification
+  const formatAgentOperation = useCallback((opType: string, result: { success: boolean; cellIndex?: number; error?: string }) => {
+    if (!result.success) return `Agent error: ${result.error}`;
+    const cellNum = result.cellIndex !== undefined ? ` #${result.cellIndex + 1}` : '';
+    switch (opType) {
+      case 'insertCell': return `Agent inserted cell${cellNum}`;
+      case 'deleteCell': return `Agent deleted cell${cellNum}`;
+      case 'updateContent': return `Agent updated cell${cellNum}`;
+      case 'updateOutputs': return `Agent updated outputs${cellNum}`;
+      case 'moveCell': return `Agent moved cell`;
+      case 'duplicateCell': return `Agent duplicated cell${cellNum}`;
+      case 'clearNotebook': return `Agent cleared notebook`;
+      default: return `Agent: ${opType}`;
+    }
+  }, []);
+
   // Operation handler - receives operations routed from backend OperationRouter
-  const { isConnected: isOperationHandlerConnected } = useOperationHandler({
+  const { isConnected: isAgentConnected, activeOperation: agentOperation, agentSession } = useOperationHandler({
     filePath: currentFileId,
     cells,
     insertCell: undoableInsertCell,
@@ -289,6 +305,36 @@ export const Notebook: React.FC = () => {
     updateMetadata,
     setCellOutputs,
     createNotebook: handleCreateNotebook,
+    onAgentOperation: useCallback((operation, result) => {
+      // Skip read-only operations
+      if (operation.type === 'readCell' || operation.type === 'readCellOutput') return;
+
+      // Handle output updates - only show toast when execution completes (has executionCount)
+      if (operation.type === 'updateOutputs') {
+        if ('executionCount' in operation && operation.executionCount) {
+          toast(`Agent executed cell #${(result.cellIndex ?? 0) + 1}`, 'info', 2000);
+        }
+        return;
+      }
+
+      // Handle session operations specially
+      if (operation.type === 'startAgentSession') {
+        if (result.warning) {
+          toast(`⚠️ ${result.warning}`, 'warning', 3000);
+        } else {
+          toast('🤖 Agent session started', 'info', 2000);
+        }
+        return;
+      }
+      if (operation.type === 'endAgentSession') {
+        const duration = result.sessionDuration ? ` (${Math.round(result.sessionDuration / 1000)}s)` : '';
+        toast(`🤖 Agent session ended${duration}`, 'info', 2000);
+        return;
+      }
+
+      const msg = formatAgentOperation(operation.type, result);
+      toast(msg, result.success ? 'info' : 'error', 2000);
+    }, [formatAgentOperation, toast]),
   });
 
   // Clipboard for cut/copy/paste cells
@@ -2089,6 +2135,21 @@ export const Notebook: React.FC = () => {
                       )}
                       </div>
 
+                      {/* Agent Session Indicator - only shows when session is active */}
+                      {agentSession && (
+                        <span
+                          className="flex items-center gap-1 text-xs mr-2 px-1.5 py-0.5 rounded text-purple-800 bg-purple-200 border border-purple-300"
+                          title="Agent session active - notebook locked for agent use"
+                        >
+                          <Bot className="w-3 h-3 animate-pulse" />
+                          <span>
+                            {agentOperation
+                              ? agentOperation.type.replace(/([A-Z])/g, ' $1').trim()
+                              : 'Agent'}
+                          </span>
+                        </span>
+                      )}
+
                       {/* Save Status Indicator */}
                       <span className="flex items-center gap-1 text-xs">
                         {!isOnline && (
@@ -2365,6 +2426,7 @@ export const Notebook: React.FC = () => {
               virtuosoRef={virtuosoRef}
               className="h-full"
               onRangeChange={handleRangeChange}
+              renderKey={showLineNumbers ? 'line-numbers-on' : 'line-numbers-off'}
               renderCell={(cell, idx) => (
                   <CellComponent
                   key={cell.id}
