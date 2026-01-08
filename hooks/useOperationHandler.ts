@@ -1,18 +1,77 @@
 /**
- * Operation Handler Hook - Handles operations routed from backend OperationRouter
+ * Operation Handler Hook - UI-Side Agent Operation Processor
  *
- * When an agent (MCP/CLI) sends an operation to the backend:
- * 1. OperationRouter (Python) checks if UI is connected via WebSocket
- * 2. If connected, it routes the operation HERE via WebSocket
- * 3. This hook applies the operation to UI state (ground truth when UI is active)
- * 4. Result is sent back to OperationRouter → agent
+ * This hook is the UI counterpart to HeadlessOperationHandler. When an agent
+ * sends operations through NebulaClient, the Operation Router checks if the
+ * notebook is open in a browser. If so, operations are forwarded HERE via
+ * WebSocket for real-time UI updates.
  *
- * When UI is NOT connected:
- * - OperationRouter falls back to HeadlessNotebookManager (file-based operations)
- * - Files become the ground truth
+ * ## Architecture
  *
- * This enables real-time collaboration where an AI agent can modify
- * the notebook and the UI reflects changes immediately.
+ * ```
+ * Agent → NebulaClient → POST /api/notebook/operation
+ *                                    ↓
+ *                          ┌─────────────────────┐
+ *                          │   Operation Router   │
+ *                          └──────────┬──────────┘
+ *                                     │
+ *              UI Connected?  ────────┼──────── No UI?
+ *                     │               │              │
+ *                     ▼               │              ▼
+ *    ┌─────────────────────────┐      │   ┌──────────────────────┐
+ *    │  useOperationHandler    │      │   │ HeadlessOperation    │
+ *    │  (this hook via WS)     │      │   │ Handler (file-based) │
+ *    └─────────────────────────┘      │   └──────────────────────┘
+ *              │                      │
+ *              ▼                      │
+ *    Apply to React state             │
+ *    (insertCell, etc.)               │
+ *              │                      │
+ *              ▼                      │
+ *    Send result back via WS ─────────┘
+ * ```
+ *
+ * ## Responsibilities
+ *
+ * 1. **WebSocket Connection**: Maintains connection to `/api/notebook/{path}/ws`
+ * 2. **Operation Processing**: Receives and applies operations to React state
+ * 3. **Result Reporting**: Sends operation results back to router
+ * 4. **UI Feedback**: Updates agent session indicator and triggers toasts
+ * 5. **Notebook State**: Serves current cell state for read operations
+ *
+ * ## Agent Sessions
+ *
+ * When an agent calls `startAgentSession`, this hook:
+ * - Sets `agentSession` state (shows purple badge in UI)
+ * - Tracks session start time and agent ID
+ * - Returns session duration on `endAgentSession`
+ *
+ * ## Supported Operations
+ *
+ * Cell: insertCell, deleteCell, updateContent, updateMetadata, moveCell,
+ *       duplicateCell, updateOutputs, clearNotebook
+ * Notebook: createNotebook, readCell, readCellOutput
+ * Session: startAgentSession, endAgentSession
+ *
+ * ## Usage
+ *
+ * ```tsx
+ * const {
+ *   isConnected,      // WebSocket connection status
+ *   activeOperation,  // Current operation being processed (for UI indicator)
+ *   agentSession,     // Active session info (null if no session)
+ * } = useOperationHandler({
+ *   filePath,
+ *   cells,
+ *   insertCell,
+ *   deleteCell,
+ *   // ... other callbacks from useUndoRedo
+ *   onAgentOperation: (op, result) => toast(`Agent: ${op.type}`)
+ * });
+ * ```
+ *
+ * @see server/headless_handler.py - Headless equivalent
+ * @see docs/AGENTIC_ARCHITECTURE.md - Full system documentation
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';

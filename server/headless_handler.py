@@ -1,11 +1,67 @@
 """
 Headless Operation Handler
 
-Handles notebook operations when no UI is connected.
-Maintains notebook content in memory as ground truth for efficiency.
-Reads from disk only on first access, writes based on mode.
+Handles notebook operations when no UI is connected to Nebula.
 
-Mirrors useOperationHandler (React) but operates on files instead of UI state.
+## Architecture Context
+
+This module is part of Nebula's dual-mode operation system:
+
+    Agent → NebulaClient → Operation Router → [ UI Handler | Headless Handler ]
+
+When a notebook is NOT open in the browser (no WebSocket connection), the
+Operation Router delegates to this HeadlessOperationHandler instead of
+forwarding to the UI.
+
+## Write-Back Caching Strategy
+
+To optimize for agent workflows (many rapid operations), this handler uses
+write-back caching:
+
+    1. First access: Load notebook from disk into memory cache
+    2. Operations: Apply to cache only (no disk I/O)
+    3. After operation: Schedule async persist (non-blocking)
+    4. Persist: Write to disk in background, re-check dirty flag
+
+This provides:
+- Fast operation response times (no blocking I/O)
+- Automatic batching of rapid sequential operations
+- Crash safety via periodic background writes
+
+## Usage
+
+    handler = HeadlessOperationHandler(fs_service)
+
+    # Apply operation (returns immediately, persists in background)
+    result = await handler.apply_operation({
+        'type': 'insertCell',
+        'notebookPath': '/path/to/notebook.ipynb',
+        'index': 0,
+        'cell': {'id': 'cell-1', 'type': 'code', 'content': '# Hello'}
+    })
+
+    # Force immediate persistence (for graceful shutdown)
+    await handler.flush()
+
+## Supported Operations
+
+Cell Operations:
+- insertCell, deleteCell, updateContent, updateMetadata
+- moveCell, duplicateCell, updateOutputs, clearNotebook
+
+Notebook Operations:
+- createNotebook, readCell, readCellOutput
+
+Session Operations (no-ops in headless mode):
+- startAgentSession, endAgentSession
+
+## Thread Safety
+
+- Uses asyncio.Lock per notebook path to prevent overlapping writes
+- Cache mutations are synchronous (no race conditions)
+- Persist operations run in thread pool to avoid blocking event loop
+
+See also: hooks/useOperationHandler.ts (UI-side equivalent)
 """
 
 import asyncio
