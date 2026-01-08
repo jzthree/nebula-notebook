@@ -21,7 +21,7 @@ import { FileBrowser } from './FileBrowser';
 import { AIChatSidebar } from './AIChatSidebar';
 import { VirtualCellList } from './VirtualCellList';
 import { useUndoRedo } from '../hooks/useUndoRedo';
-import { useOperationSync } from '../hooks/useOperationSync';
+import { useOperationHandler } from '../hooks/useOperationHandler';
 import { SettingsModal } from './SettingsModal';
 import { KernelManager } from './KernelManager';
 import { NotebookSearch } from './NotebookSearch';
@@ -267,6 +267,11 @@ export const Notebook: React.FC = () => {
         }
       }
 
+      // Open the new notebook in a new tab for real-time viewing
+      // Note: May be blocked by popup blocker - user needs to allow popups
+      const newTabUrl = `${window.location.origin}/?file=${encodeURIComponent(path)}`;
+      window.open(newTabUrl, '_blank');
+
       return { success: true, mtime };
     } catch (e) {
       return {
@@ -276,8 +281,8 @@ export const Notebook: React.FC = () => {
     }
   }, [currentFileId, setLastKnownMtime]);
 
-  // Operation sync hook - real-time sync with MCP tools
-  const { isConnected: isOperationSyncConnected } = useOperationSync({
+  // Operation handler - receives operations routed from backend OperationRouter
+  const { isConnected: isOperationHandlerConnected } = useOperationHandler({
     filePath: currentFileId,
     cells,
     insertCell: undoableInsertCell,

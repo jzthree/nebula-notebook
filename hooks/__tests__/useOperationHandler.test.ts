@@ -1,5 +1,5 @@
 /**
- * Tests for useOperationSync hook
+ * Tests for useOperationHandler hook
  *
  * Verifies:
  * 1. Operation application logic (insert, delete, update, etc.)
@@ -62,10 +62,10 @@ class MockWebSocket {
 const originalWebSocket = global.WebSocket;
 
 // Import after WebSocket mock is set up
-import { useOperationSync, NotebookOperation, OperationResult } from '../useOperationSync';
+import { useOperationHandler, NotebookOperation, OperationResult } from '../useOperationHandler';
 import { Cell, CellType } from '../../types';
 
-describe('useOperationSync', () => {
+describe('useOperationHandler', () => {
   // Mock callbacks
   let mockInsertCell: ReturnType<typeof vi.fn>;
   let mockDeleteCell: ReturnType<typeof vi.fn>;
@@ -106,9 +106,9 @@ describe('useOperationSync', () => {
     vi.clearAllTimers();
   });
 
-  const renderOperationSync = (cells: Cell[] = initialCells, filePath: string | null = '/test/notebook.ipynb') => {
+  const renderOperationHandler = (cells: Cell[] = initialCells, filePath: string | null = '/test/notebook.ipynb') => {
     return renderHook(() =>
-      useOperationSync({
+      useOperationHandler({
         filePath,
         cells,
         insertCell: mockInsertCell,
@@ -124,7 +124,7 @@ describe('useOperationSync', () => {
 
   describe('Connection Management', () => {
     it('should not connect when filePath is null', async () => {
-      renderOperationSync(initialCells, null);
+      renderOperationHandler(initialCells, null);
 
       // Wait for potential connection attempt
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -133,7 +133,7 @@ describe('useOperationSync', () => {
     });
 
     it('should connect when filePath is provided', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       // Wait for connection
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -143,7 +143,7 @@ describe('useOperationSync', () => {
     });
 
     it('should disconnect when unmounted', async () => {
-      const { unmount } = renderOperationSync();
+      const { unmount } = renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -156,7 +156,7 @@ describe('useOperationSync', () => {
 
   describe('Insert Cell Operation', () => {
     it('should apply insertCell operation', async () => {
-      const { result } = renderOperationSync();
+      const { result } = renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -196,7 +196,7 @@ describe('useOperationSync', () => {
     });
 
     it('should auto-fix duplicate cell ID', async () => {
-      const { result } = renderOperationSync();
+      const { result } = renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -234,7 +234,7 @@ describe('useOperationSync', () => {
 
   describe('Delete Cell Operation', () => {
     it('should delete cell by index', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -256,7 +256,7 @@ describe('useOperationSync', () => {
     });
 
     it('should delete cell by ID', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -278,7 +278,7 @@ describe('useOperationSync', () => {
     });
 
     it('should return error for non-existent cell ID', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -307,7 +307,7 @@ describe('useOperationSync', () => {
 
   describe('Update Content Operation', () => {
     it('should update cell content using AI callback', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -332,7 +332,7 @@ describe('useOperationSync', () => {
 
     it('should fall back to regular update if AI callback not provided', async () => {
       const { result } = renderHook(() =>
-        useOperationSync({
+        useOperationHandler({
           filePath: '/test/notebook.ipynb',
           cells: initialCells,
           insertCell: mockInsertCell,
@@ -368,7 +368,7 @@ describe('useOperationSync', () => {
 
   describe('Move Cell Operation', () => {
     it('should move cell from one position to another', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -391,7 +391,7 @@ describe('useOperationSync', () => {
     });
 
     it('should return error for invalid indices', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -420,7 +420,7 @@ describe('useOperationSync', () => {
 
   describe('Duplicate Cell Operation', () => {
     it('should duplicate cell', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -447,7 +447,7 @@ describe('useOperationSync', () => {
     });
 
     it('should auto-fix duplicate ID on duplicate', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -474,7 +474,7 @@ describe('useOperationSync', () => {
 
   describe('Update Metadata Operation', () => {
     it('should change cell type', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -499,7 +499,7 @@ describe('useOperationSync', () => {
 
   describe('Update Outputs Operation', () => {
     it('should update cell outputs', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -533,7 +533,7 @@ describe('useOperationSync', () => {
 
   describe('Read Notebook Request', () => {
     it('should respond to readNotebook request', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -558,7 +558,7 @@ describe('useOperationSync', () => {
 
   describe('Keep-Alive', () => {
     it('should respond to pong', async () => {
-      renderOperationSync();
+      renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
 

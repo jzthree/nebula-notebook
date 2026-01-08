@@ -1,10 +1,15 @@
 /**
- * Operation Sync Hook - Real-time sync between MCP tools and UI
+ * Operation Handler Hook - Handles operations routed from backend OperationRouter
  *
- * Connects to the backend WebSocket to:
- * 1. Receive operations from MCP tools
- * 2. Apply them to the notebook state
- * 3. Send back results
+ * When an agent (MCP/CLI) sends an operation to the backend:
+ * 1. OperationRouter (Python) checks if UI is connected via WebSocket
+ * 2. If connected, it routes the operation HERE via WebSocket
+ * 3. This hook applies the operation to UI state (ground truth when UI is active)
+ * 4. Result is sent back to OperationRouter → agent
+ *
+ * When UI is NOT connected:
+ * - OperationRouter falls back to HeadlessNotebookManager (file-based operations)
+ * - Files become the ground truth
  *
  * This enables real-time collaboration where an AI agent can modify
  * the notebook and the UI reflects changes immediately.
@@ -111,7 +116,7 @@ interface ReadNotebookMessage {
 
 type IncomingMessage = OperationMessage | ReadNotebookMessage | { type: 'pong' };
 
-interface UseOperationSyncOptions {
+interface UseOperationHandlerOptions {
   /** Current file path (null if no file open) */
   filePath: string | null;
 
@@ -143,7 +148,7 @@ interface UseOperationSyncOptions {
   createNotebook?: (path: string, overwrite: boolean, kernelName: string) => Promise<{ success: boolean; mtime?: number; error?: string }>;
 }
 
-export function useOperationSync(options: UseOperationSyncOptions) {
+export function useOperationHandler(options: UseOperationHandlerOptions) {
   const {
     filePath,
     cells,
@@ -496,13 +501,13 @@ export function useOperationSync(options: UseOperationSyncOptions) {
     const encodedPath = encodeURIComponent(filePath);
     const wsUrl = `${protocol}//${host}/api/notebook/${encodedPath}/ws`;
 
-    console.log('[OperationSync] Connecting to:', wsUrl);
+    console.log('[OperationHandler] Connecting to:', wsUrl);
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('[OperationSync] Connected');
+      console.log('[OperationHandler] Connected');
       setIsConnected(true);
 
       // Set up ping interval to keep connection alive
@@ -518,16 +523,16 @@ export function useOperationSync(options: UseOperationSyncOptions) {
         const data = JSON.parse(event.data);
         handleMessage(data);
       } catch (e) {
-        console.error('[OperationSync] Failed to parse message:', e);
+        console.error('[OperationHandler] Failed to parse message:', e);
       }
     };
 
     ws.onerror = (error) => {
-      console.error('[OperationSync] WebSocket error:', error);
+      console.error('[OperationHandler] WebSocket error:', error);
     };
 
     ws.onclose = () => {
-      console.log('[OperationSync] Disconnected');
+      console.log('[OperationHandler] Disconnected');
       setIsConnected(false);
 
       // Clear ping interval
@@ -539,7 +544,7 @@ export function useOperationSync(options: UseOperationSyncOptions) {
       // Attempt to reconnect after 5 seconds
       reconnectTimeoutRef.current = setTimeout(() => {
         if (filePath) {
-          console.log('[OperationSync] Attempting reconnect...');
+          console.log('[OperationHandler] Attempting reconnect...');
           connect();
         }
       }, 5000);
