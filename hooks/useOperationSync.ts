@@ -69,6 +69,14 @@ export interface UpdateOutputsOp {
   executionCount?: number;
 }
 
+export interface CreateNotebookOp {
+  type: 'createNotebook';
+  notebookPath: string;
+  overwrite?: boolean;
+  kernelName?: string;
+  kernelDisplayName?: string;
+}
+
 export type NotebookOperation =
   | InsertCellOp
   | DeleteCellOp
@@ -76,7 +84,8 @@ export type NotebookOperation =
   | UpdateMetadataOp
   | MoveCellOp
   | DuplicateCellOp
-  | UpdateOutputsOp;
+  | UpdateOutputsOp
+  | CreateNotebookOp;
 
 export interface OperationResult {
   success: boolean;
@@ -85,6 +94,8 @@ export interface OperationResult {
   idModified?: boolean;
   requestedId?: string;
   error?: string;
+  path?: string;
+  mtime?: number;
 }
 
 interface OperationMessage {
@@ -127,6 +138,9 @@ interface UseOperationSyncOptions {
 
   /** Set cell outputs callback */
   setCellOutputs?: (cellId: string, outputs: Cell['outputs'], executionCount?: number) => void;
+
+  /** Create notebook callback - returns promise with mtime */
+  createNotebook?: (path: string, overwrite: boolean, kernelName: string) => Promise<{ success: boolean; mtime?: number; error?: string }>;
 }
 
 export function useOperationSync(options: UseOperationSyncOptions) {
@@ -140,6 +154,7 @@ export function useOperationSync(options: UseOperationSyncOptions) {
     updateContentAI,
     changeType,
     setCellOutputs,
+    createNotebook,
   } = options;
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -155,6 +170,7 @@ export function useOperationSync(options: UseOperationSyncOptions) {
   const updateContentAIRef = useRef(updateContentAI);
   const changeTypeRef = useRef(changeType);
   const setCellOutputsRef = useRef(setCellOutputs);
+  const createNotebookRef = useRef(createNotebook);
 
   // Update refs on each render
   cellsRef.current = cells;
@@ -165,6 +181,7 @@ export function useOperationSync(options: UseOperationSyncOptions) {
   updateContentAIRef.current = updateContentAI;
   changeTypeRef.current = changeType;
   setCellOutputsRef.current = setCellOutputs;
+  createNotebookRef.current = createNotebook;
 
   const [isConnected, setIsConnected] = useState(false);
 
@@ -188,7 +205,7 @@ export function useOperationSync(options: UseOperationSyncOptions) {
   /**
    * Apply an operation and return the result
    */
-  const applyOperation = useCallback((operation: NotebookOperation): OperationResult => {
+  const applyOperation = useCallback(async (operation: NotebookOperation): Promise<OperationResult> => {
     const currentCells = cellsRef.current;
 
     try {
@@ -385,6 +402,22 @@ export function useOperationSync(options: UseOperationSyncOptions) {
           };
         }
 
+        case 'createNotebook': {
+          const { notebookPath, overwrite = false, kernelName = 'python3' } = operation;
+
+          if (!createNotebookRef.current) {
+            return { success: false, error: 'createNotebook callback not provided' };
+          }
+
+          const result = await createNotebookRef.current(notebookPath, overwrite, kernelName);
+          return {
+            success: result.success,
+            path: notebookPath,
+            mtime: result.mtime,
+            error: result.error,
+          };
+        }
+
         default:
           return { success: false, error: `Unknown operation type: ${(operation as any).type}` };
       }
@@ -396,7 +429,7 @@ export function useOperationSync(options: UseOperationSyncOptions) {
   /**
    * Handle incoming WebSocket message
    */
-  const handleMessage = useCallback((data: IncomingMessage) => {
+  const handleMessage = useCallback(async (data: IncomingMessage) => {
     if (data.type === 'pong') {
       // Keep-alive response, ignore
       return;
@@ -404,7 +437,7 @@ export function useOperationSync(options: UseOperationSyncOptions) {
 
     if (data.type === 'operation') {
       const { operation, requestId } = data;
-      const result = applyOperation(operation);
+      const result = await applyOperation(operation);
 
       // Send result back
       if (wsRef.current?.readyState === WebSocket.OPEN) {

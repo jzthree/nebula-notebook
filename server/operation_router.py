@@ -266,6 +266,8 @@ class HeadlessNotebookManager:
                 return await self._duplicate_cell(operation)
             elif op_type == 'updateOutputs':
                 return await self._update_outputs(operation)
+            elif op_type == 'createNotebook':
+                return await self._create_notebook(operation)
             else:
                 return {
                     'success': False,
@@ -708,6 +710,55 @@ class HeadlessNotebookManager:
             'success': True,
             'cellId': cell_id,
             'cellIndex': target_index
+        }
+
+    async def _create_notebook(self, operation: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new notebook file"""
+        import os
+
+        notebook_path = operation['notebookPath']
+        overwrite = operation.get('overwrite', False)
+        kernel_name = operation.get('kernelName', 'python3')
+        kernel_display_name = operation.get('kernelDisplayName', 'Python 3')
+
+        # Normalize path
+        normalized_path = self._fs_service._normalize_path(notebook_path)
+
+        # Check if file exists
+        if os.path.exists(normalized_path) and not overwrite:
+            return {
+                'success': False,
+                'error': f'Notebook already exists: {notebook_path}. Use overwrite=true to replace.'
+            }
+
+        # Create empty notebook structure
+        notebook = {
+            'nbformat': 4,
+            'nbformat_minor': 5,
+            'metadata': {
+                'kernelspec': {
+                    'name': kernel_name,
+                    'display_name': kernel_display_name
+                },
+                'language_info': {
+                    'name': 'python'
+                }
+            },
+            'cells': []
+        }
+
+        # Write notebook file
+        os.makedirs(os.path.dirname(normalized_path), exist_ok=True)
+        with open(normalized_path, 'w', encoding='utf-8') as f:
+            json.dump(notebook, f, indent=2)
+
+        # Get mtime for sync
+        mtime = os.path.getmtime(normalized_path)
+
+        return {
+            'success': True,
+            'path': notebook_path,
+            'mtime': mtime
         }
 
 

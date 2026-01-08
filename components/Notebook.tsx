@@ -205,6 +205,77 @@ export const Notebook: React.FC = () => {
     ));
   }, [setCells]);
 
+  // Helper to create notebook (for operation sync)
+  const handleCreateNotebook = useCallback(async (
+    path: string,
+    overwrite: boolean,
+    kernelName: string
+  ): Promise<{ success: boolean; mtime?: number; error?: string }> => {
+    try {
+      // First check if file exists (if not overwriting)
+      if (!overwrite) {
+        const checkResponse = await fetch(`/api/fs/read?path=${encodeURIComponent(path)}`);
+        if (checkResponse.ok) {
+          // File exists
+          return {
+            success: false,
+            error: `Notebook already exists: ${path}. Use overwrite=true to replace.`,
+          };
+        }
+        // 404 means file doesn't exist - that's what we want
+      }
+
+      // Create empty notebook structure
+      const notebook = {
+        nbformat: 4,
+        nbformat_minor: 5,
+        metadata: {
+          kernelspec: {
+            name: kernelName,
+            display_name: kernelName === 'python3' ? 'Python 3' : kernelName,
+          },
+          language_info: { name: 'python' },
+        },
+        cells: [],
+      };
+
+      // Write directly via fs API (avoids routing loop)
+      const response = await fetch('/api/fs/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path,
+          content: JSON.stringify(notebook, null, 2),
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        return { success: false, error: error.detail || 'Failed to create notebook' };
+      }
+
+      // Get mtime from the created file
+      const mtimeResponse = await fetch(`/api/fs/file-mtime?path=${encodeURIComponent(path)}`);
+      let mtime: number | undefined;
+      if (mtimeResponse.ok) {
+        const data = await mtimeResponse.json();
+        mtime = data.mtime;
+
+        // Update our mtime tracking if this is the current file
+        if (path === currentFileId) {
+          setLastKnownMtime(mtime);
+        }
+      }
+
+      return { success: true, mtime };
+    } catch (e) {
+      return {
+        success: false,
+        error: String(e),
+      };
+    }
+  }, [currentFileId, setLastKnownMtime]);
+
   // Operation sync hook - real-time sync with MCP tools
   const { isConnected: isOperationSyncConnected } = useOperationSync({
     filePath: currentFileId,
@@ -216,6 +287,7 @@ export const Notebook: React.FC = () => {
     updateContentAI,
     changeType,
     setCellOutputs,
+    createNotebook: handleCreateNotebook,
   });
 
   // Clipboard for cut/copy/paste cells
