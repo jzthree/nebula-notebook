@@ -104,10 +104,21 @@ class OperationRouter:
         """
         notebook_path = operation.get('notebookPath', '')
         normalized_path = str(Path(notebook_path).resolve())
+        op_type = operation.get('type', 'unknown')
+
+        # Debug logging
+        print(f"[OperationRouter] apply_operation:")
+        print(f"  op_type: {op_type}")
+        print(f"  notebook_path: {notebook_path}")
+        print(f"  normalized_path: {normalized_path}")
+        print(f"  registered_uis: {list(self._ui_connections.keys())}")
+        print(f"  has_ui: {normalized_path in self._ui_connections}")
 
         if normalized_path in self._ui_connections:
+            print(f"  -> Routing to UI")
             return await self._forward_to_ui(normalized_path, operation)
         else:
+            print(f"  -> Routing to HEADLESS")
             return await self._apply_headless(operation)
 
     async def _forward_to_ui(self, notebook_path: str, operation: Dict[str, Any]) -> Dict[str, Any]:
