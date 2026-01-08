@@ -387,6 +387,11 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
           insertCellRef.current(actualIndex, newCell);
 
+          // Update cellsRef immediately to avoid stale reads before re-render
+          const updatedCells = [...currentCells];
+          updatedCells.splice(actualIndex, 0, newCell);
+          cellsRef.current = updatedCells;
+
           return {
             success: true,
             cellId,
@@ -416,6 +421,9 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           }
 
           deleteCellRef.current(targetIndex);
+
+          // Update cellsRef immediately to avoid stale reads before re-render
+          cellsRef.current = currentCells.filter((_, i) => i !== targetIndex);
 
           return { success: true, cellIndex: targetIndex };
         }
@@ -666,6 +674,9 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           for (let i = currentCells.length - 1; i >= 0; i--) {
             deleteCellRef.current(i);
           }
+
+          // Update cellsRef immediately to avoid stale reads before re-render
+          cellsRef.current = [];
 
           return { success: true, deletedCount };
         }
