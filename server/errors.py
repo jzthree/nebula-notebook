@@ -85,6 +85,13 @@ class KernelInvalidError(KernelError):
     user_message = "Invalid kernel specification"
 
 
+class KernelNotReadyError(KernelError):
+    """Kernel service is still initializing."""
+    status_code = 503
+    error_code = "KERNEL_NOT_READY"
+    user_message = "Kernel service is still initializing. Please wait a moment."
+
+
 # =============================================================================
 # LLM Errors
 # =============================================================================

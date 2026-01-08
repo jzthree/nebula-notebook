@@ -173,7 +173,19 @@ class KernelService:
             kernel_name: The kernel to start (e.g., 'python3')
             cwd: Working directory for the kernel process
             file_path: The notebook file path (for "one notebook = one kernel")
+
+        Raises:
+            KernelNotReadyError: If kernel service is not yet initialized
+            KernelInvalidError: If kernel specification is invalid
+            KernelStartupError: If kernel fails to start
+            KernelTimeoutError: If kernel doesn't respond in time
         """
+        from errors import KernelNotReadyError
+
+        # Check readiness before attempting to start kernel
+        if not self._ready:
+            raise KernelNotReadyError(detail="Kernel service has not completed initialization")
+
         # Normalize file path for consistent lookup
         normalized_file_path = self._normalize_path(file_path) if file_path else None
 
@@ -181,25 +193,53 @@ class KernelService:
             return await self._start_kernel_internal(kernel_name, cwd, normalized_file_path)
 
     async def _start_kernel_internal(self, kernel_name: str = "python3", cwd: str = None, file_path: str = None) -> str:
-        """Internal kernel start - caller must hold self._lock"""
+        """Internal kernel start - caller must hold self._lock
+
+        Raises:
+            KernelInvalidError: If kernel specification is invalid
+            KernelStartupError: If kernel fails to start
+            KernelTimeoutError: If kernel doesn't respond in time
+        """
+        from errors import KernelStartupError, KernelTimeoutError, KernelInvalidError
+
         session_id = str(uuid.uuid4())
 
         # Create kernel manager
-        km = KernelManager(kernel_name=kernel_name)
+        try:
+            km = KernelManager(kernel_name=kernel_name)
+        except Exception as e:
+            raise KernelInvalidError(
+                detail=f"Invalid kernel '{kernel_name}': {e}",
+                user_message=f"Could not find kernel '{kernel_name}'. Please check it is installed."
+            )
 
         # Prepare start_kernel kwargs
         start_kwargs = {}
         if cwd:
             start_kwargs['cwd'] = self._normalize_path(cwd)
 
-        km.start_kernel(**start_kwargs)
+        try:
+            km.start_kernel(**start_kwargs)
+        except Exception as e:
+            raise KernelStartupError(
+                detail=f"Failed to start kernel process: {e}",
+                user_message="Failed to start kernel. Check that Python is installed correctly."
+            )
 
         # Get async client
         client = km.client()
         client.start_channels()
 
-        # Wait for kernel to be ready
-        await self._wait_for_ready(client)
+        # Wait for kernel to be ready (may raise KernelTimeoutError)
+        try:
+            await self._wait_for_ready(client)
+        except KernelTimeoutError:
+            # Clean up the failed kernel
+            try:
+                km.shutdown_kernel(now=True)
+            except Exception:
+                pass
+            raise
 
         session = KernelSession(
             id=session_id,
@@ -255,8 +295,16 @@ class KernelService:
 
         Returns:
             session_id of existing or new kernel
+
+        Raises:
+            KernelNotReadyError: If kernel service is not yet initialized
         """
         from pathlib import Path
+        from errors import KernelNotReadyError
+
+        # Check readiness before attempting kernel operations
+        if not self._ready:
+            raise KernelNotReadyError(detail="Kernel service has not completed initialization")
 
         # Normalize path for consistent lookup
         normalized_path = self._normalize_path(file_path)
@@ -296,18 +344,38 @@ class KernelService:
         return None
 
     async def _wait_for_ready(self, client: AsyncKernelClient, timeout: float = KERNEL_STARTUP_TIMEOUT_SECONDS):
-        """Wait for kernel to be ready"""
+        """Wait for kernel to be ready with proper error handling.
+
+        Raises:
+            KernelTimeoutError: If kernel doesn't respond within timeout
+        """
+        from errors import KernelTimeoutError
+
         start_time = asyncio.get_event_loop().time()
+        last_error = None
+
+        # Send initial kernel_info request
+        client.kernel_info()
+
         while True:
-            if asyncio.get_event_loop().time() - start_time > timeout:
-                raise TimeoutError("Kernel did not start in time")
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > timeout:
+                detail = f"Kernel did not respond within {timeout}s"
+                if last_error:
+                    detail += f". Last error: {last_error}"
+                raise KernelTimeoutError(detail=detail)
 
             try:
                 msg = client.get_shell_msg(timeout=KERNEL_MSG_TIMEOUT_SECONDS)
                 if msg.get('msg_type') == 'kernel_info_reply':
-                    break
-            except:
-                # Send kernel_info_request
+                    return  # Success - kernel is ready
+            except TimeoutError:
+                # No message available yet, send another request
+                client.kernel_info()
+                await asyncio.sleep(KERNEL_POLLING_INTERVAL_SECONDS)
+            except Exception as e:
+                # Log but continue polling - kernel may still be starting
+                last_error = str(e)
                 client.kernel_info()
                 await asyncio.sleep(KERNEL_POLLING_INTERVAL_SECONDS)
 
@@ -395,7 +463,8 @@ class KernelService:
         self,
         session_id: str,
         code: str,
-        on_output: Callable[[dict], Any]
+        on_output: Callable[[dict], Any],
+        timeout: Optional[float] = None
     ) -> dict:
         """
         Execute code in a kernel session with streaming output
@@ -404,28 +473,70 @@ class KernelService:
             session_id: The kernel session ID
             code: Code to execute
             on_output: Callback for each output message
+            timeout: Optional execution timeout in seconds (None = no timeout)
 
         Returns:
             Final execution result with kernel's execution_count
+
+        Raises:
+            KernelNotReadyError: If kernel service is not yet initialized
+            KernelNotFoundError: If session doesn't exist or kernel has stopped
+            KernelTimeoutError: If execution times out (when timeout is specified)
         """
+        from errors import KernelNotFoundError, KernelTimeoutError, KernelNotReadyError
+
+        # Check readiness
+        if not self._ready:
+            raise KernelNotReadyError(detail="Kernel service has not completed initialization")
+
         session = self.sessions.get(session_id)
         if not session:
-            raise ValueError(f"Session {session_id} not found")
+            raise KernelNotFoundError(
+                detail=f"Session {session_id} not found",
+                user_message="Kernel session not found. It may have been stopped or expired."
+            )
+
+        # Verify kernel is still alive
+        if not session.manager.is_alive():
+            # Clean up dead session
+            self.sessions.pop(session_id, None)
+            if session.file_path:
+                self.file_to_session.pop(session.file_path, None)
+            raise KernelNotFoundError(
+                detail=f"Kernel for session {session_id} is no longer running",
+                user_message="Kernel has stopped unexpectedly. Please restart it."
+            )
 
         session.status = "busy"
         exec_count = None  # Will be set from kernel's execute_reply
+        start_time = asyncio.get_event_loop().time()
 
         try:
             # Execute the code
             msg_id = session.client.execute(code, store_history=True)
 
-            # Process iopub messages for output (no timeout - cells can run indefinitely)
+            # Process iopub messages for output
+            # Use 1 second poll interval when timeout is set to allow checking
+            poll_timeout = 1.0 if timeout is not None else None
+
             while True:
+                # Check execution timeout if specified
+                if timeout is not None:
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    if elapsed > timeout:
+                        raise KernelTimeoutError(
+                            detail=f"Execution timed out after {timeout}s",
+                            user_message="Code execution timed out. Try a simpler operation or increase the timeout."
+                        )
+
                 try:
                     msg = await asyncio.get_event_loop().run_in_executor(
                         None,
-                        lambda: session.client.get_iopub_msg(timeout=None)
+                        lambda: session.client.get_iopub_msg(timeout=poll_timeout)
                     )
+                except TimeoutError:
+                    # Poll timeout, continue to check execution timeout
+                    continue
                 except Exception as e:
                     # Only break on actual errors, not timeouts
                     print(f"Error getting iopub message: {e}")
@@ -458,6 +569,9 @@ class KernelService:
             session.status = "idle"
             return {"status": "ok", "execution_count": exec_count}
 
+        except (KernelTimeoutError, KernelNotFoundError):
+            session.status = "idle"
+            raise
         except Exception as e:
             session.status = "idle"
             error_output = {

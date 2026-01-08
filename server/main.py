@@ -45,6 +45,12 @@ class ExecuteCodeRequest(BaseModel):
     code: str
 
 
+class ExecuteCodeRestRequest(BaseModel):
+    """POST /api/kernels/{session_id}/execute - Execute code synchronously"""
+    code: str
+    timeout: Optional[float] = None  # Optional execution timeout in seconds
+
+
 class GenerateRequest(BaseModel):
     prompt: str
     system_prompt: str
@@ -386,6 +392,44 @@ async def kernel_websocket(websocket: WebSocket, session_id: str):
             await websocket.send_json({"type": "error", "error": str(e)})
         except:
             pass
+
+
+@app.post("/api/kernels/{session_id}/execute")
+async def execute_code_rest(session_id: str, request: ExecuteCodeRestRequest):
+    """
+    Execute code synchronously via REST and return all outputs.
+
+    This is a REST alternative to WebSocket execution, suitable for:
+    - MCP integration
+    - Simple one-shot executions
+    - Testing
+
+    Note: For streaming output during long-running cells, use the WebSocket endpoint instead.
+
+    Returns:
+        - status: "ok" or "error"
+        - outputs: List of output objects (stdout, stderr, error, image, html)
+        - execution_count: The kernel's execution counter
+        - error: Error message if status is "error"
+    """
+    outputs: List[Dict[str, Any]] = []
+
+    async def collect_output(output: dict):
+        outputs.append(output)
+
+    result = await kernel_service.execute_code(
+        session_id,
+        request.code,
+        collect_output,
+        timeout=request.timeout
+    )
+
+    return {
+        "status": result.get("status", "ok"),
+        "outputs": outputs,
+        "execution_count": result.get("execution_count"),
+        "error": result.get("error")
+    }
 
 
 # --- Python Discovery Endpoints ---

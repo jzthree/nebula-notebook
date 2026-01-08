@@ -12,6 +12,7 @@ from errors import (
     KernelTimeoutError,
     KernelPermissionError,
     KernelInvalidError,
+    KernelNotReadyError,
     LLMError,
     LLMAuthenticationError,
     LLMRateLimitError,
@@ -96,6 +97,17 @@ class TestKernelErrors:
         assert error.status_code == 400
         assert error.error_code == "KERNEL_INVALID"
 
+    def test_kernel_not_ready_status_code(self):
+        """KernelNotReadyError should return 503."""
+        error = KernelNotReadyError()
+        assert error.status_code == 503
+        assert error.error_code == "KERNEL_NOT_READY"
+
+    def test_kernel_not_ready_user_message(self):
+        """KernelNotReadyError should have appropriate user message."""
+        error = KernelNotReadyError()
+        assert "initializing" in error.user_message.lower()
+
     def test_kernel_errors_inherit_from_kernel_error(self):
         """All kernel errors should inherit from KernelError."""
         assert issubclass(KernelNotFoundError, KernelError)
@@ -103,6 +115,7 @@ class TestKernelErrors:
         assert issubclass(KernelTimeoutError, KernelError)
         assert issubclass(KernelPermissionError, KernelError)
         assert issubclass(KernelInvalidError, KernelError)
+        assert issubclass(KernelNotReadyError, KernelError)
 
 
 class TestLLMErrors:
@@ -240,6 +253,7 @@ class TestErrorHierarchy:
             KernelNotFoundError,
             KernelStartupError,
             KernelTimeoutError,
+            KernelNotReadyError,
             LLMAuthenticationError,
             LLMRateLimitError,
             LLMTimeoutError,
@@ -260,6 +274,7 @@ class TestErrorHierarchy:
             KernelStartupError,
             KernelTimeoutError,
             KernelPermissionError,
+            KernelNotReadyError,
             LLMAuthenticationError,
             LLMRateLimitError,
             LLMTimeoutError,
@@ -271,7 +286,7 @@ class TestErrorHierarchy:
             SessionExpiredError,
             ValidationError,
         ]
-        valid_status_codes = {400, 401, 403, 404, 409, 429, 500, 502, 504}
+        valid_status_codes = {400, 401, 403, 404, 409, 429, 500, 502, 503, 504}
         for error_type in error_types:
             error = error_type()
             assert error.status_code in valid_status_codes, f"{error_type} has invalid status code {error.status_code}"

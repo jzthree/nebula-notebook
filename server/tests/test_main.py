@@ -314,3 +314,135 @@ class TestKernelEndpoints:
         response = test_client.get("/api/kernels/nonexistent-session/status")
 
         assert response.status_code == 404
+
+
+class TestKernelExecuteEndpoint:
+    """Test POST /api/kernels/{session_id}/execute REST endpoint"""
+
+    def test_execute_code_success(self, client):
+        """Test successful code execution via REST"""
+        test_client, mock_ks, _ = client
+
+        async def mock_execute(session_id, code, on_output, timeout=None):
+            # Simulate some output
+            await on_output({"type": "stdout", "content": "hello\n"})
+            return {"status": "ok", "execution_count": 1}
+
+        mock_ks.execute_code = AsyncMock(side_effect=mock_execute)
+
+        response = test_client.post(
+            "/api/kernels/test-session-123/execute",
+            json={"code": "print('hello')"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert "outputs" in data
+        assert len(data["outputs"]) == 1
+        assert data["outputs"][0]["type"] == "stdout"
+        assert data["execution_count"] == 1
+
+    def test_execute_code_with_timeout(self, client):
+        """Test execute respects timeout parameter"""
+        test_client, mock_ks, _ = client
+
+        async def mock_execute(session_id, code, on_output, timeout=None):
+            return {"status": "ok", "execution_count": 1}
+
+        mock_ks.execute_code = AsyncMock(side_effect=mock_execute)
+
+        response = test_client.post(
+            "/api/kernels/test-session-123/execute",
+            json={"code": "print('hello')", "timeout": 5.0}
+        )
+
+        assert response.status_code == 200
+        # Verify timeout was passed to execute_code
+        call_kwargs = mock_ks.execute_code.call_args.kwargs
+        assert call_kwargs.get("timeout") == 5.0
+
+    def test_execute_code_session_not_found(self, client):
+        """Test execute returns 404 when session not found"""
+        test_client, mock_ks, _ = client
+
+        # Import error inside test to avoid import issues
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from errors import KernelNotFoundError
+
+        mock_ks.execute_code = AsyncMock(
+            side_effect=KernelNotFoundError(detail="Session not found")
+        )
+
+        response = test_client.post(
+            "/api/kernels/nonexistent/execute",
+            json={"code": "print('hello')"}
+        )
+
+        assert response.status_code == 404
+        assert response.json()["error_code"] == "KERNEL_NOT_FOUND"
+
+    def test_execute_code_when_not_ready(self, client):
+        """Test execute returns 503 when service not ready"""
+        test_client, mock_ks, _ = client
+
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from errors import KernelNotReadyError
+
+        mock_ks.execute_code = AsyncMock(
+            side_effect=KernelNotReadyError(detail="Service not ready")
+        )
+
+        response = test_client.post(
+            "/api/kernels/test-session-123/execute",
+            json={"code": "print('hello')"}
+        )
+
+        assert response.status_code == 503
+        assert response.json()["error_code"] == "KERNEL_NOT_READY"
+
+    def test_execute_code_multiple_outputs(self, client):
+        """Test execute collects multiple outputs"""
+        test_client, mock_ks, _ = client
+
+        async def mock_execute(session_id, code, on_output, timeout=None):
+            await on_output({"type": "stdout", "content": "line1\n"})
+            await on_output({"type": "stdout", "content": "line2\n"})
+            await on_output({"type": "stderr", "content": "warning\n"})
+            return {"status": "ok", "execution_count": 2}
+
+        mock_ks.execute_code = AsyncMock(side_effect=mock_execute)
+
+        response = test_client.post(
+            "/api/kernels/test-session-123/execute",
+            json={"code": "print('line1'); print('line2')"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["outputs"]) == 3
+        assert data["outputs"][0]["content"] == "line1\n"
+        assert data["outputs"][1]["content"] == "line2\n"
+        assert data["outputs"][2]["type"] == "stderr"
+
+    def test_execute_code_error_result(self, client):
+        """Test execute returns error status from kernel"""
+        test_client, mock_ks, _ = client
+
+        async def mock_execute(session_id, code, on_output, timeout=None):
+            await on_output({"type": "error", "content": "NameError: name 'foo' is not defined"})
+            return {"status": "error", "error": "NameError"}
+
+        mock_ks.execute_code = AsyncMock(side_effect=mock_execute)
+
+        response = test_client.post(
+            "/api/kernels/test-session-123/execute",
+            json={"code": "foo"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "error"
+        assert data["error"] == "NameError"

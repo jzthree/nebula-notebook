@@ -34,6 +34,8 @@ def kernel_service_instance(temp_session_store):
     """Create a fresh KernelService instance with temp session store"""
     service = KernelService()
     service._session_store = temp_session_store
+    # Mark as ready for tests that need to start kernels
+    service._ready = True
     return service
 
 
@@ -252,3 +254,91 @@ class TestGracefulShutdown:
         """Test that stop_kernel returns False for non-existent session"""
         result = await kernel_service_instance.stop_kernel("nonexistent-session-id")
         assert result is False
+
+
+class TestKernelReadinessGuards:
+    """Test kernel service readiness guards"""
+
+    @pytest.mark.asyncio
+    async def test_start_kernel_raises_when_not_ready(self):
+        """Test that start_kernel raises KernelNotReadyError when not initialized"""
+        from errors import KernelNotReadyError
+
+        service = KernelService()
+        service._ready = False
+
+        with pytest.raises(KernelNotReadyError):
+            await service.start_kernel(kernel_name="python3")
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_kernel_raises_when_not_ready(self):
+        """Test that get_or_create_kernel raises KernelNotReadyError when not initialized"""
+        from errors import KernelNotReadyError
+
+        service = KernelService()
+        service._ready = False
+
+        with pytest.raises(KernelNotReadyError):
+            await service.get_or_create_kernel(
+                file_path="/path/to/notebook.ipynb",
+                kernel_name="python3"
+            )
+
+    @pytest.mark.asyncio
+    async def test_execute_code_raises_when_not_ready(self):
+        """Test that execute_code raises KernelNotReadyError when not initialized"""
+        from errors import KernelNotReadyError
+
+        service = KernelService()
+        service._ready = False
+
+        async def dummy_callback(output):
+            pass
+
+        with pytest.raises(KernelNotReadyError):
+            await service.execute_code("session-id", "print('hi')", dummy_callback)
+
+
+class TestKernelTypedErrors:
+    """Test typed error handling in kernel service"""
+
+    @pytest.mark.asyncio
+    async def test_execute_code_session_not_found_raises_typed_error(self, kernel_service_instance):
+        """Test that missing session raises KernelNotFoundError"""
+        from errors import KernelNotFoundError
+
+        # Ensure service is ready
+        kernel_service_instance._ready = True
+
+        async def dummy_callback(output):
+            pass
+
+        with pytest.raises(KernelNotFoundError):
+            await kernel_service_instance.execute_code(
+                "nonexistent-session-id",
+                "print('hello')",
+                dummy_callback
+            )
+
+    @pytest.mark.asyncio
+    async def test_execute_code_with_timeout_parameter(self, kernel_service_instance):
+        """Test that execute_code accepts timeout parameter"""
+        # Start a kernel
+        session_id = await kernel_service_instance.start_kernel(kernel_name="python3")
+
+        outputs = []
+        async def collect_output(output):
+            outputs.append(output)
+
+        # Execute code with timeout (should complete before timeout)
+        result = await kernel_service_instance.execute_code(
+            session_id,
+            "print('hello')",
+            collect_output,
+            timeout=30.0  # 30 second timeout
+        )
+
+        assert result["status"] == "ok"
+
+        # Cleanup
+        await kernel_service_instance.stop_kernel(session_id)
