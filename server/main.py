@@ -26,7 +26,8 @@ from python_discovery import python_discovery
 from session_store import session_store
 from config import SESSION_MAX_AGE_HOURS, BACKEND_SHUTDOWN_TIMEOUT_SECONDS
 from errors import NebulaError, convert_sdk_error
-from operation_router import operation_router, HeadlessOperationHandler
+from operation_router import operation_router
+from headless_handler import HeadlessOperationHandler
 
 
 # --- Pydantic Models ---

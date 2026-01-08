@@ -20,7 +20,8 @@ from unittest.mock import MagicMock, AsyncMock, patch
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from operation_router import OperationRouter, HeadlessNotebookManager
+from operation_router import OperationRouter
+from headless_handler import HeadlessOperationHandler
 
 
 class MockFsService:
@@ -106,7 +107,7 @@ def mock_fs():
 @pytest.fixture
 def headless_manager(mock_fs):
     """Create a headless notebook manager with mock fs"""
-    return HeadlessNotebookManager(mock_fs)
+    return HeadlessOperationHandler(mock_fs)
 
 
 @pytest.fixture
@@ -117,8 +118,8 @@ def router(headless_manager):
     return r
 
 
-class TestHeadlessNotebookManager:
-    """Tests for HeadlessNotebookManager"""
+class TestHeadlessOperationHandler:
+    """Tests for HeadlessOperationHandler"""
 
     @pytest.mark.asyncio
     async def test_insert_cell_append(self, headless_manager, mock_fs):

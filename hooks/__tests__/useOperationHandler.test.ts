@@ -72,7 +72,7 @@ describe('useOperationHandler', () => {
   let mockMoveCell: ReturnType<typeof vi.fn>;
   let mockUpdateContent: ReturnType<typeof vi.fn>;
   let mockUpdateContentAI: ReturnType<typeof vi.fn>;
-  let mockChangeType: ReturnType<typeof vi.fn>;
+  let mockUpdateMetadata: ReturnType<typeof vi.fn>;
   let mockSetCellOutputs: ReturnType<typeof vi.fn>;
 
   // Initial cells
@@ -89,7 +89,7 @@ describe('useOperationHandler', () => {
     mockMoveCell = vi.fn();
     mockUpdateContent = vi.fn();
     mockUpdateContentAI = vi.fn();
-    mockChangeType = vi.fn();
+    mockUpdateMetadata = vi.fn();
     mockSetCellOutputs = vi.fn();
 
     // Initial cells state
@@ -116,7 +116,7 @@ describe('useOperationHandler', () => {
         moveCell: mockMoveCell,
         updateContent: mockUpdateContent,
         updateContentAI: mockUpdateContentAI,
-        changeType: mockChangeType,
+        updateMetadata: mockUpdateMetadata,
         setCellOutputs: mockSetCellOutputs,
       })
     );
@@ -186,6 +186,9 @@ describe('useOperationHandler', () => {
         content: 'new content',
       }));
 
+      // Wait for async operation to complete
+      await new Promise(resolve => setTimeout(resolve, 10));
+
       // Check response was sent
       const responses = ws.sentMessages.filter(m => m.includes('operationResult'));
       expect(responses.length).toBe(1);
@@ -224,6 +227,9 @@ describe('useOperationHandler', () => {
       expect(mockInsertCell).toHaveBeenCalledWith(3, expect.objectContaining({
         id: 'cell-1-2', // Auto-fixed
       }));
+
+      // Wait for async operation to complete
+      await new Promise(resolve => setTimeout(resolve, 10));
 
       const responses = ws.sentMessages.filter(m => m.includes('operationResult'));
       const response = JSON.parse(responses[0]);
@@ -298,6 +304,9 @@ describe('useOperationHandler', () => {
 
       expect(mockDeleteCell).not.toHaveBeenCalled();
 
+      // Wait for async operation to complete
+      await new Promise(resolve => setTimeout(resolve, 10));
+
       const responses = ws.sentMessages.filter(m => m.includes('operationResult'));
       const response = JSON.parse(responses[0]);
       expect(response.result.success).toBe(false);
@@ -340,7 +349,7 @@ describe('useOperationHandler', () => {
           moveCell: mockMoveCell,
           updateContent: mockUpdateContent,
           // No updateContentAI
-          changeType: mockChangeType,
+          updateMetadata: mockUpdateMetadata,
           setCellOutputs: mockSetCellOutputs,
         })
       );
@@ -412,6 +421,9 @@ describe('useOperationHandler', () => {
 
       expect(mockMoveCell).not.toHaveBeenCalled();
 
+      // Wait for async operation to complete
+      await new Promise(resolve => setTimeout(resolve, 10));
+
       const responses = ws.sentMessages.filter(m => m.includes('operationResult'));
       const response = JSON.parse(responses[0]);
       expect(response.result.success).toBe(false);
@@ -473,7 +485,7 @@ describe('useOperationHandler', () => {
   });
 
   describe('Update Metadata Operation', () => {
-    it('should change cell type', async () => {
+    it('should change cell type via generic updateMetadata', async () => {
       renderOperationHandler();
 
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -493,7 +505,69 @@ describe('useOperationHandler', () => {
         });
       });
 
-      expect(mockChangeType).toHaveBeenCalledWith('cell-1', 'markdown');
+      // Uses generic updateMetadata callback with { key: { old, new } } format
+      expect(mockUpdateMetadata).toHaveBeenCalledWith('cell-1', {
+        type: { old: 'code', new: 'markdown' },
+      });
+    });
+
+    it('should reject invalid metadata fields', async () => {
+      renderOperationHandler();
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const ws = MockWebSocket.instances[0];
+
+      act(() => {
+        ws.receiveMessage({
+          type: 'operation',
+          requestId: 'req-1',
+          operation: {
+            type: 'updateMetadata',
+            notebookPath: '/test/notebook.ipynb',
+            cellId: 'cell-1',
+            changes: { unknownField: 'value' }, // Not in schema!
+          },
+        });
+      });
+
+      // Should not call updateMetadata for invalid field
+      expect(mockUpdateMetadata).not.toHaveBeenCalled();
+
+      // Wait for async operation to complete
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Check error response
+      const responses = ws.sentMessages.filter(m => m.includes('operationResult'));
+      expect(responses.length).toBe(1);
+      const response = JSON.parse(responses[0]);
+      expect(response.result.success).toBe(false);
+      expect(response.result.error).toContain('Unknown field');
+    });
+
+    it('should update scrolled metadata', async () => {
+      renderOperationHandler();
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const ws = MockWebSocket.instances[0];
+
+      act(() => {
+        ws.receiveMessage({
+          type: 'operation',
+          requestId: 'req-1',
+          operation: {
+            type: 'updateMetadata',
+            notebookPath: '/test/notebook.ipynb',
+            cellId: 'cell-1',
+            changes: { scrolled: true },
+          },
+        });
+      });
+
+      expect(mockUpdateMetadata).toHaveBeenCalledWith('cell-1', {
+        scrolled: { old: undefined, new: true },
+      });
     });
   });
 

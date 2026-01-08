@@ -157,6 +157,7 @@ export const Notebook: React.FC = () => {
     deleteCell: undoableDeleteCell,
     moveCell: undoableMoveCell,
     updateContent,
+    updateMetadata,
     changeType,
     setCellScrolled,
     setCellScrolledHeight,
@@ -267,11 +268,6 @@ export const Notebook: React.FC = () => {
         }
       }
 
-      // Open the new notebook in a new tab for real-time viewing
-      // Note: May be blocked by popup blocker - user needs to allow popups
-      const newTabUrl = `${window.location.origin}/?file=${encodeURIComponent(path)}`;
-      window.open(newTabUrl, '_blank');
-
       return { success: true, mtime };
     } catch (e) {
       return {
@@ -290,7 +286,7 @@ export const Notebook: React.FC = () => {
     moveCell: undoableMoveCell,
     updateContent,
     updateContentAI,
-    changeType,
+    updateMetadata,
     setCellOutputs,
     createNotebook: handleCreateNotebook,
   });

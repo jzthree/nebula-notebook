@@ -17,6 +17,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Cell, CellType } from '../types';
+import { validateMetadataValue, CELL_METADATA_SCHEMA } from '../lib/cellMetadata';
 
 // Operation types (matching backend/MCP types)
 export interface InsertCellOp {
@@ -82,6 +83,25 @@ export interface CreateNotebookOp {
   kernelDisplayName?: string;
 }
 
+export interface ReadCellOp {
+  type: 'readCell';
+  notebookPath: string;
+  cellId?: string;
+  cellIndex?: number;
+}
+
+export interface ReadCellOutputOp {
+  type: 'readCellOutput';
+  notebookPath: string;
+  cellId?: string;
+  cellIndex?: number;
+}
+
+export interface ClearNotebookOp {
+  type: 'clearNotebook';
+  notebookPath: string;
+}
+
 export type NotebookOperation =
   | InsertCellOp
   | DeleteCellOp
@@ -90,7 +110,10 @@ export type NotebookOperation =
   | MoveCellOp
   | DuplicateCellOp
   | UpdateOutputsOp
-  | CreateNotebookOp;
+  | CreateNotebookOp
+  | ReadCellOp
+  | ReadCellOutputOp
+  | ClearNotebookOp;
 
 export interface OperationResult {
   success: boolean;
@@ -101,6 +124,20 @@ export interface OperationResult {
   error?: string;
   path?: string;
   mtime?: number;
+  // For readCell operation
+  cell?: {
+    id: string;
+    type: 'code' | 'markdown';
+    content: string;
+    outputs: Array<{ type: string; content: string }>;
+    executionCount?: number;
+    metadata?: Record<string, unknown>;
+  };
+  // For readCellOutput operation
+  outputs?: Array<{ type: string; content: string }>;
+  executionCount?: number;
+  // For clearNotebook operation
+  deletedCount?: number;
 }
 
 interface OperationMessage {
@@ -138,8 +175,8 @@ interface UseOperationHandlerOptions {
   /** Update cell content from AI callback (from useUndoRedo) */
   updateContentAI?: (cellId: string, content: string) => void;
 
-  /** Change cell type callback (from useUndoRedo) */
-  changeType: (cellId: string, newType: CellType) => void;
+  /** Generic metadata update callback (from useUndoRedo) - schema-driven */
+  updateMetadata: (cellId: string, changes: Record<string, { old: unknown; new: unknown }>) => void;
 
   /** Set cell outputs callback */
   setCellOutputs?: (cellId: string, outputs: Cell['outputs'], executionCount?: number) => void;
@@ -157,7 +194,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     moveCell,
     updateContent,
     updateContentAI,
-    changeType,
+    updateMetadata,
     setCellOutputs,
     createNotebook,
   } = options;
@@ -173,7 +210,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const moveCellRef = useRef(moveCell);
   const updateContentRef = useRef(updateContent);
   const updateContentAIRef = useRef(updateContentAI);
-  const changeTypeRef = useRef(changeType);
+  const updateMetadataRef = useRef(updateMetadata);
   const setCellOutputsRef = useRef(setCellOutputs);
   const createNotebookRef = useRef(createNotebook);
 
@@ -184,7 +221,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   moveCellRef.current = moveCell;
   updateContentRef.current = updateContent;
   updateContentAIRef.current = updateContentAI;
-  changeTypeRef.current = changeType;
+  updateMetadataRef.current = updateMetadata;
   setCellOutputsRef.current = setCellOutputs;
   createNotebookRef.current = createNotebook;
 
@@ -309,22 +346,41 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           }
 
           const cell = currentCells[cellIndex];
-          let newCellId = cellId;
 
-          // Handle type change
-          if ('type' in changes && changes.type !== cell.type) {
-            changeTypeRef.current(cellId, changes.type as CellType);
+          // Validate all changes against schema before applying any
+          const errors: string[] = [];
+          for (const [key, value] of Object.entries(changes)) {
+            const validation = validateMetadataValue(key, value);
+            if (!validation.valid) {
+              errors.push(validation.error!);
+            }
+          }
+          if (errors.length > 0) {
+            return { success: false, error: errors.join('; ') };
           }
 
-          // Handle ID change (not directly supported, would need to delete and recreate)
+          // ID changes are not supported (would require delete + recreate)
           if ('id' in changes && changes.id !== cellId) {
-            // For now, return error - ID changes are complex
-            return { success: false, error: 'ID changes are not supported via this method' };
+            return { success: false, error: 'ID changes are not supported via updateMetadata' };
+          }
+
+          // Convert operation format { key: value } to MetadataChanges format { key: { old, new } }
+          // Schema validation passed, so all keys are valid
+          const metadataChanges: Record<string, { old: unknown; new: unknown }> = {};
+          for (const [key, newValue] of Object.entries(changes)) {
+            if (key === 'id') continue; // Skip ID (handled above)
+            const oldValue = (cell as Record<string, unknown>)[key];
+            metadataChanges[key] = { old: oldValue, new: newValue };
+          }
+
+          // Apply all changes through the generic updateMetadata callback
+          if (Object.keys(metadataChanges).length > 0) {
+            updateMetadataRef.current(cellId, metadataChanges);
           }
 
           return {
             success: true,
-            cellId: newCellId,
+            cellId,
             cellIndex,
           };
         }
@@ -423,6 +479,92 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           };
         }
 
+        case 'readCell': {
+          const { cellId, cellIndex } = operation;
+
+          let cell: Cell | undefined;
+          let targetIndex: number | undefined;
+
+          if (cellId) {
+            targetIndex = currentCells.findIndex(c => c.id === cellId);
+            if (targetIndex === -1) {
+              return { success: false, error: `Cell with ID "${cellId}" not found` };
+            }
+            cell = currentCells[targetIndex];
+          } else if (cellIndex !== undefined) {
+            if (cellIndex < 0 || cellIndex >= currentCells.length) {
+              return { success: false, error: `Cell index ${cellIndex} out of range` };
+            }
+            targetIndex = cellIndex;
+            cell = currentCells[cellIndex];
+          } else {
+            return { success: false, error: 'Must provide cellId or cellIndex' };
+          }
+
+          return {
+            success: true,
+            cellId: cell.id,
+            cellIndex: targetIndex,
+            cell: {
+              id: cell.id,
+              type: cell.type,
+              content: cell.content,
+              outputs: cell.outputs.map(o => ({ type: o.type, content: o.content })),
+              executionCount: cell.executionCount,
+              metadata: {
+                scrolled: cell.scrolled,
+                scrolledHeight: cell.scrolledHeight,
+              },
+            },
+          };
+        }
+
+        case 'readCellOutput': {
+          const { cellId, cellIndex } = operation;
+
+          let cell: Cell | undefined;
+          let targetIndex: number | undefined;
+
+          if (cellId) {
+            targetIndex = currentCells.findIndex(c => c.id === cellId);
+            if (targetIndex === -1) {
+              return { success: false, error: `Cell with ID "${cellId}" not found` };
+            }
+            cell = currentCells[targetIndex];
+          } else if (cellIndex !== undefined) {
+            if (cellIndex < 0 || cellIndex >= currentCells.length) {
+              return { success: false, error: `Cell index ${cellIndex} out of range` };
+            }
+            targetIndex = cellIndex;
+            cell = currentCells[cellIndex];
+          } else {
+            return { success: false, error: 'Must provide cellId or cellIndex' };
+          }
+
+          return {
+            success: true,
+            cellId: cell.id,
+            cellIndex: targetIndex,
+            outputs: cell.outputs.map(o => ({ type: o.type, content: o.content })),
+            executionCount: cell.executionCount,
+          };
+        }
+
+        case 'clearNotebook': {
+          const deletedCount = currentCells.length;
+
+          if (deletedCount === 0) {
+            return { success: true, deletedCount: 0 };
+          }
+
+          // Delete from end to start to avoid index shifting issues
+          for (let i = currentCells.length - 1; i >= 0; i--) {
+            deleteCellRef.current(i);
+          }
+
+          return { success: true, deletedCount };
+        }
+
         default:
           return { success: false, error: `Unknown operation type: ${(operation as any).type}` };
       }
@@ -466,11 +608,13 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             success: true,
             data: {
               path: filePath,
+              // Return cells in standardized format (matching headless)
               cells: cellsRef.current.map(c => ({
                 id: c.id,
                 type: c.type,
                 content: c.content,
-                outputs: c.outputs,
+                // Strip internal fields (id, timestamp) from outputs for API consistency
+                outputs: c.outputs.map(o => ({ type: o.type, content: o.content })),
                 executionCount: c.executionCount,
                 metadata: {
                   scrolled: c.scrolled,
