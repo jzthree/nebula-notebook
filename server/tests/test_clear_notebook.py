@@ -129,8 +129,8 @@ class TestClearNotebookOperation:
 
         assert result['success'] is True
         assert result['deletedCount'] == 100
-        assert 'metadata' in result
-        assert result['metadata']['totalCells'] == 0
+        assert result['totalCells'] == 0
+        assert result['operationTime'] is None  # Placeholder
 
         # Verify cells were actually cleared (check via handler's cache)
         cells = handler._get_cells('/test/large_notebook.ipynb')
@@ -164,7 +164,7 @@ class TestClearNotebookOperation:
 
         assert result['success'] is True
         assert result['deletedCount'] == 0
-        assert result['metadata']['totalCells'] == 0
+        assert result['totalCells'] == 0
 
     @pytest.mark.asyncio
     async def test_clear_notebook_nonexistent_fails(self, handler):

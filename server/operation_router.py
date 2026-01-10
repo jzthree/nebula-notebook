@@ -56,6 +56,10 @@ class OperationRouter:
         # Operation timeout in seconds
         self._operation_timeout = 30.0
 
+        # Track active agent sessions - notebooks locked by agents
+        # These should NOT fall back to headless if UI disconnects
+        self._agent_sessions: set[str] = set()
+
     def set_headless_handler(self, handler: HeadlessOperationHandler):
         """Set the headless operation handler for file-based operations"""
         self._headless_manager = handler
@@ -95,6 +99,23 @@ class OperationRouter:
         normalized_path = str(Path(notebook_path).resolve())
         return normalized_path in self._ui_connections
 
+    def start_agent_session(self, notebook_path: str):
+        """Mark a notebook as being in an agent session"""
+        normalized_path = str(Path(notebook_path).resolve())
+        self._agent_sessions.add(normalized_path)
+        print(f"[OperationRouter] Agent session started for: {normalized_path}")
+
+    def end_agent_session(self, notebook_path: str):
+        """Mark a notebook as no longer in an agent session"""
+        normalized_path = str(Path(notebook_path).resolve())
+        self._agent_sessions.discard(normalized_path)
+        print(f"[OperationRouter] Agent session ended for: {normalized_path}")
+
+    def is_agent_session(self, notebook_path: str) -> bool:
+        """Check if a notebook is in an agent session"""
+        normalized_path = str(Path(notebook_path).resolve())
+        return normalized_path in self._agent_sessions
+
     async def apply_operation(self, operation: Dict[str, Any]) -> Dict[str, Any]:
         """
         Apply a notebook operation.
@@ -113,11 +134,19 @@ class OperationRouter:
         print(f"  normalized_path: {normalized_path}")
         print(f"  registered_uis: {list(self._ui_connections.keys())}")
         print(f"  has_ui: {normalized_path in self._ui_connections}")
+        print(f"  is_agent_session: {normalized_path in self._agent_sessions}")
 
         if normalized_path in self._ui_connections:
             print(f"  -> Routing to UI")
             return await self._forward_to_ui(normalized_path, operation)
         else:
+            # Check if this is an agent session - if so, fail instead of falling back
+            if normalized_path in self._agent_sessions:
+                print(f"  -> FAILING: Agent session but UI disconnected")
+                return {
+                    'success': False,
+                    'error': 'Agent session active but UI disconnected. Cannot fall back to headless mode during agent session.'
+                }
             print(f"  -> Routing to HEADLESS")
             return await self._apply_headless(operation)
 

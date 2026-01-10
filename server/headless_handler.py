@@ -90,14 +90,16 @@ class HeadlessOperationHandler:
     Mirrors useOperationHandler (React) but operates on files instead of UI state.
     """
 
-    def __init__(self, fs_service):
+    def __init__(self, fs_service, operation_router=None):
         """
         Initialize with filesystem service for notebook I/O.
 
         Args:
             fs_service: Filesystem service for reading/writing notebooks
+            operation_router: Optional OperationRouter for agent session tracking
         """
         self._fs_service = fs_service
+        self._operation_router = operation_router
         # Cache: path -> {cells, metadata, dirty}
         self._cache: Dict[str, Dict[str, Any]] = {}
         # Write coordination: prevents overlapping writes, allows non-blocking ops
@@ -237,10 +239,14 @@ class HeadlessOperationHandler:
             elif op_type == 'clearNotebook':
                 result = await self._clear_notebook(operation)
             elif op_type == 'startAgentSession':
-                # No-op in headless mode (no UI to lock)
+                # Track agent session in router to prevent headless fallback
+                if self._operation_router:
+                    self._operation_router.start_agent_session(notebook_path)
                 result = {'success': True}
             elif op_type == 'endAgentSession':
-                # No-op in headless mode
+                # End agent session tracking in router
+                if self._operation_router:
+                    self._operation_router.end_agent_session(notebook_path)
                 result = {'success': True}
             else:
                 return {
@@ -431,9 +437,8 @@ class HeadlessOperationHandler:
             'cellIndex': actual_index,
             'idModified': id_modified,
             'requestedId': original_id if id_modified else None,
-            'metadata': {  # Phase 2 ready: extensible metadata envelope
-                'totalCells': len(cells)
-            }
+            'totalCells': len(cells),
+            'operationTime': None  # Placeholder for future timing integration
         }
 
     async def _delete_cell(self, operation: Dict[str, Any]) -> Dict[str, Any]:
@@ -466,9 +471,8 @@ class HeadlessOperationHandler:
         return {
             'success': True,
             'cellIndex': target_index,
-            'metadata': {  # Phase 2 ready: extensible metadata envelope
-                'totalCells': len(cells)
-            }
+            'totalCells': len(cells),
+            'operationTime': None  # Placeholder for future timing integration
         }
 
     async def _update_content(self, operation: Dict[str, Any]) -> Dict[str, Any]:
@@ -630,9 +634,8 @@ class HeadlessOperationHandler:
             'cellId': actual_id,
             'cellIndex': cell_index + 1,
             'idModified': id_modified,
-            'metadata': {  # Phase 2 ready: extensible metadata envelope
-                'totalCells': len(cells)
-            }
+            'totalCells': len(cells),
+            'operationTime': None  # Placeholder for future timing integration
         }
 
     async def _update_outputs(self, operation: Dict[str, Any]) -> Dict[str, Any]:
@@ -824,8 +827,6 @@ class HeadlessOperationHandler:
         return {
             'success': True,
             'deletedCount': deleted_count,
-            'metadata': {  # Phase 2 ready: extensible metadata container
-                'totalCells': 0,
-                'operationTime': None  # Can be populated with timing in Phase 3
-            }
+            'totalCells': 0,
+            'operationTime': None  # Placeholder for future timing integration
         }

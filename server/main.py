@@ -127,9 +127,9 @@ async def lifespan(app: FastAPI):
     print("Starting Nebula Notebook Backend...")
 
     # Initialize operation router with headless handler
-    headless_handler = HeadlessOperationHandler(fs_service)
+    headless_handler = HeadlessOperationHandler(fs_service, operation_router)
     operation_router.set_headless_handler(headless_handler)
-    print("Operation router initialized")
+    print("Operation router initialized with agent session tracking")
 
     # Mark any previously active sessions as orphaned (from crashed server)
     orphaned_count = session_store.mark_all_orphaned()

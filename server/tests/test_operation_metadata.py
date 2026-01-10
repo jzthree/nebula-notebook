@@ -125,9 +125,9 @@ class TestInsertCellMetadata:
         result = await handler.apply_operation(operation)
 
         assert result['success'] is True
-        assert 'metadata' in result, "Response should include metadata envelope"
-        assert 'totalCells' in result['metadata'], "Metadata should include totalCells"
-        assert result['metadata']['totalCells'] == 2, "Should have 2 cells after insert"
+        assert 'totalCells' in result, "Response should include totalCells"
+        assert result['totalCells'] == 2, "Should have 2 cells after insert"
+        assert result['operationTime'] is None, "Should include operationTime placeholder"
 
     @pytest.mark.asyncio
     async def test_insert_cell_metadata_correct_after_multiple_inserts(self, handler, mock_fs):
@@ -144,7 +144,7 @@ class TestInsertCellMetadata:
 
             assert result['success'] is True
             expected_count = 2 + i  # Started with 1, added i cells
-            assert result['metadata']['totalCells'] == expected_count
+            assert result['totalCells'] == expected_count
 
     @pytest.mark.asyncio
     async def test_insert_cell_into_empty_notebook(self, handler, mock_fs):
@@ -161,7 +161,7 @@ class TestInsertCellMetadata:
         result = await handler.apply_operation(operation)
 
         assert result['success'] is True
-        assert result['metadata']['totalCells'] == 1
+        assert result['totalCells'] == 1
 
 
 class TestDeleteCellMetadata:
@@ -194,9 +194,9 @@ class TestDeleteCellMetadata:
         result = await handler.apply_operation(operation)
 
         assert result['success'] is True
-        assert 'metadata' in result, "Response should include metadata envelope"
-        assert 'totalCells' in result['metadata'], "Metadata should include totalCells"
-        assert result['metadata']['totalCells'] == 2, "Should have 2 cells after deleting 1"
+        assert 'totalCells' in result, "Response should include totalCells"
+        assert result['totalCells'] == 2, "Should have 2 cells after deleting 1"
+        assert result['operationTime'] is None, "Should include operationTime placeholder"
 
     @pytest.mark.asyncio
     async def test_delete_cell_metadata_decrements_correctly(self, handler, mock_fs):
@@ -211,7 +211,7 @@ class TestDeleteCellMetadata:
             result = await handler.apply_operation(operation)
 
             assert result['success'] is True
-            assert result['metadata']['totalCells'] == expected_count
+            assert result['totalCells'] == expected_count
 
     @pytest.mark.asyncio
     async def test_delete_last_cell_returns_zero_cells(self, handler, mock_fs):
@@ -229,7 +229,7 @@ class TestDeleteCellMetadata:
         result = await handler.apply_operation(operation)
 
         assert result['success'] is True
-        assert result['metadata']['totalCells'] == 0
+        assert result['totalCells'] == 0
 
 
 class TestDuplicateCellMetadata:
@@ -262,11 +262,7 @@ class TestDuplicateCellMetadata:
         result = await handler.apply_operation(operation)
 
         assert result['success'] is True
-        # Should use metadata envelope, not top-level totalCells field
-        assert 'metadata' in result, "Should use metadata envelope"
-        assert 'totalCells' in result['metadata'], "Metadata should include totalCells"
-        assert result['metadata']['totalCells'] == 3, "Should have 3 cells after duplication"
-
-        # Deprecated: top-level totalCells field should NOT exist
-        # (Current implementation may have it - this test documents desired state)
-        # In Phase 1.2, we'll refactor to remove the top-level field
+        # totalCells should be at top level (flat structure)
+        assert 'totalCells' in result, "Response should include totalCells"
+        assert result['totalCells'] == 3, "Should have 3 cells after duplication"
+        assert result['operationTime'] is None, "Should include operationTime placeholder"
