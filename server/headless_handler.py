@@ -430,7 +430,10 @@ class HeadlessOperationHandler:
             'cellId': cell_id,
             'cellIndex': actual_index,
             'idModified': id_modified,
-            'requestedId': original_id if id_modified else None
+            'requestedId': original_id if id_modified else None,
+            'metadata': {  # Phase 2 ready: extensible metadata envelope
+                'totalCells': len(cells)
+            }
         }
 
     async def _delete_cell(self, operation: Dict[str, Any]) -> Dict[str, Any]:
@@ -462,7 +465,10 @@ class HeadlessOperationHandler:
 
         return {
             'success': True,
-            'cellIndex': target_index
+            'cellIndex': target_index,
+            'metadata': {  # Phase 2 ready: extensible metadata envelope
+                'totalCells': len(cells)
+            }
         }
 
     async def _update_content(self, operation: Dict[str, Any]) -> Dict[str, Any]:
@@ -624,7 +630,9 @@ class HeadlessOperationHandler:
             'cellId': actual_id,
             'cellIndex': cell_index + 1,
             'idModified': id_modified,
-            'totalCells': len(cells)
+            'metadata': {  # Phase 2 ready: extensible metadata envelope
+                'totalCells': len(cells)
+            }
         }
 
     async def _update_outputs(self, operation: Dict[str, Any]) -> Dict[str, Any]:
@@ -801,19 +809,23 @@ class HeadlessOperationHandler:
         }
 
     async def _clear_notebook(self, operation: Dict[str, Any]) -> Dict[str, Any]:
-        """Clear all cells from a notebook"""
+        """
+        Clear all cells from a notebook.
+        Returns deleted count and metadata for Phase 2 compatibility.
+        """
         notebook_path = operation['notebookPath']
 
         cells = self._get_cells(notebook_path)
         deleted_count = len(cells)
-
-        if deleted_count == 0:
-            return {'success': True, 'deletedCount': 0}
 
         # Clear all cells
         self._save_cells(notebook_path, [])
 
         return {
             'success': True,
-            'deletedCount': deleted_count
+            'deletedCount': deleted_count,
+            'metadata': {  # Phase 2 ready: extensible metadata container
+                'totalCells': 0,
+                'operationTime': None  # Can be populated with timing in Phase 3
+            }
         }
