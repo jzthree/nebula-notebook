@@ -28,6 +28,7 @@ from config import SESSION_MAX_AGE_HOURS, BACKEND_SHUTDOWN_TIMEOUT_SECONDS
 from errors import NebulaError, convert_sdk_error
 from operation_router import operation_router
 from headless_handler import HeadlessOperationHandler
+from timing_middleware import TimingMiddleware
 
 
 # --- Pydantic Models ---
@@ -161,6 +162,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Timing middleware - register FIRST to measure total request time
+app.add_middleware(TimingMiddleware, slow_request_threshold_ms=1000.0)
 
 # CORS
 app.add_middleware(
