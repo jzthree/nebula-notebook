@@ -77,6 +77,9 @@ from cell_metadata import validate_metadata_value
 # Output truncation defaults for MCP read_output
 OUTPUT_DEFAULT_MAX_LINES = 100
 OUTPUT_DEFAULT_MAX_CHARS = 10000
+# Separate limits for error outputs (tracebacks need more context)
+OUTPUT_DEFAULT_MAX_LINES_ERROR = 200
+OUTPUT_DEFAULT_MAX_CHARS_ERROR = 20000
 
 
 class HeadlessOperationHandler:
@@ -322,18 +325,22 @@ class HeadlessOperationHandler:
         notebook_path: str,
         include_outputs: bool = True,
         max_lines: int = None,
-        max_chars: int = None
+        max_chars: int = None,
+        max_lines_error: int = None,
+        max_chars_error: int = None
     ) -> Dict[str, Any]:
         """Read notebook from cache (loads from disk on first access)
 
         Args:
             notebook_path: Path to the notebook file
             include_outputs: Whether to include cell outputs (default: True)
-            max_lines: Max lines per output (default: OUTPUT_DEFAULT_MAX_LINES)
-            max_chars: Max chars per output (default: OUTPUT_DEFAULT_MAX_CHARS)
+            max_lines: Max lines per regular output (default: 100)
+            max_chars: Max chars per regular output (default: 10000)
+            max_lines_error: Max lines per error output (default: 200)
+            max_chars_error: Max chars per error output (default: 20000)
 
-        When include_outputs=True, truncation is always applied with defaults
-        (100 lines, 10000 chars) unless explicit values are provided.
+        When include_outputs=True, truncation is always applied with defaults.
+        Error outputs get higher limits since tracebacks need more context.
         """
         try:
             notebook = self._get_cached_notebook(notebook_path)
@@ -343,7 +350,12 @@ class HeadlessOperationHandler:
                 # Always apply truncation when outputs are included
                 effective_max_lines = max_lines if max_lines is not None else OUTPUT_DEFAULT_MAX_LINES
                 effective_max_chars = max_chars if max_chars is not None else OUTPUT_DEFAULT_MAX_CHARS
-                cells = self._truncate_cell_outputs(cells, effective_max_lines, effective_max_chars)
+                effective_max_lines_error = max_lines_error if max_lines_error is not None else OUTPUT_DEFAULT_MAX_LINES_ERROR
+                effective_max_chars_error = max_chars_error if max_chars_error is not None else OUTPUT_DEFAULT_MAX_CHARS_ERROR
+                cells = self._truncate_cell_outputs(
+                    cells, effective_max_lines, effective_max_chars,
+                    effective_max_lines_error, effective_max_chars_error
+                )
             else:
                 # Strip outputs entirely
                 cells = [{**cell, 'outputs': []} for cell in cells]
@@ -366,9 +378,23 @@ class HeadlessOperationHandler:
         self,
         cells: list,
         max_lines: int,
-        max_chars: int
+        max_chars: int,
+        max_lines_error: int = None,
+        max_chars_error: int = None
     ) -> list:
-        """Apply truncation to outputs of all cells"""
+        """Apply truncation to outputs of all cells
+
+        Args:
+            cells: List of cells to process
+            max_lines: Max lines for regular outputs (stdout, stderr)
+            max_chars: Max chars for regular outputs
+            max_lines_error: Max lines for error outputs (default: same as max_lines)
+            max_chars_error: Max chars for error outputs (default: same as max_chars)
+        """
+        # Default error limits to regular limits if not specified
+        effective_max_lines_error = max_lines_error if max_lines_error is not None else max_lines
+        effective_max_chars_error = max_chars_error if max_chars_error is not None else max_chars
+
         truncated_cells = []
         for cell in cells:
             outputs = cell.get('outputs', [])
@@ -386,9 +412,17 @@ class HeadlessOperationHandler:
                     })
                     continue
 
+                # Use separate limits for error outputs (tracebacks need more context)
+                if output_type == 'error':
+                    lines_limit = effective_max_lines_error
+                    chars_limit = effective_max_chars_error
+                else:
+                    lines_limit = max_lines
+                    chars_limit = max_chars
+
                 # Apply truncation
                 truncated_content, metadata = self._truncate_output(
-                    content, max_lines, max_chars, 0
+                    content, lines_limit, chars_limit, 0
                 )
 
                 truncated_outputs.append({
@@ -984,8 +1018,10 @@ class HeadlessOperationHandler:
         Parameters:
             notebookPath: Path to notebook
             cellId/cellIndex: Cell identifier
-            max_lines: Max lines to return (default: 100)
-            max_chars: Max characters to return (default: 10000)
+            max_lines: Max lines for regular output (default: 100)
+            max_chars: Max characters for regular output (default: 10000)
+            max_lines_error: Max lines for error output (default: 200)
+            max_chars_error: Max characters for error output (default: 20000)
             line_offset: Start from line N for pagination (default: 0)
             save_to_file: Save full output to temp file (default: false)
 
@@ -996,9 +1032,11 @@ class HeadlessOperationHandler:
         cell_id = operation.get('cellId')
         cell_index = operation.get('cellIndex')
 
-        # Truncation parameters
+        # Truncation parameters (separate limits for errors)
         max_lines = operation.get('max_lines', OUTPUT_DEFAULT_MAX_LINES)
         max_chars = operation.get('max_chars', OUTPUT_DEFAULT_MAX_CHARS)
+        max_lines_error = operation.get('max_lines_error', OUTPUT_DEFAULT_MAX_LINES_ERROR)
+        max_chars_error = operation.get('max_chars_error', OUTPUT_DEFAULT_MAX_CHARS_ERROR)
         line_offset = operation.get('line_offset', 0)
         save_to_file = operation.get('save_to_file', False)
 
@@ -1055,9 +1093,17 @@ class HeadlessOperationHandler:
                 )
                 temp_files.append(temp_file_path)
 
+            # Use separate limits for error outputs (tracebacks need more context)
+            if output_type == 'error':
+                lines_limit = max_lines_error
+                chars_limit = max_chars_error
+            else:
+                lines_limit = max_lines
+                chars_limit = max_chars
+
             # Apply truncation
             truncated_content, truncation_meta = self._truncate_output(
-                content, max_lines, max_chars, line_offset
+                content, lines_limit, chars_limit, line_offset
             )
 
             processed_output = {

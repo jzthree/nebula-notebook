@@ -497,7 +497,9 @@ async def read_notebook_via_router(
     path: str,
     include_outputs: bool = True,
     max_lines: int = None,
-    max_chars: int = None
+    max_chars: int = None,
+    max_lines_error: int = None,
+    max_chars_error: int = None
 ):
     """
     Read notebook state via operation router.
@@ -508,15 +510,19 @@ async def read_notebook_via_router(
     Args:
         path: Path to the notebook file
         include_outputs: Whether to include cell outputs (default: True)
-        max_lines: Max lines per output for truncation (default: no truncation)
-        max_chars: Max chars per output for truncation (default: no truncation)
+        max_lines: Max lines per regular output (default: 100)
+        max_chars: Max chars per regular output (default: 10000)
+        max_lines_error: Max lines per error output (default: 200)
+        max_chars_error: Max chars per error output (default: 20000)
     """
     try:
         result = await operation_router.read_notebook(
             path,
             include_outputs=include_outputs,
             max_lines=max_lines,
-            max_chars=max_chars
+            max_chars=max_chars,
+            max_lines_error=max_lines_error,
+            max_chars_error=max_chars_error
         )
         return result
     except Exception as e:

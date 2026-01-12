@@ -222,7 +222,9 @@ class OperationRouter:
         notebook_path: str,
         include_outputs: bool = True,
         max_lines: int = None,
-        max_chars: int = None
+        max_chars: int = None,
+        max_lines_error: int = None,
+        max_chars_error: int = None
     ) -> Dict[str, Any]:
         """
         Read notebook state.
@@ -233,8 +235,10 @@ class OperationRouter:
         Args:
             notebook_path: Path to the notebook file
             include_outputs: Whether to include cell outputs (default: True)
-            max_lines: Max lines per output for truncation (default: no truncation)
-            max_chars: Max chars per output for truncation (default: no truncation)
+            max_lines: Max lines per regular output (default: 100)
+            max_chars: Max chars per regular output (default: 10000)
+            max_lines_error: Max lines per error output (default: 200)
+            max_chars_error: Max chars per error output (default: 20000)
         """
         normalized_path = str(Path(notebook_path).resolve())
 
@@ -243,10 +247,16 @@ class OperationRouter:
             result = await self._read_from_ui(normalized_path)
             if result.get('success'):
                 # Always apply truncation (with defaults) when outputs included
-                result = self._apply_output_truncation(result, include_outputs, max_lines, max_chars)
+                result = self._apply_output_truncation(
+                    result, include_outputs, max_lines, max_chars,
+                    max_lines_error, max_chars_error
+                )
             return result
         else:
-            return await self._read_from_file(notebook_path, include_outputs, max_lines, max_chars)
+            return await self._read_from_file(
+                notebook_path, include_outputs, max_lines, max_chars,
+                max_lines_error, max_chars_error
+            )
 
     async def _read_from_ui(self, notebook_path: str) -> Dict[str, Any]:
         """Request current notebook state from UI"""
@@ -287,7 +297,9 @@ class OperationRouter:
         notebook_path: str,
         include_outputs: bool = True,
         max_lines: int = None,
-        max_chars: int = None
+        max_chars: int = None,
+        max_lines_error: int = None,
+        max_chars_error: int = None
     ) -> Dict[str, Any]:
         """Read notebook from file"""
         if self._headless_manager is None:
@@ -300,7 +312,9 @@ class OperationRouter:
             notebook_path,
             include_outputs=include_outputs,
             max_lines=max_lines,
-            max_chars=max_chars
+            max_chars=max_chars,
+            max_lines_error=max_lines_error,
+            max_chars_error=max_chars_error
         )
 
     def _apply_output_truncation(
@@ -308,12 +322,14 @@ class OperationRouter:
         result: Dict[str, Any],
         include_outputs: bool,
         max_lines: int,
-        max_chars: int
+        max_chars: int,
+        max_lines_error: int = None,
+        max_chars_error: int = None
     ) -> Dict[str, Any]:
         """Apply output truncation to a read result (for UI-sourced data)
 
-        When include_outputs=True, truncation is always applied with defaults
-        (100 lines, 10000 chars) unless explicit values are provided.
+        When include_outputs=True, truncation is always applied with defaults.
+        Error outputs get higher limits (200 lines, 20000 chars) by default.
         """
         if not result.get('success') or 'data' not in result:
             return result
@@ -328,8 +344,11 @@ class OperationRouter:
         if self._headless_manager is not None:
             effective_max_lines = max_lines if max_lines is not None else 100
             effective_max_chars = max_chars if max_chars is not None else 10000
+            effective_max_lines_error = max_lines_error if max_lines_error is not None else 200
+            effective_max_chars_error = max_chars_error if max_chars_error is not None else 20000
             result['data']['cells'] = self._headless_manager._truncate_cell_outputs(
-                cells, effective_max_lines, effective_max_chars
+                cells, effective_max_lines, effective_max_chars,
+                effective_max_lines_error, effective_max_chars_error
             )
 
         return result

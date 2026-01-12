@@ -4,6 +4,8 @@ import { ChevronDown, ChevronRight, GripHorizontal, WrapText, ArrowRightLeft } f
 import {
   MAX_OUTPUT_LINES,
   MAX_OUTPUT_CHARS,
+  MAX_OUTPUT_LINES_ERROR,
+  MAX_OUTPUT_CHARS_ERROR,
   OUTPUT_MIN_HEIGHT_PX,
   OUTPUT_DEFAULT_HEIGHT_PX,
   OUTPUT_MAX_HEIGHT_PX,
@@ -11,8 +13,11 @@ import {
 
 // Display limits to prevent UI freeze from huge outputs
 // Note: Full data is preserved in state for saving - only display is truncated
+// Separate limits for regular output and error output (tracebacks need more context)
 const MAX_DISPLAY_LINES = MAX_OUTPUT_LINES;
 const MAX_DISPLAY_CHARS = MAX_OUTPUT_CHARS;
+const MAX_DISPLAY_LINES_ERROR = MAX_OUTPUT_LINES_ERROR;
+const MAX_DISPLAY_CHARS_ERROR = MAX_OUTPUT_CHARS_ERROR;
 
 interface Props {
   outputs: ICellOutput[];
@@ -110,39 +115,62 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
   }, [scrolledHeight]);
 
   // Truncate outputs for display only - full data preserved in parent state for saving
+  // Separate limits for regular output (stdout/stderr) and error output (tracebacks)
   const displayOutputs = useMemo(() => {
-    // Quick check - count total lines and chars
-    let totalLines = 0;
-    let totalChars = 0;
+    // Quick check - count lines and chars separately for regular and error outputs
+    let regularLines = 0;
+    let regularChars = 0;
+    let errorLines = 0;
+    let errorChars = 0;
+
     for (const output of outputs) {
-      if (output.type === 'stdout' || output.type === 'stderr' || output.type === 'error') {
-        totalLines += (output.content?.match(/\n/g) || []).length + 1;
+      const lines = output.type === 'image' || output.type === 'html'
+        ? 0
+        : (output.content?.match(/\n/g) || []).length + 1;
+      const chars = output.content?.length || 0;
+
+      if (output.type === 'error') {
+        errorLines += lines;
+        errorChars += chars;
+      } else {
+        regularLines += lines;
+        regularChars += chars;
       }
-      totalChars += output.content?.length || 0;
     }
 
     // No truncation needed if under limits
-    if (totalLines <= MAX_DISPLAY_LINES && totalChars <= MAX_DISPLAY_CHARS) {
+    const regularOk = regularLines <= MAX_DISPLAY_LINES && regularChars <= MAX_DISPLAY_CHARS;
+    const errorOk = errorLines <= MAX_DISPLAY_LINES_ERROR && errorChars <= MAX_DISPLAY_CHARS_ERROR;
+    if (regularOk && errorOk) {
       return outputs;
     }
 
-    // Need to truncate - count lines as we go
+    // Need to truncate - track lines/chars shown separately
     const truncated: ICellOutput[] = [];
-    let linesShown = 0;
-    let charsShown = 0;
+    let regularLinesShown = 0;
+    let regularCharsShown = 0;
+    let errorLinesShown = 0;
+    let errorCharsShown = 0;
+    let truncationNeeded = false;
 
     for (const output of outputs) {
       const outputSize = output.content?.length || 0;
-      let outputLines = 0;
-      if (output.type === 'stdout' || output.type === 'stderr' || output.type === 'error') {
-        outputLines = (output.content?.match(/\n/g) || []).length + 1;
-      }
+      const outputLines = output.type === 'image' || output.type === 'html'
+        ? 0
+        : (output.content?.match(/\n/g) || []).length + 1;
 
-      // Check if adding this would exceed limits
-      if (linesShown + outputLines > MAX_DISPLAY_LINES || charsShown + outputSize > MAX_DISPLAY_CHARS) {
+      // Determine limits based on output type
+      const isError = output.type === 'error';
+      const maxLines = isError ? MAX_DISPLAY_LINES_ERROR : MAX_DISPLAY_LINES;
+      const maxChars = isError ? MAX_DISPLAY_CHARS_ERROR : MAX_DISPLAY_CHARS;
+      const currentLines = isError ? errorLinesShown : regularLinesShown;
+      const currentChars = isError ? errorCharsShown : regularCharsShown;
+
+      // Check if adding this would exceed limits for its category
+      if (currentLines + outputLines > maxLines || currentChars + outputSize > maxChars) {
         // For text outputs, show partial content up to the limit
         if (output.type === 'stdout' || output.type === 'stderr' || output.type === 'error') {
-          const remainingLines = MAX_DISPLAY_LINES - linesShown;
+          const remainingLines = maxLines - currentLines;
           if (remainingLines > 0 && output.content) {
             // Split into lines and take what we can fit
             const lines = output.content.split('\n');
@@ -152,30 +180,43 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
               id: `${output.id}-truncated`,
               content: truncatedLines.join('\n')
             });
-            linesShown += truncatedLines.length;
+            if (isError) {
+              errorLinesShown += truncatedLines.length;
+            } else {
+              regularLinesShown += truncatedLines.length;
+            }
           }
         }
         // For images/html, include if size is ok
         else if (output.type === 'image' || output.type === 'html') {
-          if (charsShown + outputSize <= MAX_DISPLAY_CHARS) {
+          if (currentChars + outputSize <= maxChars) {
             truncated.push(output);
-            charsShown += outputSize;
+            regularCharsShown += outputSize;
           }
         }
-        break;
+        truncationNeeded = true;
+        continue; // Skip to next output instead of breaking
       }
 
       truncated.push(output);
-      linesShown += outputLines;
-      charsShown += outputSize;
+      if (isError) {
+        errorLinesShown += outputLines;
+        errorCharsShown += outputSize;
+      } else {
+        regularLinesShown += outputLines;
+        regularCharsShown += outputSize;
+      }
     }
 
-    // Add truncation warning
-    truncated.push({
-      id: `display-truncated-${Date.now()}`,
-      type: 'stderr',
-      content: `\n⚠️ Output limit reached (${linesShown.toLocaleString()} lines). Additional output not displayed.`
-    });
+    // Add truncation warning if needed
+    if (truncationNeeded) {
+      const totalLines = regularLinesShown + errorLinesShown;
+      truncated.push({
+        id: `display-truncated-${Date.now()}`,
+        type: 'stderr',
+        content: `\n⚠️ Output limit reached (${totalLines.toLocaleString()} lines). Additional output not displayed.`
+      });
+    }
 
     return truncated;
   }, [outputs]);

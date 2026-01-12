@@ -9,11 +9,17 @@
 // Output Limits
 // =============================================================================
 
-/** Maximum lines of text output to display */
+/** Maximum lines of regular output to display */
 export const MAX_OUTPUT_LINES = 10000;
 
-/** Maximum characters of output to display (100MB - generous for images) */
+/** Maximum characters of regular output to display (100MB - generous for images) */
 export const MAX_OUTPUT_CHARS = 100_000_000;
+
+/** Maximum lines of error output to display (tracebacks need more context) */
+export const MAX_OUTPUT_LINES_ERROR = 10000;
+
+/** Maximum characters of error output to display */
+export const MAX_OUTPUT_CHARS_ERROR = 100_000_000;
 
 /** Truncation threshold for inline output display (characters) */
 export const OUTPUT_TRUNCATION_THRESHOLD = 2000;
