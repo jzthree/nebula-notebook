@@ -68,9 +68,15 @@ import asyncio
 import copy
 import json
 import os
-from typing import Dict, Any, Optional
+import tempfile
+import uuid
+from typing import Dict, Any, Optional, Tuple
 
 from cell_metadata import validate_metadata_value
+
+# Output truncation defaults for MCP read_output
+OUTPUT_DEFAULT_MAX_LINES = 100
+OUTPUT_DEFAULT_MAX_CHARS = 10000
 
 
 class HeadlessOperationHandler:
@@ -203,6 +209,43 @@ class HeadlessOperationHandler:
         """Check if a notebook has unsaved changes."""
         return path in self._cache and self._cache[path]['dirty']
 
+    def _check_agent_permission(self, notebook_path: str, operation_type: str) -> Optional[Dict[str, Any]]:
+        """
+        Check if agent has permission to modify this notebook.
+
+        Agent can modify a notebook if:
+        1. Notebook was created by agent (nebula.agent_created = true), OR
+        2. User explicitly permitted it (nebula.agent_permitted = true), AND history exists
+
+        For user-permitted notebooks, history must exist as a safety measure.
+
+        Returns None if permitted, or an error dict if not permitted.
+        """
+        # Check if notebook is agent-created (always permitted)
+        if self._fs_service.is_agent_permitted(notebook_path):
+            # For agent-created notebooks, no additional checks needed
+            metadata = self._fs_service.get_notebook_metadata(notebook_path)
+            nebula = metadata.get("nebula", {})
+            if nebula.get("agent_created", False):
+                return None  # Agent-created notebooks are always modifiable
+
+            # For user-permitted notebooks, require history as safety measure
+            if not self._fs_service.has_history(notebook_path):
+                return {
+                    'success': False,
+                    'error': f'Agent cannot modify "{notebook_path}": notebook is user-permitted but history is not enabled. '
+                             f'Open the notebook in the UI first to enable history tracking, or the agent can create a new notebook.'
+                }
+            return None  # User-permitted with history
+
+        # Not permitted - provide helpful error message
+        return {
+            'success': False,
+            'error': f'Agent cannot modify "{notebook_path}": notebook is not agent-permitted. '
+                     f'Either open the notebook in Nebula UI and grant agent permission, '
+                     f'or the agent can create a new notebook which will be automatically permitted.'
+        }
+
     async def apply_operation(self, operation: Dict[str, Any]) -> Dict[str, Any]:
         """
         Apply operation to notebook (in-memory) and auto-flush to disk.
@@ -212,8 +255,17 @@ class HeadlessOperationHandler:
         op_type = operation.get('type')
         notebook_path = operation.get('notebookPath', '')
 
-        # Read-only operations (no flush needed)
+        # Read-only operations (no flush needed, no permission check needed)
         read_only_ops = {'readCell', 'readCellOutput', 'startAgentSession', 'endAgentSession'}
+
+        # Operations that don't require permission (create new or read-only)
+        permission_exempt_ops = {'createNotebook', 'readCell', 'readCellOutput', 'startAgentSession', 'endAgentSession'}
+
+        # Check agent permission for write operations on existing notebooks
+        if op_type not in permission_exempt_ops and notebook_path:
+            permission_error = self._check_agent_permission(notebook_path, op_type)
+            if permission_error:
+                return permission_error
 
         try:
             if op_type == 'insertCell':
@@ -265,15 +317,42 @@ class HeadlessOperationHandler:
                 'error': str(e)
             }
 
-    async def read_notebook(self, notebook_path: str) -> Dict[str, Any]:
-        """Read notebook from cache (loads from disk on first access)"""
+    async def read_notebook(
+        self,
+        notebook_path: str,
+        include_outputs: bool = True,
+        max_lines: int = None,
+        max_chars: int = None
+    ) -> Dict[str, Any]:
+        """Read notebook from cache (loads from disk on first access)
+
+        Args:
+            notebook_path: Path to the notebook file
+            include_outputs: Whether to include cell outputs (default: True)
+            max_lines: Max lines per output (default: OUTPUT_DEFAULT_MAX_LINES)
+            max_chars: Max chars per output (default: OUTPUT_DEFAULT_MAX_CHARS)
+
+        When include_outputs=True, truncation is always applied with defaults
+        (100 lines, 10000 chars) unless explicit values are provided.
+        """
         try:
             notebook = self._get_cached_notebook(notebook_path)
+            cells = notebook['cells']
+
+            if include_outputs:
+                # Always apply truncation when outputs are included
+                effective_max_lines = max_lines if max_lines is not None else OUTPUT_DEFAULT_MAX_LINES
+                effective_max_chars = max_chars if max_chars is not None else OUTPUT_DEFAULT_MAX_CHARS
+                cells = self._truncate_cell_outputs(cells, effective_max_lines, effective_max_chars)
+            else:
+                # Strip outputs entirely
+                cells = [{**cell, 'outputs': []} for cell in cells]
+
             return {
                 'success': True,
                 'data': {
                     'path': notebook_path,
-                    'cells': notebook['cells'],
+                    'cells': cells,
                     'metadata': notebook.get('metadata', {})
                 }
             }
@@ -282,6 +361,48 @@ class HeadlessOperationHandler:
                 'success': False,
                 'error': str(e)
             }
+
+    def _truncate_cell_outputs(
+        self,
+        cells: list,
+        max_lines: int,
+        max_chars: int
+    ) -> list:
+        """Apply truncation to outputs of all cells"""
+        truncated_cells = []
+        for cell in cells:
+            outputs = cell.get('outputs', [])
+            truncated_outputs = []
+
+            for output in outputs:
+                content = output.get('content', '')
+                output_type = output.get('type', 'stdout')
+
+                # Skip truncation for binary/image outputs
+                if output_type in ('image', 'html'):
+                    truncated_outputs.append({
+                        **output,
+                        'is_binary': output_type == 'image'
+                    })
+                    continue
+
+                # Apply truncation
+                truncated_content, metadata = self._truncate_output(
+                    content, max_lines, max_chars, 0
+                )
+
+                truncated_outputs.append({
+                    'type': output_type,
+                    'content': truncated_content,
+                    **metadata
+                })
+
+            truncated_cells.append({
+                **cell,
+                'outputs': truncated_outputs
+            })
+
+        return truncated_cells
 
     def _convert_cells_to_internal(self, jupyter_cells: list) -> list:
         """Convert Jupyter cells to internal format"""
@@ -697,7 +818,7 @@ class HeadlessOperationHandler:
                 'error': f'Notebook already exists: {notebook_path}. Use overwrite=true to replace.'
             }
 
-        # Create empty notebook structure
+        # Create empty notebook structure with agent permission marker
         notebook = {
             'nbformat': 4,
             'nbformat_minor': 5,
@@ -708,6 +829,10 @@ class HeadlessOperationHandler:
                 },
                 'language_info': {
                     'name': 'python'
+                },
+                'nebula': {
+                    'agent_created': True,
+                    'agent_permitted': True
                 }
             },
             'cells': []
@@ -775,11 +900,107 @@ class HeadlessOperationHandler:
             },
         }
 
+    def _truncate_output(
+        self,
+        content: str,
+        max_lines: int,
+        max_chars: int,
+        line_offset: int = 0
+    ) -> Tuple[str, Dict[str, Any]]:
+        """
+        Truncate output content with pagination support.
+
+        Returns: (truncated_content, metadata)
+        """
+        lines = content.split('\n')
+        total_lines = len(lines)
+        total_chars = len(content)
+
+        # Apply line offset
+        if line_offset > 0:
+            lines = lines[line_offset:]
+
+        # Track what we're returning
+        start_line = line_offset
+        end_line = start_line
+        char_count = 0
+        truncated = False
+        truncation_reason = None
+        result_lines = []
+
+        for i, line in enumerate(lines):
+            # Check if adding this line would exceed limits
+            new_char_count = char_count + len(line) + (1 if i > 0 else 0)  # +1 for newline
+
+            if i >= max_lines:
+                truncated = True
+                truncation_reason = 'lines'
+                break
+
+            if new_char_count > max_chars and i > 0:  # Always include at least 1 line
+                truncated = True
+                truncation_reason = 'chars'
+                break
+
+            result_lines.append(line)
+            char_count = new_char_count
+            end_line = start_line + i + 1
+
+        truncated_content = '\n'.join(result_lines)
+
+        metadata = {
+            'truncated': truncated,
+            'truncation_reason': truncation_reason,
+            'total_lines': total_lines,
+            'total_chars': total_chars,
+            'returned_range': {
+                'start_line': start_line,
+                'end_line': end_line,
+                'char_count': len(truncated_content),
+            }
+        }
+
+        return truncated_content, metadata
+
+    def _save_output_to_temp_file(self, content: str, cell_id: str) -> str:
+        """Save output to a temp file and return the path."""
+        # Create nebula temp directory
+        temp_dir = os.path.join(tempfile.gettempdir(), 'nebula', 'outputs')
+        os.makedirs(temp_dir, exist_ok=True)
+
+        # Generate unique filename
+        filename = f"cell_output_{cell_id}_{uuid.uuid4().hex[:8]}.txt"
+        filepath = os.path.join(temp_dir, filename)
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        return filepath
+
     async def _read_cell_output(self, operation: Dict[str, Any]) -> Dict[str, Any]:
-        """Read outputs of a single cell by ID or index"""
+        """
+        Read outputs of a single cell by ID or index with smart truncation.
+
+        Parameters:
+            notebookPath: Path to notebook
+            cellId/cellIndex: Cell identifier
+            max_lines: Max lines to return (default: 100)
+            max_chars: Max characters to return (default: 10000)
+            line_offset: Start from line N for pagination (default: 0)
+            save_to_file: Save full output to temp file (default: false)
+
+        Returns truncated output with metadata about full output size.
+        Use save_to_file=true to save the complete output for analysis.
+        """
         notebook_path = operation['notebookPath']
         cell_id = operation.get('cellId')
         cell_index = operation.get('cellIndex')
+
+        # Truncation parameters
+        max_lines = operation.get('max_lines', OUTPUT_DEFAULT_MAX_LINES)
+        max_chars = operation.get('max_chars', OUTPUT_DEFAULT_MAX_CHARS)
+        line_offset = operation.get('line_offset', 0)
+        save_to_file = operation.get('save_to_file', False)
 
         cells = self._get_cells(notebook_path)
 
@@ -803,12 +1024,62 @@ class HeadlessOperationHandler:
         else:
             return {'success': False, 'error': 'Must provide cellId or cellIndex'}
 
+        # Process each output with truncation
+        processed_outputs = []
+        temp_files = []
+
+        for output in cell.get('outputs', []):
+            output_type = output.get('type', '')
+            content = output.get('content', '')
+
+            # Skip non-text outputs (images, etc.)
+            if output_type == 'image':
+                processed_outputs.append({
+                    'type': output_type,
+                    'content': '[Image data - use read_cell to get full content]',
+                    'truncated': False,
+                    'is_binary': True,
+                })
+                continue
+
+            # Calculate total size
+            total_lines = content.count('\n') + 1 if content else 0
+            total_chars = len(content)
+
+            # Only save to temp file if explicitly requested
+            temp_file_path = None
+            if save_to_file and content:
+                temp_file_path = self._save_output_to_temp_file(
+                    content,
+                    cell.get('id', f'cell_{target_index}')
+                )
+                temp_files.append(temp_file_path)
+
+            # Apply truncation
+            truncated_content, truncation_meta = self._truncate_output(
+                content, max_lines, max_chars, line_offset
+            )
+
+            processed_output = {
+                'type': output_type,
+                'content': truncated_content,
+                **truncation_meta,
+            }
+
+            if temp_file_path:
+                processed_output['temp_file'] = temp_file_path
+                processed_output['temp_file_size'] = total_chars
+
+            processed_outputs.append(processed_output)
+
         return {
             'success': True,
             'cellId': cell.get('id'),
             'cellIndex': target_index,
-            'outputs': [{'type': o.get('type'), 'content': o.get('content', '')} for o in cell.get('outputs', [])],
+            'outputs': processed_outputs,
             'executionCount': cell.get('executionCount'),
+            'output_count': len(processed_outputs),
+            'temp_files': temp_files if temp_files else None,
         }
 
     async def _clear_notebook(self, operation: Dict[str, Any]) -> Dict[str, Any]:

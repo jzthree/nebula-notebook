@@ -92,8 +92,28 @@ class MockFsService:
         self.notebooks[path] = {
             "cells": cells,
             "kernelspec": {"name": "python3"},
-            "mtime": 12345
+            "mtime": 12345,
+            "metadata": {"nebula": {"agent_permitted": True}}  # Default to permitted
         }
+
+    # Agent permission methods - default to permitted for backward compatibility
+    def is_agent_permitted(self, path: str) -> bool:
+        """All test notebooks are agent-permitted by default"""
+        return True
+
+    def has_history(self, path: str) -> bool:
+        """All test notebooks have history by default"""
+        return True
+
+    def get_notebook_metadata(self, path: str) -> dict:
+        """Return notebook metadata"""
+        if path in self.notebooks:
+            return self.notebooks[path].get("metadata", {"nebula": {"agent_permitted": True}})
+        return {"nebula": {"agent_permitted": True}}
+
+    def update_notebook_metadata(self, path: str, metadata_updates: dict) -> dict:
+        """Update notebook metadata"""
+        return {"success": True}
 
 
 class TestInsertCellMetadata:

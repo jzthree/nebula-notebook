@@ -217,19 +217,36 @@ class OperationRouter:
 
         return await self._headless_manager.apply_operation(operation)
 
-    async def read_notebook(self, notebook_path: str) -> Dict[str, Any]:
+    async def read_notebook(
+        self,
+        notebook_path: str,
+        include_outputs: bool = True,
+        max_lines: int = None,
+        max_chars: int = None
+    ) -> Dict[str, Any]:
         """
         Read notebook state.
 
         If UI is connected, requests current state from UI.
         Otherwise reads from file.
+
+        Args:
+            notebook_path: Path to the notebook file
+            include_outputs: Whether to include cell outputs (default: True)
+            max_lines: Max lines per output for truncation (default: no truncation)
+            max_chars: Max chars per output for truncation (default: no truncation)
         """
         normalized_path = str(Path(notebook_path).resolve())
 
         if normalized_path in self._ui_connections:
-            return await self._read_from_ui(normalized_path)
+            # UI always returns full outputs - we apply truncation after
+            result = await self._read_from_ui(normalized_path)
+            if result.get('success'):
+                # Always apply truncation (with defaults) when outputs included
+                result = self._apply_output_truncation(result, include_outputs, max_lines, max_chars)
+            return result
         else:
-            return await self._read_from_file(notebook_path)
+            return await self._read_from_file(notebook_path, include_outputs, max_lines, max_chars)
 
     async def _read_from_ui(self, notebook_path: str) -> Dict[str, Any]:
         """Request current notebook state from UI"""
@@ -265,7 +282,13 @@ class OperationRouter:
         finally:
             conn.pending_requests.pop(request_id, None)
 
-    async def _read_from_file(self, notebook_path: str) -> Dict[str, Any]:
+    async def _read_from_file(
+        self,
+        notebook_path: str,
+        include_outputs: bool = True,
+        max_lines: int = None,
+        max_chars: int = None
+    ) -> Dict[str, Any]:
         """Read notebook from file"""
         if self._headless_manager is None:
             return {
@@ -273,7 +296,43 @@ class OperationRouter:
                 'error': 'Headless manager not configured'
             }
 
-        return await self._headless_manager.read_notebook(notebook_path)
+        return await self._headless_manager.read_notebook(
+            notebook_path,
+            include_outputs=include_outputs,
+            max_lines=max_lines,
+            max_chars=max_chars
+        )
+
+    def _apply_output_truncation(
+        self,
+        result: Dict[str, Any],
+        include_outputs: bool,
+        max_lines: int,
+        max_chars: int
+    ) -> Dict[str, Any]:
+        """Apply output truncation to a read result (for UI-sourced data)
+
+        When include_outputs=True, truncation is always applied with defaults
+        (100 lines, 10000 chars) unless explicit values are provided.
+        """
+        if not result.get('success') or 'data' not in result:
+            return result
+
+        cells = result['data'].get('cells', [])
+        if not include_outputs:
+            # Strip outputs entirely
+            result['data']['cells'] = [{**cell, 'outputs': []} for cell in cells]
+            return result
+
+        # Always apply truncation when outputs are included (use defaults if not specified)
+        if self._headless_manager is not None:
+            effective_max_lines = max_lines if max_lines is not None else 100
+            effective_max_chars = max_chars if max_chars is not None else 10000
+            result['data']['cells'] = self._headless_manager._truncate_cell_outputs(
+                cells, effective_max_lines, effective_max_chars
+            )
+
+        return result
 
 
 # Global router instance

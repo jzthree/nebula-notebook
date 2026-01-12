@@ -506,7 +506,7 @@ class FilesystemService:
             "mtime": stat.st_mtime
         }
 
-    def save_notebook_cells(self, path: str, cells: List[Dict[str, Any]], kernel_name: str = None) -> Dict[str, Any]:
+    def save_notebook_cells(self, path: str, cells: List[Dict[str, Any]], kernel_name: str = None, notebook_metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Save cells to a notebook file
 
@@ -517,8 +517,19 @@ class FilesystemService:
             path: Path to save the notebook
             cells: List of cells in internal format
             kernel_name: Optional kernel name to save in metadata (defaults to python3)
+            notebook_metadata: Optional metadata to merge into notebook metadata (e.g., nebula namespace)
         """
         path = self._normalize_path(path)
+
+        # Load existing notebook metadata if file exists
+        existing_metadata = {}
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    existing_nb = json.load(f)
+                    existing_metadata = existing_nb.get("metadata", {})
+            except (json.JSONDecodeError, IOError):
+                pass  # File doesn't exist or isn't valid JSON, start fresh
 
         # Use provided kernel_name or default to python3
         if kernel_name is None:
@@ -620,19 +631,32 @@ class FilesystemService:
 
             nb_cells.append(nb_cell)
 
+        # Build notebook metadata: preserve existing, update kernelspec, merge custom metadata
+        final_metadata = {
+            **existing_metadata,  # Preserve existing metadata (including nebula namespace)
+            "kernelspec": {
+                "display_name": display_name,
+                "language": "python",
+                "name": kernel_name
+            },
+            "language_info": {
+                "name": "python",
+                "version": "3.11"
+            }
+        }
+
+        # Merge custom notebook metadata (e.g., nebula namespace)
+        if notebook_metadata:
+            for key, value in notebook_metadata.items():
+                if isinstance(value, dict) and isinstance(final_metadata.get(key), dict):
+                    # Deep merge for dict values (like nebula namespace)
+                    final_metadata[key] = {**final_metadata[key], **value}
+                else:
+                    final_metadata[key] = value
+
         notebook = {
             "cells": nb_cells,
-            "metadata": {
-                "kernelspec": {
-                    "display_name": display_name,
-                    "language": "python",
-                    "name": kernel_name
-                },
-                "language_info": {
-                    "name": "python",
-                    "version": "3.11"
-                }
-            },
+            "metadata": final_metadata,
             "nbformat": 4,
             "nbformat_minor": 5
         }
@@ -646,6 +670,80 @@ class FilesystemService:
             "success": True,
             "mtime": stat.st_mtime
         }
+
+    def get_notebook_metadata(self, path: str) -> Dict[str, Any]:
+        """
+        Get notebook-level metadata (not cell metadata).
+        Returns empty dict if file doesn't exist or isn't valid.
+        """
+        path = self._normalize_path(path)
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                notebook = json.load(f)
+                return notebook.get("metadata", {})
+        except (json.JSONDecodeError, IOError):
+            return {}
+
+    def update_notebook_metadata(self, path: str, metadata_updates: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update notebook-level metadata without modifying cells.
+        Deep-merges dict values (like nebula namespace).
+        Returns: { "success": bool, "error"?: str }
+        """
+        path = self._normalize_path(path)
+        if not os.path.exists(path):
+            return {"success": False, "error": f"Notebook not found: {path}"}
+
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                notebook = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            return {"success": False, "error": f"Failed to read notebook: {e}"}
+
+        # Deep merge metadata updates
+        existing_metadata = notebook.get("metadata", {})
+        for key, value in metadata_updates.items():
+            if isinstance(value, dict) and isinstance(existing_metadata.get(key), dict):
+                existing_metadata[key] = {**existing_metadata[key], **value}
+            else:
+                existing_metadata[key] = value
+
+        notebook["metadata"] = existing_metadata
+
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(notebook, f, indent=2)
+            return {"success": True}
+        except IOError as e:
+            return {"success": False, "error": f"Failed to write notebook: {e}"}
+
+    def is_agent_permitted(self, path: str) -> bool:
+        """
+        Check if a notebook is permitted for agent modifications.
+        A notebook is permitted if:
+        - It was created by an agent (nebula.agent_created = true), OR
+        - User explicitly permitted it (nebula.agent_permitted = true)
+        """
+        metadata = self.get_notebook_metadata(path)
+        nebula = metadata.get("nebula", {})
+        return nebula.get("agent_created", False) or nebula.get("agent_permitted", False)
+
+    def has_history(self, path: str) -> bool:
+        """
+        Check if a notebook has history tracking enabled.
+        History exists if the .nebula/notebook.history.json file exists and is non-empty.
+        """
+        history_path = self._get_history_path(path)
+        if not os.path.exists(history_path):
+            return False
+        try:
+            with open(history_path, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+                return len(history) > 0
+        except (json.JSONDecodeError, IOError):
+            return False
 
     def _get_history_path(self, notebook_path: str) -> str:
         """

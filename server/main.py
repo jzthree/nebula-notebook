@@ -101,6 +101,11 @@ class SaveSessionRequest(BaseModel):
     session: Dict[str, Any]
 
 
+class PermitAgentAccessRequest(BaseModel):
+    notebook_path: str
+    permitted: bool = True  # Set to False to revoke permission
+
+
 class InstallKernelRequest(BaseModel):
     python_path: str
     kernel_name: Optional[str] = None
@@ -488,15 +493,31 @@ async def apply_notebook_operation(request: NotebookOperationRequest):
 
 
 @app.get("/api/notebook/read")
-async def read_notebook_via_router(path: str):
+async def read_notebook_via_router(
+    path: str,
+    include_outputs: bool = True,
+    max_lines: int = None,
+    max_chars: int = None
+):
     """
     Read notebook state via operation router.
 
     If UI is connected, requests current state from UI.
     Otherwise reads from file.
+
+    Args:
+        path: Path to the notebook file
+        include_outputs: Whether to include cell outputs (default: True)
+        max_lines: Max lines per output for truncation (default: no truncation)
+        max_chars: Max chars per output for truncation (default: no truncation)
     """
     try:
-        result = await operation_router.read_notebook(path)
+        result = await operation_router.read_notebook(
+            path,
+            include_outputs=include_outputs,
+            max_lines=max_lines,
+            max_chars=max_chars
+        )
         return result
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -823,6 +844,74 @@ async def save_notebook_session(request: SaveSessionRequest):
     try:
         fs_service.save_session(request.notebook_path, request.session)
         return {"status": "ok", "notebook_path": request.notebook_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/notebook/permit-agent")
+async def permit_agent_access(request: PermitAgentAccessRequest):
+    """
+    Grant or revoke agent permission to modify a notebook.
+
+    For user-permitted notebooks (not agent-created), history must be enabled
+    as a safety measure before the agent can make modifications.
+    """
+    try:
+        result = fs_service.update_notebook_metadata(
+            request.notebook_path,
+            {"nebula": {"agent_permitted": request.permitted}}
+        )
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Failed to update notebook"))
+
+        # Return current permission status
+        metadata = fs_service.get_notebook_metadata(request.notebook_path)
+        nebula = metadata.get("nebula", {})
+        has_history = fs_service.has_history(request.notebook_path)
+
+        return {
+            "status": "ok",
+            "notebook_path": request.notebook_path,
+            "agent_permitted": nebula.get("agent_permitted", False),
+            "agent_created": nebula.get("agent_created", False),
+            "has_history": has_history,
+            "can_agent_modify": nebula.get("agent_created", False) or (nebula.get("agent_permitted", False) and has_history)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/notebook/agent-status")
+async def get_agent_status(path: str):
+    """
+    Get the agent permission status for a notebook.
+
+    Returns whether the agent can modify this notebook and why.
+    """
+    try:
+        metadata = fs_service.get_notebook_metadata(path)
+        nebula = metadata.get("nebula", {})
+        has_history = fs_service.has_history(path)
+
+        agent_created = nebula.get("agent_created", False)
+        agent_permitted = nebula.get("agent_permitted", False)
+        can_modify = agent_created or (agent_permitted and has_history)
+
+        return {
+            "notebook_path": path,
+            "agent_created": agent_created,
+            "agent_permitted": agent_permitted,
+            "has_history": has_history,
+            "can_agent_modify": can_modify,
+            "reason": (
+                "Agent created this notebook" if agent_created
+                else "User permitted and history enabled" if can_modify
+                else "User permitted but history not enabled" if agent_permitted
+                else "Not permitted for agent modifications"
+            )
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

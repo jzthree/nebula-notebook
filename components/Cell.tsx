@@ -21,6 +21,7 @@ interface Props {
   index: number;
   isActive: boolean;
   isHighlighted?: boolean; // Visual feedback for undo/redo
+  isLocked?: boolean; // When true, cell is read-only (e.g., during agent session)
   allCells: ICell[];
   onUpdate: (id: string, content: string) => void;
   onAIUpdate?: (id: string, content: string) => void; // For AI edits (tracked in undo history)
@@ -52,6 +53,7 @@ const CellComponent: React.FC<Props> = ({
   index,
   isActive,
   isHighlighted = false,
+  isLocked = false,
   allCells,
   onUpdate,
   onAIUpdate,
@@ -271,16 +273,16 @@ const CellComponent: React.FC<Props> = ({
     // Without this check, Shift+Enter would execute twice (once from CodeMirror, once from here)
     if (focusState !== 'cell') return;
 
-    // Cmd/Ctrl+Shift+Arrow: move cell position
+    // Cmd/Ctrl+Shift+Arrow: move cell position (blocked when locked)
     if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        onMove(cell.id, 'up');
+        if (!isLocked) onMove(cell.id, 'up');
         return;
       }
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        onMove(cell.id, 'down');
+        if (!isLocked) onMove(cell.id, 'down');
         return;
       }
     }
@@ -302,18 +304,19 @@ const CellComponent: React.FC<Props> = ({
       return;
     }
 
-    // Enter: focus editor (enter edit mode)
+    // Enter: focus editor (enter edit mode) - blocked when locked
     if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
+      if (isLocked) return; // Can't enter edit mode when locked
       // Set state to trigger shouldFocus, which will focus the editor
       setFocusState('editor');
       return;
     }
 
-    // Delete/Backspace: delete cell
+    // Delete/Backspace: delete cell (blocked when locked)
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
-      onDelete(cell.id);
+      if (!isLocked) onDelete(cell.id);
       return;
     }
 
@@ -330,7 +333,7 @@ const CellComponent: React.FC<Props> = ({
       onRunRef.current(cell.id);
       return;
     }
-  }, [cell.id, index, onMove, onDelete, focusState]);
+  }, [cell.id, index, onMove, onDelete, focusState, isLocked]);
 
   return (
     <div
@@ -386,30 +389,34 @@ const CellComponent: React.FC<Props> = ({
             <Bot className="w-3.5 h-3.5" />
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); onMove(cell.id, 'up'); }}
-            className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-            title="Move Up"
+            onClick={(e) => { e.stopPropagation(); if (!isLocked) onMove(cell.id, 'up'); }}
+            disabled={isLocked}
+            className={`p-1 text-slate-400 rounded opacity-0 group-hover:opacity-100 transition-opacity ${isLocked ? 'cursor-not-allowed opacity-50' : 'hover:text-slate-700 hover:bg-slate-100'}`}
+            title={isLocked ? 'Locked during agent session' : 'Move Up'}
           >
             <ArrowUp className="w-3.5 h-3.5" />
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); onMove(cell.id, 'down'); }}
-            className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-            title="Move Down"
+            onClick={(e) => { e.stopPropagation(); if (!isLocked) onMove(cell.id, 'down'); }}
+            disabled={isLocked}
+            className={`p-1 text-slate-400 rounded opacity-0 group-hover:opacity-100 transition-opacity ${isLocked ? 'cursor-not-allowed opacity-50' : 'hover:text-slate-700 hover:bg-slate-100'}`}
+            title={isLocked ? 'Locked during agent session' : 'Move Down'}
           >
             <ArrowDown className="w-3.5 h-3.5" />
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); onDelete(cell.id); }}
-            className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-            title="Delete Cell"
+            onClick={(e) => { e.stopPropagation(); if (!isLocked) onDelete(cell.id); }}
+            disabled={isLocked}
+            className={`p-1 text-slate-400 rounded opacity-0 group-hover:opacity-100 transition-opacity ${isLocked ? 'cursor-not-allowed opacity-50' : 'hover:text-red-600 hover:bg-red-50'}`}
+            title={isLocked ? 'Locked during agent session' : 'Delete Cell'}
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); onAddCell(index); }}
-            className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-            title="Add Cell Below"
+            onClick={(e) => { e.stopPropagation(); if (!isLocked) onAddCell(index); }}
+            disabled={isLocked}
+            className={`p-1 text-slate-400 rounded opacity-0 group-hover:opacity-100 transition-opacity ${isLocked ? 'cursor-not-allowed opacity-50' : 'hover:text-blue-600 hover:bg-blue-50'}`}
+            title={isLocked ? 'Locked during agent session' : 'Add Cell Below'}
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
@@ -505,6 +512,7 @@ const CellComponent: React.FC<Props> = ({
           indentConfig={indentConfig}
           allCellsRef={allCellsRef}
           showLineNumbers={cell.type === 'code' && showLineNumbers}
+          readOnly={isLocked}
         />
       </div>
 

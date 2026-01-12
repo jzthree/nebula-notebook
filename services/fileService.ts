@@ -560,3 +560,66 @@ export const saveNotebookSession = async (
     return false;
   }
 };
+
+// --- Agent Permission API ---
+
+export interface AgentPermissionStatus {
+  notebook_path: string;
+  agent_created: boolean;
+  agent_permitted: boolean;
+  has_history: boolean;
+  can_agent_modify: boolean;
+  reason: string;
+}
+
+/**
+ * Get agent permission status for a notebook
+ */
+export const getAgentPermissionStatus = async (
+  notebookPath: string
+): Promise<AgentPermissionStatus | null> => {
+  try {
+    const response = await fetch(
+      `${API_BASE}/notebook/agent-status?path=${encodeURIComponent(notebookPath)}`
+    );
+
+    if (!response.ok) {
+      console.warn('Failed to get agent status:', await response.text());
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.warn('Failed to get agent permission status:', error);
+    return null;
+  }
+};
+
+/**
+ * Grant or revoke agent permission for a notebook
+ */
+export const setAgentPermission = async (
+  notebookPath: string,
+  permitted: boolean
+): Promise<AgentPermissionStatus | null> => {
+  try {
+    const response = await fetch(`${API_BASE}/notebook/permit-agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        notebook_path: notebookPath,
+        permitted
+      })
+    });
+
+    if (!response.ok) {
+      console.warn('Failed to set agent permission:', await response.text());
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.warn('Failed to set agent permission:', error);
+    return null;
+  }
+};
