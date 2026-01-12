@@ -259,10 +259,10 @@ class HeadlessOperationHandler:
         notebook_path = operation.get('notebookPath', '')
 
         # Read-only operations (no flush needed, no permission check needed)
-        read_only_ops = {'readCell', 'readCellOutput', 'startAgentSession', 'endAgentSession'}
+        read_only_ops = {'readCell', 'readCellOutput', 'searchCells', 'startAgentSession', 'endAgentSession'}
 
         # Operations that don't require permission (create new or read-only)
-        permission_exempt_ops = {'createNotebook', 'readCell', 'readCellOutput', 'startAgentSession', 'endAgentSession'}
+        permission_exempt_ops = {'createNotebook', 'readCell', 'readCellOutput', 'searchCells', 'startAgentSession', 'endAgentSession'}
 
         # Check agent permission for write operations on existing notebooks
         if op_type not in permission_exempt_ops and notebook_path:
@@ -293,6 +293,15 @@ class HeadlessOperationHandler:
                 result = await self._read_cell_output(operation)
             elif op_type == 'clearNotebook':
                 result = await self._clear_notebook(operation)
+            # Batch operations (Phase 1 enhancements)
+            elif op_type == 'deleteCells':
+                result = await self._delete_cells(operation)
+            elif op_type == 'insertCells':
+                result = await self._insert_cells(operation)
+            elif op_type == 'searchCells':
+                result = await self._search_cells(operation)
+            elif op_type == 'clearOutputs':
+                result = await self._clear_outputs(operation)
             elif op_type == 'startAgentSession':
                 # Track agent session in router to prevent headless fallback
                 if self._operation_router:
@@ -730,24 +739,76 @@ class HeadlessOperationHandler:
         }
 
     async def _move_cell(self, operation: Dict[str, Any]) -> Dict[str, Any]:
-        """Move a cell"""
+        """
+        Move a cell to a new position.
+
+        Supports two modes:
+        1. By index: fromIndex, toIndex (legacy)
+        2. By ID: cellId, afterCellId (or toIndex=-1 for start)
+
+        Parameters:
+            notebookPath: Path to notebook
+            fromIndex: Source index (legacy mode)
+            toIndex: Target index (legacy mode)
+            cellId: ID of cell to move (ID mode)
+            afterCellId: Move after this cell (ID mode, optional)
+            toIndex: -1 to move to start, or target index (with cellId)
+        """
         notebook_path = operation['notebookPath']
-        from_index = operation['fromIndex']
-        to_index = operation['toIndex']
+        cell_id = operation.get('cellId')
+        from_index = operation.get('fromIndex')
+        to_index = operation.get('toIndex')
+        after_cell_id = operation.get('afterCellId')
 
         cells = self._get_cells(notebook_path)
 
+        # Determine source cell
+        if cell_id:
+            # Find by ID
+            from_index = None
+            for i, cell in enumerate(cells):
+                if cell.get('id') == cell_id:
+                    from_index = i
+                    break
+            if from_index is None:
+                return {'success': False, 'error': f'Cell with ID "{cell_id}" not found'}
+        elif from_index is None:
+            return {'success': False, 'error': 'Must provide cellId or fromIndex'}
+
         if from_index < 0 or from_index >= len(cells):
             return {'success': False, 'error': 'Invalid from_index'}
+
+        # Determine target position
+        if after_cell_id:
+            # Move after specified cell
+            target_index = None
+            for i, cell in enumerate(cells):
+                if cell.get('id') == after_cell_id:
+                    target_index = i + 1  # Insert after this cell
+                    break
+            if target_index is None:
+                return {'success': False, 'error': f'Cell with ID "{after_cell_id}" not found'}
+            # Adjust if moving from before target
+            if from_index < target_index:
+                target_index -= 1
+            to_index = target_index
+        elif to_index == -1:
+            # Move to start (before all cells)
+            to_index = 0
+        elif to_index is None:
+            return {'success': False, 'error': 'Must provide afterCellId or toIndex'}
+
         if to_index < 0 or to_index >= len(cells):
             return {'success': False, 'error': 'Invalid to_index'}
 
+        # Perform move
         cell = cells.pop(from_index)
         cells.insert(to_index, cell)
         self._save_cells(notebook_path, cells)
 
         return {
             'success': True,
+            'cellId': cell.get('id'),
             'fromIndex': from_index,
             'toIndex': to_index
         }
@@ -1146,4 +1207,209 @@ class HeadlessOperationHandler:
             'deletedCount': deleted_count,
             'totalCells': 0,
             'operationTime': None  # Placeholder for future timing integration
+        }
+
+    # =========================================================================
+    # Batch Operations (Phase 1 enhancements)
+    # =========================================================================
+
+    async def _delete_cells(self, operation: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Delete multiple cells by ID in a single operation.
+        More efficient than multiple single deletes.
+        """
+        notebook_path = operation['notebookPath']
+        cell_ids = operation.get('cellIds', [])
+
+        if not cell_ids:
+            return {'success': False, 'error': 'No cell IDs provided'}
+
+        cells = self._get_cells(notebook_path)
+        original_count = len(cells)
+
+        # Find indices to delete (in reverse order to avoid index shifting)
+        indices_to_delete = []
+        deleted_ids = []
+        not_found = []
+
+        for cell_id in cell_ids:
+            found = False
+            for i, cell in enumerate(cells):
+                if cell.get('id') == cell_id:
+                    indices_to_delete.append(i)
+                    deleted_ids.append(cell_id)
+                    found = True
+                    break
+            if not found:
+                not_found.append(cell_id)
+
+        # Delete in reverse order to maintain correct indices
+        for idx in sorted(indices_to_delete, reverse=True):
+            cells.pop(idx)
+
+        self._save_cells(notebook_path, cells)
+
+        return {
+            'success': True,
+            'deletedCount': len(deleted_ids),
+            'deletedIds': deleted_ids,
+            'notFound': not_found if not_found else None,
+            'totalCells': len(cells)
+        }
+
+    async def _insert_cells(self, operation: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Insert multiple cells at a position in a single operation.
+        More efficient than multiple single inserts.
+        """
+        notebook_path = operation['notebookPath']
+        position = operation.get('position', -1)  # -1 means append at end
+        new_cells = operation.get('cells', [])
+
+        if not new_cells:
+            return {'success': False, 'error': 'No cells provided'}
+
+        cells = self._get_cells(notebook_path)
+
+        # Validate and prepare cells
+        inserted_cells = []
+        for i, cell_data in enumerate(new_cells):
+            cell_id = cell_data.get('id') or f'cell-{len(cells) + i}-{id(cell_data)}'
+            cell = {
+                'id': cell_id,
+                'type': cell_data.get('type', 'code'),
+                'content': cell_data.get('content', ''),
+                'outputs': cell_data.get('outputs', []),
+                'executionCount': cell_data.get('executionCount'),
+            }
+            inserted_cells.append(cell)
+
+        # Insert at position
+        if position < 0 or position >= len(cells):
+            # Append at end
+            insert_index = len(cells)
+            cells.extend(inserted_cells)
+        else:
+            insert_index = position
+            for i, cell in enumerate(inserted_cells):
+                cells.insert(position + i, cell)
+
+        self._save_cells(notebook_path, cells)
+
+        return {
+            'success': True,
+            'insertedCount': len(inserted_cells),
+            'insertedIds': [c['id'] for c in inserted_cells],
+            'startIndex': insert_index,
+            'totalCells': len(cells)
+        }
+
+    async def _search_cells(self, operation: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Search cells by keyword in source and/or outputs.
+        """
+        notebook_path = operation['notebookPath']
+        query = operation.get('query', '')
+        include_outputs = operation.get('includeOutputs', False)
+        limit = operation.get('limit', 10)
+
+        if not query:
+            return {'success': False, 'error': 'No search query provided'}
+
+        cells = self._get_cells(notebook_path)
+        query_lower = query.lower()
+        matches = []
+
+        for i, cell in enumerate(cells):
+            cell_id = cell.get('id', f'cell-{i}')
+            content = cell.get('content', '')
+
+            # Search in source
+            if query_lower in content.lower():
+                # Find line number of first match
+                lines = content.split('\n')
+                match_line = None
+                for line_num, line in enumerate(lines):
+                    if query_lower in line.lower():
+                        match_line = line_num
+                        break
+
+                matches.append({
+                    'cellId': cell_id,
+                    'cellIndex': i,
+                    'matchLocation': 'source',
+                    'matchLine': match_line,
+                    'preview': content[:200] + ('...' if len(content) > 200 else '')
+                })
+
+            # Search in outputs if requested
+            if include_outputs:
+                for out_idx, output in enumerate(cell.get('outputs', [])):
+                    out_content = output.get('content', '')
+                    if query_lower in out_content.lower():
+                        matches.append({
+                            'cellId': cell_id,
+                            'cellIndex': i,
+                            'matchLocation': 'output',
+                            'outputIndex': out_idx,
+                            'outputType': output.get('type', 'unknown'),
+                            'preview': out_content[:200] + ('...' if len(out_content) > 200 else '')
+                        })
+
+            if len(matches) >= limit:
+                break
+
+        return {
+            'success': True,
+            'query': query,
+            'matchCount': len(matches),
+            'matches': matches[:limit],
+            'hasMore': len(matches) > limit
+        }
+
+    async def _clear_outputs(self, operation: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Clear outputs from one or more cells without re-executing.
+        Useful for cleanup before sharing notebooks.
+        """
+        notebook_path = operation['notebookPath']
+        cell_id = operation.get('cellId')
+        cell_ids = operation.get('cellIds', [])
+
+        # Support both single ID and list of IDs
+        if cell_id and not cell_ids:
+            cell_ids = [cell_id]
+
+        cells = self._get_cells(notebook_path)
+        cleared_ids = []
+        not_found = []
+
+        if not cell_ids:
+            # Clear all cells if no IDs specified
+            for cell in cells:
+                if cell.get('outputs'):
+                    cell['outputs'] = []
+                    cell['executionCount'] = None
+                    cleared_ids.append(cell.get('id'))
+        else:
+            # Clear specific cells
+            for cid in cell_ids:
+                found = False
+                for cell in cells:
+                    if cell.get('id') == cid:
+                        cell['outputs'] = []
+                        cell['executionCount'] = None
+                        cleared_ids.append(cid)
+                        found = True
+                        break
+                if not found:
+                    not_found.append(cid)
+
+        self._save_cells(notebook_path, cells)
+
+        return {
+            'success': True,
+            'clearedCount': len(cleared_ids),
+            'clearedIds': cleared_ids,
+            'notFound': not_found if not_found else None
         }

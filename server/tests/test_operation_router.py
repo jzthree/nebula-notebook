@@ -160,6 +160,7 @@ class TestHeadlessOperationHandler:
         }
 
         result = await headless_manager.apply_operation(operation)
+        await headless_manager.flush("/test/notebook.ipynb")  # Wait for persist
 
         assert result["success"] is True
         assert result["cellId"] == "new-cell"
@@ -186,6 +187,7 @@ class TestHeadlessOperationHandler:
         }
 
         result = await headless_manager.apply_operation(operation)
+        await headless_manager.flush("/test/notebook.ipynb")  # Wait for persist
 
         assert result["success"] is True
         assert result["cellId"] == "middle-cell"
@@ -235,6 +237,7 @@ class TestHeadlessOperationHandler:
         }
 
         result = await headless_manager.apply_operation(operation)
+        await headless_manager.flush("/test/notebook.ipynb")  # Wait for persist
 
         assert result["success"] is True
         cells = mock_fs.notebooks["/test/notebook.ipynb"]["cells"]
@@ -257,6 +260,7 @@ class TestHeadlessOperationHandler:
         }
 
         result = await headless_manager.apply_operation(operation)
+        await headless_manager.flush("/test/notebook.ipynb")  # Wait for persist
 
         assert result["success"] is True
         cells = mock_fs.notebooks["/test/notebook.ipynb"]["cells"]
@@ -278,6 +282,7 @@ class TestHeadlessOperationHandler:
         }
 
         result = await headless_manager.apply_operation(operation)
+        await headless_manager.flush("/test/notebook.ipynb")  # Wait for persist
 
         assert result["success"] is True
         assert mock_fs.notebooks["/test/notebook.ipynb"]["cells"][0]["source"] == "updated content"
@@ -318,6 +323,7 @@ class TestHeadlessOperationHandler:
         }
 
         result = await headless_manager.apply_operation(operation)
+        await headless_manager.flush("/test/notebook.ipynb")  # Wait for persist
 
         assert result["success"] is True
         cells = mock_fs.notebooks["/test/notebook.ipynb"]["cells"]
@@ -340,6 +346,7 @@ class TestHeadlessOperationHandler:
         }
 
         result = await headless_manager.apply_operation(operation)
+        await headless_manager.flush("/test/notebook.ipynb")  # Wait for persist
 
         assert result["success"] is True
         assert result["cellId"] == "cell-1-copy"
@@ -365,6 +372,7 @@ class TestHeadlessOperationHandler:
         }
 
         result = await headless_manager.apply_operation(operation)
+        await headless_manager.flush("/test/notebook.ipynb")  # Wait for persist
 
         assert result["success"] is True
         assert mock_fs.notebooks["/test/notebook.ipynb"]["cells"][0]["cell_type"] == "markdown"
@@ -387,6 +395,7 @@ class TestHeadlessOperationHandler:
         }
 
         result = await headless_manager.apply_operation(operation)
+        await headless_manager.flush("/test/notebook.ipynb")  # Wait for persist
 
         assert result["success"] is True
         cell = mock_fs.notebooks["/test/notebook.ipynb"]["cells"][0]
