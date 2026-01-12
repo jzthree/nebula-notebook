@@ -313,14 +313,15 @@ class TestReadCellOutput:
         os.remove(output["temp_file"])
 
     @pytest.mark.asyncio
-    async def test_image_output_handled_specially(self, mock_fs, handler):
-        """Image outputs should return placeholder, not be truncated"""
+    async def test_image_output_returned_in_full(self, mock_fs, handler):
+        """Image outputs should be returned in full, not truncated"""
+        image_content = "base64data..." * 1000
         mock_fs.add_notebook("/test.ipynb", [
             {
                 "id": "cell-1",
                 "type": "code",
                 "content": "",
-                "outputs": [{"type": "image", "content": "base64data..." * 1000}],
+                "outputs": [{"type": "image", "content": image_content}],
             }
         ])
 
@@ -333,7 +334,8 @@ class TestReadCellOutput:
         assert result["success"] is True
         output = result["outputs"][0]
         assert output["is_binary"] is True
-        assert "[Image data" in output["content"]
+        assert output["content"] == image_content  # Full image data returned
+        assert output["truncated"] is False
 
     @pytest.mark.asyncio
     async def test_multiple_outputs(self, mock_fs, handler):

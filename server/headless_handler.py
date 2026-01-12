@@ -1070,11 +1070,11 @@ class HeadlessOperationHandler:
             output_type = output.get('type', '')
             content = output.get('content', '')
 
-            # Skip non-text outputs (images, etc.)
+            # Images are returned as-is (not affected by truncation limits)
             if output_type == 'image':
                 processed_outputs.append({
                     'type': output_type,
-                    'content': '[Image data - use read_cell to get full content]',
+                    'content': content,  # Return actual base64 image data
                     'truncated': False,
                     'is_binary': True,
                 })
