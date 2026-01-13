@@ -301,11 +301,16 @@ class FilesystemService:
         return self._get_file_info(path).__dict__
 
     def delete_file(self, path: str) -> bool:
-        """Delete a file or directory"""
+        """Delete a file or directory. For notebooks, also deletes history and session files."""
         path = self._normalize_path(path)
 
         if not os.path.exists(path):
             raise FileNotFoundError(f"Path not found: {path}")
+
+        # For notebooks, also delete history and session files
+        ext = os.path.splitext(path)[1].lower()
+        if ext == '.ipynb' and not os.path.isdir(path):
+            self._delete_notebook_metadata(path)
 
         if os.path.isdir(path):
             shutil.rmtree(path)
@@ -314,8 +319,19 @@ class FilesystemService:
 
         return True
 
+    def _delete_notebook_metadata(self, path: str) -> None:
+        """Delete notebook-related metadata files (history, session)."""
+        history_path = self._get_history_path(path)
+        session_path = self._get_session_path(path)
+
+        if os.path.exists(history_path):
+            os.remove(history_path)
+
+        if os.path.exists(session_path):
+            os.remove(session_path)
+
     def rename_file(self, old_path: str, new_path: str) -> Dict[str, Any]:
-        """Rename/move a file or directory"""
+        """Rename/move a file or directory. For notebooks, also renames history and session files."""
         old_path = self._normalize_path(old_path)
         new_path = self._normalize_path(new_path)
 
@@ -325,9 +341,105 @@ class FilesystemService:
         if os.path.exists(new_path):
             raise FileExistsError(f"Destination already exists: {new_path}")
 
+        # For notebooks, also rename history and session files
+        ext = os.path.splitext(old_path)[1].lower()
+        if ext == '.ipynb':
+            self._rename_notebook_metadata(old_path, new_path)
+
         shutil.move(old_path, new_path)
 
         return self._get_file_info(new_path).__dict__
+
+    def _rename_notebook_metadata(self, old_path: str, new_path: str) -> None:
+        """Rename notebook-related metadata files (history, session)."""
+        # Get old history/session paths
+        old_history = self._get_history_path(old_path)
+        old_session = self._get_session_path(old_path)
+
+        # Get new history/session paths
+        new_history = self._get_history_path(new_path)
+        new_session = self._get_session_path(new_path)
+
+        # Create destination .nebula directory if needed
+        new_nebula_dir = os.path.dirname(new_history)
+        if not os.path.exists(new_nebula_dir):
+            os.makedirs(new_nebula_dir, exist_ok=True)
+
+        # Rename history file if it exists
+        if os.path.exists(old_history):
+            shutil.move(old_history, new_history)
+
+        # Rename session file if it exists
+        if os.path.exists(old_session):
+            shutil.move(old_session, new_session)
+
+    def duplicate_file(self, path: str) -> Dict[str, Any]:
+        """Duplicate a file with _copy suffix. For notebooks, also duplicates history."""
+        path = self._normalize_path(path)
+
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File not found: {path}")
+
+        if os.path.isdir(path):
+            raise IsADirectoryError(f"Cannot duplicate directories: {path}")
+
+        # Generate new filename with _copy suffix
+        parent_dir = os.path.dirname(path)
+        filename = os.path.basename(path)
+        name, ext = os.path.splitext(filename)
+
+        # Find a unique name
+        new_name = f"{name}_copy{ext}"
+        new_path = os.path.join(parent_dir, new_name)
+        counter = 2
+        while os.path.exists(new_path):
+            new_name = f"{name}_copy_{counter}{ext}"
+            new_path = os.path.join(parent_dir, new_name)
+            counter += 1
+
+        # Copy the file
+        shutil.copy2(path, new_path)
+
+        # For notebooks, also duplicate history and session files
+        if ext.lower() == '.ipynb':
+            self._duplicate_notebook_metadata(path, new_path)
+
+        # Return file info in the format expected by the frontend
+        info = self._get_file_info(new_path)
+        return {
+            "id": new_path,
+            "name": info.name,
+            "path": info.path,
+            "isDirectory": info.is_directory,
+            "size": self._format_size(info.size),
+            "sizeBytes": info.size,
+            "modified": info.modified,
+            "extension": info.extension,
+            "fileType": self._get_file_type(info.extension)
+        }
+
+    def _duplicate_notebook_metadata(self, src_path: str, dest_path: str) -> None:
+        """Duplicate notebook-related metadata files (history, session)."""
+        # Get history file paths
+        src_history = self._get_history_path(src_path)
+        dest_history = self._get_history_path(dest_path)
+
+        # Get session file paths
+        src_session = self._get_session_path(src_path)
+        dest_session = self._get_session_path(dest_path)
+
+        # Create .nebula directory for destination if needed
+        dest_nebula_dir = os.path.dirname(dest_history)
+        if not os.path.exists(dest_nebula_dir):
+            os.makedirs(dest_nebula_dir, exist_ok=True)
+
+        # Copy history file if it exists
+        if os.path.exists(src_history):
+            shutil.copy2(src_history, dest_history)
+
+        # Copy session file if it exists
+        if os.path.exists(src_session):
+            shutil.copy2(src_session, dest_session)
 
     async def upload_file(self, directory: str, file) -> Dict[str, Any]:
         """

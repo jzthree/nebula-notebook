@@ -201,6 +201,25 @@ export const renameFile = async (oldPath: string, newPath: string): Promise<File
 };
 
 /**
+ * Duplicate a file
+ */
+export const duplicateFile = async (sourcePath: string): Promise<FileItem> => {
+  const response = await fetch(`${API_BASE}/fs/duplicate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: sourcePath })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to duplicate file');
+  }
+
+  const data = await response.json();
+  return data.file;
+};
+
+/**
  * Upload a file to a directory
  */
 export const uploadFile = async (directory: string, file: File): Promise<FileItem> => {

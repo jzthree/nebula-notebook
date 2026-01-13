@@ -84,6 +84,10 @@ class RenameFileRequest(BaseModel):
     new_path: str
 
 
+class DuplicateFileRequest(BaseModel):
+    path: str
+
+
 class SaveNotebookRequest(BaseModel):
     path: str
     cells: List[Dict[str, Any]]
@@ -760,6 +764,20 @@ async def rename_file(request: RenameFileRequest):
         raise HTTPException(status_code=404, detail=str(e))
     except FileExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/fs/duplicate")
+async def duplicate_file(request: DuplicateFileRequest):
+    """Duplicate a file"""
+    try:
+        info = fs_service.duplicate_file(request.path)
+        return {"status": "ok", "file": info}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except IsADirectoryError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

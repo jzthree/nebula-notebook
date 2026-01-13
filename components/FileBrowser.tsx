@@ -4,7 +4,7 @@ import {
   File,
   Plus,
   Trash2,
-  Edit2,
+  Copy,
   X,
   FolderOpen,
   Filter,
@@ -28,7 +28,7 @@ import {
   getDirectoryMtime,
   createNotebook,
   deleteFile,
-  renameFile,
+  duplicateFile,
   downloadFile,
   uploadFile,
   FileItem,
@@ -67,8 +67,6 @@ export const FileBrowser: React.FC<Props> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState('');
   const [showNotebooksOnly, setShowNotebooksOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'modified'>('modified');
@@ -182,33 +180,16 @@ export const FileBrowser: React.FC<Props> = ({
     }
   };
 
-  const startEdit = (e: React.MouseEvent, item: FileItem) => {
+  const handleDuplicate = async (e: React.MouseEvent, item: FileItem) => {
     e.stopPropagation();
-    setEditingId(item.id);
-    setEditName(item.name.replace(item.extension, ''));
-  };
-
-  const saveEdit = async () => {
-    if (editingId && editName.trim()) {
-      const item = items.find(i => i.id === editingId);
-      if (item) {
-        const dir = item.path.substring(0, item.path.lastIndexOf('/'));
-        const newPath = `${dir}/${editName}${item.extension}`;
-        try {
-          await renameFile(item.path, newPath);
-          loadDirectory(currentPath);
-          onRefresh();
-        } catch (err: any) {
-          toast(err.message || 'Failed to rename file', 'error');
-        }
-      }
-      setEditingId(null);
+    try {
+      await duplicateFile(item.path);
+      loadDirectory(currentPath);
+      onRefresh();
+      toast(`Duplicated ${item.name}`, 'success');
+    } catch (err: any) {
+      toast(err.message || 'Failed to duplicate file', 'error');
     }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') saveEdit();
-    if (e.key === 'Escape') setEditingId(null);
   };
 
   const handleItemClick = (item: FileItem) => {
@@ -461,35 +442,22 @@ export const FileBrowser: React.FC<Props> = ({
               <div className="flex items-center gap-2 overflow-hidden flex-1">
                 {getFileIcon(item)}
 
-                {editingId === item.id ? (
-                  <input
-                    type="text"
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    onBlur={saveEdit}
-                    onKeyDown={handleKeyDown}
-                    className="w-full text-xs px-1 py-0.5 border border-blue-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    autoFocus
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                ) : (
-                  <div className="flex flex-col truncate min-w-0">
-                    <span className="text-xs truncate" title={item.name}>
-                      {item.name}
+                <div className="flex flex-col truncate min-w-0">
+                  <span className="text-xs truncate" title={item.name}>
+                    {item.name}
+                  </span>
+                  {!item.isDirectory && (
+                    <span className="text-[9px] text-slate-400 flex gap-2">
+                      {new Date(item.modified * 1000).toLocaleDateString()}
+                      <span>•</span>
+                      {item.size}
                     </span>
-                    {!item.isDirectory && (
-                      <span className="text-[9px] text-slate-400 flex gap-2">
-                        {new Date(item.modified * 1000).toLocaleDateString()}
-                        <span>•</span>
-                        {item.size}
-                      </span>
-                    )}
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
 
               {/* Hover Actions */}
-              {!item.isDirectory && editingId !== item.id && (
+              {!item.isDirectory && (
                 <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                   <div className="flex bg-white shadow-sm rounded border border-slate-200">
                     {item.extension === '.ipynb' && (
@@ -510,19 +478,19 @@ export const FileBrowser: React.FC<Props> = ({
                       </>
                     )}
                     <button
+                      onClick={(e) => handleDuplicate(e, item)}
+                      className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50"
+                      title="Duplicate"
+                    >
+                      <Copy className="w-3 h-3" />
+                    </button>
+                    <div className="w-[1px] bg-slate-200"></div>
+                    <button
                       onClick={(e) => handleDownload(e, item)}
                       className="p-1 text-slate-400 hover:text-purple-600 hover:bg-purple-50"
                       title="Download"
                     >
                       <Download className="w-3 h-3" />
-                    </button>
-                    <div className="w-[1px] bg-slate-200"></div>
-                    <button
-                      onClick={(e) => startEdit(e, item)}
-                      className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50"
-                      title="Rename"
-                    >
-                      <Edit2 className="w-3 h-3" />
                     </button>
                     <div className="w-[1px] bg-slate-200"></div>
                     <button
