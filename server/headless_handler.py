@@ -69,10 +69,12 @@ import copy
 import json
 import os
 import tempfile
+import time
 import uuid
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 
 from cell_metadata import validate_metadata_value
+from kernel_service import kernel_service
 
 # Output truncation defaults for MCP read_output
 OUTPUT_DEFAULT_MAX_LINES = 100
@@ -302,6 +304,8 @@ class HeadlessOperationHandler:
                 result = await self._search_cells(operation)
             elif op_type == 'clearOutputs':
                 result = await self._clear_outputs(operation)
+            elif op_type == 'executeCell':
+                result = await self._execute_cell(operation)
             elif op_type == 'startAgentSession':
                 # Track agent session in router to prevent headless fallback
                 if self._operation_router:
@@ -1412,4 +1416,137 @@ class HeadlessOperationHandler:
             'clearedCount': len(cleared_ids),
             'clearedIds': cleared_ids,
             'notFound': not_found if not_found else None
+        }
+
+    async def _execute_cell(self, operation: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute a cell in headless mode.
+
+        Routes to kernel service for execution. For long-running cells,
+        returns with status='busy' after max_wait seconds.
+        """
+        notebook_path = operation['notebookPath']
+        cell_id = operation.get('cellId')
+        cell_index = operation.get('cellIndex')
+        session_id = operation.get('sessionId')
+        max_wait = operation.get('maxWait', 10)  # Default 10 seconds
+        save_outputs = operation.get('saveOutputs', True)
+
+        cells = self._get_cells(notebook_path)
+
+        # Find the cell
+        if cell_id:
+            found_index = None
+            for i, cell in enumerate(cells):
+                if cell.get('id') == cell_id:
+                    found_index = i
+                    break
+            if found_index is None:
+                return {'success': False, 'error': f'Cell with ID "{cell_id}" not found'}
+            cell_index = found_index
+        elif cell_index is not None:
+            if cell_index < 0 or cell_index >= len(cells):
+                return {'success': False, 'error': f'Cell index {cell_index} out of range'}
+        else:
+            return {'success': False, 'error': 'Must provide cellId or cellIndex'}
+
+        cell = cells[cell_index]
+        cell_id = cell.get('id')
+
+        if cell.get('type') != 'code':
+            return {'success': False, 'error': f'Cell {cell_index} is not a code cell'}
+
+        code = cell.get('content', '')
+        if not code.strip():
+            # Empty cell - just clear outputs
+            cell['outputs'] = []
+            cell['executionCount'] = None
+            if save_outputs:
+                self._save_cells(notebook_path, cells)
+            return {
+                'success': True,
+                'cellId': cell_id,
+                'cellIndex': cell_index,
+                'executionStatus': 'idle',
+                'outputs': [],
+                'executionCount': None
+            }
+
+        # Get or create kernel session
+        if not session_id:
+            # Try to get existing session for this file
+            for sid, session in kernel_service.sessions.items():
+                if session.file_path == notebook_path:
+                    session_id = sid
+                    break
+
+            # Create new session if needed
+            if not session_id:
+                try:
+                    session = await kernel_service.start_kernel(file_path=notebook_path)
+                    session_id = session.id
+                except Exception as e:
+                    return {'success': False, 'error': f'Failed to start kernel: {e}'}
+
+        # Verify session exists
+        if session_id not in kernel_service.sessions:
+            return {'success': False, 'error': f'Session {session_id} not found'}
+
+        # Execute with timeout
+        outputs: List[Dict[str, Any]] = []
+        execution_count = None
+        start_time = time.time()
+        execution_complete = asyncio.Event()
+        execution_error = None
+
+        async def output_callback(output: Dict[str, Any]):
+            nonlocal execution_count
+            outputs.append(output)
+            # Save outputs periodically if requested
+            if save_outputs and len(outputs) % 5 == 0:
+                cell['outputs'] = outputs.copy()
+                self._save_cells(notebook_path, cells)
+
+        async def execute_task():
+            nonlocal execution_count, execution_error
+            try:
+                result = await kernel_service.execute_code(session_id, code, output_callback)
+                execution_count = result.get('execution_count')
+                if result.get('status') == 'error':
+                    execution_error = result.get('error')
+            except Exception as e:
+                execution_error = str(e)
+            finally:
+                execution_complete.set()
+
+        # Start execution in background
+        task = asyncio.create_task(execute_task())
+
+        # Wait for completion or timeout
+        try:
+            await asyncio.wait_for(execution_complete.wait(), timeout=max_wait)
+            status = 'error' if execution_error else 'idle'
+        except asyncio.TimeoutError:
+            status = 'busy'  # Still running
+
+        elapsed = time.time() - start_time
+
+        # Update cell outputs
+        cell['outputs'] = outputs.copy()
+        if execution_count is not None:
+            cell['executionCount'] = execution_count
+
+        if save_outputs:
+            self._save_cells(notebook_path, cells)
+
+        return {
+            'success': True,
+            'cellId': cell_id,
+            'cellIndex': cell_index,
+            'executionStatus': status,
+            'executionCount': execution_count,
+            'outputs': outputs,
+            'executionTime': int(elapsed * 1000),  # ms
+            'sessionId': session_id,
+            'error': execution_error
         }
