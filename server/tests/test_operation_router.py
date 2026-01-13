@@ -134,7 +134,7 @@ def headless_manager(mock_fs):
 def router(headless_manager):
     """Create an operation router with headless manager"""
     r = OperationRouter()
-    r.set_headless_manager(headless_manager)
+    r.set_headless_handler(headless_manager)
     return r
 
 
