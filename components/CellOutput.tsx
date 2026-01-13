@@ -8,7 +8,6 @@ import {
   MAX_OUTPUT_CHARS_ERROR,
   OUTPUT_MIN_HEIGHT_PX,
   OUTPUT_DEFAULT_HEIGHT_PX,
-  OUTPUT_MAX_HEIGHT_PX,
 } from '../config';
 
 // Display limits to prevent UI freeze from huge outputs
@@ -80,7 +79,6 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean }> = ({ outp
 
 const MIN_HEIGHT = OUTPUT_MIN_HEIGHT_PX;
 const DEFAULT_COLLAPSED_HEIGHT = OUTPUT_DEFAULT_HEIGHT_PX;
-const MAX_HEIGHT = OUTPUT_MAX_HEIGHT_PX;
 
 export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, onScrolledChange, scrolledHeight, onScrolledHeightChange }) => {
   // scrolled prop controls collapse state (Jupyter standard: true = collapsed with scrollbar)
@@ -266,7 +264,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       const deltaY = moveEvent.clientY - startY;
-      finalHeight = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startHeight + deltaY));
+      finalHeight = Math.max(MIN_HEIGHT, startHeight + deltaY);
       setCollapsedHeight(finalHeight);
     };
 
