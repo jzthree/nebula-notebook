@@ -1,9 +1,18 @@
 /**
  * Terminal Service - Client for the terminal server
+ *
+ * Uses /terminal proxy to reach the terminal server, allowing it to work
+ * when accessing Nebula remotely (the browser connects to the same host).
  */
 
-const TERMINAL_SERVER_URL = 'http://localhost:3001';
-const TERMINAL_WS_URL = 'ws://localhost:3001';
+// Use relative URLs - Vite proxies /terminal to localhost:3001
+const TERMINAL_API_PREFIX = '/terminal';
+
+// WebSocket URL uses the same host as the page
+function getTerminalWsUrl(): string {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}/terminal`;
+}
 
 export interface TerminalInfo {
   id: string;
@@ -28,7 +37,7 @@ export interface CreateTerminalOptions {
  */
 export async function checkTerminalServer(): Promise<boolean> {
   try {
-    const response = await fetch(`${TERMINAL_SERVER_URL}/api/health`);
+    const response = await fetch(`${TERMINAL_API_PREFIX}/api/health`);
     return response.ok;
   } catch {
     return false;
@@ -39,7 +48,7 @@ export async function checkTerminalServer(): Promise<boolean> {
  * Create a new terminal session
  */
 export async function createTerminal(options?: CreateTerminalOptions): Promise<TerminalInfo> {
-  const response = await fetch(`${TERMINAL_SERVER_URL}/api/terminals`, {
+  const response = await fetch(`${TERMINAL_API_PREFIX}/api/terminals`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(options || {}),
@@ -57,7 +66,7 @@ export async function createTerminal(options?: CreateTerminalOptions): Promise<T
  * List all active terminals
  */
 export async function listTerminals(): Promise<TerminalInfo[]> {
-  const response = await fetch(`${TERMINAL_SERVER_URL}/api/terminals`);
+  const response = await fetch(`${TERMINAL_API_PREFIX}/api/terminals`);
 
   if (!response.ok) {
     throw new Error('Failed to list terminals');
@@ -70,7 +79,7 @@ export async function listTerminals(): Promise<TerminalInfo[]> {
  * Get terminal info by ID
  */
 export async function getTerminal(id: string): Promise<TerminalInfo | null> {
-  const response = await fetch(`${TERMINAL_SERVER_URL}/api/terminals/${id}`);
+  const response = await fetch(`${TERMINAL_API_PREFIX}/api/terminals/${id}`);
 
   if (response.status === 404) {
     return null;
@@ -87,7 +96,7 @@ export async function getTerminal(id: string): Promise<TerminalInfo | null> {
  * Close a terminal session
  */
 export async function closeTerminal(id: string): Promise<void> {
-  const response = await fetch(`${TERMINAL_SERVER_URL}/api/terminals/${id}`, {
+  const response = await fetch(`${TERMINAL_API_PREFIX}/api/terminals/${id}`, {
     method: 'DELETE',
   });
 
@@ -100,7 +109,7 @@ export async function closeTerminal(id: string): Promise<void> {
  * Resize a terminal
  */
 export async function resizeTerminal(id: string, cols: number, rows: number): Promise<void> {
-  const response = await fetch(`${TERMINAL_SERVER_URL}/api/terminals/${id}/resize`, {
+  const response = await fetch(`${TERMINAL_API_PREFIX}/api/terminals/${id}/resize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ cols, rows }),
@@ -115,7 +124,7 @@ export async function resizeTerminal(id: string, cols: number, rows: number): Pr
  * Connect to a terminal via WebSocket
  */
 export function connectTerminal(id: string): WebSocket {
-  return new WebSocket(`${TERMINAL_WS_URL}/ws?id=${id}`);
+  return new WebSocket(`${getTerminalWsUrl()}/ws?id=${id}`);
 }
 
 /**

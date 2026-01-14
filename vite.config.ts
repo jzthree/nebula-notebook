@@ -14,6 +14,12 @@ export default defineConfig(({ mode }) => {
             changeOrigin: true,
             ws: true,
           },
+          '/terminal': {
+            target: 'http://localhost:3001',
+            changeOrigin: true,
+            ws: true,
+            rewrite: (path) => path.replace(/^\/terminal/, ''),
+          },
         },
       },
       plugins: [react()],
