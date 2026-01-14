@@ -137,9 +137,11 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
       terminal.write('\r\n\x1b[90m[Disconnected]\x1b[0m\r\n');
     };
 
-    // Handle terminal input - only send if this terminal is active
+    // Handle terminal input - only send if this terminal is active and focused
     terminal.onData((data) => {
-      if (isActiveRef.current && ws.readyState === WebSocket.OPEN) {
+      // Check both the active state and that the terminal actually has focus
+      const hasFocus = containerRef.current?.contains(document.activeElement);
+      if (isActiveRef.current && hasFocus && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'input', data }));
       }
     });
@@ -183,10 +185,18 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
     return () => window.removeEventListener('resize', handleResize);
   }, [handleResize]);
 
-  // Focus terminal when active
+  // Focus/blur terminal based on active state
   useEffect(() => {
-    if (isActive && terminalRef.current) {
-      terminalRef.current.focus();
+    if (terminalRef.current) {
+      if (isActive) {
+        // Small delay to ensure DOM is ready
+        setTimeout(() => {
+          terminalRef.current?.focus();
+        }, 10);
+      } else {
+        // Blur when becoming inactive to prevent stealing input
+        terminalRef.current.blur();
+      }
     }
   }, [isActive]);
 
