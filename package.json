@@ -12,6 +12,7 @@
     "terminal": "cd terminal-server && npm run dev",
     "terminal:build": "cd terminal-server && npm run build",
     "setup": "node setup.cjs",
+    "postinstall": "cd terminal-server && npm install",
     "prestart": "node setup.cjs",
     "start": "concurrently --kill-others --kill-signal SIGTERM --raw \"npm run server\" \"npm run terminal\" \"npm run dev\"",
     "start:prod": "npm run build && npm run server:prod",
