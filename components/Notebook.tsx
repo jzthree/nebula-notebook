@@ -115,6 +115,7 @@ export const Notebook: React.FC = () => {
   const [isKernelManagerOpen, setIsKernelManagerOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isKeyboardHelpOpen, setIsKeyboardHelpOpen] = useState(false);
+  const [memoryUsage, setMemoryUsage] = useState<{ used: number; total: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState<{
     query: string;
     caseSensitive: boolean;
@@ -908,6 +909,23 @@ export const Notebook: React.FC = () => {
   // Dismiss execution result indicator
   const dismissExecutionResult = useCallback(() => {
     setLastExecutionResult(null);
+  }, []);
+
+  // Memory usage tracking (Chrome-specific API)
+  useEffect(() => {
+    const updateMemory = () => {
+      // Chrome-specific memory API
+      const perf = performance as Performance & { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } };
+      if (perf.memory) {
+        setMemoryUsage({
+          used: perf.memory.usedJSHeapSize,
+          total: perf.memory.jsHeapSizeLimit
+        });
+      }
+    };
+    updateMemory();
+    const interval = setInterval(updateMemory, 5000); // Update every 5 seconds
+    return () => clearInterval(interval);
   }, []);
 
   // Fetch available kernels and initialize
@@ -2695,7 +2713,43 @@ export const Notebook: React.FC = () => {
           onClose={() => setIsTerminalOpen(false)}
         />
 
-        <div className={`absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-4 bg-white p-2 rounded-full shadow-lg border border-slate-200 z-20 ${agentSession ? 'opacity-50' : ''} ${isTerminalOpen ? 'hidden' : ''}`}>
+        {/* Status Bar */}
+        <div className="h-6 flex items-center justify-between px-2 bg-slate-100 dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-400 select-none shrink-0">
+          {/* Left side */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsTerminalOpen(!isTerminalOpen)}
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-colors ${
+                isTerminalOpen
+                  ? 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                  : 'hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+              title="Toggle Terminal (Ctrl+`)"
+            >
+              <Terminal className="w-3 h-3" />
+              <span>Terminal</span>
+            </button>
+          </div>
+
+          {/* Right side */}
+          <div className="flex items-center gap-3">
+            {/* Cell count */}
+            <span className="flex items-center gap-1" title={`${cells.filter(c => c.type === 'code').length} code, ${cells.filter(c => c.type === 'markdown').length} markdown`}>
+              <Layers className="w-3 h-3" />
+              {cells.length} cells
+            </span>
+
+            {/* Memory usage (Chrome only) */}
+            {memoryUsage && (
+              <span className="flex items-center gap-1 tabular-nums" title={`Memory: ${(memoryUsage.used / 1024 / 1024).toFixed(0)}MB used of ${(memoryUsage.total / 1024 / 1024).toFixed(0)}MB`}>
+                <Cpu className="w-3 h-3" />
+                {(memoryUsage.used / 1024 / 1024).toFixed(0)}MB
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className={`absolute bottom-14 left-1/2 -translate-x-1/2 flex gap-4 bg-white p-2 rounded-full shadow-lg border border-slate-200 z-20 ${agentSession ? 'opacity-50' : ''} ${isTerminalOpen ? 'hidden' : ''}`}>
             <button
               onClick={() => handleAddCell('code')}
               disabled={agentSession !== null}
