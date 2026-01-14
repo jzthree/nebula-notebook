@@ -2710,6 +2710,7 @@ export const Notebook: React.FC = () => {
         <TerminalPanel
           isOpen={isTerminalOpen}
           onClose={() => setIsTerminalOpen(false)}
+          notebookPath={currentFileId}
         />
 
         {/* Status Bar */}

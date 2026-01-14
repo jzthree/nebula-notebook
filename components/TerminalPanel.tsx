@@ -1,23 +1,21 @@
 /**
- * TerminalPanel - Bottom panel container with tabs for multiple terminals
+ * TerminalPanel - Single terminal per notebook
+ *
+ * Terminal is created lazily when first opened and closed when notebook changes.
+ * This is better suited for agentic use where each notebook has its own terminal context.
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Terminal,
-  Plus,
   X,
-  Minus,
   Maximize2,
   Minimize2,
-  GripHorizontal,
   AlertCircle,
-  Trash2,
 } from 'lucide-react';
 import { TerminalInstance } from './TerminalInstance';
 import {
   createTerminal,
-  listTerminals,
   closeTerminal,
   checkTerminalServer,
   TerminalInfo,
@@ -26,6 +24,7 @@ import {
 interface TerminalPanelProps {
   isOpen: boolean;
   onClose: () => void;
+  notebookPath?: string | null; // Current notebook path for cwd
   defaultHeight?: number;
 }
 
@@ -36,11 +35,11 @@ const DEFAULT_HEIGHT = 300;
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   isOpen,
   onClose,
+  notebookPath,
   defaultHeight = DEFAULT_HEIGHT,
 }) => {
   const [height, setHeight] = useState(defaultHeight);
-  const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
-  const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
+  const [terminal, setTerminal] = useState<TerminalInfo | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [serverAvailable, setServerAvailable] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -48,93 +47,65 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const currentNotebookRef = useRef<string | null>(null);
 
-  // Check server availability and load existing terminals on mount
+  // Close terminal when notebook changes
+  useEffect(() => {
+    const prevNotebook = currentNotebookRef.current;
+    currentNotebookRef.current = notebookPath ?? null;
+
+    // If notebook changed and we have a terminal, close it
+    if (prevNotebook && prevNotebook !== notebookPath && terminal) {
+      closeTerminal(terminal.id).catch(console.error);
+      setTerminal(null);
+    }
+  }, [notebookPath, terminal]);
+
+  // Check server availability when panel opens
   useEffect(() => {
     if (!isOpen) return;
 
-    const init = async () => {
+    const checkServer = async () => {
       const available = await checkTerminalServer();
-
-      if (available) {
-        try {
-          const existingTerminals = await listTerminals();
-          setTerminals(existingTerminals);
-
-          // Set active terminal to first one if exists
-          if (existingTerminals.length > 0 && !activeTerminalId) {
-            setActiveTerminalId(existingTerminals[0].id);
-          }
-        } catch (error) {
-          console.error('[TerminalPanel] Failed to list terminals:', error);
-        }
-      }
-
-      // Set serverAvailable AFTER loading terminals to prevent race condition
       setServerAvailable(available);
     };
 
-    init();
+    checkServer();
   }, [isOpen]);
 
-  // Create a new terminal
-  const handleCreateTerminal = useCallback(async () => {
-    if (!serverAvailable) return;
+  // Create terminal when panel opens and no terminal exists
+  useEffect(() => {
+    if (!isOpen || !serverAvailable || terminal || isLoading) return;
 
-    setIsLoading(true);
-    try {
-      const terminal = await createTerminal();
-      setTerminals((prev) => [...prev, terminal]);
-      setActiveTerminalId(terminal.id);
-    } catch (error) {
-      console.error('[TerminalPanel] Failed to create terminal:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [serverAvailable]);
-
-  // Close a terminal
-  const handleCloseTerminal = useCallback(async (id: string, e?: React.MouseEvent) => {
-    e?.stopPropagation();
-
-    try {
-      await closeTerminal(id);
-      setTerminals((prev) => prev.filter((t) => t.id !== id));
-
-      // If closing active terminal, switch to another
-      if (activeTerminalId === id) {
-        setTerminals((prev) => {
-          const remaining = prev.filter((t) => t.id !== id);
-          if (remaining.length > 0) {
-            setActiveTerminalId(remaining[remaining.length - 1].id);
-          } else {
-            setActiveTerminalId(null);
+    const createNewTerminal = async () => {
+      setIsLoading(true);
+      try {
+        // Get cwd from notebook path (parent directory)
+        let cwd: string | undefined;
+        if (notebookPath) {
+          const lastSlash = notebookPath.lastIndexOf('/');
+          if (lastSlash > 0) {
+            cwd = notebookPath.substring(0, lastSlash);
           }
-          return remaining;
-        });
+        }
+
+        const newTerminal = await createTerminal({ cwd });
+        setTerminal(newTerminal);
+      } catch (error) {
+        console.error('[TerminalPanel] Failed to create terminal:', error);
+      } finally {
+        setIsLoading(false);
       }
-    } catch (error) {
-      console.error('[TerminalPanel] Failed to close terminal:', error);
-    }
-  }, [activeTerminalId]);
+    };
+
+    createNewTerminal();
+  }, [isOpen, serverAvailable, terminal, isLoading, notebookPath]);
 
   // Handle terminal exit
-  const handleTerminalExit = useCallback((terminalId: string, _code: number) => {
-    // Remove from list after a short delay
-    setTimeout(() => {
-      setTerminals((prev) => prev.filter((t) => t.id !== terminalId));
-      if (activeTerminalId === terminalId) {
-        setTerminals((prev) => {
-          if (prev.length > 0) {
-            setActiveTerminalId(prev[prev.length - 1].id);
-          } else {
-            setActiveTerminalId(null);
-          }
-          return prev;
-        });
-      }
-    }, 2000);
-  }, [activeTerminalId]);
+  const handleTerminalExit = useCallback((_code: number) => {
+    // Terminal exited, clear it so a new one can be created if panel reopens
+    setTerminal(null);
+  }, []);
 
   // Resize handling
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -146,7 +117,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     const startHeight = height;
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
-      // Resize from top, so moving up increases height
       const deltaY = startY - moveEvent.clientY;
       const newHeight = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, startHeight + deltaY));
       setHeight(newHeight);
@@ -158,14 +128,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       document.removeEventListener('mouseup', handleMouseUp);
       resizeCleanupRef.current = null;
 
-      // Trigger resize on all terminal instances
+      // Trigger resize on terminal instance
       if (panelRef.current) {
-        const containers = panelRef.current.querySelectorAll('[data-terminal-container]');
-        containers.forEach((container: any) => {
-          if (container.__terminalResize) {
-            container.__terminalResize();
-          }
-        });
+        const container = panelRef.current.querySelector('[data-terminal-container]');
+        if (container && (container as any).__terminalResize) {
+          (container as any).__terminalResize();
+        }
       }
     };
 
@@ -187,24 +155,14 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     };
   }, []);
 
-  // Auto-create terminal if none exist when panel opens
-  useEffect(() => {
-    if (isOpen && serverAvailable && terminals.length === 0 && !isLoading) {
-      handleCreateTerminal();
-    }
-  }, [isOpen, serverAvailable, terminals.length, isLoading, handleCreateTerminal]);
-
-  // Trigger resize on terminal instances when maximized changes
+  // Trigger resize when maximized changes
   useEffect(() => {
     if (panelRef.current) {
-      // Small delay to let the CSS transition complete
       const timer = setTimeout(() => {
-        const containers = panelRef.current?.querySelectorAll('[data-terminal-container]');
-        containers?.forEach((container: any) => {
-          if (container.__terminalResize) {
-            container.__terminalResize();
-          }
-        });
+        const container = panelRef.current?.querySelector('[data-terminal-container]');
+        if (container && (container as any).__terminalResize) {
+          (container as any).__terminalResize();
+        }
       }, 250);
       return () => clearTimeout(timer);
     }
@@ -214,55 +172,26 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   const panelHeight = isMaximized ? '80vh' : `${height}px`;
 
+  // Get notebook name for display
+  const notebookName = notebookPath
+    ? notebookPath.split('/').pop()?.replace('.ipynb', '') || 'Terminal'
+    : 'Terminal';
+
   return (
     <div
       ref={panelRef}
       className="flex-none border-t border-slate-200 bg-white flex flex-col transition-all duration-200 shadow-inner"
       style={{ height: panelHeight }}
     >
-      {/* Tab Bar Header */}
-      <div className="flex items-center bg-slate-100 border-b border-slate-200">
-        {/* Tabs Scroll Area */}
-        <div className="flex-1 flex overflow-x-auto">
-          {terminals.map((terminal, index) => (
-            <div
-              key={terminal.id}
-              onClick={() => setActiveTerminalId(terminal.id)}
-              className={`
-                group flex items-center gap-2 px-3 py-2 text-xs font-medium cursor-pointer
-                border-r border-slate-200 min-w-[120px] max-w-[200px] select-none transition-colors
-                ${activeTerminalId === terminal.id
-                  ? 'bg-white text-blue-600 border-t-2 border-t-blue-500'
-                  : 'bg-slate-50 text-slate-500 hover:bg-white border-t-2 border-t-transparent'
-                }
-              `}
-            >
-              <Terminal className="w-3 h-3" />
-              <span className="truncate flex-1">Terminal {index + 1}</span>
-              {terminals.length > 1 && (
-                <button
-                  onClick={(e) => handleCloseTerminal(terminal.id, e)}
-                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-slate-200 hover:text-red-500 transition-opacity"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-          ))}
-
-          {/* Add Terminal Button */}
-          <button
-            onClick={handleCreateTerminal}
-            disabled={!serverAvailable || isLoading}
-            className="px-3 text-slate-500 hover:bg-slate-200 hover:text-slate-700 transition-colors disabled:opacity-50"
-            title="New Terminal"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-1.5 bg-slate-100 border-b border-slate-200">
+        <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
+          <Terminal className="w-3.5 h-3.5" />
+          <span>{notebookName}</span>
         </div>
 
-        {/* Global Controls */}
-        <div className="flex items-center gap-1 px-2">
+        {/* Controls */}
+        <div className="flex items-center gap-1">
           <button
             onClick={() => setIsMaximized(!isMaximized)}
             className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded transition-colors"
@@ -284,7 +213,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         </div>
       </div>
 
-      {/* Resize Handle - below tab bar */}
+      {/* Resize Handle */}
       {!isMaximized && (
         <div
           className={`h-1 cursor-ns-resize transition-colors ${
@@ -308,7 +237,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           </div>
         )}
 
-        {serverAvailable && terminals.length === 0 && (
+        {serverAvailable && !terminal && (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-50">
             <div className="text-center text-slate-500">
               <Terminal className="w-8 h-8 mx-auto mb-2" />
@@ -317,21 +246,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           </div>
         )}
 
-        {terminals.map((terminal) => (
-          <div
-            key={terminal.id}
-            data-terminal-container
-            className={`absolute inset-0 ${
-              activeTerminalId === terminal.id ? '' : 'invisible'
-            }`}
-          >
+        {terminal && (
+          <div data-terminal-container className="absolute inset-0">
             <TerminalInstance
               terminalId={terminal.id}
-              isActive={activeTerminalId === terminal.id}
-              onExit={(code) => handleTerminalExit(terminal.id, code)}
+              isActive={true}
+              onExit={handleTerminalExit}
             />
           </div>
-        ))}
+        )}
       </div>
     </div>
   );
