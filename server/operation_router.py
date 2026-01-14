@@ -7,6 +7,7 @@ Routes notebook operations to either:
 
 From the agent's (MCP) perspective, operations look identical regardless of mode.
 """
+from __future__ import annotations
 
 import asyncio
 import uuid

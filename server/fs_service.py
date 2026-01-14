@@ -1,6 +1,7 @@
 """
 Filesystem Service - Real filesystem operations
 """
+from __future__ import annotations
 import os
 import json
 import shutil

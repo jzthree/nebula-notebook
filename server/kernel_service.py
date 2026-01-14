@@ -1,6 +1,7 @@
 """
 Jupyter Kernel Service - Manages real Jupyter kernels
 """
+from __future__ import annotations
 import asyncio
 import uuid
 import base64
