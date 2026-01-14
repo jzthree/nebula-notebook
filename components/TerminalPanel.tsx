@@ -194,6 +194,22 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     }
   }, [isOpen, serverAvailable, terminals.length, isLoading, handleCreateTerminal]);
 
+  // Trigger resize on terminal instances when maximized changes
+  useEffect(() => {
+    if (panelRef.current) {
+      // Small delay to let the CSS transition complete
+      const timer = setTimeout(() => {
+        const containers = panelRef.current?.querySelectorAll('[data-terminal-container]');
+        containers?.forEach((container: any) => {
+          if (container.__terminalResize) {
+            container.__terminalResize();
+          }
+        });
+      }, 250);
+      return () => clearTimeout(timer);
+    }
+  }, [isMaximized]);
+
   if (!isOpen) return null;
 
   const panelHeight = isMaximized ? '80vh' : `${height}px`;
@@ -201,24 +217,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   return (
     <div
       ref={panelRef}
-      className="flex-none border-t border-slate-800 bg-[#0d1117] flex flex-col transition-all duration-200"
+      className="flex-none border-t border-slate-200 bg-white flex flex-col transition-all duration-200 shadow-inner"
       style={{ height: panelHeight }}
     >
-      {/* Resize Handle */}
-      {!isMaximized && (
-        <div
-          className={`h-1.5 cursor-ns-resize flex items-center justify-center transition-colors ${
-            isResizing ? 'bg-blue-500' : 'bg-slate-800 hover:bg-slate-700'
-          }`}
-          onMouseDown={handleResizeStart}
-        >
-          <GripHorizontal className="w-4 h-4 text-slate-600" />
-        </div>
-      )}
-
-      {/* Tab Bar */}
-      <div className="flex items-center bg-slate-950/50 border-b border-slate-800">
-        {/* Tabs */}
+      {/* Tab Bar Header */}
+      <div className="flex items-center bg-slate-100 border-b border-slate-200">
+        {/* Tabs Scroll Area */}
         <div className="flex-1 flex overflow-x-auto">
           {terminals.map((terminal, index) => (
             <div
@@ -226,10 +230,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               onClick={() => setActiveTerminalId(terminal.id)}
               className={`
                 group flex items-center gap-2 px-3 py-2 text-xs font-medium cursor-pointer
-                border-r border-slate-800 min-w-[120px] max-w-[200px] select-none transition-colors
+                border-r border-slate-200 min-w-[120px] max-w-[200px] select-none transition-colors
                 ${activeTerminalId === terminal.id
-                  ? 'bg-[#0d1117] text-blue-400 border-t-2 border-t-blue-500'
-                  : 'bg-slate-950 text-slate-500 hover:bg-[#0d1117] border-t-2 border-t-transparent'
+                  ? 'bg-white text-blue-600 border-t-2 border-t-blue-500'
+                  : 'bg-slate-50 text-slate-500 hover:bg-white border-t-2 border-t-transparent'
                 }
               `}
             >
@@ -238,7 +242,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               {terminals.length > 1 && (
                 <button
                   onClick={(e) => handleCloseTerminal(terminal.id, e)}
-                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-slate-800 hover:text-red-500 transition-opacity"
+                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-slate-200 hover:text-red-500 transition-opacity"
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -250,18 +254,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           <button
             onClick={handleCreateTerminal}
             disabled={!serverAvailable || isLoading}
-            className="px-3 text-slate-500 hover:bg-slate-800 hover:text-white transition-colors disabled:opacity-50"
+            className="px-3 text-slate-500 hover:bg-slate-200 hover:text-slate-700 transition-colors disabled:opacity-50"
             title="New Terminal"
           >
             <Plus className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Panel Controls */}
+        {/* Global Controls */}
         <div className="flex items-center gap-1 px-2">
           <button
             onClick={() => setIsMaximized(!isMaximized)}
-            className="p-1.5 text-slate-500 hover:text-white hover:bg-slate-800 rounded transition-colors"
+            className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded transition-colors"
             title={isMaximized ? 'Restore' : 'Maximize'}
           >
             {isMaximized ? (
@@ -272,7 +276,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           </button>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-500 hover:text-white hover:bg-slate-800 rounded transition-colors"
+            className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded transition-colors"
             title="Close Panel"
           >
             <X className="w-3.5 h-3.5" />
@@ -280,23 +284,33 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         </div>
       </div>
 
+      {/* Resize Handle - below tab bar */}
+      {!isMaximized && (
+        <div
+          className={`h-1 cursor-ns-resize transition-colors ${
+            isResizing ? 'bg-blue-500' : 'bg-slate-100 hover:bg-slate-200'
+          }`}
+          onMouseDown={handleResizeStart}
+        />
+      )}
+
       {/* Terminal Content */}
-      <div className="flex-1 min-h-0 relative bg-[#0d1117]">
+      <div className="flex-1 min-h-0 relative bg-slate-900">
         {serverAvailable === false && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="text-center text-slate-400">
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-50">
+            <div className="text-center text-slate-500">
               <AlertCircle className="w-8 h-8 mx-auto mb-2 text-amber-500" />
               <p className="text-sm font-medium">Terminal server not available</p>
               <p className="text-xs mt-1">
-                Run <code className="bg-slate-800 px-1.5 py-0.5 rounded">npm run terminal</code> to start
+                Run <code className="bg-slate-200 px-1.5 py-0.5 rounded">npm run terminal</code> to start
               </p>
             </div>
           </div>
         )}
 
         {serverAvailable && terminals.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="text-center text-slate-400">
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-50">
+            <div className="text-center text-slate-500">
               <Terminal className="w-8 h-8 mx-auto mb-2" />
               <p className="text-sm">Creating terminal...</p>
             </div>
