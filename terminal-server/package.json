@@ -11,7 +11,7 @@
   "dependencies": {
     "express": "^4.18.2",
     "ws": "^8.16.0",
-    "node-pty": "^1.0.0",
+    "node-pty-prebuilt-multiarch": "^0.10.1-pre.5",
     "uuid": "^9.0.1",
     "cors": "^2.8.5"
   },

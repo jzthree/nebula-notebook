@@ -2,7 +2,7 @@
  * PTY Manager - Manages terminal sessions using node-pty
  */
 
-import * as pty from 'node-pty';
+import * as pty from 'node-pty-prebuilt-multiarch';
 import { v4 as uuidv4 } from 'uuid';
 import {
   TerminalInfo,
