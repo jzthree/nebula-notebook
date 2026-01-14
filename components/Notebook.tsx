@@ -911,22 +911,33 @@ export const Notebook: React.FC = () => {
     setLastExecutionResult(null);
   }, []);
 
-  // Memory usage tracking (Chrome-specific API)
+  // Kernel memory usage tracking
   useEffect(() => {
-    const updateMemory = () => {
-      // Chrome-specific memory API
-      const perf = performance as Performance & { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } };
-      if (perf.memory) {
-        setMemoryUsage({
-          used: perf.memory.usedJSHeapSize,
-          total: perf.memory.jsHeapSizeLimit
-        });
+    if (!kernelSessionId) {
+      setMemoryUsage(null);
+      return;
+    }
+
+    const updateMemory = async () => {
+      try {
+        const response = await fetch(`/api/kernels/${kernelSessionId}/status`);
+        if (response.ok) {
+          const status = await response.json();
+          if (status.memory_mb != null) {
+            setMemoryUsage({
+              used: status.memory_mb * 1024 * 1024, // Convert back to bytes for consistent display
+              total: 0 // Not applicable for kernel memory
+            });
+          }
+        }
+      } catch {
+        // Ignore fetch errors
       }
     };
     updateMemory();
     const interval = setInterval(updateMemory, 5000); // Update every 5 seconds
     return () => clearInterval(interval);
-  }, []);
+  }, [kernelSessionId]);
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
@@ -2727,11 +2738,11 @@ export const Notebook: React.FC = () => {
               {cells.length} cells
             </span>
 
-            {/* Memory usage (Chrome only) */}
+            {/* Kernel memory usage */}
             {memoryUsage && (
-              <span className="flex items-center gap-1 tabular-nums" title={`Memory: ${(memoryUsage.used / 1024 / 1024).toFixed(0)}MB used of ${(memoryUsage.total / 1024 / 1024).toFixed(0)}MB`}>
+              <span className="flex items-center gap-1 tabular-nums" title={`Kernel memory: ${(memoryUsage.used / 1024 / 1024).toFixed(0)}MB`}>
                 <Cpu className="w-3 h-3" />
-                {(memoryUsage.used / 1024 / 1024).toFixed(0)}MB
+                Kernel: {(memoryUsage.used / 1024 / 1024).toFixed(0)}MB
               </span>
             )}
           </div>

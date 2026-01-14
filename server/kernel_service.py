@@ -530,15 +530,31 @@ class KernelService:
         return ansi_escape.sub('', text)
 
     def get_session_status(self, session_id: str) -> Optional[dict]:
-        """Get status of a kernel session"""
+        """Get status of a kernel session including memory usage"""
         session = self.sessions.get(session_id)
         if session:
-            return {
+            info = {
                 "id": session.id,
                 "kernel_name": session.kernel_name,
                 "status": session.status,
-                "execution_count": session.execution_count
+                "execution_count": session.execution_count,
+                "memory_mb": None,
+                "pid": None
             }
+            # Get memory usage if psutil available
+            try:
+                import psutil
+                if session.manager.is_alive():
+                    pid = session.manager.kernel.pid
+                    info["pid"] = pid
+                    proc = psutil.Process(pid)
+                    mem_info = proc.memory_info()
+                    info["memory_mb"] = round(mem_info.rss / (1024 * 1024), 1)
+            except (ImportError, AttributeError):
+                pass
+            except Exception:
+                pass  # Process may have died
+            return info
         return None
 
     def get_all_sessions(self) -> list[dict]:

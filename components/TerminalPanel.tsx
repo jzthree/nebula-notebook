@@ -9,8 +9,10 @@ import {
   X,
   Minus,
   Maximize2,
+  Minimize2,
   GripHorizontal,
   AlertCircle,
+  Trash2,
 } from 'lucide-react';
 import { TerminalInstance } from './TerminalInstance';
 import {
@@ -42,6 +44,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const [isResizing, setIsResizing] = useState(false);
   const [serverAvailable, setServerAvailable] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
@@ -193,51 +196,61 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   if (!isOpen) return null;
 
+  const panelHeight = isMaximized ? '80vh' : `${height}px`;
+
   return (
     <div
       ref={panelRef}
-      className="flex-none border-t border-slate-200 bg-slate-900 flex flex-col"
-      style={{ height: `${height}px` }}
+      className="flex-none border-t border-slate-800 bg-[#0d1117] flex flex-col transition-all duration-200"
+      style={{ height: panelHeight }}
     >
       {/* Resize Handle */}
-      <div
-        className={`h-2 cursor-ns-resize flex items-center justify-center transition-colors ${
-          isResizing ? 'bg-blue-500' : 'bg-slate-700 hover:bg-slate-600'
-        }`}
-        onMouseDown={handleResizeStart}
-      >
-        <GripHorizontal className="w-4 h-4 text-slate-400" />
-      </div>
+      {!isMaximized && (
+        <div
+          className={`h-1.5 cursor-ns-resize flex items-center justify-center transition-colors ${
+            isResizing ? 'bg-blue-500' : 'bg-slate-800 hover:bg-slate-700'
+          }`}
+          onMouseDown={handleResizeStart}
+        >
+          <GripHorizontal className="w-4 h-4 text-slate-600" />
+        </div>
+      )}
 
       {/* Tab Bar */}
-      <div className="flex items-center justify-between px-2 py-1 bg-slate-800 border-b border-slate-700">
-        <div className="flex items-center gap-1 overflow-x-auto">
+      <div className="flex items-center bg-slate-950/50 border-b border-slate-800">
+        {/* Tabs */}
+        <div className="flex-1 flex overflow-x-auto">
           {terminals.map((terminal, index) => (
-            <button
+            <div
               key={terminal.id}
               onClick={() => setActiveTerminalId(terminal.id)}
-              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded transition-colors ${
-                activeTerminalId === terminal.id
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-700'
-              }`}
+              className={`
+                group flex items-center gap-2 px-3 py-2 text-xs font-medium cursor-pointer
+                border-r border-slate-800 min-w-[120px] max-w-[200px] select-none transition-colors
+                ${activeTerminalId === terminal.id
+                  ? 'bg-[#0d1117] text-blue-400 border-t-2 border-t-blue-500'
+                  : 'bg-slate-950 text-slate-500 hover:bg-[#0d1117] border-t-2 border-t-transparent'
+                }
+              `}
             >
               <Terminal className="w-3 h-3" />
-              <span>Terminal {index + 1}</span>
-              <button
-                onClick={(e) => handleCloseTerminal(terminal.id, e)}
-                className="ml-1 p-0.5 rounded hover:bg-slate-600"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </button>
+              <span className="truncate flex-1">Terminal {index + 1}</span>
+              {terminals.length > 1 && (
+                <button
+                  onClick={(e) => handleCloseTerminal(terminal.id, e)}
+                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-slate-800 hover:text-red-500 transition-opacity"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
           ))}
 
           {/* Add Terminal Button */}
           <button
             onClick={handleCreateTerminal}
             disabled={!serverAvailable || isLoading}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors disabled:opacity-50"
+            className="px-3 text-slate-500 hover:bg-slate-800 hover:text-white transition-colors disabled:opacity-50"
             title="New Terminal"
           >
             <Plus className="w-4 h-4" />
@@ -245,44 +258,44 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         </div>
 
         {/* Panel Controls */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 px-2">
           <button
-            onClick={() => setHeight(height === MIN_HEIGHT ? DEFAULT_HEIGHT : MIN_HEIGHT)}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
-            title={height === MIN_HEIGHT ? 'Expand' : 'Minimize'}
+            onClick={() => setIsMaximized(!isMaximized)}
+            className="p-1.5 text-slate-500 hover:text-white hover:bg-slate-800 rounded transition-colors"
+            title={isMaximized ? 'Restore' : 'Maximize'}
           >
-            {height === MIN_HEIGHT ? (
-              <Maximize2 className="w-4 h-4" />
+            {isMaximized ? (
+              <Minimize2 className="w-3.5 h-3.5" />
             ) : (
-              <Minus className="w-4 h-4" />
+              <Maximize2 className="w-3.5 h-3.5" />
             )}
           </button>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+            className="p-1.5 text-slate-500 hover:text-white hover:bg-slate-800 rounded transition-colors"
             title="Close Panel"
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
       {/* Terminal Content */}
-      <div className="flex-1 min-h-0 relative">
+      <div className="flex-1 min-h-0 relative bg-[#0d1117]">
         {serverAvailable === false && (
-          <div className="absolute inset-0 flex items-center justify-center bg-slate-900">
+          <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center text-slate-400">
               <AlertCircle className="w-8 h-8 mx-auto mb-2 text-amber-500" />
               <p className="text-sm font-medium">Terminal server not available</p>
               <p className="text-xs mt-1">
-                Run <code className="bg-slate-800 px-1 py-0.5 rounded">npm run terminal</code> to start
+                Run <code className="bg-slate-800 px-1.5 py-0.5 rounded">npm run terminal</code> to start
               </p>
             </div>
           </div>
         )}
 
         {serverAvailable && terminals.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center bg-slate-900">
+          <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center text-slate-400">
               <Terminal className="w-8 h-8 mx-auto mb-2" />
               <p className="text-sm">Creating terminal...</p>
