@@ -28,6 +28,12 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const isInitializedRef = useRef(false);
+  const isActiveRef = useRef(isActive);
+
+  // Keep isActiveRef in sync
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   // Initialize terminal
   useEffect(() => {
@@ -131,9 +137,9 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
       terminal.write('\r\n\x1b[90m[Disconnected]\x1b[0m\r\n');
     };
 
-    // Handle terminal input
+    // Handle terminal input - only send if this terminal is active
     terminal.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (isActiveRef.current && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'input', data }));
       }
     });
