@@ -2630,18 +2630,6 @@ export const Notebook: React.FC = () => {
                     Copilot
                   </button>
 
-                  <button
-                    onClick={() => setIsTerminalOpen(!isTerminalOpen)}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md font-medium text-xs transition-all shadow-sm
-                      ${isTerminalOpen
-                        ? 'bg-slate-700 text-white ring-2 ring-slate-300'
-                        : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                      }`}
-                    title="Toggle Terminal (Ctrl+`)"
-                  >
-                    <Terminal className={`w-4 h-4 ${isTerminalOpen ? 'text-slate-300' : 'text-slate-600'}`} />
-                    Terminal
-                  </button>
                </div>
             </div>
         </header>

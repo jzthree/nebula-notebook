@@ -52,7 +52,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
     const init = async () => {
       const available = await checkTerminalServer();
-      setServerAvailable(available);
 
       if (available) {
         try {
@@ -67,6 +66,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           console.error('[TerminalPanel] Failed to list terminals:', error);
         }
       }
+
+      // Set serverAvailable AFTER loading terminals to prevent race condition
+      setServerAvailable(available);
     };
 
     init();
