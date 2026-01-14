@@ -161,6 +161,16 @@ export interface ClearNotebookOp {
   notebookPath: string;
 }
 
+export interface ExecuteCellOp {
+  type: 'executeCell';
+  notebookPath: string;
+  cellId?: string;
+  cellIndex?: number;
+  sessionId?: string;
+  maxWait?: number;
+  saveOutputs?: boolean;
+}
+
 export interface StartAgentSessionOp {
   type: 'startAgentSession';
   notebookPath: string;
@@ -185,7 +195,8 @@ export type NotebookOperation =
   | CreateNotebookOp
   | ReadCellOp
   | ReadCellOutputOp
-  | ClearNotebookOp;
+  | ClearNotebookOp
+  | ExecuteCellOp;
 
 export interface OperationResult {
   success: boolean;
@@ -214,6 +225,10 @@ export interface OperationResult {
   warning?: string;
   previousSession?: AgentSessionInfo;
   sessionDuration?: number;
+  // For executeCell operation
+  executionStatus?: 'idle' | 'busy' | 'error';
+  executionTime?: number;
+  sessionId?: string;
 }
 
 interface OperationMessage {
@@ -274,6 +289,24 @@ interface UseOperationHandlerOptions {
   /** Create notebook callback - returns promise with mtime */
   createNotebook?: (path: string, overwrite: boolean, kernelName: string) => Promise<{ success: boolean; mtime?: number; error?: string }>;
 
+  /**
+   * Execute cell callback - runs a cell and returns results
+   * Returns a promise with execution result including outputs
+   */
+  executeCell?: (cellId: string, options?: {
+    sessionId?: string;
+    maxWait?: number;
+    saveOutputs?: boolean;
+  }) => Promise<{
+    success: boolean;
+    executionStatus?: 'idle' | 'busy' | 'error';
+    executionCount?: number;
+    executionTime?: number;
+    outputs?: Array<{ type: string; content: string }>;
+    sessionId?: string;
+    error?: string;
+  }>;
+
   /** Callback when an agent operation is applied (for toasts/notifications) */
   onAgentOperation?: (operation: NotebookOperation, result: OperationResult) => void;
 }
@@ -290,6 +323,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     updateMetadata,
     setCellOutputs,
     createNotebook,
+    executeCell,
     onAgentOperation,
   } = options;
 
@@ -308,6 +342,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const updateMetadataRef = useRef(updateMetadata);
   const setCellOutputsRef = useRef(setCellOutputs);
   const createNotebookRef = useRef(createNotebook);
+  const executeCellRef = useRef(executeCell);
   const onAgentOperationRef = useRef(onAgentOperation);
 
   // Update refs on each render
@@ -320,6 +355,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   updateMetadataRef.current = updateMetadata;
   setCellOutputsRef.current = setCellOutputs;
   createNotebookRef.current = createNotebook;
+  executeCellRef.current = executeCell;
   onAgentOperationRef.current = onAgentOperation;
 
   const [isConnected, setIsConnected] = useState(false);
@@ -712,6 +748,54 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           setAgentSession(null);
 
           return { success: true, sessionDuration };
+        }
+
+        case 'executeCell': {
+          const { cellId, cellIndex, sessionId, maxWait, saveOutputs } = operation;
+
+          // Find the cell
+          let targetIndex: number | undefined;
+          let targetCellId: string | undefined;
+
+          if (cellId) {
+            targetIndex = currentCells.findIndex(c => c.id === cellId);
+            if (targetIndex === -1) {
+              return { success: false, error: `Cell with ID "${cellId}" not found` };
+            }
+            targetCellId = cellId;
+          } else if (cellIndex !== undefined) {
+            if (cellIndex < 0 || cellIndex >= currentCells.length) {
+              return { success: false, error: `Cell index ${cellIndex} out of range` };
+            }
+            targetIndex = cellIndex;
+            targetCellId = currentCells[cellIndex].id;
+          } else {
+            return { success: false, error: 'Must provide cellId or cellIndex' };
+          }
+
+          // Check if executeCell callback is available
+          if (!executeCellRef.current) {
+            return { success: false, error: 'executeCell callback not provided - UI cannot execute cells' };
+          }
+
+          // Execute the cell through the UI's execution mechanism
+          const result = await executeCellRef.current(targetCellId!, {
+            sessionId,
+            maxWait,
+            saveOutputs,
+          });
+
+          return {
+            success: result.success,
+            cellId: targetCellId,
+            cellIndex: targetIndex,
+            executionStatus: result.executionStatus,
+            executionCount: result.executionCount,
+            executionTime: result.executionTime,
+            outputs: result.outputs,
+            sessionId: result.sessionId,
+            error: result.error,
+          };
         }
 
         default:

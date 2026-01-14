@@ -4,7 +4,7 @@ import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
 import { getSettings, saveSettings, IndentationPreference } from '../services/llmService';
-import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff } from 'lucide-react';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -22,6 +22,7 @@ import {
 } from '../services/fileService';
 import { FileBrowser } from './FileBrowser';
 import { AIChatSidebar } from './AIChatSidebar';
+import { TerminalPanel } from './TerminalPanel';
 import { VirtualCellList } from './VirtualCellList';
 import { useUndoRedo } from '../hooks/useUndoRedo';
 import { useOperationHandler } from '../hooks/useOperationHandler';
@@ -109,6 +110,7 @@ export const Notebook: React.FC = () => {
   const [currentFileMetadata, setCurrentFileMetadata] = useState<NotebookMetadata | null>(null);
   const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isKernelManagerOpen, setIsKernelManagerOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -299,6 +301,131 @@ export const Notebook: React.FC = () => {
     }
   }, []);
 
+  // Execute cell callback for agent operations
+  const handleAgentExecuteCell = useCallback(async (
+    cellId: string,
+    options?: {
+      sessionId?: string;
+      maxWait?: number;
+      saveOutputs?: boolean;
+    }
+  ): Promise<{
+    success: boolean;
+    executionStatus?: 'idle' | 'busy' | 'error';
+    executionCount?: number;
+    executionTime?: number;
+    outputs?: Array<{ type: string; content: string }>;
+    sessionId?: string;
+    error?: string;
+  }> => {
+    const cell = cells.find(c => c.id === cellId);
+    if (!cell) {
+      return { success: false, error: `Cell with ID "${cellId}" not found` };
+    }
+
+    if (cell.type !== 'code') {
+      return { success: false, error: `Cell ${cellId} is not a code cell` };
+    }
+
+    // Use provided session ID or current session
+    const effectiveSessionId = options?.sessionId || kernelSessionId;
+    if (!effectiveSessionId) {
+      return { success: false, error: 'No kernel session available. Start a kernel first.' };
+    }
+
+    const code = cell.content;
+    if (!code.trim()) {
+      // Empty cell - return immediately
+      return {
+        success: true,
+        executionStatus: 'idle',
+        outputs: [],
+        executionCount: undefined,
+        sessionId: effectiveSessionId,
+      };
+    }
+
+    const startTime = Date.now();
+    const maxWait = (options?.maxWait ?? 10) * 1000; // Convert to ms
+    const collectedOutputs: Array<{ type: string; content: string }> = [];
+    let executionComplete = false;
+    let executionError: string | undefined;
+
+    // Set cell to executing state
+    setCells(prev => prev.map(c =>
+      c.id === cellId ? { ...c, isExecuting: true, outputs: [] } : c
+    ));
+
+    try {
+      // Create a promise race between execution and timeout
+      const executionPromise = (async () => {
+        await kernelService.executeCode(effectiveSessionId, code, (output) => {
+          const simpleOutput = { type: output.type, content: output.content };
+          collectedOutputs.push(simpleOutput);
+
+          // Update cell outputs in real-time if saveOutputs is not false
+          if (options?.saveOutputs !== false) {
+            setCells(prev => prev.map(c => {
+              if (c.id !== cellId) return c;
+              return {
+                ...c,
+                outputs: [...c.outputs, output],
+              };
+            }));
+          }
+        });
+        executionComplete = true;
+      })();
+
+      const timeoutPromise = new Promise<void>((resolve) => {
+        setTimeout(resolve, maxWait);
+      });
+
+      await Promise.race([executionPromise, timeoutPromise]);
+
+      const elapsed = Date.now() - startTime;
+
+      // Mark cell as no longer executing
+      setCells(prev => prev.map(c =>
+        c.id === cellId ? { ...c, isExecuting: false, lastExecutionMs: elapsed } : c
+      ));
+
+      if (executionComplete) {
+        const hasError = collectedOutputs.some(o => o.type === 'error');
+        return {
+          success: true,
+          executionStatus: hasError ? 'error' : 'idle',
+          outputs: collectedOutputs,
+          executionTime: elapsed,
+          sessionId: effectiveSessionId,
+        };
+      } else {
+        // Timed out - execution still running
+        return {
+          success: true,
+          executionStatus: 'busy',
+          outputs: collectedOutputs,
+          executionTime: elapsed,
+          sessionId: effectiveSessionId,
+        };
+      }
+    } catch (error) {
+      // Mark cell as no longer executing
+      setCells(prev => prev.map(c =>
+        c.id === cellId ? { ...c, isExecuting: false } : c
+      ));
+
+      return {
+        success: false,
+        executionStatus: 'error',
+        error: String(error),
+        outputs: collectedOutputs,
+        executionTime: Date.now() - startTime,
+        sessionId: effectiveSessionId,
+      };
+    }
+  }, [cells, kernelSessionId, setCells]);
+
   // Operation handler - receives operations routed from backend OperationRouter
   const { isConnected: isAgentConnected, activeOperation: agentOperation, agentSession } = useOperationHandler({
     filePath: currentFileId,
@@ -311,6 +438,7 @@ export const Notebook: React.FC = () => {
     updateMetadata,
     setCellOutputs,
     createNotebook: handleCreateNotebook,
+    executeCell: handleAgentExecuteCell,
     onAgentOperation: useCallback((operation, result) => {
       // Skip read-only operations
       if (operation.type === 'readCell' || operation.type === 'readCellOutput') return;
@@ -335,6 +463,23 @@ export const Notebook: React.FC = () => {
       if (operation.type === 'endAgentSession') {
         const duration = result.sessionDuration ? ` (${Math.round(result.sessionDuration / 1000)}s)` : '';
         toast(`🤖 Agent session ended${duration}`, 'info', 2000);
+        return;
+      }
+
+      // Handle executeCell operation
+      if (operation.type === 'executeCell') {
+        const cellNum = result.cellIndex !== undefined ? ` #${result.cellIndex + 1}` : '';
+        if (result.success) {
+          if (result.executionStatus === 'busy') {
+            toast(`Agent started executing cell${cellNum}`, 'info', 2000);
+          } else if (result.executionStatus === 'error') {
+            toast(`Agent executed cell${cellNum} (with errors)`, 'warning', 2000);
+          } else {
+            toast(`Agent executed cell${cellNum}`, 'info', 2000);
+          }
+        } else {
+          toast(`Agent execution failed: ${result.error}`, 'error', 3000);
+        }
         return;
       }
 
@@ -907,6 +1052,13 @@ export const Notebook: React.FC = () => {
       if ((e.metaKey || e.ctrlKey) && key === 'f') {
         e.preventDefault();
         setIsSearchOpen(true);
+        return;
+      }
+
+      // Ctrl+`: Toggle terminal (works everywhere)
+      if ((e.metaKey || e.ctrlKey) && key === '`') {
+        e.preventDefault();
+        setIsTerminalOpen(prev => !prev);
         return;
       }
 
@@ -2459,6 +2611,19 @@ export const Notebook: React.FC = () => {
                     <Sparkles className={`w-4 h-4 ${isChatOpen ? 'text-purple-200' : 'text-purple-600'}`} />
                     Copilot
                   </button>
+
+                  <button
+                    onClick={() => setIsTerminalOpen(!isTerminalOpen)}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md font-medium text-xs transition-all shadow-sm
+                      ${isTerminalOpen
+                        ? 'bg-slate-700 text-white ring-2 ring-slate-300'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                      }`}
+                    title="Toggle Terminal (Ctrl+`)"
+                  >
+                    <Terminal className={`w-4 h-4 ${isTerminalOpen ? 'text-slate-300' : 'text-slate-600'}`} />
+                    Terminal
+                  </button>
                </div>
             </div>
         </header>
@@ -2478,7 +2643,7 @@ export const Notebook: React.FC = () => {
         />
 
         {/* Virtuoso Scrollable Area */}
-        <div className="flex-1 h-full pt-3">
+        <div className="flex-1 min-h-0 pt-3">
             {/* Force remount when file changes to recalculate cell heights */}
             <VirtualCellList
               key={currentFileId || 'empty'}
@@ -2524,7 +2689,13 @@ export const Notebook: React.FC = () => {
             />
         </div>
 
-        <div className={`absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-4 bg-white p-2 rounded-full shadow-lg border border-slate-200 z-20 ${agentSession ? 'opacity-50' : ''}`}>
+        {/* Terminal Panel */}
+        <TerminalPanel
+          isOpen={isTerminalOpen}
+          onClose={() => setIsTerminalOpen(false)}
+        />
+
+        <div className={`absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-4 bg-white p-2 rounded-full shadow-lg border border-slate-200 z-20 ${agentSession ? 'opacity-50' : ''} ${isTerminalOpen ? 'hidden' : ''}`}>
             <button
               onClick={() => handleAddCell('code')}
               disabled={agentSession !== null}
