@@ -2605,11 +2605,11 @@ export const Notebook: React.FC = () => {
                     }
                   >
                     {agentPermissionStatus?.can_agent_modify ? (
-                      <ShieldCheck className="w-4 h-4" />
+                      <ShieldOff className="w-4 h-4" />
                     ) : agentPermissionStatus?.agent_permitted ? (
                       <Shield className="w-4 h-4 text-amber-500" />
                     ) : (
-                      <ShieldOff className="w-4 h-4" />
+                      <ShieldCheck className="w-4 h-4" />
                     )}
                   </button>
                   <button
