@@ -613,6 +613,45 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           };
         }
 
+        case 'clearOutputs': {
+          const { cellId, cellIds = [] } = operation;
+
+          // Support both single ID and list of IDs
+          const targetIds = cellId && cellIds.length === 0 ? [cellId] : cellIds;
+          const clearedIds: string[] = [];
+          const notFound: string[] = [];
+
+          if (targetIds.length === 0) {
+            // Clear all cells if no IDs specified
+            for (const cell of currentCells) {
+              if (cell.outputs.length > 0 && setCellOutputsRef.current) {
+                setCellOutputsRef.current(cell.id, [], undefined);
+                clearedIds.push(cell.id);
+              }
+            }
+          } else {
+            // Clear specific cells
+            for (const cid of targetIds) {
+              const cell = currentCells.find(c => c.id === cid);
+              if (cell) {
+                if (setCellOutputsRef.current) {
+                  setCellOutputsRef.current(cid, [], undefined);
+                }
+                clearedIds.push(cid);
+              } else {
+                notFound.push(cid);
+              }
+            }
+          }
+
+          return {
+            success: true,
+            clearedCount: clearedIds.length,
+            clearedIds,
+            notFound: notFound.length > 0 ? notFound : undefined,
+          };
+        }
+
         case 'createNotebook': {
           const { notebookPath, overwrite = false, kernelName = 'python3' } = operation;
 
