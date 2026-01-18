@@ -15,7 +15,10 @@
     "ws": "^8.16.0",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.14.0",
     "uuid": "^9.0.1",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "@google/genai": "^0.7.0",
+    "openai": "^4.77.0",
+    "@anthropic-ai/sdk": "^0.32.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
