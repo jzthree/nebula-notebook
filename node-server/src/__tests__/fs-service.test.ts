@@ -1,0 +1,735 @@
+/**
+ * Filesystem Service Tests
+ *
+ * Comprehensive tests for all filesystem operations.
+ */
+
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { FilesystemService } from '../fs/fs-service';
+
+describe('FilesystemService', () => {
+  let service: FilesystemService;
+  let testDir: string;
+
+  beforeAll(() => {
+    // Create a temporary test directory
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nebula-fs-test-'));
+  });
+
+  afterAll(() => {
+    // Clean up test directory
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    service = new FilesystemService(testDir);
+  });
+
+  describe('Path Normalization', () => {
+    it('should normalize ~ to default root', () => {
+      const normalized = service.normalizePath('~');
+      expect(normalized).toBe(testDir);
+    });
+
+    it('should normalize ~/ paths relative to default root', () => {
+      const normalized = service.normalizePath('~/subdir');
+      expect(normalized).toBe(path.join(testDir, 'subdir'));
+    });
+
+    it('should handle absolute paths', () => {
+      const absPath = '/tmp/test-file';
+      const normalized = service.normalizePath(absPath);
+      expect(normalized).toBe(absPath);
+    });
+
+    it('should handle empty path as default root', () => {
+      const normalized = service.normalizePath('');
+      expect(normalized).toBe(testDir);
+    });
+  });
+
+  describe('Size Formatting', () => {
+    it('should format bytes correctly', () => {
+      expect(service.formatSize(500)).toBe('500B');
+    });
+
+    it('should format kilobytes correctly', () => {
+      expect(service.formatSize(1536)).toBe('1.5KB');
+    });
+
+    it('should format megabytes correctly', () => {
+      expect(service.formatSize(1572864)).toBe('1.5MB');
+    });
+
+    it('should format gigabytes correctly', () => {
+      expect(service.formatSize(1610612736)).toBe('1.5GB');
+    });
+  });
+
+  describe('File Type Detection', () => {
+    it('should detect notebook files', () => {
+      expect(service.getFileType('.ipynb')).toBe('notebook');
+    });
+
+    it('should detect code files', () => {
+      expect(service.getFileType('.py')).toBe('code');
+      expect(service.getFileType('.js')).toBe('code');
+      expect(service.getFileType('.ts')).toBe('code');
+      expect(service.getFileType('.tsx')).toBe('code');
+      expect(service.getFileType('.json')).toBe('code');
+      expect(service.getFileType('.md')).toBe('code');
+    });
+
+    it('should detect data files', () => {
+      expect(service.getFileType('.csv')).toBe('data');
+      expect(service.getFileType('.xlsx')).toBe('data');
+    });
+
+    it('should detect image files', () => {
+      expect(service.getFileType('.png')).toBe('image');
+      expect(service.getFileType('.jpg')).toBe('image');
+      expect(service.getFileType('.svg')).toBe('image');
+    });
+
+    it('should detect document files', () => {
+      expect(service.getFileType('.pdf')).toBe('document');
+    });
+
+    it('should return file for unknown extensions', () => {
+      expect(service.getFileType('.xyz')).toBe('file');
+      expect(service.getFileType('')).toBe('file');
+    });
+  });
+
+  describe('Directory Listing', () => {
+    beforeEach(() => {
+      // Create test files and directories
+      fs.mkdirSync(path.join(testDir, 'subdir'));
+      fs.writeFileSync(path.join(testDir, 'test.txt'), 'hello');
+      fs.writeFileSync(path.join(testDir, 'test.py'), 'print("hello")');
+      fs.writeFileSync(path.join(testDir, '.hidden'), 'hidden file');
+    });
+
+    afterEach(() => {
+      // Clean up test files
+      fs.rmSync(path.join(testDir, 'subdir'), { recursive: true, force: true });
+      fs.unlinkSync(path.join(testDir, 'test.txt'));
+      fs.unlinkSync(path.join(testDir, 'test.py'));
+      fs.unlinkSync(path.join(testDir, '.hidden'));
+    });
+
+    it('should list directory contents', () => {
+      const result = service.listDirectory(testDir);
+      expect(result.path).toBe(testDir);
+      expect(result.items.length).toBeGreaterThan(0);
+    });
+
+    it('should skip hidden files', () => {
+      const result = service.listDirectory(testDir);
+      const hidden = result.items.find(i => i.name === '.hidden');
+      expect(hidden).toBeUndefined();
+    });
+
+    it('should sort directories first', () => {
+      const result = service.listDirectory(testDir);
+      const firstDir = result.items.findIndex(i => i.isDirectory);
+      const firstFile = result.items.findIndex(i => !i.isDirectory);
+      if (firstDir !== -1 && firstFile !== -1) {
+        expect(firstDir).toBeLessThan(firstFile);
+      }
+    });
+
+    it('should include parent directory', () => {
+      const result = service.listDirectory(testDir);
+      expect(result.parent).toBe(path.dirname(testDir));
+    });
+
+    it('should throw on non-existent directory', () => {
+      expect(() => service.listDirectory('/nonexistent/path')).toThrow();
+    });
+
+    it('should throw on file path', () => {
+      expect(() => service.listDirectory(path.join(testDir, 'test.txt'))).toThrow();
+    });
+  });
+
+  describe('Directory Mtime', () => {
+    it('should return mtime for directory', () => {
+      const result = service.getDirectoryMtime(testDir);
+      expect(result.path).toBe(testDir);
+      expect(typeof result.mtime).toBe('number');
+    });
+
+    it('should throw on non-existent path', () => {
+      expect(() => service.getDirectoryMtime('/nonexistent')).toThrow();
+    });
+  });
+
+  describe('File Mtime', () => {
+    beforeEach(() => {
+      fs.writeFileSync(path.join(testDir, 'mtime-test.txt'), 'test');
+    });
+
+    afterEach(() => {
+      fs.unlinkSync(path.join(testDir, 'mtime-test.txt'));
+    });
+
+    it('should return mtime for file', () => {
+      const result = service.getFileMtime(path.join(testDir, 'mtime-test.txt'));
+      expect(typeof result.mtime).toBe('number');
+    });
+
+    it('should throw on non-existent file', () => {
+      expect(() => service.getFileMtime('/nonexistent')).toThrow();
+    });
+  });
+
+  describe('File Reading', () => {
+    beforeEach(() => {
+      fs.writeFileSync(path.join(testDir, 'read-test.txt'), 'hello world');
+      fs.writeFileSync(path.join(testDir, 'read-test.ipynb'), JSON.stringify({
+        cells: [],
+        metadata: { kernelspec: { name: 'python3' } },
+        nbformat: 4,
+        nbformat_minor: 5
+      }));
+    });
+
+    afterEach(() => {
+      fs.unlinkSync(path.join(testDir, 'read-test.txt'));
+      fs.unlinkSync(path.join(testDir, 'read-test.ipynb'));
+    });
+
+    it('should read text files', () => {
+      const result = service.readFile(path.join(testDir, 'read-test.txt'));
+      expect(result.type).toBe('text');
+      expect(result.content).toBe('hello world');
+    });
+
+    it('should read notebook files as JSON', () => {
+      const result = service.readFile(path.join(testDir, 'read-test.ipynb'));
+      expect(result.type).toBe('notebook');
+      expect(typeof result.content).toBe('object');
+    });
+
+    it('should throw on non-existent file', () => {
+      expect(() => service.readFile('/nonexistent')).toThrow();
+    });
+
+    it('should throw on directory', () => {
+      expect(() => service.readFile(testDir)).toThrow();
+    });
+  });
+
+  describe('File Writing', () => {
+    afterEach(() => {
+      try {
+        fs.unlinkSync(path.join(testDir, 'write-test.txt'));
+      } catch {}
+      try {
+        fs.unlinkSync(path.join(testDir, 'write-test.ipynb'));
+      } catch {}
+    });
+
+    it('should write text files', () => {
+      service.writeFile(path.join(testDir, 'write-test.txt'), 'new content');
+      const content = fs.readFileSync(path.join(testDir, 'write-test.txt'), 'utf-8');
+      expect(content).toBe('new content');
+    });
+
+    it('should write notebook files as JSON', () => {
+      const notebook = { cells: [], metadata: {}, nbformat: 4, nbformat_minor: 5 };
+      service.writeFile(path.join(testDir, 'write-test.ipynb'), notebook, 'notebook');
+      const content = JSON.parse(fs.readFileSync(path.join(testDir, 'write-test.ipynb'), 'utf-8'));
+      expect(content.nbformat).toBe(4);
+    });
+
+    it('should create parent directories if needed', () => {
+      const nestedPath = path.join(testDir, 'new-dir', 'nested', 'file.txt');
+      service.writeFile(nestedPath, 'content');
+      expect(fs.existsSync(nestedPath)).toBe(true);
+      fs.rmSync(path.join(testDir, 'new-dir'), { recursive: true });
+    });
+  });
+
+  describe('File Creation', () => {
+    afterEach(() => {
+      try {
+        fs.unlinkSync(path.join(testDir, 'new-file.txt'));
+      } catch {}
+      try {
+        fs.rmSync(path.join(testDir, 'new-dir'), { recursive: true });
+      } catch {}
+      try {
+        fs.unlinkSync(path.join(testDir, 'new-notebook.ipynb'));
+      } catch {}
+    });
+
+    it('should create empty text file', () => {
+      const result = service.createFile(path.join(testDir, 'new-file.txt'));
+      expect(fs.existsSync(path.join(testDir, 'new-file.txt'))).toBe(true);
+      expect(result.is_directory).toBe(false);
+    });
+
+    it('should create directory', () => {
+      const result = service.createFile(path.join(testDir, 'new-dir'), true);
+      expect(fs.statSync(path.join(testDir, 'new-dir')).isDirectory()).toBe(true);
+      expect(result.is_directory).toBe(true);
+    });
+
+    it('should create empty notebook with default structure', () => {
+      service.createFile(path.join(testDir, 'new-notebook.ipynb'));
+      const content = JSON.parse(fs.readFileSync(path.join(testDir, 'new-notebook.ipynb'), 'utf-8'));
+      expect(content.cells).toEqual([]);
+      expect(content.nbformat).toBe(4);
+    });
+
+    it('should throw if file already exists', () => {
+      fs.writeFileSync(path.join(testDir, 'new-file.txt'), '');
+      expect(() => service.createFile(path.join(testDir, 'new-file.txt'))).toThrow();
+    });
+  });
+
+  describe('File Deletion', () => {
+    it('should delete files', () => {
+      const filePath = path.join(testDir, 'to-delete.txt');
+      fs.writeFileSync(filePath, 'delete me');
+      service.deleteFile(filePath);
+      expect(fs.existsSync(filePath)).toBe(false);
+    });
+
+    it('should delete directories recursively', () => {
+      const dirPath = path.join(testDir, 'to-delete-dir');
+      fs.mkdirSync(dirPath);
+      fs.writeFileSync(path.join(dirPath, 'file.txt'), 'content');
+      service.deleteFile(dirPath);
+      expect(fs.existsSync(dirPath)).toBe(false);
+    });
+
+    it('should throw on non-existent path', () => {
+      expect(() => service.deleteFile('/nonexistent')).toThrow();
+    });
+  });
+
+  describe('File Renaming', () => {
+    beforeEach(() => {
+      fs.writeFileSync(path.join(testDir, 'rename-source.txt'), 'content');
+    });
+
+    afterEach(() => {
+      try {
+        fs.unlinkSync(path.join(testDir, 'rename-source.txt'));
+      } catch {}
+      try {
+        fs.unlinkSync(path.join(testDir, 'rename-dest.txt'));
+      } catch {}
+    });
+
+    it('should rename files', () => {
+      service.renameFile(
+        path.join(testDir, 'rename-source.txt'),
+        path.join(testDir, 'rename-dest.txt')
+      );
+      expect(fs.existsSync(path.join(testDir, 'rename-source.txt'))).toBe(false);
+      expect(fs.existsSync(path.join(testDir, 'rename-dest.txt'))).toBe(true);
+    });
+
+    it('should throw if source does not exist', () => {
+      expect(() =>
+        service.renameFile('/nonexistent', path.join(testDir, 'dest.txt'))
+      ).toThrow();
+    });
+
+    it('should throw if destination exists', () => {
+      fs.writeFileSync(path.join(testDir, 'rename-dest.txt'), 'existing');
+      expect(() =>
+        service.renameFile(
+          path.join(testDir, 'rename-source.txt'),
+          path.join(testDir, 'rename-dest.txt')
+        )
+      ).toThrow();
+    });
+  });
+
+  describe('File Duplication', () => {
+    beforeEach(() => {
+      fs.writeFileSync(path.join(testDir, 'dup-source.txt'), 'original');
+    });
+
+    afterEach(() => {
+      try {
+        fs.unlinkSync(path.join(testDir, 'dup-source.txt'));
+      } catch {}
+      try {
+        fs.unlinkSync(path.join(testDir, 'dup-source_copy.txt'));
+      } catch {}
+      try {
+        fs.unlinkSync(path.join(testDir, 'dup-source_copy_2.txt'));
+      } catch {}
+    });
+
+    it('should duplicate files with _copy suffix', () => {
+      const result = service.duplicateFile(path.join(testDir, 'dup-source.txt'));
+      expect(result.name).toBe('dup-source_copy.txt');
+      expect(fs.existsSync(path.join(testDir, 'dup-source_copy.txt'))).toBe(true);
+      const content = fs.readFileSync(path.join(testDir, 'dup-source_copy.txt'), 'utf-8');
+      expect(content).toBe('original');
+    });
+
+    it('should increment suffix if _copy exists', () => {
+      fs.writeFileSync(path.join(testDir, 'dup-source_copy.txt'), 'copy1');
+      const result = service.duplicateFile(path.join(testDir, 'dup-source.txt'));
+      expect(result.name).toBe('dup-source_copy_2.txt');
+    });
+
+    it('should throw on non-existent file', () => {
+      expect(() => service.duplicateFile('/nonexistent')).toThrow();
+    });
+
+    it('should throw on directory', () => {
+      expect(() => service.duplicateFile(testDir)).toThrow();
+    });
+  });
+
+  describe('Notebook Cells Conversion', () => {
+    const sampleNotebook = {
+      cells: [
+        {
+          cell_type: 'code',
+          source: ['print("hello")', '\n', 'print("world")'],
+          metadata: { nebula_id: 'cell-1', scrolled: true },
+          outputs: [
+            { output_type: 'stream', name: 'stdout', text: ['hello\n', 'world\n'] }
+          ],
+          execution_count: 1
+        },
+        {
+          cell_type: 'markdown',
+          source: '# Header',
+          metadata: {},
+          outputs: []
+        }
+      ],
+      metadata: { kernelspec: { name: 'python3', display_name: 'Python 3', language: 'python' } },
+      nbformat: 4,
+      nbformat_minor: 5
+    };
+
+    beforeEach(() => {
+      fs.writeFileSync(
+        path.join(testDir, 'cells-test.ipynb'),
+        JSON.stringify(sampleNotebook)
+      );
+    });
+
+    afterEach(() => {
+      fs.unlinkSync(path.join(testDir, 'cells-test.ipynb'));
+    });
+
+    it('should convert notebook to internal cell format', () => {
+      const result = service.getNotebookCells(path.join(testDir, 'cells-test.ipynb'));
+      expect(result.cells.length).toBe(2);
+      expect(result.kernelspec).toBe('python3');
+
+      // Check code cell
+      const codeCell = result.cells[0];
+      expect(codeCell.type).toBe('code');
+      expect(codeCell.content).toBe('print("hello")\nprint("world")');
+      expect(codeCell.id).toBe('cell-1');
+      expect(codeCell.scrolled).toBe(true);
+      expect(codeCell.outputs.length).toBe(1);
+      expect(codeCell.outputs[0].type).toBe('stdout');
+      expect(codeCell.outputs[0].content).toBe('hello\nworld\n');
+
+      // Check markdown cell
+      const mdCell = result.cells[1];
+      expect(mdCell.type).toBe('markdown');
+      expect(mdCell.content).toBe('# Header');
+    });
+
+    it('should throw on non-existent notebook', () => {
+      expect(() => service.getNotebookCells('/nonexistent.ipynb')).toThrow();
+    });
+  });
+
+  describe('Notebook Cells Saving', () => {
+    const cells = [
+      {
+        id: 'cell-1',
+        type: 'code' as const,
+        content: 'print("hello")',
+        outputs: [{ id: 'out-1', type: 'stdout' as const, content: 'hello\n', timestamp: Date.now() }],
+        isExecuting: false,
+        executionCount: 1,
+        scrolled: true
+      },
+      {
+        id: 'cell-2',
+        type: 'markdown' as const,
+        content: '# Title',
+        outputs: [],
+        isExecuting: false,
+        executionCount: null
+      }
+    ];
+
+    afterEach(() => {
+      try {
+        fs.unlinkSync(path.join(testDir, 'save-cells.ipynb'));
+      } catch {}
+    });
+
+    it('should save cells to notebook format', () => {
+      service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells, 'python3');
+      const saved = JSON.parse(fs.readFileSync(path.join(testDir, 'save-cells.ipynb'), 'utf-8'));
+
+      expect(saved.nbformat).toBe(4);
+      expect(saved.cells.length).toBe(2);
+
+      // Check code cell conversion
+      const codeCell = saved.cells[0];
+      expect(codeCell.cell_type).toBe('code');
+      expect(codeCell.source).toEqual(['print("hello")']);
+      expect(codeCell.metadata.nebula_id).toBe('cell-1');
+      expect(codeCell.metadata.scrolled).toBe(true);
+      expect(codeCell.execution_count).toBe(1);
+
+      // Check markdown cell
+      const mdCell = saved.cells[1];
+      expect(mdCell.cell_type).toBe('markdown');
+      expect(mdCell.source).toEqual(['# Title']);
+    });
+
+    it('should return mtime after save', () => {
+      const result = service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells);
+      expect(result.success).toBe(true);
+      expect(typeof result.mtime).toBe('number');
+    });
+
+    it('should preserve existing metadata', () => {
+      // Create notebook with existing metadata
+      fs.writeFileSync(path.join(testDir, 'save-cells.ipynb'), JSON.stringify({
+        cells: [],
+        metadata: { custom: 'value', nebula: { agent_created: true } },
+        nbformat: 4,
+        nbformat_minor: 5
+      }));
+
+      service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells);
+      const saved = JSON.parse(fs.readFileSync(path.join(testDir, 'save-cells.ipynb'), 'utf-8'));
+
+      expect(saved.metadata.custom).toBe('value');
+      expect(saved.metadata.nebula.agent_created).toBe(true);
+    });
+  });
+
+  describe('History Persistence', () => {
+    const historyData = [
+      { type: 'insertCell', index: 0, cell: { id: 'cell-1' } },
+      { type: 'updateContent', cellId: 'cell-1', oldContent: '', newContent: 'code' }
+    ];
+
+    const getNotebookPath = () => path.join(testDir, 'history-test.ipynb');
+
+    beforeEach(() => {
+      fs.writeFileSync(getNotebookPath(), JSON.stringify({ cells: [], metadata: {}, nbformat: 4, nbformat_minor: 5 }));
+    });
+
+    afterEach(() => {
+      try {
+        fs.unlinkSync(getNotebookPath());
+      } catch {}
+      try {
+        fs.rmSync(path.join(testDir, '.nebula'), { recursive: true });
+      } catch {}
+    });
+
+    it('should save history to .nebula directory', () => {
+      service.saveHistory(getNotebookPath(), historyData);
+      const nebulaDir = path.join(testDir, '.nebula');
+      expect(fs.existsSync(nebulaDir)).toBe(true);
+      expect(fs.existsSync(path.join(nebulaDir, 'history-test.history.json'))).toBe(true);
+    });
+
+    it('should load saved history', () => {
+      service.saveHistory(getNotebookPath(), historyData);
+      const loaded = service.loadHistory(getNotebookPath());
+      expect(loaded).toEqual(historyData);
+    });
+
+    it('should return empty array if no history', () => {
+      const loaded = service.loadHistory(getNotebookPath());
+      expect(loaded).toEqual([]);
+    });
+
+    it('should check if history exists', () => {
+      expect(service.hasHistory(getNotebookPath())).toBe(false);
+      service.saveHistory(getNotebookPath(), historyData);
+      expect(service.hasHistory(getNotebookPath())).toBe(true);
+    });
+  });
+
+  describe('Session Persistence', () => {
+    const sessionData = { kernelSessionId: 'abc-123', lastOpened: Date.now() };
+    const getNotebookPath = () => path.join(testDir, 'session-test.ipynb');
+
+    beforeEach(() => {
+      fs.writeFileSync(getNotebookPath(), JSON.stringify({ cells: [], metadata: {}, nbformat: 4, nbformat_minor: 5 }));
+    });
+
+    afterEach(() => {
+      try {
+        fs.unlinkSync(getNotebookPath());
+      } catch {}
+      try {
+        fs.rmSync(path.join(testDir, '.nebula'), { recursive: true });
+      } catch {}
+    });
+
+    it('should save and load session', () => {
+      service.saveSession(getNotebookPath(), sessionData);
+      const loaded = service.loadSession(getNotebookPath());
+      expect(loaded).toEqual(sessionData);
+    });
+
+    it('should return empty object if no session', () => {
+      const loaded = service.loadSession(getNotebookPath());
+      expect(loaded).toEqual({});
+    });
+  });
+
+  describe('Notebook Metadata', () => {
+    const getNotebookPath = () => path.join(testDir, 'metadata-test.ipynb');
+
+    beforeEach(() => {
+      fs.writeFileSync(getNotebookPath(), JSON.stringify({
+        cells: [],
+        metadata: { kernelspec: { name: 'python3' } },
+        nbformat: 4,
+        nbformat_minor: 5
+      }));
+    });
+
+    afterEach(() => {
+      fs.unlinkSync(getNotebookPath());
+    });
+
+    it('should get notebook metadata', () => {
+      const metadata = service.getNotebookMetadata(getNotebookPath()) as any;
+      expect(metadata.kernelspec.name).toBe('python3');
+    });
+
+    it('should update notebook metadata', () => {
+      const result = service.updateNotebookMetadata(getNotebookPath(), {
+        nebula: { agent_permitted: true }
+      });
+      expect(result.success).toBe(true);
+
+      const metadata = service.getNotebookMetadata(getNotebookPath()) as any;
+      expect(metadata.nebula.agent_permitted).toBe(true);
+      expect(metadata.kernelspec.name).toBe('python3'); // preserved
+    });
+
+    it('should return empty object for non-existent notebook', () => {
+      const metadata = service.getNotebookMetadata('/nonexistent.ipynb');
+      expect(metadata).toEqual({});
+    });
+  });
+
+  describe('Agent Permission', () => {
+    const getNotebookPath = () => path.join(testDir, 'agent-test.ipynb');
+
+    afterEach(() => {
+      try {
+        fs.unlinkSync(getNotebookPath());
+      } catch {}
+      try {
+        fs.rmSync(path.join(testDir, '.nebula'), { recursive: true });
+      } catch {}
+    });
+
+    it('should detect agent-created notebooks', () => {
+      fs.writeFileSync(getNotebookPath(), JSON.stringify({
+        cells: [],
+        metadata: { nebula: { agent_created: true } },
+        nbformat: 4,
+        nbformat_minor: 5
+      }));
+      expect(service.isAgentPermitted(getNotebookPath())).toBe(true);
+    });
+
+    it('should detect user-permitted notebooks', () => {
+      fs.writeFileSync(getNotebookPath(), JSON.stringify({
+        cells: [],
+        metadata: { nebula: { agent_permitted: true } },
+        nbformat: 4,
+        nbformat_minor: 5
+      }));
+      expect(service.isAgentPermitted(getNotebookPath())).toBe(true);
+    });
+
+    it('should return false for non-permitted notebooks', () => {
+      fs.writeFileSync(getNotebookPath(), JSON.stringify({
+        cells: [],
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 5
+      }));
+      expect(service.isAgentPermitted(getNotebookPath())).toBe(false);
+    });
+  });
+
+  describe('Notebook Metadata File Handling', () => {
+    const getNotebookPath = () => path.join(testDir, 'metadata-files.ipynb');
+    const historyData = [{ type: 'test' }];
+    const sessionData = { kernel: 'test' };
+
+    beforeEach(() => {
+      fs.writeFileSync(getNotebookPath(), JSON.stringify({ cells: [], metadata: {}, nbformat: 4, nbformat_minor: 5 }));
+      service.saveHistory(getNotebookPath(), historyData);
+      service.saveSession(getNotebookPath(), sessionData);
+    });
+
+    afterEach(() => {
+      try {
+        fs.unlinkSync(getNotebookPath());
+      } catch {}
+      try {
+        fs.rmSync(path.join(testDir, '.nebula'), { recursive: true });
+      } catch {}
+    });
+
+    it('should delete history and session when deleting notebook', () => {
+      service.deleteFile(getNotebookPath());
+      const historyPath = path.join(testDir, '.nebula', 'metadata-files.history.json');
+      const sessionPath = path.join(testDir, '.nebula', 'metadata-files.session.json');
+      expect(fs.existsSync(historyPath)).toBe(false);
+      expect(fs.existsSync(sessionPath)).toBe(false);
+    });
+
+    it('should rename history and session when renaming notebook', () => {
+      const newPath = path.join(testDir, 'renamed.ipynb');
+      service.renameFile(getNotebookPath(), newPath);
+
+      const oldHistoryPath = path.join(testDir, '.nebula', 'metadata-files.history.json');
+      const newHistoryPath = path.join(testDir, '.nebula', 'renamed.history.json');
+      expect(fs.existsSync(oldHistoryPath)).toBe(false);
+      expect(fs.existsSync(newHistoryPath)).toBe(true);
+
+      // Clean up
+      fs.unlinkSync(newPath);
+    });
+
+    it('should duplicate history and session when duplicating notebook', () => {
+      const result = service.duplicateFile(getNotebookPath());
+      const copyHistoryPath = path.join(testDir, '.nebula', 'metadata-files_copy.history.json');
+      expect(fs.existsSync(copyHistoryPath)).toBe(true);
+
+      // Clean up
+      fs.unlinkSync(path.join(testDir, result.name));
+    });
+  });
+});
