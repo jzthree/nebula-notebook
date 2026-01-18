@@ -52,6 +52,7 @@
  *       duplicateCell, updateOutputs, clearNotebook
  * Notebook: createNotebook, readCell, readCellOutput
  * Session: startAgentSession, endAgentSession
+ * History: undo, redo (UI-only - requires notebook open in browser)
  *
  * ## Usage
  *
@@ -161,6 +162,12 @@ export interface ClearNotebookOp {
   notebookPath: string;
 }
 
+export interface ClearOutputsOp {
+  type: 'clearOutputs';
+  notebookPath: string;
+  cellIds?: string[];  // If not provided, clears all cells
+}
+
 export interface ExecuteCellOp {
   type: 'executeCell';
   notebookPath: string;
@@ -182,6 +189,16 @@ export interface EndAgentSessionOp {
   notebookPath: string;
 }
 
+export interface UndoOp {
+  type: 'undo';
+  notebookPath: string;
+}
+
+export interface RedoOp {
+  type: 'redo';
+  notebookPath: string;
+}
+
 export type NotebookOperation =
   | InsertCellOp
   | DeleteCellOp
@@ -196,7 +213,10 @@ export type NotebookOperation =
   | ReadCellOp
   | ReadCellOutputOp
   | ClearNotebookOp
-  | ExecuteCellOp;
+  | ClearOutputsOp
+  | ExecuteCellOp
+  | UndoOp
+  | RedoOp;
 
 export interface OperationResult {
   success: boolean;
@@ -221,6 +241,8 @@ export interface OperationResult {
   executionCount?: number;
   // For clearNotebook operation
   deletedCount?: number;
+  // For clearOutputs operation
+  clearedCount?: number;
   // For session operations
   warning?: string;
   previousSession?: AgentSessionInfo;
@@ -229,6 +251,11 @@ export interface OperationResult {
   executionStatus?: 'idle' | 'busy' | 'error';
   executionTime?: number;
   sessionId?: string;
+  // For undo/redo operations
+  affectedCellIds?: string[];
+  operationType?: string;
+  canUndo?: boolean;
+  canRedo?: boolean;
 }
 
 interface OperationMessage {
@@ -309,6 +336,18 @@ interface UseOperationHandlerOptions {
 
   /** Callback when an agent operation is applied (for toasts/notifications) */
   onAgentOperation?: (operation: NotebookOperation, result: OperationResult) => void;
+
+  /** Undo callback (from useUndoRedo) */
+  undo?: () => { affectedCellIds: string[]; operationType: string } | null;
+
+  /** Redo callback (from useUndoRedo) */
+  redo?: () => { affectedCellIds: string[]; operationType: string } | null;
+
+  /** Whether undo is available */
+  canUndo?: boolean;
+
+  /** Whether redo is available */
+  canRedo?: boolean;
 }
 
 export function useOperationHandler(options: UseOperationHandlerOptions) {
@@ -325,6 +364,10 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     createNotebook,
     executeCell,
     onAgentOperation,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
   } = options;
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -344,6 +387,10 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const createNotebookRef = useRef(createNotebook);
   const executeCellRef = useRef(executeCell);
   const onAgentOperationRef = useRef(onAgentOperation);
+  const undoRef = useRef(undo);
+  const redoRef = useRef(redo);
+  const canUndoRef = useRef(canUndo);
+  const canRedoRef = useRef(canRedo);
 
   // Update refs on each render
   cellsRef.current = cells;
@@ -357,6 +404,10 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   createNotebookRef.current = createNotebook;
   executeCellRef.current = executeCell;
   onAgentOperationRef.current = onAgentOperation;
+  undoRef.current = undo;
+  redoRef.current = redo;
+  canUndoRef.current = canUndo;
+  canRedoRef.current = canRedo;
 
   const [isConnected, setIsConnected] = useState(false);
   const [activeOperation, setActiveOperation] = useState<AgentOperationInfo | null>(null);
@@ -709,9 +760,8 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
         }
 
         case 'readCellOutput': {
-          const { cellId, cellIndex } = operation;
+          const { cellId, cellIndex, maxWait = 0 } = operation as ReadCellOutputOp & { maxWait?: number };
 
-          let cell: Cell | undefined;
           let targetIndex: number | undefined;
 
           if (cellId) {
@@ -719,15 +769,37 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             if (targetIndex === -1) {
               return { success: false, error: `Cell with ID "${cellId}" not found` };
             }
-            cell = currentCells[targetIndex];
           } else if (cellIndex !== undefined) {
             if (cellIndex < 0 || cellIndex >= currentCells.length) {
               return { success: false, error: `Cell index ${cellIndex} out of range` };
             }
             targetIndex = cellIndex;
-            cell = currentCells[cellIndex];
           } else {
             return { success: false, error: 'Must provide cellId or cellIndex' };
+          }
+
+          // If maxWait > 0, poll for new outputs
+          let cell = currentCells[targetIndex];
+          if (maxWait > 0) {
+            const initialOutputCount = cell.outputs.length;
+            const initialOutputChars = cell.outputs.reduce((sum, o) => sum + o.content.length, 0);
+            const startTime = Date.now();
+            const pollInterval = 500; // 500ms
+
+            while (Date.now() - startTime < maxWait * 1000) {
+              await new Promise(resolve => setTimeout(resolve, pollInterval));
+              // Re-read from current ref (cells may have updated)
+              const updatedCells = cellsRef.current;
+              if (targetIndex >= updatedCells.length) break; // Cell deleted
+              cell = updatedCells[targetIndex];
+              const currentOutputCount = cell.outputs.length;
+              const currentOutputChars = cell.outputs.reduce((sum, o) => sum + o.content.length, 0);
+
+              // Check if outputs changed
+              if (currentOutputCount > initialOutputCount || currentOutputChars > initialOutputChars) {
+                break; // New output arrived
+              }
+            }
           }
 
           return {
@@ -834,6 +906,54 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             outputs: result.outputs,
             sessionId: result.sessionId,
             error: result.error,
+          };
+        }
+
+        case 'undo': {
+          if (!undoRef.current) {
+            return { success: false, error: 'Undo not available (callback not provided)' };
+          }
+
+          const result = undoRef.current();
+          if (!result) {
+            return {
+              success: false,
+              error: 'Nothing to undo',
+              canUndo: false,
+              canRedo: canRedoRef.current ?? false,
+            };
+          }
+
+          return {
+            success: true,
+            affectedCellIds: result.affectedCellIds,
+            operationType: result.operationType,
+            canUndo: canUndoRef.current ?? false,
+            canRedo: true, // After undo, redo is always available
+          };
+        }
+
+        case 'redo': {
+          if (!redoRef.current) {
+            return { success: false, error: 'Redo not available (callback not provided)' };
+          }
+
+          const result = redoRef.current();
+          if (!result) {
+            return {
+              success: false,
+              error: 'Nothing to redo',
+              canUndo: canUndoRef.current ?? false,
+              canRedo: false,
+            };
+          }
+
+          return {
+            success: true,
+            affectedCellIds: result.affectedCellIds,
+            operationType: result.operationType,
+            canUndo: true, // After redo, undo is always available
+            canRedo: canRedoRef.current ?? false,
           };
         }
 

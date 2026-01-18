@@ -433,16 +433,17 @@ export const FileBrowser: React.FC<Props> = ({
               key={item.id}
               onClick={() => handleItemClick(item)}
               className={`
-                group flex items-center justify-between px-3 py-2 rounded-md cursor-pointer transition-all mb-1
+                group relative flex items-center px-3 py-2 rounded-md cursor-pointer transition-all mb-1
                 ${item.path === currentFileId
                   ? 'bg-blue-100/50 text-blue-900 font-medium'
                   : 'text-slate-600 hover:bg-slate-200/50'}
               `}
             >
-              <div className="flex items-center gap-2 overflow-hidden flex-1">
+              {/* File icon and name - takes full width */}
+              <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0">
                 {getFileIcon(item)}
 
-                <div className="flex flex-col truncate min-w-0">
+                <div className="flex flex-col min-w-0 flex-1">
                   <span className="text-xs truncate" title={item.name}>
                     {item.name}
                   </span>
@@ -456,16 +457,15 @@ export const FileBrowser: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Hover Actions */}
+              {/* Hover Actions - absolutely positioned overlay */}
               {!item.isDirectory && (
-                <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto">
                   <div className="flex bg-white shadow-sm rounded border border-slate-200">
                     {item.extension === '.ipynb' && (
                       <>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            // Don't encode slashes for readable URLs
                             const baseUrl = window.location.pathname;
                             window.open(`${baseUrl}?file=${item.path}`, '_blank');
                           }}

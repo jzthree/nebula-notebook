@@ -316,6 +316,18 @@ class HeadlessOperationHandler:
                 if self._operation_router:
                     self._operation_router.end_agent_session(notebook_path)
                 result = {'success': True}
+            elif op_type == 'undo':
+                # Undo requires UI to be connected (undo state is maintained in browser)
+                return {
+                    'success': False,
+                    'error': 'Undo requires the notebook to be open in the browser. Undo state is maintained in the UI.'
+                }
+            elif op_type == 'redo':
+                # Redo requires UI to be connected (redo state is maintained in browser)
+                return {
+                    'success': False,
+                    'error': 'Redo requires the notebook to be open in the browser. Redo state is maintained in the UI.'
+                }
             else:
                 return {
                     'success': False,
@@ -1089,13 +1101,16 @@ class HeadlessOperationHandler:
             max_chars_error: Max characters for error output (default: 20000)
             line_offset: Start from line N for pagination (default: 0)
             save_to_file: Save full output to temp file (default: false)
+            maxWait: Wait up to N seconds for new outputs (default: 0)
 
         Returns truncated output with metadata about full output size.
         Use save_to_file=true to save the complete output for analysis.
+        Use maxWait > 0 to poll for new outputs from long-running cells.
         """
         notebook_path = operation['notebookPath']
         cell_id = operation.get('cellId')
         cell_index = operation.get('cellIndex')
+        max_wait = operation.get('maxWait', 0)  # Polling timeout in seconds
 
         # Truncation parameters (separate limits for errors)
         max_lines = operation.get('max_lines', OUTPUT_DEFAULT_MAX_LINES)
@@ -1126,6 +1141,26 @@ class HeadlessOperationHandler:
             cell = cells[cell_index]
         else:
             return {'success': False, 'error': 'Must provide cellId or cellIndex'}
+
+        # If max_wait > 0, poll for new outputs
+        if max_wait > 0:
+            initial_output_count = len(cell.get('outputs', []))
+            initial_output_chars = sum(len(o.get('content', '')) for o in cell.get('outputs', []))
+            start_time = time.time()
+            poll_interval = 0.5  # Poll every 500ms
+
+            while time.time() - start_time < max_wait:
+                await asyncio.sleep(poll_interval)
+                # Re-read cells to get updated outputs
+                cells = self._get_cells(notebook_path)
+                # Re-find cell (use target_index since we already validated it)
+                cell = cells[target_index]
+                current_output_count = len(cell.get('outputs', []))
+                current_output_chars = sum(len(o.get('content', '')) for o in cell.get('outputs', []))
+
+                # Check if outputs changed (more outputs or more content)
+                if current_output_count > initial_output_count or current_output_chars > initial_output_chars:
+                    break  # New output arrived
 
         # Process each output with truncation
         processed_outputs = []

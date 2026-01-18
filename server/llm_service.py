@@ -74,6 +74,7 @@ class LLMConfig:
     model: str
     temperature: float = LLM_DEFAULT_TEMPERATURE
     max_tokens: int = LLM_DEFAULT_MAX_TOKENS
+    api_key: Optional[str] = None  # Optional API key from client (overrides env var)
 
 
 class LLMService:
@@ -84,31 +85,58 @@ class LLMService:
         self._openai_client = None
         self._anthropic_client = None
 
-    def _get_google_client(self) -> genai.Client:
-        """Get or create Google GenAI client"""
+    def _get_google_client(self, api_key: Optional[str] = None) -> genai.Client:
+        """Get or create Google GenAI client
+
+        Args:
+            api_key: Optional API key from client. If provided, creates a new client
+                    instead of using the cached one.
+        """
+        if api_key:
+            # Create a new client with the provided API key (don't cache)
+            return genai.Client(api_key=api_key)
+
         if self._google_client is None:
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                raise ValueError("GEMINI_API_KEY not found in environment")
-            self._google_client = genai.Client(api_key=api_key)
+            env_key = os.getenv("GEMINI_API_KEY")
+            if not env_key:
+                raise ValueError("GEMINI_API_KEY not found in environment. Configure it in settings or server .env file.")
+            self._google_client = genai.Client(api_key=env_key)
         return self._google_client
 
-    def _get_openai_client(self) -> OpenAI:
-        """Get or create OpenAI client"""
+    def _get_openai_client(self, api_key: Optional[str] = None) -> OpenAI:
+        """Get or create OpenAI client
+
+        Args:
+            api_key: Optional API key from client. If provided, creates a new client
+                    instead of using the cached one.
+        """
+        if api_key:
+            # Create a new client with the provided API key (don't cache)
+            return OpenAI(api_key=api_key)
+
         if self._openai_client is None:
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError("OPENAI_API_KEY not found in environment")
-            self._openai_client = OpenAI(api_key=api_key)
+            env_key = os.getenv("OPENAI_API_KEY")
+            if not env_key:
+                raise ValueError("OPENAI_API_KEY not found in environment. Configure it in settings or server .env file.")
+            self._openai_client = OpenAI(api_key=env_key)
         return self._openai_client
 
-    def _get_anthropic_client(self) -> Anthropic:
-        """Get or create Anthropic client"""
+    def _get_anthropic_client(self, api_key: Optional[str] = None) -> Anthropic:
+        """Get or create Anthropic client
+
+        Args:
+            api_key: Optional API key from client. If provided, creates a new client
+                    instead of using the cached one.
+        """
+        if api_key:
+            # Create a new client with the provided API key (don't cache)
+            return Anthropic(api_key=api_key)
+
         if self._anthropic_client is None:
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise ValueError("ANTHROPIC_API_KEY not found in environment")
-            self._anthropic_client = Anthropic(api_key=api_key)
+            env_key = os.getenv("ANTHROPIC_API_KEY")
+            if not env_key:
+                raise ValueError("ANTHROPIC_API_KEY not found in environment. Configure it in settings or server .env file.")
+            self._anthropic_client = Anthropic(api_key=env_key)
         return self._anthropic_client
 
     def get_available_providers(self) -> Dict[str, List[str]]:
@@ -162,7 +190,7 @@ class LLMService:
         images: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """Generate using Google Gemini"""
-        client = self._get_google_client()
+        client = self._get_google_client(config.api_key)
 
         # Build content parts
         contents = [prompt]
@@ -195,7 +223,7 @@ class LLMService:
         images: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """Generate using OpenAI"""
-        client = self._get_openai_client()
+        client = self._get_openai_client(config.api_key)
 
         messages = [
             {"role": "system", "content": system_prompt}
@@ -232,7 +260,7 @@ class LLMService:
         images: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """Generate using Anthropic Claude"""
-        client = self._get_anthropic_client()
+        client = self._get_anthropic_client(config.api_key)
 
         # Build user message content
         if images:
@@ -295,7 +323,7 @@ class LLMService:
         config: LLMConfig
     ) -> Dict[str, Any]:
         """Generate structured JSON using Google Gemini"""
-        client = self._get_google_client()
+        client = self._get_google_client(config.api_key)
 
         response = client.models.generate_content(
             model=config.model,
@@ -317,7 +345,7 @@ class LLMService:
         config: LLMConfig
     ) -> Dict[str, Any]:
         """Generate structured JSON using OpenAI"""
-        client = self._get_openai_client()
+        client = self._get_openai_client(config.api_key)
 
         response = client.chat.completions.create(
             model=config.model,
@@ -339,7 +367,7 @@ class LLMService:
         config: LLMConfig
     ) -> Dict[str, Any]:
         """Generate structured JSON using Anthropic Claude"""
-        client = self._get_anthropic_client()
+        client = self._get_anthropic_client(config.api_key)
 
         # Anthropic doesn't have native JSON mode, so we enforce via prompt
         enhanced_system = system_prompt + "\n\nIMPORTANT: Respond with ONLY a valid JSON object. No markdown, no explanation outside the JSON."
@@ -393,7 +421,7 @@ class LLMService:
         images: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """Chat using Google Gemini"""
-        client = self._get_google_client()
+        client = self._get_google_client(config.api_key)
 
         # Convert history to Gemini format
         contents = []
@@ -440,7 +468,7 @@ class LLMService:
         images: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """Chat using OpenAI"""
-        client = self._get_openai_client()
+        client = self._get_openai_client(config.api_key)
 
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -483,7 +511,7 @@ class LLMService:
         images: Optional[List[Dict[str, str]]] = None
     ) -> str:
         """Chat using Anthropic Claude"""
-        client = self._get_anthropic_client()
+        client = self._get_anthropic_client(config.api_key)
 
         messages = []
 

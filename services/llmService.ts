@@ -73,6 +73,9 @@ export const DEFAULT_MODELS: Record<LLMProvider, string> = {
   anthropic: 'claude-sonnet-4-5-20250929'
 };
 
+// Forward declaration - will be defined after getSettings
+let getLLMHeaders: (provider?: LLMProvider) => Record<string, string>;
+
 /**
  * Get available providers and models from backend
  */
@@ -198,7 +201,7 @@ export const generateCellContent = async (
     `${API_BASE}/llm/generate`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getLLMHeaders(config.provider),
       body: JSON.stringify({
         prompt: userContent,
         system_prompt: systemPrompt,
@@ -262,7 +265,7 @@ ${prompt}`;
     `${API_BASE}/llm/generate-structured`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getLLMHeaders(config.provider),
       body: JSON.stringify({
         prompt: userContent,
         system_prompt: systemPrompt,
@@ -317,7 +320,7 @@ export const fixCellError = async (
     `${API_BASE}/llm/generate`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getLLMHeaders(config.provider),
       body: JSON.stringify({
         prompt: userContent,
         system_prompt: systemPrompt,
@@ -408,7 +411,7 @@ export const chatWithNotebook = async (
     `${API_BASE}/llm/chat`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getLLMHeaders(config.provider),
       body: JSON.stringify({
         message: `Notebook Context:\n${context}\n\nUser Question: ${message}`,
         history: historyFormatted,
@@ -441,6 +444,12 @@ export interface NebulaSettings {
   notifySoundEnabled?: boolean; // Play sound when long-running jobs complete
   indentation?: IndentationPreference; // Indentation style: 'auto' (detect), '2', '4', '8', or 'tab'
   showLineNumbers?: boolean; // Show line numbers in code cells
+  // API Keys (stored in localStorage - use with caution on shared machines)
+  apiKeys?: {
+    google?: string;    // Gemini API key
+    openai?: string;    // OpenAI API key
+    anthropic?: string; // Anthropic API key
+  };
 }
 
 export const getSettings = (): NebulaSettings => {
@@ -470,4 +479,41 @@ export const saveSettings = (settings: Partial<NebulaSettings>): void => {
   const current = getSettings();
   const updated = { ...current, ...settings };
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
+};
+
+/**
+ * Get API key for the specified provider from settings
+ */
+export const getApiKey = (provider: LLMProvider): string | undefined => {
+  const settings = getSettings();
+  return settings.apiKeys?.[provider];
+};
+
+/**
+ * Get headers with API key for current provider (if configured in settings)
+ */
+export const getApiKeyHeaders = (): Record<string, string> => {
+  const settings = getSettings();
+  const apiKey = settings.apiKeys?.[settings.llmProvider];
+  if (apiKey) {
+    return { 'X-API-Key': apiKey };
+  }
+  return {};
+};
+
+/**
+ * Get headers for LLM requests including Content-Type and API key if configured
+ */
+getLLMHeaders = (provider?: LLMProvider): Record<string, string> => {
+  const settings = getSettings();
+  const targetProvider = provider || settings.llmProvider;
+  const apiKey = settings.apiKeys?.[targetProvider];
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (apiKey) {
+    headers['X-API-Key'] = apiKey;
+    headers['X-API-Provider'] = targetProvider;
+  }
+  return headers;
 };

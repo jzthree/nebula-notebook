@@ -139,6 +139,7 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
 
   return (
     <Virtuoso
+      key={renderKey} // Force full re-render when settings like line numbers change
       ref={virtuosoRef}
       className={className}
       data={cells}

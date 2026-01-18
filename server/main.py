@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File, Form, Request, Response
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File, Form, Request, Response, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -605,13 +605,27 @@ async def list_providers():
 
 
 @app.post("/api/llm/generate")
-async def generate(request: GenerateRequest):
-    """Generate text/code from LLM"""
+async def generate(
+    request: GenerateRequest,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_api_provider: Optional[str] = Header(None, alias="X-API-Provider")
+):
+    """Generate text/code from LLM
+
+    API keys can be provided via X-API-Key header (overrides server env vars).
+    X-API-Provider header indicates which provider the key is for.
+    """
     try:
+        # Use header API key if it matches the requested provider
+        api_key = None
+        if x_api_key and x_api_provider == request.provider:
+            api_key = x_api_key
+
         config = LLMConfig(
             provider=request.provider,
             model=request.model,
-            temperature=request.temperature
+            temperature=request.temperature,
+            api_key=api_key
         )
         response = await llm_service.generate(
             prompt=request.prompt,
@@ -627,13 +641,26 @@ async def generate(request: GenerateRequest):
 
 
 @app.post("/api/llm/generate-structured")
-async def generate_structured(request: GenerateStructuredRequest):
-    """Generate structured JSON response from LLM"""
+async def generate_structured(
+    request: GenerateStructuredRequest,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_api_provider: Optional[str] = Header(None, alias="X-API-Provider")
+):
+    """Generate structured JSON response from LLM
+
+    API keys can be provided via X-API-Key header (overrides server env vars).
+    """
     try:
+        # Use header API key if it matches the requested provider
+        api_key = None
+        if x_api_key and x_api_provider == request.provider:
+            api_key = x_api_key
+
         config = LLMConfig(
             provider=request.provider,
             model=request.model,
-            temperature=request.temperature
+            temperature=request.temperature,
+            api_key=api_key
         )
         response = await llm_service.generate_structured(
             prompt=request.prompt,
@@ -648,13 +675,26 @@ async def generate_structured(request: GenerateStructuredRequest):
 
 
 @app.post("/api/llm/chat")
-async def chat(request: ChatRequest):
-    """Chat with LLM including history"""
+async def chat(
+    request: ChatRequest,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_api_provider: Optional[str] = Header(None, alias="X-API-Provider")
+):
+    """Chat with LLM including history
+
+    API keys can be provided via X-API-Key header (overrides server env vars).
+    """
     try:
+        # Use header API key if it matches the requested provider
+        api_key = None
+        if x_api_key and x_api_provider == request.provider:
+            api_key = x_api_key
+
         config = LLMConfig(
             provider=request.provider,
             model=request.model,
-            temperature=request.temperature
+            temperature=request.temperature,
+            api_key=api_key
         )
         response = await llm_service.chat(
             message=request.message,

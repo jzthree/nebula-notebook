@@ -303,6 +303,7 @@ export const Notebook: React.FC = () => {
   }, []);
 
   // Execute cell callback for agent operations
+  // Uses the same execution queue as UI - just adds timeout wrapper for agent
   const handleAgentExecuteCell = useCallback(async (
     cellId: string,
     options?: {
@@ -319,7 +320,11 @@ export const Notebook: React.FC = () => {
     sessionId?: string;
     error?: string;
   }> => {
-    const cell = cells.find(c => c.id === cellId);
+    // Use ref for current cell state
+    const currentCells = cellsRef.current;
+    const cellIndex = currentCells.findIndex(c => c.id === cellId);
+    const cell = cellIndex >= 0 ? currentCells[cellIndex] : null;
+
     if (!cell) {
       return { success: false, error: `Cell with ID "${cellId}" not found` };
     }
@@ -328,15 +333,12 @@ export const Notebook: React.FC = () => {
       return { success: false, error: `Cell ${cellId} is not a code cell` };
     }
 
-    // Use provided session ID or current session
     const effectiveSessionId = options?.sessionId || kernelSessionId;
     if (!effectiveSessionId) {
       return { success: false, error: 'No kernel session available. Start a kernel first.' };
     }
 
-    const code = cell.content;
-    if (!code.trim()) {
-      // Empty cell - return immediately
+    if (!cell.content.trim()) {
       return {
         success: true,
         executionStatus: 'idle',
@@ -348,84 +350,74 @@ export const Notebook: React.FC = () => {
 
     const startTime = Date.now();
     const maxWait = (options?.maxWait ?? 10) * 1000; // Convert to ms
-    const collectedOutputs: Array<{ type: string; content: string }> = [];
-    let executionComplete = false;
-    let executionError: string | undefined;
+    const pollInterval = 100; // Poll every 100ms
 
-    // Set cell to executing state
-    setCells(prev => prev.map(c =>
-      c.id === cellId ? { ...c, isExecuting: true, outputs: [] } : c
-    ));
+    // Add to execution queue - this triggers the existing UI execution logic
+    // The useEffect execution processor will handle the actual execution
+    setExecutionQueue(prev => prev.includes(cellId) ? prev : [...prev, cellId]);
 
-    try {
-      // Create a promise race between execution and timeout
-      const executionPromise = (async () => {
-        await kernelService.executeCode(effectiveSessionId, code, (output) => {
-          const simpleOutput = { type: output.type, content: output.content };
-          collectedOutputs.push(simpleOutput);
+    // Wait for execution to complete (isExecuting becomes false) or timeout
+    return new Promise((resolve) => {
+      let wasExecuting = false; // Track if execution ever started
 
-          // Update cell outputs in real-time if saveOutputs is not false
-          if (options?.saveOutputs !== false) {
-            setCells(prev => prev.map(c => {
-              if (c.id !== cellId) return c;
-              return {
-                ...c,
-                outputs: [...c.outputs, output],
-              };
-            }));
-          }
-        });
-        executionComplete = true;
-      })();
+      const checkCompletion = () => {
+        const elapsed = Date.now() - startTime;
 
-      const timeoutPromise = new Promise<void>((resolve) => {
-        setTimeout(resolve, maxWait);
-      });
+        // Get current cell state from ref (not closure) to get live data
+        const currentCell = cellsRef.current.find(c => c.id === cellId);
 
-      await Promise.race([executionPromise, timeoutPromise]);
+        if (!currentCell) {
+          // Cell was deleted during execution
+          resolve({
+            success: false,
+            error: 'Cell was deleted during execution',
+            executionTime: elapsed,
+            sessionId: effectiveSessionId,
+          });
+          return;
+        }
 
-      const elapsed = Date.now() - startTime;
+        // Track if execution started
+        if (currentCell.isExecuting) {
+          wasExecuting = true;
+        }
 
-      // Mark cell as no longer executing
-      setCells(prev => prev.map(c =>
-        c.id === cellId ? { ...c, isExecuting: false, lastExecutionMs: elapsed } : c
-      ));
+        // Check if execution completed (was executing, now not)
+        if (wasExecuting && !currentCell.isExecuting) {
+          // Execution complete - get outputs from cell state
+          const hasError = currentCell.outputs.some(o => o.type === 'error');
+          resolve({
+            success: true,
+            executionStatus: hasError ? 'error' : 'idle',
+            executionCount: currentCell.executionCount,
+            executionTime: elapsed,
+            outputs: currentCell.outputs.map(o => ({ type: o.type, content: o.content })),
+            sessionId: effectiveSessionId,
+          });
+          return;
+        }
 
-      if (executionComplete) {
-        const hasError = collectedOutputs.some(o => o.type === 'error');
-        return {
-          success: true,
-          executionStatus: hasError ? 'error' : 'idle',
-          outputs: collectedOutputs,
-          executionTime: elapsed,
-          sessionId: effectiveSessionId,
-        };
-      } else {
-        // Timed out - execution still running
-        return {
-          success: true,
-          executionStatus: 'busy',
-          outputs: collectedOutputs,
-          executionTime: elapsed,
-          sessionId: effectiveSessionId,
-        };
-      }
-    } catch (error) {
-      // Mark cell as no longer executing
-      setCells(prev => prev.map(c =>
-        c.id === cellId ? { ...c, isExecuting: false } : c
-      ));
+        // Check timeout
+        if (elapsed >= maxWait) {
+          // Timeout - return current outputs, execution continues in background
+          resolve({
+            success: true,
+            executionStatus: 'busy',
+            executionTime: elapsed,
+            outputs: currentCell.outputs.map(o => ({ type: o.type, content: o.content })),
+            sessionId: effectiveSessionId,
+          });
+          return;
+        }
 
-      return {
-        success: false,
-        executionStatus: 'error',
-        error: String(error),
-        outputs: collectedOutputs,
-        executionTime: Date.now() - startTime,
-        sessionId: effectiveSessionId,
+        // Still waiting for execution to start or complete, poll again
+        setTimeout(checkCompletion, pollInterval);
       };
-    }
-  }, [cells, kernelSessionId, setCells]);
+
+      // Start polling after a small delay to let execution start
+      setTimeout(checkCompletion, pollInterval);
+    });
+  }, [kernelSessionId]);
 
   // Operation handler - receives operations routed from backend OperationRouter
   const { isConnected: isAgentConnected, activeOperation: agentOperation, agentSession } = useOperationHandler({
@@ -440,6 +432,10 @@ export const Notebook: React.FC = () => {
     setCellOutputs,
     createNotebook: handleCreateNotebook,
     executeCell: handleAgentExecuteCell,
+    undo: rawUndo,
+    redo: rawRedo,
+    canUndo,
+    canRedo,
     onAgentOperation: useCallback((operation, result) => {
       // Skip read-only operations
       if (operation.type === 'readCell' || operation.type === 'readCellOutput') return;
@@ -480,6 +476,26 @@ export const Notebook: React.FC = () => {
           }
         } else {
           toast(`Agent execution failed: ${result.error}`, 'error', 3000);
+        }
+        return;
+      }
+
+      // Handle undo/redo operations
+      if (operation.type === 'undo') {
+        if (result.success) {
+          const affectedCount = result.affectedCellIds?.length ?? 0;
+          toast(`Agent undid ${result.operationType || 'operation'} (${affectedCount} cell${affectedCount !== 1 ? 's' : ''})`, 'info', 2000);
+        } else {
+          toast(result.error || 'Nothing to undo', 'warning', 2000);
+        }
+        return;
+      }
+      if (operation.type === 'redo') {
+        if (result.success) {
+          const affectedCount = result.affectedCellIds?.length ?? 0;
+          toast(`Agent redid ${result.operationType || 'operation'} (${affectedCount} cell${affectedCount !== 1 ? 's' : ''})`, 'info', 2000);
+        } else {
+          toast(result.error || 'Nothing to redo', 'warning', 2000);
         }
         return;
       }

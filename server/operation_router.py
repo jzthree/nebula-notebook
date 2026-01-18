@@ -161,6 +161,18 @@ class OperationRouter:
         response_future: asyncio.Future = loop.create_future()
         conn.pending_requests[request_id] = response_future
 
+        # For executeCell operations, respect the maxWait parameter
+        # Add buffer time for network/processing overhead
+        op_type = operation.get('type', '')
+        if op_type == 'executeCell':
+            max_wait = operation.get('maxWait', 10)  # Default 10 seconds
+            timeout = max_wait + 5  # Add 5 seconds buffer
+        elif op_type == 'readCellOutput':
+            max_wait = operation.get('maxWait', 0)  # Default 0 for read
+            timeout = max(self._operation_timeout, max_wait + 5)
+        else:
+            timeout = self._operation_timeout
+
         try:
             # Send operation to UI
             message = {
@@ -170,17 +182,17 @@ class OperationRouter:
             }
             await conn.websocket.send_json(message)
 
-            # Wait for response with timeout
+            # Wait for response with appropriate timeout
             result = await asyncio.wait_for(
                 response_future,
-                timeout=self._operation_timeout
+                timeout=timeout
             )
             return result
 
         except asyncio.TimeoutError:
             return {
                 'success': False,
-                'error': f'Operation timed out after {self._operation_timeout}s'
+                'error': f'Operation timed out after {timeout}s'
             }
         except Exception as e:
             return {
