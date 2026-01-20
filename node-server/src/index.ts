@@ -98,7 +98,11 @@ function createApp(): Express {
  */
 function setupWebSockets(server: ReturnType<typeof createServer>): void {
   // Create WebSocket server with noServer mode for path-based routing
-  const wss = new WebSocketServer({ noServer: true });
+  // Disable per-message deflate to avoid compression issues with proxies/browsers
+  const wss = new WebSocketServer({
+    noServer: true,
+    perMessageDeflate: false,
+  });
 
   // Handle upgrade requests
   server.on('upgrade', (request: IncomingMessage, socket, head) => {
@@ -110,15 +114,8 @@ function setupWebSockets(server: ReturnType<typeof createServer>): void {
         wss.emit('connection', ws, request);
       });
     }
-    // Route to terminal WebSocket (handled separately)
-    else if (pathname.startsWith('/ws')) {
-      // Let terminal WebSocket handler take over
-      // This is set up in setupTerminalWebSocket
-    }
-    // Unknown WebSocket path
-    else {
-      socket.destroy();
-    }
+    // Terminal WebSocket (/ws) is handled by setupTerminalWebSocket
+    // Don't destroy socket for other paths - let other handlers deal with them
   });
 
   // Setup kernel WebSocket handler
@@ -172,7 +169,7 @@ async function main(): Promise<void> {
   // Setup WebSocket routing
   setupWebSockets(server);
 
-  // Setup terminal WebSocket (existing functionality)
+  // Setup terminal WebSocket (now using noServer mode)
   setupTerminalWebSocket(server);
 
   // Setup static file serving

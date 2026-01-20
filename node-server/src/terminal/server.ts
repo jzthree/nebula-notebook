@@ -93,10 +93,27 @@ export function setupTerminalRoutes(app: Express): void {
 }
 
 /**
- * Setup terminal WebSocket server on the HTTP server
+ * Setup terminal WebSocket server with noServer mode
+ * Returns the WSS so the upgrade can be handled externally
  */
 export function setupTerminalWebSocket(server: HttpServer): WebSocketServer {
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  // Use noServer mode to avoid conflicts with kernel WebSocket
+  const wss = new WebSocketServer({
+    noServer: true,
+    perMessageDeflate: false,  // Disable compression
+  });
+
+  // Handle upgrade requests for /ws path
+  server.on('upgrade', (request, socket, head) => {
+    const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
+
+    if (pathname === '/ws') {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    }
+    // Don't destroy socket for non-matching paths - let other handlers deal with it
+  });
 
   wss.on('connection', (ws: WebSocket, req) => {
     // Extract terminal ID from URL query

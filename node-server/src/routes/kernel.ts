@@ -162,7 +162,21 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
     }
 
     const sessionId = match[1];
-    console.log(`[Kernel WS] Connected for session ${sessionId}`);
+
+    // Validate session exists
+    const session = kernelService.getSessionStatus(sessionId);
+    if (!session) {
+      console.log(`[Kernel WS] Session ${sessionId} not found, closing connection`);
+      ws.send(JSON.stringify({ type: 'error', error: 'Session not found' }));
+      ws.close(1008, 'Session not found');
+      return;
+    }
+
+    console.log(`[Kernel WS] Connected for session ${sessionId} (kernel: ${session.kernelName}, status: ${session.status})`);
+
+    ws.on('error', (err) => {
+      console.error(`[Kernel WS] WebSocket error for session ${sessionId}:`, err);
+    });
 
     ws.on('message', async (data) => {
       try {
@@ -188,9 +202,9 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
           ws.send(JSON.stringify({ type: 'status', status: 'idle' }));
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        console.error('[Kernel WS] Error:', message);
-        ws.send(JSON.stringify({ type: 'error', error: message }));
+        const errMessage = err instanceof Error ? err.message : 'Unknown error';
+        console.error('[Kernel WS] Error:', errMessage);
+        ws.send(JSON.stringify({ type: 'error', error: errMessage }));
       }
     });
 

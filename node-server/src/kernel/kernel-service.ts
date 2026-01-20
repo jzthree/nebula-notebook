@@ -170,7 +170,15 @@ export class KernelService {
     const proc = spawn(argv[0], argv.slice(1), {
       cwd,
       env: { ...process.env, ...spec.env },
-      stdio: 'pipe',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // Log kernel stdout/stderr for debugging
+    proc.stdout?.on('data', (data) => {
+      console.log(`[Kernel ${sessionId.slice(0, 8)}] stdout: ${data.toString().trim()}`);
+    });
+    proc.stderr?.on('data', (data) => {
+      console.error(`[Kernel ${sessionId.slice(0, 8)}] stderr: ${data.toString().trim()}`);
     });
 
     const now = Date.now() / 1000;

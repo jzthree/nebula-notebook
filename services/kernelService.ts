@@ -401,6 +401,37 @@ class KernelService {
         }
 
         try {
+          // First check if session exists on server
+          const status = await this.getStatus(sessionId);
+
+          if (!status && session.filePath && session.kernelName) {
+            // Session no longer exists on server, recreate it
+            console.log(`Session ${sessionId} not found on server, recreating for ${session.filePath}`);
+
+            // Remove old session tracking
+            this.sessions.delete(sessionId);
+            this.disconnectedSessions.delete(sessionId);
+
+            // Create new session - this will call onReconnect with the new session
+            try {
+              const newSessionId = await this.getOrCreateKernelForFile(session.filePath, session.kernelName);
+              console.log(`Recreated session as ${newSessionId}`);
+
+              // Notify callbacks with new session ID
+              for (const callback of this.onReconnectCallbacks) {
+                try {
+                  callback(newSessionId, session.filePath);
+                } catch (e) {
+                  console.error('Reconnect callback error:', e);
+                }
+              }
+            } catch (e) {
+              console.error('Failed to recreate session:', e);
+            }
+            continue;
+          }
+
+          // Session exists, just reconnect WebSocket
           await this.connectWebSocket(sessionId);
           this.disconnectedSessions.delete(sessionId);
           console.log(`Reconnected session ${sessionId}`);
@@ -415,9 +446,10 @@ class KernelService {
           }
         } catch (e) {
           // Still disconnected, will retry next interval
+          console.log(`Reconnection attempt failed for ${sessionId}:`, e);
         }
       }
-    }, 1000); // Try every second
+    }, 2000); // Try every 2 seconds (reduced frequency)
   }
 
   /**
