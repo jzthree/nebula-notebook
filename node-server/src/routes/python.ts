@@ -11,27 +11,33 @@ const discoveryService = new PythonDiscoveryService();
 
 /**
  * List all discovered Python environments
+ * Transforms to snake_case to match Python API format expected by frontend
  */
 router.get('/python/environments', async (req: Request, res: Response) => {
   try {
     const refresh = req.query.refresh === 'true';
 
-    // Get Jupyter kernelspecs
-    const kernelspecs = discoverKernelSpecs();
+    // Get Jupyter kernelspecs and transform to snake_case
+    const kernelspecs = discoverKernelSpecs().map(k => ({
+      name: k.name,
+      display_name: k.displayName,
+      language: k.language,
+      path: k.path,
+    }));
     const kernelspecNames = new Set(kernelspecs.map(k => k.name));
 
     // Get discovered Python environments
     const environments = await discoveryService.discover({ forceRefresh: refresh });
 
-    // Convert to plain objects and match with kernelspecs
+    // Convert to snake_case and match with kernelspecs
     const envObjects = environments.map(env => ({
       path: env.path,
       version: env.version,
-      displayName: env.displayName,
-      envType: env.envType,
-      envName: env.envName,
-      hasIpykernel: env.hasIpykernel,
-      kernelName: env.kernelName && kernelspecNames.has(env.kernelName) ? env.kernelName : null,
+      display_name: env.displayName,
+      env_type: env.envType,
+      env_name: env.envName,
+      has_ipykernel: env.hasIpykernel,
+      kernel_name: env.kernelName && kernelspecNames.has(env.kernelName) ? env.kernelName : null,
     }));
 
     res.json({

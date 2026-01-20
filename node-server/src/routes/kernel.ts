@@ -16,17 +16,32 @@ kernelService.initialize().catch(err => {
 
 /**
  * List available kernelspecs
+ * Transforms to snake_case to match Python API format expected by frontend
  */
 router.get('/kernels', (_req: Request, res: Response) => {
-  const kernels = kernelService.getAvailableKernels();
+  const kernels = kernelService.getAvailableKernels().map(k => ({
+    name: k.name,
+    display_name: k.displayName,
+    language: k.language,
+    path: k.path,
+  }));
   res.json({ kernels });
 });
 
 /**
  * List all active kernel sessions
+ * Transforms to snake_case to match Python API format expected by frontend
  */
 router.get('/kernels/sessions', (_req: Request, res: Response) => {
-  const sessions = kernelService.getAllSessions();
+  const sessions = kernelService.getAllSessions().map(s => ({
+    id: s.id,
+    kernel_name: s.kernelName,
+    file_path: s.filePath,
+    status: s.status,
+    execution_count: s.executionCount,
+    memory_mb: s.memoryMb,
+    pid: s.pid,
+  }));
   res.json({ sessions });
 });
 
