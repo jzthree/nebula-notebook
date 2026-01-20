@@ -256,19 +256,22 @@ export class LLMService {
     let content: Anthropic.MessageCreateParams['messages'][0]['content'];
 
     if (images && images.length > 0) {
-      const parts: Anthropic.ContentBlockParam[] = [];
+      const parts: Array<
+        | { type: 'text'; text: string }
+        | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+      > = [];
       for (const img of images) {
         parts.push({
           type: 'image',
           source: {
             type: 'base64',
-            media_type: (img.mimeType || 'image/png') as 'image/png' | 'image/gif' | 'image/webp' | 'image/jpeg',
+            media_type: img.mimeType || 'image/png',
             data: img.data,
           },
         });
       }
       parts.push({ type: 'text', text: prompt });
-      content = parts;
+      content = parts as Anthropic.MessageCreateParams['messages'][0]['content'];
     } else {
       content = prompt;
     }
@@ -532,19 +535,22 @@ export class LLMService {
 
     // Add current message with images
     if (images && images.length > 0) {
-      const parts: Anthropic.ContentBlockParam[] = [];
+      const parts: Array<
+        | { type: 'text'; text: string }
+        | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+      > = [];
       for (const img of images) {
         parts.push({
           type: 'image',
           source: {
             type: 'base64',
-            media_type: (img.mimeType || 'image/png') as 'image/png' | 'image/gif' | 'image/webp' | 'image/jpeg',
+            media_type: img.mimeType || 'image/png',
             data: img.data,
           },
         });
       }
       parts.push({ type: 'text', text: message });
-      messages.push({ role: 'user', content: parts });
+      messages.push({ role: 'user', content: parts as Anthropic.MessageCreateParams['messages'][0]['content'] });
     } else {
       messages.push({ role: 'user', content: message });
     }

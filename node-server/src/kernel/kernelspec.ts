@@ -10,6 +10,9 @@ import * as path from 'path';
 import * as os from 'os';
 import { KernelSpec } from './types';
 
+// Re-export KernelSpec for convenience
+export type { KernelSpec } from './types';
+
 /**
  * Standard kernelspec search paths
  */

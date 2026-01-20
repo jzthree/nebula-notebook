@@ -511,6 +511,42 @@ export class FilesystemService {
   }
 
   /**
+   * Upload a file to a directory
+   */
+  async uploadFile(destDir: string, tempFilePath: string, originalName: string): Promise<FileInfoResponse> {
+    const normalizedDir = this.normalizePath(destDir);
+
+    if (!fs.existsSync(normalizedDir)) {
+      throw new Error(`Directory not found: ${normalizedDir}`);
+    }
+
+    const stat = fs.statSync(normalizedDir);
+    if (!stat.isDirectory()) {
+      throw new Error(`Not a directory: ${normalizedDir}`);
+    }
+
+    // Determine final path
+    let finalPath = path.join(normalizedDir, originalName);
+
+    // If file exists, find unique name
+    if (fs.existsSync(finalPath)) {
+      const ext = path.extname(originalName);
+      const name = path.basename(originalName, ext);
+      let counter = 1;
+      while (fs.existsSync(finalPath)) {
+        finalPath = path.join(normalizedDir, `${name}_${counter}${ext}`);
+        counter++;
+      }
+    }
+
+    // Move temp file to final destination
+    fs.copyFileSync(tempFilePath, finalPath);
+    fs.unlinkSync(tempFilePath);
+
+    return this.toFileInfoResponse(this.getFileInfo(finalPath));
+  }
+
+  /**
    * Convert Jupyter source to string
    */
   private sourceToString(source: string | string[]): string {
