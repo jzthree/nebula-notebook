@@ -27,6 +27,9 @@ import pythonRoutes from './routes/python';
 // Import terminal routes (existing)
 import { setupTerminalRoutes, setupTerminalWebSocket, cleanupTerminals } from './terminal/server';
 
+// Import notebook WebSocket
+import { setupNotebookWebSocket } from './notebook/notebook-websocket';
+
 const PORT = process.env.PORT || process.env.NODE_SERVER_PORT || 8000;
 const DEV_MODE = process.env.DEV_MODE === 'true' || process.argv.includes('--dev');
 
@@ -172,6 +175,9 @@ async function main(): Promise<void> {
   // Setup terminal WebSocket (now using noServer mode)
   setupTerminalWebSocket(server);
 
+  // Setup notebook operations WebSocket
+  setupNotebookWebSocket(server);
+
   // Setup static file serving
   setupStaticServing(app);
 
@@ -210,6 +216,7 @@ async function main(): Promise<void> {
     console.log(`[Server] Nebula running on http://localhost:${PORT} (${mode} mode)`);
     console.log(`[Server] API endpoints: http://localhost:${PORT}/api/*`);
     console.log(`[Server] Kernel WebSocket: ws://localhost:${PORT}/api/kernels/{session_id}/ws`);
+    console.log(`[Server] Notebook WebSocket: ws://localhost:${PORT}/api/notebook/{path}/ws`);
     console.log(`[Server] Terminal WebSocket: ws://localhost:${PORT}/ws?id={terminal_id}`);
   });
 }

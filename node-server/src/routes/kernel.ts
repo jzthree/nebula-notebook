@@ -4,7 +4,11 @@
 
 import { Router, Request, Response } from 'express';
 import { WebSocket, WebSocketServer } from 'ws';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { KernelService } from '../kernel/kernel-service';
+import { getKernelSearchPaths } from '../kernel/kernelspec';
 
 const router = Router();
 const kernelService = new KernelService();
@@ -26,6 +30,60 @@ router.get('/kernels', (_req: Request, res: Response) => {
     path: k.path,
   }));
   res.json({ kernels });
+});
+
+/**
+ * Debug endpoint to show kernel discovery paths and environment
+ */
+router.get('/kernels/debug', (_req: Request, res: Response) => {
+  const searchPaths = getKernelSearchPaths();
+
+  // Check common kernel locations
+  const commonPaths = [
+    path.join(os.homedir(), '.local', 'share', 'jupyter', 'kernels'),
+    '/usr/local/share/jupyter/kernels',
+    '/usr/share/jupyter/kernels',
+  ];
+
+  const condaPrefix = process.env.CONDA_PREFIX;
+  if (condaPrefix) {
+    commonPaths.push(path.join(condaPrefix, 'share', 'jupyter', 'kernels'));
+  }
+
+  const pathStatus: Record<string, { exists: boolean; kernels?: string[]; error?: string }> = {};
+
+  for (const p of commonPaths) {
+    if (fs.existsSync(p)) {
+      try {
+        const entries = fs.readdirSync(p, { withFileTypes: true });
+        const kernels = entries
+          .filter(e => e.isDirectory() && fs.existsSync(path.join(p, e.name, 'kernel.json')))
+          .map(e => e.name);
+        pathStatus[p] = { exists: true, kernels };
+      } catch (err) {
+        pathStatus[p] = { exists: true, error: String(err) };
+      }
+    } else {
+      pathStatus[p] = { exists: false };
+    }
+  }
+
+  res.json({
+    node_executable: process.execPath,
+    jupyter_data_paths: searchPaths,
+    common_paths: pathStatus,
+    env: {
+      JUPYTER_PATH: process.env.JUPYTER_PATH || '(not set)',
+      CONDA_PREFIX: process.env.CONDA_PREFIX || '(not set)',
+      HOME: process.env.HOME || '(not set)',
+    },
+    discovered_kernels: kernelService.getAvailableKernels().map(k => ({
+      name: k.name,
+      display_name: k.displayName,
+      language: k.language,
+      path: k.path,
+    })),
+  });
 });
 
 /**
@@ -188,6 +246,9 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
     }
 
     console.log(`[Kernel WS] Connected for session ${sessionId} (kernel: ${session.kernelName}, status: ${session.status})`);
+
+    // Send initial status so frontend knows the kernel state immediately
+    ws.send(JSON.stringify({ type: 'status', status: session.status }));
 
     ws.on('error', (err) => {
       console.error(`[Kernel WS] WebSocket error for session ${sessionId}:`, err);

@@ -854,9 +854,23 @@ export const Notebook: React.FC = () => {
       }
     });
 
+    // Subscribe to status updates from server
+    const unsubscribeStatus = kernelService.onStatus((sessionId, status) => {
+      if (kernelSessionId === sessionId) {
+        console.log(`Kernel status update: ${status}`);
+        if (status === 'idle' || status === 'busy') {
+          setKernelStatus(status);
+          setIsKernelReady(true);
+        } else if (status === 'starting') {
+          setKernelStatus('starting');
+        }
+      }
+    });
+
     return () => {
       unsubscribeReconnect();
       unsubscribeDisconnect();
+      unsubscribeStatus();
     };
   }, [currentFileId, kernelSessionId, saveNow]);
 

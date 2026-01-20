@@ -56,6 +56,7 @@ interface SessionState {
 
 // Reconnection callback type
 type ReconnectCallback = (sessionId: string, filePath?: string) => void;
+type StatusCallback = (sessionId: string, status: 'idle' | 'busy' | 'starting') => void;
 
 class KernelService {
   // Multi-session state: sessionId -> SessionState
@@ -66,6 +67,7 @@ class KernelService {
   private disconnectedSessions: Set<string> = new Set();
   private onReconnectCallbacks: ReconnectCallback[] = [];
   private onDisconnectCallbacks: ((sessionId: string) => void)[] = [];
+  private onStatusCallbacks: StatusCallback[] = [];
 
   /**
    * Get list of available kernels on the system
@@ -259,7 +261,15 @@ class KernelService {
         break;
 
       case 'status':
-        // Status updates (busy/idle) - can be used for UI
+        // Status updates (busy/idle) - notify listeners
+        const status = data.status as 'idle' | 'busy' | 'starting';
+        for (const callback of this.onStatusCallbacks) {
+          try {
+            callback(sessionId, status);
+          } catch (e) {
+            console.error('Status callback error:', e);
+          }
+        }
         break;
     }
   }
@@ -376,6 +386,16 @@ class KernelService {
     this.onDisconnectCallbacks.push(callback);
     return () => {
       this.onDisconnectCallbacks = this.onDisconnectCallbacks.filter(cb => cb !== callback);
+    };
+  }
+
+  /**
+   * Subscribe to status updates
+   */
+  onStatus(callback: StatusCallback): () => void {
+    this.onStatusCallbacks.push(callback);
+    return () => {
+      this.onStatusCallbacks = this.onStatusCallbacks.filter(cb => cb !== callback);
     };
   }
 

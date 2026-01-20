@@ -16,7 +16,7 @@ export type { KernelSpec } from './types';
 /**
  * Standard kernelspec search paths
  */
-function getKernelSearchPaths(): string[] {
+export function getKernelSearchPaths(): string[] {
   const paths: string[] = [];
   const home = os.homedir();
 

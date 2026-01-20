@@ -1,0 +1,91 @@
+/**
+ * Notebook Operations WebSocket
+ *
+ * Handles real-time communication between UI and backend for notebook operations.
+ * Path: /api/notebook/{notebook_path}/ws
+ */
+
+import { WebSocket, WebSocketServer } from 'ws';
+import { Server as HttpServer, IncomingMessage } from 'http';
+import { parse as parseUrl } from 'url';
+import { operationRouter } from './operation-router';
+
+/**
+ * Setup notebook operations WebSocket handler
+ */
+export function setupNotebookWebSocket(server: HttpServer): WebSocketServer {
+  const wss = new WebSocketServer({
+    noServer: true,
+    perMessageDeflate: false,
+  });
+
+  // Handle upgrade requests for /api/notebook/{path}/ws
+  server.on('upgrade', (request: IncomingMessage, socket, head) => {
+    const parsedUrl = parseUrl(request.url || '', true);
+    const pathname = parsedUrl.pathname || '';
+
+    // Match /api/notebook/{encoded_path}/ws
+    const match = pathname.match(/^\/api\/notebook\/(.+)\/ws$/);
+    if (match) {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    }
+    // Don't destroy socket for non-matching paths
+  });
+
+  wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
+    const parsedUrl = parseUrl(req.url || '', true);
+    const pathname = parsedUrl.pathname || '';
+    const match = pathname.match(/^\/api\/notebook\/(.+)\/ws$/);
+
+    if (!match) {
+      ws.close(1008, 'Invalid path');
+      return;
+    }
+
+    // Decode the notebook path
+    const encodedPath = match[1];
+    const notebookPath = decodeURIComponent(encodedPath);
+
+    console.log(`[Notebook WS] Connected for notebook: ${notebookPath}`);
+
+    // Register UI connection
+    await operationRouter.registerUI(ws, notebookPath);
+
+    ws.on('error', (err) => {
+      console.error(`[Notebook WS] WebSocket error for ${notebookPath}:`, err);
+    });
+
+    ws.on('message', async (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+
+        if (message.type === 'operationResult') {
+          // UI is responding to an operation request
+          operationRouter.handleUIResponse(notebookPath, message);
+        } else if (message.type === 'notebookData') {
+          // UI is responding to a readNotebook request
+          operationRouter.handleUIResponse(notebookPath, {
+            requestId: message.requestId,
+            result: {
+              success: true,
+              data: message.data,
+            },
+          });
+        } else {
+          console.warn(`[Notebook WS] Unknown message type:`, message.type);
+        }
+      } catch (err) {
+        console.error('[Notebook WS] Error parsing message:', err);
+      }
+    });
+
+    ws.on('close', () => {
+      console.log(`[Notebook WS] Disconnected for notebook: ${notebookPath}`);
+      operationRouter.unregisterUI(notebookPath);
+    });
+  });
+
+  return wss;
+}

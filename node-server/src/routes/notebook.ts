@@ -5,9 +5,15 @@
 import { Router, Request, Response } from 'express';
 import { FilesystemService } from '../fs/fs-service';
 import { NebulaCell } from '../fs/types';
+import { operationRouter } from '../notebook/operation-router';
+import { HeadlessOperationHandler } from '../notebook/headless-handler';
 
 const router = Router();
 const fsService = new FilesystemService();
+
+// Initialize headless handler and wire to operation router
+const headlessHandler = new HeadlessOperationHandler(fsService, operationRouter);
+operationRouter.setHeadlessHandler(headlessHandler);
 
 /**
  * Get cell metadata schema
@@ -246,7 +252,10 @@ router.get('/notebook/agent-status', (req: Request, res: Response) => {
 });
 
 /**
- * Read notebook via operation router (simplified version - just reads from file)
+ * Read notebook via operation router
+ *
+ * Supports output truncation for large outputs.
+ * When include_outputs=true (default), outputs are truncated with defaults.
  */
 router.get('/notebook/read', (req: Request, res: Response) => {
   try {
@@ -256,11 +265,59 @@ router.get('/notebook/read', (req: Request, res: Response) => {
       return;
     }
 
+    const includeOutputs = req.query.include_outputs !== 'false';
+    const maxLines = req.query.max_lines ? parseInt(req.query.max_lines as string, 10) : 100;
+    const maxChars = req.query.max_chars ? parseInt(req.query.max_chars as string, 10) : 10000;
+    const maxLinesError = req.query.max_lines_error ? parseInt(req.query.max_lines_error as string, 10) : 200;
+    const maxCharsError = req.query.max_chars_error ? parseInt(req.query.max_chars_error as string, 10) : 20000;
+
     const result = fsService.getNotebookCells(filePath);
+
+    let cells = result.cells;
+
+    if (!includeOutputs) {
+      // Strip outputs entirely
+      cells = cells.map(cell => ({ ...cell, outputs: [] }));
+    } else {
+      // Apply truncation to outputs (preserving original structure)
+      cells = cells.map(cell => ({
+        ...cell,
+        outputs: (cell.outputs || []).map(output => {
+          const outputType = output.type || 'stdout';
+          const content = output.content || '';
+
+          // Images are returned as-is
+          if (outputType === 'image' || outputType === 'html') {
+            return output;
+          }
+
+          // Use separate limits for error outputs
+          const linesLimit = outputType === 'error' ? maxLinesError : maxLines;
+          const charsLimit = outputType === 'error' ? maxCharsError : maxChars;
+
+          // Truncate content
+          const lines = content.split('\n');
+          let truncatedContent = lines.slice(0, linesLimit).join('\n');
+
+          if (truncatedContent.length > charsLimit) {
+            truncatedContent = truncatedContent.slice(0, charsLimit);
+          }
+
+          return {
+            ...output,
+            content: truncatedContent,
+          };
+        }),
+      }));
+    }
+
     res.json({
       success: true,
-      cells: result.cells,
-      kernelspec: result.kernelspec,
+      data: {
+        path: filePath,
+        cells,
+        metadata: result.kernelspec,
+      },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -269,14 +326,38 @@ router.get('/notebook/read', (req: Request, res: Response) => {
 });
 
 /**
- * Check if UI is connected for a notebook (stub - always false for now)
+ * Check if UI is connected for a notebook
  */
 router.get('/notebook/has-ui', (req: Request, res: Response) => {
   const filePath = req.query.path as string;
-  // In the Python version, this checks if a WebSocket is connected
-  // For now, we'll return false
-  res.json({ hasUI: false, path: filePath });
+  if (!filePath) {
+    res.status(400).json({ error: 'path query parameter is required' });
+    return;
+  }
+  const hasUI = operationRouter.hasUI(filePath);
+  res.json({ hasUI, path: filePath });
 });
 
-export { fsService };
+/**
+ * Apply a notebook operation
+ *
+ * Routes to UI if connected, otherwise uses headless handler.
+ */
+router.post('/notebook/operation', async (req: Request, res: Response) => {
+  try {
+    const operation = req.body;
+    if (!operation || !operation.type) {
+      res.status(400).json({ error: 'Operation with type is required' });
+      return;
+    }
+
+    const result = await operationRouter.applyOperation(operation);
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.json({ success: false, error: message });
+  }
+});
+
+export { fsService, operationRouter, headlessHandler };
 export default router;
