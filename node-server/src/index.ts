@@ -76,7 +76,7 @@ function createApp(): Express {
   app.get('/api/ready', (_req: Request, res: Response) => {
     if (!kernelService.isReady) {
       res.status(503).json({
-        error: 'Service initializing, kernel discovery in progress',
+        detail: 'Service initializing, kernel discovery in progress',
       });
       return;
     }
@@ -144,7 +144,7 @@ function setupStaticServing(app: Express): void {
     // SPA fallback - serve index.html for all non-API routes
     app.get('*', (req: Request, res: Response) => {
       if (req.path.startsWith('/api/')) {
-        res.status(404).json({ error: 'Not found' });
+        res.status(404).json({ detail: 'Not found' });
         return;
       }
       res.sendFile(path.join(distDir, 'index.html'));

@@ -117,7 +117,7 @@ router.post('/kernels/start', async (req: Request, res: Response) => {
     res.json({ session_id: sessionId, kernel_name });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -128,14 +128,14 @@ router.post('/kernels/for-file', async (req: Request, res: Response) => {
   try {
     const { file_path, kernel_name = 'python3' } = req.body;
     if (!file_path) {
-      res.status(400).json({ error: 'file_path is required' });
+      res.status(400).json({ detail: 'file_path is required' });
       return;
     }
     const sessionId = await kernelService.getOrCreateKernel(file_path, kernel_name);
     res.json({ session_id: sessionId, kernel_name, file_path });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -145,7 +145,7 @@ router.post('/kernels/for-file', async (req: Request, res: Response) => {
 router.get('/kernels/for-file', (req: Request, res: Response) => {
   const filePath = req.query.file_path as string;
   if (!filePath) {
-    res.status(400).json({ error: 'file_path query parameter is required' });
+    res.status(400).json({ detail: 'file_path query parameter is required' });
     return;
   }
   // We don't have a direct method, so check sessions
@@ -167,11 +167,11 @@ router.delete('/kernels/:sessionId', async (req: Request, res: Response) => {
     if (success) {
       res.json({ status: 'ok' });
     } else {
-      res.status(404).json({ error: 'Session not found' });
+      res.status(404).json({ detail: 'Session not found' });
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -184,11 +184,11 @@ router.post('/kernels/:sessionId/interrupt', async (req: Request, res: Response)
     if (success) {
       res.json({ status: 'ok' });
     } else {
-      res.status(404).json({ error: 'Session not found' });
+      res.status(404).json({ detail: 'Session not found' });
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -201,11 +201,11 @@ router.post('/kernels/:sessionId/restart', async (req: Request, res: Response) =
     if (success) {
       res.json({ status: 'ok' });
     } else {
-      res.status(404).json({ error: 'Session not found' });
+      res.status(404).json({ detail: 'Session not found' });
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -217,7 +217,7 @@ router.get('/kernels/:sessionId/status', (req: Request, res: Response) => {
   if (status) {
     res.json(status);
   } else {
-    res.status(404).json({ error: 'Session not found' });
+    res.status(404).json({ detail: 'Session not found' });
   }
 });
 

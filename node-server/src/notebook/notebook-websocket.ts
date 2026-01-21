@@ -73,6 +73,9 @@ export function setupNotebookWebSocket(server: HttpServer): WebSocketServer {
               data: message.data,
             },
           });
+        } else if (message.type === 'ping') {
+          // Respond to keep-alive ping with pong
+          ws.send(JSON.stringify({ type: 'pong' }));
         } else {
           console.warn(`[Notebook WS] Unknown message type:`, message.type);
         }

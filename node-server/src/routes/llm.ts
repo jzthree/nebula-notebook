@@ -50,7 +50,7 @@ router.post('/llm/generate', async (req: Request, res: Response) => {
     res.json({ response });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -85,7 +85,7 @@ router.post('/llm/generate-structured', async (req: Request, res: Response) => {
     res.json({ response });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -130,7 +130,7 @@ router.post('/llm/chat', async (req: Request, res: Response) => {
     res.json({ response });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 

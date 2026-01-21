@@ -52,7 +52,7 @@ router.get('/notebook/cells', (req: Request, res: Response) => {
   try {
     const filePath = req.query.path as string;
     if (!filePath) {
-      res.status(400).json({ error: 'path query parameter is required' });
+      res.status(400).json({ detail: 'path query parameter is required' });
       return;
     }
     const result = fsService.getNotebookCells(filePath);
@@ -64,10 +64,10 @@ router.get('/notebook/cells', (req: Request, res: Response) => {
     });
   } catch (err) {
     if (err instanceof Error && err.message.includes('not found')) {
-      res.status(404).json({ error: err.message });
+      res.status(404).json({ detail: err.message });
     } else {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ error: message });
+      res.status(500).json({ detail: message });
     }
   }
 });
@@ -79,11 +79,11 @@ router.post('/notebook/save', (req: Request, res: Response) => {
   try {
     const { path: filePath, cells, kernel_name, history } = req.body;
     if (!filePath) {
-      res.status(400).json({ error: 'path is required' });
+      res.status(400).json({ detail: 'path is required' });
       return;
     }
     if (!cells) {
-      res.status(400).json({ error: 'cells is required' });
+      res.status(400).json({ detail: 'cells is required' });
       return;
     }
 
@@ -97,7 +97,7 @@ router.post('/notebook/save', (req: Request, res: Response) => {
     res.json({ status: 'ok', path: filePath, mtime: result.mtime });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -108,14 +108,14 @@ router.get('/notebook/history', (req: Request, res: Response) => {
   try {
     const notebookPath = req.query.notebook_path as string;
     if (!notebookPath) {
-      res.status(400).json({ error: 'notebook_path query parameter is required' });
+      res.status(400).json({ detail: 'notebook_path query parameter is required' });
       return;
     }
     const history = fsService.loadHistory(notebookPath);
     res.json({ notebook_path: notebookPath, history });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -126,14 +126,14 @@ router.post('/notebook/history', (req: Request, res: Response) => {
   try {
     const { notebook_path, history } = req.body;
     if (!notebook_path) {
-      res.status(400).json({ error: 'notebook_path is required' });
+      res.status(400).json({ detail: 'notebook_path is required' });
       return;
     }
     fsService.saveHistory(notebook_path, history || []);
     res.json({ status: 'ok', notebook_path });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -144,14 +144,14 @@ router.get('/notebook/session', (req: Request, res: Response) => {
   try {
     const notebookPath = req.query.notebook_path as string;
     if (!notebookPath) {
-      res.status(400).json({ error: 'notebook_path query parameter is required' });
+      res.status(400).json({ detail: 'notebook_path query parameter is required' });
       return;
     }
     const session = fsService.loadSession(notebookPath);
     res.json({ notebook_path: notebookPath, session });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -162,14 +162,14 @@ router.post('/notebook/session', (req: Request, res: Response) => {
   try {
     const { notebook_path, session } = req.body;
     if (!notebook_path) {
-      res.status(400).json({ error: 'notebook_path is required' });
+      res.status(400).json({ detail: 'notebook_path is required' });
       return;
     }
     fsService.saveSession(notebook_path, session || {});
     res.json({ status: 'ok', notebook_path });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -180,7 +180,7 @@ router.post('/notebook/permit-agent', (req: Request, res: Response) => {
   try {
     const { notebook_path, permitted = true } = req.body;
     if (!notebook_path) {
-      res.status(400).json({ error: 'notebook_path is required' });
+      res.status(400).json({ detail: 'notebook_path is required' });
       return;
     }
 
@@ -189,7 +189,7 @@ router.post('/notebook/permit-agent', (req: Request, res: Response) => {
     });
 
     if (!result.success) {
-      res.status(400).json({ error: result.error || 'Failed to update notebook' });
+      res.status(400).json({ detail: result.error || 'Failed to update notebook' });
       return;
     }
 
@@ -208,7 +208,7 @@ router.post('/notebook/permit-agent', (req: Request, res: Response) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -219,7 +219,7 @@ router.get('/notebook/agent-status', (req: Request, res: Response) => {
   try {
     const filePath = req.query.path as string;
     if (!filePath) {
-      res.status(400).json({ error: 'path query parameter is required' });
+      res.status(400).json({ detail: 'path query parameter is required' });
       return;
     }
 
@@ -247,7 +247,7 @@ router.get('/notebook/agent-status', (req: Request, res: Response) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -256,69 +256,35 @@ router.get('/notebook/agent-status', (req: Request, res: Response) => {
  *
  * Supports output truncation for large outputs.
  * When include_outputs=true (default), outputs are truncated with defaults.
+ *
+ * Uses operation router to get live state from UI if connected,
+ * otherwise reads from file.
  */
-router.get('/notebook/read', (req: Request, res: Response) => {
+router.get('/notebook/read', async (req: Request, res: Response) => {
   try {
     const filePath = req.query.path as string;
     if (!filePath) {
-      res.status(400).json({ error: 'path query parameter is required' });
+      res.status(400).json({ detail: 'path query parameter is required' });
       return;
     }
 
     const includeOutputs = req.query.include_outputs !== 'false';
-    const maxLines = req.query.max_lines ? parseInt(req.query.max_lines as string, 10) : 100;
-    const maxChars = req.query.max_chars ? parseInt(req.query.max_chars as string, 10) : 10000;
-    const maxLinesError = req.query.max_lines_error ? parseInt(req.query.max_lines_error as string, 10) : 200;
-    const maxCharsError = req.query.max_chars_error ? parseInt(req.query.max_chars_error as string, 10) : 20000;
+    const maxLines = req.query.max_lines ? parseInt(req.query.max_lines as string, 10) : undefined;
+    const maxChars = req.query.max_chars ? parseInt(req.query.max_chars as string, 10) : undefined;
+    const maxLinesError = req.query.max_lines_error ? parseInt(req.query.max_lines_error as string, 10) : undefined;
+    const maxCharsError = req.query.max_chars_error ? parseInt(req.query.max_chars_error as string, 10) : undefined;
 
-    const result = fsService.getNotebookCells(filePath);
+    // Use operation router to get state from UI if connected, otherwise from file
+    const result = await operationRouter.readNotebook(
+      filePath,
+      includeOutputs,
+      maxLines,
+      maxChars,
+      maxLinesError,
+      maxCharsError
+    );
 
-    let cells = result.cells;
-
-    if (!includeOutputs) {
-      // Strip outputs entirely
-      cells = cells.map(cell => ({ ...cell, outputs: [] }));
-    } else {
-      // Apply truncation to outputs (preserving original structure)
-      cells = cells.map(cell => ({
-        ...cell,
-        outputs: (cell.outputs || []).map(output => {
-          const outputType = output.type || 'stdout';
-          const content = output.content || '';
-
-          // Images are returned as-is
-          if (outputType === 'image' || outputType === 'html') {
-            return output;
-          }
-
-          // Use separate limits for error outputs
-          const linesLimit = outputType === 'error' ? maxLinesError : maxLines;
-          const charsLimit = outputType === 'error' ? maxCharsError : maxChars;
-
-          // Truncate content
-          const lines = content.split('\n');
-          let truncatedContent = lines.slice(0, linesLimit).join('\n');
-
-          if (truncatedContent.length > charsLimit) {
-            truncatedContent = truncatedContent.slice(0, charsLimit);
-          }
-
-          return {
-            ...output,
-            content: truncatedContent,
-          };
-        }),
-      }));
-    }
-
-    res.json({
-      success: true,
-      data: {
-        path: filePath,
-        cells,
-        metadata: result.kernelspec,
-      },
-    });
+    res.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.json({ success: false, error: message });
@@ -331,7 +297,7 @@ router.get('/notebook/read', (req: Request, res: Response) => {
 router.get('/notebook/has-ui', (req: Request, res: Response) => {
   const filePath = req.query.path as string;
   if (!filePath) {
-    res.status(400).json({ error: 'path query parameter is required' });
+    res.status(400).json({ detail: 'path query parameter is required' });
     return;
   }
   const hasUI = operationRouter.hasUI(filePath);
@@ -347,7 +313,7 @@ router.post('/notebook/operation', async (req: Request, res: Response) => {
   try {
     const operation = req.body;
     if (!operation || !operation.type) {
-      res.status(400).json({ error: 'Operation with type is required' });
+      res.status(400).json({ detail: 'Operation with type is required' });
       return;
     }
 

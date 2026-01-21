@@ -1,0 +1,655 @@
+/**
+ * Headless Handler Tests
+ *
+ * Tests for the HeadlessOperationHandler which handles notebook operations
+ * when no UI is connected (file-based mode).
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { HeadlessOperationHandler } from '../notebook/headless-handler';
+import { OperationRouter } from '../notebook/operation-router';
+import { FilesystemService } from '../fs/fs-service';
+
+describe('HeadlessOperationHandler', () => {
+  let handler: HeadlessOperationHandler;
+  let fsService: FilesystemService;
+  let router: OperationRouter;
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'headless-test-'));
+    fsService = new FilesystemService();
+    router = new OperationRouter();
+    handler = new HeadlessOperationHandler(fsService, router);
+  });
+
+  afterEach(() => {
+    if (testDir && fs.existsSync(testDir)) {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  // Helper to create a test notebook
+  function createTestNotebook(filename: string, cells: any[] = [], agentCreated = true) {
+    const notebookPath = path.join(testDir, filename);
+    const notebook = {
+      cells: cells.map(c => ({
+        cell_type: c.type || 'code',
+        source: [c.content || ''],
+        metadata: { nebula_id: c.id, ...(c.metadata || {}) },
+        outputs: (c.outputs || []).map((o: any) => {
+          // Convert Nebula format to Jupyter format if needed
+          if (o.type === 'stdout' || o.type === 'stderr') {
+            return { output_type: 'stream', name: o.type, text: [o.content] };
+          }
+          if (o.type === 'error') {
+            return { output_type: 'error', ename: 'Error', evalue: o.content, traceback: [o.content] };
+          }
+          return o;
+        }),
+        execution_count: c.execution_count || null,
+      })),
+      metadata: {
+        kernelspec: { name: 'python3', display_name: 'Python 3' },
+        nebula: agentCreated ? { agent_created: true } : {},
+      },
+      nbformat: 4,
+      nbformat_minor: 5,
+    };
+    fs.writeFileSync(notebookPath, JSON.stringify(notebook));
+    return notebookPath;
+  }
+
+  describe('insertCell', () => {
+    it('should insert a cell at the beginning', async () => {
+      const notebookPath = createTestNotebook('insert-begin.ipynb', [
+        { id: 'existing-cell', content: 'existing' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 0,
+        cell: { id: 'new-cell', type: 'code', content: 'new content' },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.cellId).toBe('new-cell');
+      expect(result.cellIndex).toBe(0);
+
+      // Flush to persist changes before reading file
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells[0].metadata.nebula_id).toBe('new-cell');
+      expect(saved.cells[1].metadata.nebula_id).toBe('existing-cell');
+    });
+
+    it('should insert a cell at the end', async () => {
+      const notebookPath = createTestNotebook('insert-end.ipynb', [
+        { id: 'cell-1', content: 'first' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: -1, // Append
+        cell: { id: 'new-cell', type: 'markdown', content: '# Header' },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.cellId).toBe('new-cell');
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells).toHaveLength(2);
+      expect(saved.cells[1].metadata.nebula_id).toBe('new-cell');
+      expect(saved.cells[1].cell_type).toBe('markdown');
+    });
+
+    it('should insert a cell in the middle', async () => {
+      const notebookPath = createTestNotebook('insert-middle.ipynb', [
+        { id: 'cell-1', content: 'first' },
+        { id: 'cell-2', content: 'second' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 1,
+        cell: { id: 'middle-cell', type: 'code', content: 'middle' },
+      });
+
+      expect(result.success).toBe(true);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells).toHaveLength(3);
+      expect(saved.cells[0].metadata.nebula_id).toBe('cell-1');
+      expect(saved.cells[1].metadata.nebula_id).toBe('middle-cell');
+      expect(saved.cells[2].metadata.nebula_id).toBe('cell-2');
+    });
+  });
+
+  describe('deleteCell', () => {
+    it('should delete a cell by ID', async () => {
+      const notebookPath = createTestNotebook('delete-by-id.ipynb', [
+        { id: 'cell-1', content: 'first' },
+        { id: 'cell-2', content: 'second' },
+        { id: 'cell-3', content: 'third' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'deleteCell',
+        notebookPath,
+        cellId: 'cell-2',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.cellIndex).toBe(1);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells).toHaveLength(2);
+      expect(saved.cells[0].metadata.nebula_id).toBe('cell-1');
+      expect(saved.cells[1].metadata.nebula_id).toBe('cell-3');
+    });
+
+    it('should return error for non-existent cell', async () => {
+      const notebookPath = createTestNotebook('delete-missing.ipynb', [
+        { id: 'cell-1', content: 'first' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'deleteCell',
+        notebookPath,
+        cellId: 'non-existent',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not found');
+    });
+  });
+
+  describe('updateContent', () => {
+    it('should update cell content', async () => {
+      const notebookPath = createTestNotebook('update-content.ipynb', [
+        { id: 'cell-1', content: 'old content' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'updateContent',
+        notebookPath,
+        cellId: 'cell-1',
+        content: 'new content',
+      });
+
+      expect(result.success).toBe(true);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells[0].source).toEqual(['new content']);
+    });
+
+    it('should return error for non-existent cell', async () => {
+      const notebookPath = createTestNotebook('update-missing.ipynb', [
+        { id: 'cell-1', content: 'content' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'updateContent',
+        notebookPath,
+        cellId: 'non-existent',
+        content: 'new content',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not found');
+    });
+  });
+
+  describe('updateMetadata', () => {
+    it('should update cell type', async () => {
+      const notebookPath = createTestNotebook('update-type.ipynb', [
+        { id: 'cell-1', type: 'code', content: '# comment' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'updateMetadata',
+        notebookPath,
+        cellId: 'cell-1',
+        changes: { type: 'markdown' },
+      });
+
+      expect(result.success).toBe(true);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells[0].cell_type).toBe('markdown');
+    });
+
+    it('should update scrolled state', async () => {
+      const notebookPath = createTestNotebook('update-scrolled.ipynb', [
+        { id: 'cell-1', content: 'x=1' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'updateMetadata',
+        notebookPath,
+        cellId: 'cell-1',
+        changes: { scrolled: true },
+      });
+
+      expect(result.success).toBe(true);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells[0].metadata.scrolled).toBe(true);
+    });
+
+    it('should reject non-agent-mutable fields', async () => {
+      const notebookPath = createTestNotebook('update-invalid.ipynb', [
+        { id: 'cell-1', content: 'x=1' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'updateMetadata',
+        notebookPath,
+        cellId: 'cell-1',
+        changes: { invalidField: 'value' },
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Unknown field');
+    });
+  });
+
+  describe('moveCell', () => {
+    it('should move cell from beginning to end', async () => {
+      const notebookPath = createTestNotebook('move-cell.ipynb', [
+        { id: 'cell-1', content: 'first' },
+        { id: 'cell-2', content: 'second' },
+        { id: 'cell-3', content: 'third' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'moveCell',
+        notebookPath,
+        cellId: 'cell-1',
+        afterCellId: 'cell-3',
+      });
+
+      expect(result.success).toBe(true);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells[0].metadata.nebula_id).toBe('cell-2');
+      expect(saved.cells[1].metadata.nebula_id).toBe('cell-3');
+      expect(saved.cells[2].metadata.nebula_id).toBe('cell-1');
+    });
+
+    it('should move cell to beginning', async () => {
+      const notebookPath = createTestNotebook('move-to-begin.ipynb', [
+        { id: 'cell-1', content: 'first' },
+        { id: 'cell-2', content: 'second' },
+        { id: 'cell-3', content: 'third' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'moveCell',
+        notebookPath,
+        cellId: 'cell-3',
+        toIndex: 0,
+      });
+
+      expect(result.success).toBe(true);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells[0].metadata.nebula_id).toBe('cell-3');
+      expect(saved.cells[1].metadata.nebula_id).toBe('cell-1');
+      expect(saved.cells[2].metadata.nebula_id).toBe('cell-2');
+    });
+  });
+
+  describe('duplicateCell', () => {
+    it('should duplicate a cell', async () => {
+      const notebookPath = createTestNotebook('duplicate.ipynb', [
+        { id: 'cell-1', content: 'original content' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'duplicateCell',
+        notebookPath,
+        cellIndex: 0,
+        newCellId: 'cell-1-copy',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.cellId).toBeDefined();
+      expect(result.cellId).not.toBe('cell-1'); // New ID generated
+      expect(result.cellIndex).toBe(1);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells).toHaveLength(2);
+    });
+  });
+
+  describe('readCell', () => {
+    it('should read cell by ID', async () => {
+      const notebookPath = createTestNotebook('read-cell.ipynb', [
+        { id: 'cell-1', content: 'first cell content' },
+        { id: 'cell-2', content: 'second cell content' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'readCell',
+        notebookPath,
+        cellId: 'cell-2',
+      });
+
+      expect(result.success).toBe(true);
+      const cell = result.cell as Record<string, unknown>;
+      expect(cell.id).toBe('cell-2');
+      expect(cell.content).toBe('second cell content');
+    });
+
+    it('should read cell by index', async () => {
+      const notebookPath = createTestNotebook('read-by-index.ipynb', [
+        { id: 'cell-1', content: 'first' },
+        { id: 'cell-2', content: 'second' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'readCell',
+        notebookPath,
+        cellIndex: 1,
+      });
+
+      expect(result.success).toBe(true);
+      const cell = result.cell as Record<string, unknown>;
+      expect(cell.id).toBe('cell-2');
+    });
+  });
+
+  describe('clearNotebook', () => {
+    it('should clear all cells', async () => {
+      const notebookPath = createTestNotebook('clear.ipynb', [
+        { id: 'cell-1', content: 'first' },
+        { id: 'cell-2', content: 'second' },
+        { id: 'cell-3', content: 'third' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'clearNotebook',
+        notebookPath,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.deletedCount).toBe(3);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells).toHaveLength(0);
+    });
+  });
+
+  describe('deleteCells', () => {
+    it('should delete multiple cells by ID', async () => {
+      const notebookPath = createTestNotebook('delete-multiple.ipynb', [
+        { id: 'cell-1', content: 'first' },
+        { id: 'cell-2', content: 'second' },
+        { id: 'cell-3', content: 'third' },
+        { id: 'cell-4', content: 'fourth' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'deleteCells',
+        notebookPath,
+        cellIds: ['cell-2', 'cell-4'],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.deletedCount).toBe(2);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells).toHaveLength(2);
+      expect(saved.cells[0].metadata.nebula_id).toBe('cell-1');
+      expect(saved.cells[1].metadata.nebula_id).toBe('cell-3');
+    });
+  });
+
+  describe('insertCells', () => {
+    it('should insert multiple cells', async () => {
+      const notebookPath = createTestNotebook('insert-multiple.ipynb', [
+        { id: 'existing', content: 'existing' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'insertCells',
+        notebookPath,
+        position: 0,
+        cells: [
+          { id: 'new-1', type: 'code', content: 'first new' },
+          { id: 'new-2', type: 'markdown', content: '# Second' },
+        ],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.insertedCount).toBe(2);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells).toHaveLength(3);
+      expect(saved.cells[0].metadata.nebula_id).toBe('new-1');
+      expect(saved.cells[1].metadata.nebula_id).toBe('new-2');
+      expect(saved.cells[2].metadata.nebula_id).toBe('existing');
+    });
+  });
+
+  describe('searchCells', () => {
+    it('should search cells by content', async () => {
+      const notebookPath = createTestNotebook('search.ipynb', [
+        { id: 'cell-1', content: 'hello world' },
+        { id: 'cell-2', content: 'goodbye world' },
+        { id: 'cell-3', content: 'hello again' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'searchCells',
+        notebookPath,
+        query: 'hello',
+      });
+
+      expect(result.success).toBe(true);
+      const matches = result.matches as Array<Record<string, unknown>>;
+      expect(matches).toHaveLength(2);
+      expect(matches[0].cellId).toBe('cell-1');
+      expect(matches[1].cellId).toBe('cell-3');
+    });
+  });
+
+  describe('clearOutputs', () => {
+    it('should clear outputs from all cells', async () => {
+      const notebookPath = createTestNotebook('clear-outputs.ipynb', [
+        {
+          id: 'cell-1',
+          content: 'x=1',
+          outputs: [{ type: 'stdout', content: '1\n' }],
+        },
+        {
+          id: 'cell-2',
+          content: 'y=2',
+          outputs: [{ type: 'stdout', content: '2\n' }],
+        },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'clearOutputs',
+        notebookPath,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.clearedCount).toBe(2);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells[0].outputs).toEqual([]);
+      expect(saved.cells[1].outputs).toEqual([]);
+    });
+
+    it('should clear outputs from specific cells', async () => {
+      const notebookPath = createTestNotebook('clear-specific.ipynb', [
+        {
+          id: 'cell-1',
+          content: 'x=1',
+          outputs: [{ type: 'stdout', content: '1\n' }],
+        },
+        {
+          id: 'cell-2',
+          content: 'y=2',
+          outputs: [{ type: 'stdout', content: '2\n' }],
+        },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'clearOutputs',
+        notebookPath,
+        cellIds: ['cell-1'],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.clearedCount).toBe(1);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells[0].outputs).toEqual([]);
+      // cell-2 should still have outputs
+      expect(saved.cells[1].outputs).not.toEqual([]);
+    });
+  });
+
+  describe('readNotebook', () => {
+    it('should read full notebook', async () => {
+      const notebookPath = createTestNotebook('read-notebook.ipynb', [
+        { id: 'cell-1', content: 'first' },
+        { id: 'cell-2', content: 'second' },
+      ]);
+
+      const result = await handler.readNotebook(notebookPath);
+
+      expect(result.success).toBe(true);
+      expect(result.data?.cells).toHaveLength(2);
+      expect(result.data?.path).toBe(notebookPath);
+    });
+
+    it('should apply output truncation', async () => {
+      const longOutput = 'x\n'.repeat(200);
+      const notebookPath = createTestNotebook('truncate.ipynb', [
+        {
+          id: 'cell-1',
+          content: 'print("x\\n" * 200)',
+          outputs: [{ type: 'stdout', content: longOutput }],
+        },
+      ]);
+
+      const result = await handler.readNotebook(notebookPath, true, 50, 1000);
+
+      expect(result.success).toBe(true);
+      const data = result.data as Record<string, unknown>;
+      const cells = data.cells as Array<Record<string, unknown>>;
+      const outputs = cells[0].outputs as Array<Record<string, unknown>>;
+      const outputContent = outputs[0].content as string;
+      // Original is 400 chars (200 * 2), truncated to 50 lines max
+      expect(outputContent.length).toBeLessThan(longOutput.length);
+    });
+
+    it('should strip outputs when include_outputs is false', async () => {
+      const notebookPath = createTestNotebook('no-outputs.ipynb', [
+        {
+          id: 'cell-1',
+          content: 'x=1',
+          outputs: [{ type: 'stdout', content: '1\n' }],
+        },
+      ]);
+
+      const result = await handler.readNotebook(notebookPath, false);
+
+      expect(result.success).toBe(true);
+      expect(result.data?.cells[0].outputs).toEqual([]);
+    });
+  });
+
+  describe('Agent Permission Checking', () => {
+    it('should allow operations on agent-created notebooks', async () => {
+      const notebookPath = createTestNotebook('agent-created.ipynb', [], true);
+
+      const result = await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 0,
+        cell: { id: 'new-cell', type: 'code', content: 'x=1' },
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('should deny operations on non-permitted notebooks', async () => {
+      const notebookPath = createTestNotebook('not-permitted.ipynb', [], false);
+
+      const result = await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 0,
+        cell: { id: 'new-cell', type: 'code', content: 'x=1' },
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not agent-permitted');
+    });
+  });
+
+  describe('Unknown Operation', () => {
+    it('should return error for unknown operation type', async () => {
+      const notebookPath = createTestNotebook('unknown-op.ipynb', []);
+
+      const result = await handler.applyOperation({
+        type: 'unknownOperation',
+        notebookPath,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Unknown operation');
+    });
+  });
+
+  describe('Undo/Redo (UI-only operations)', () => {
+    it('should return error for undo operation', async () => {
+      const notebookPath = createTestNotebook('undo.ipynb', []);
+
+      const result = await handler.applyOperation({
+        type: 'undo',
+        notebookPath,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('requires the notebook to be open in the browser');
+    });
+
+    it('should return error for redo operation', async () => {
+      const notebookPath = createTestNotebook('redo.ipynb', []);
+
+      const result = await handler.applyOperation({
+        type: 'redo',
+        notebookPath,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('requires the notebook to be open in the browser');
+    });
+  });
+});

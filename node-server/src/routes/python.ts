@@ -47,7 +47,7 @@ router.get('/python/environments', async (req: Request, res: Response) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
@@ -59,7 +59,7 @@ router.post('/python/install-kernel', async (req: Request, res: Response) => {
     const { python_path, kernel_name } = req.body;
 
     if (!python_path) {
-      res.status(400).json({ error: 'python_path is required' });
+      res.status(400).json({ detail: 'python_path is required' });
       return;
     }
 
@@ -68,12 +68,12 @@ router.post('/python/install-kernel', async (req: Request, res: Response) => {
   } catch (err) {
     if (err instanceof Error) {
       if (err.message.includes('not found') || err.message.includes('ENOENT')) {
-        res.status(404).json({ error: err.message });
+        res.status(404).json({ detail: err.message });
       } else {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ detail: err.message });
       }
     } else {
-      res.status(500).json({ error: 'Unknown error' });
+      res.status(500).json({ detail: 'Unknown error' });
     }
   }
 });
@@ -90,7 +90,7 @@ router.post('/python/refresh', async (_req: Request, res: Response) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ detail: message });
   }
 });
 
