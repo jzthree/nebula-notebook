@@ -135,6 +135,10 @@ export const Notebook: React.FC = () => {
   const [lastKnownMtime, setLastKnownMtimeState] = useState<number | null>(null);
   const lastKnownMtimeRef = useRef<number | null>(null);
 
+  // Track whether history has been loaded for this notebook
+  // Prevents saving history before it's loaded, and can be used to lock editing
+  const [historyReady, setHistoryReady] = useState(false);
+
   // Helper to update both state AND ref synchronously to prevent race conditions
   const setLastKnownMtime = useCallback((mtime: number | null) => {
     lastKnownMtimeRef.current = mtime;  // Update ref immediately (source of truth)
@@ -178,7 +182,8 @@ export const Notebook: React.FC = () => {
     redo: rawRedo,
     canUndo,
     canRedo,
-    resetHistory,
+    loadCells,
+    initializeNewHistory,
     getFullHistory,
     loadHistory,
     logOperation,
@@ -195,6 +200,8 @@ export const Notebook: React.FC = () => {
   const [showLineNumbers, setShowLineNumbers] = useState<boolean>(() => getSettings().showLineNumbers ?? false);
 
   // Conflict resolution hook
+  // Note: When loading remote version during conflict, we initialize fresh history
+  // since we're discarding local changes
   const {
     conflictDialog,
     saveWithCheck,
@@ -203,7 +210,7 @@ export const Notebook: React.FC = () => {
     dismissDialog: dismissConflictDialog
   } = useConflictResolution(
     setLastKnownMtime,
-    resetHistory
+    initializeNewHistory  // Conflict resolution resets history since local changes are discarded
   );
 
   // Helper to set cell outputs (for operation sync)
@@ -751,7 +758,9 @@ export const Notebook: React.FC = () => {
   const performSaveToFile = useCallback(async (fileId: string, cellsToSave: Cell[]) => {
     try {
       // Get history to save alongside notebook
-      const history = getFullHistory();
+      // IMPORTANT: Skip history if not ready to prevent overwriting persisted history
+      // History is ready after loadHistory() or initializeNewHistory() completes
+      const history = historyReady ? getFullHistory() : undefined;
 
       // Use ref for mtime to avoid stale closures causing false conflicts
       const result = await saveWithCheck(
@@ -789,7 +798,7 @@ export const Notebook: React.FC = () => {
       setPendingSave(true);
       throw error; // Re-throw so autosave knows it failed
     }
-  }, [getFullHistory, currentKernel, saveWithCheck, getUnflushedState]);
+  }, [historyReady, getFullHistory, currentKernel, saveWithCheck, getUnflushedState]);
 
   const { status: autosaveStatus, saveNow } = useAutosave({
     fileId: currentFileId,
@@ -1389,7 +1398,14 @@ export const Notebook: React.FC = () => {
       setIndentConfig(detectedIndent);
     }
 
-    resetHistory(content);
+    // IMPORTANT: History loading flow to prevent data loss
+    // 1. Set cells WITHOUT creating a new snapshot (preserves existing history)
+    // 2. Load history from file
+    // 3. If history exists: call loadHistory() to restore undo/redo stack
+    // 4. If no history: call initializeNewHistory() to create initial snapshot
+    // 5. Mark history as ready so saves can include history
+    setHistoryReady(false);
+    loadCells(content);
 
     // Set UI state immediately - don't block on history loading
     setCurrentFileId(id);
@@ -1397,16 +1413,22 @@ export const Notebook: React.FC = () => {
     setActiveCellId(content.length > 0 ? content[0].id : null);
     setIsLoadingFile(false);
 
-    // Load persisted history, session state, and agent permission in background (non-blocking)
+    // Load persisted history, session state, and agent permission
     Promise.all([
       loadNotebookHistory(id),
       loadNotebookSession(id),
       getAgentPermissionStatus(id)
     ])
       .then(([savedHistory, savedSession, permissionStatus]) => {
+        // Initialize history appropriately
         if (savedHistory.length > 0) {
+          // Existing history file - restore it (includes snapshot and operations)
           loadHistory(savedHistory);
+        } else {
+          // No history file - create initial snapshot for this notebook
+          initializeNewHistory(content);
         }
+
         // Set agent permission status
         if (permissionStatus) {
           setAgentPermissionStatus(permissionStatus);
@@ -1433,8 +1455,14 @@ export const Notebook: React.FC = () => {
           }
         }
       })
-      .catch(() => {
-        // Silently ignore history/session load failures
+      .catch((err) => {
+        // History/session load failed - initialize new history to allow editing
+        console.warn('Failed to load history/session, initializing new:', err);
+        initializeNewHistory(content);
+      })
+      .finally(() => {
+        // History is now ready - saves can include history
+        setHistoryReady(true);
       });
 
     const meta = files.find(f => f.id === id);

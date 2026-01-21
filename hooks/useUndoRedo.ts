@@ -132,8 +132,10 @@ interface UseUndoRedoResult {
   redo: () => UndoRedoResult | null;
   canUndo: boolean;
   canRedo: boolean;
-  // Reset
-  resetHistory: (initialCells: Cell[]) => void;
+  // Load cells when opening a notebook (history loaded separately via loadHistory)
+  loadCells: (cells: Cell[]) => void;
+  // Initialize new history with snapshot (ONLY for new notebooks without existing history)
+  initializeNewHistory: (cells: Cell[]) => void;
   // Legacy support - for operations that don't fit the model
   saveCheckpoint: () => void;
   // History access for persistence
@@ -691,8 +693,26 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     setCellsInternal(newCells);
   }, []);
 
-  // Reset history (e.g., when loading a new file)
-  const resetHistory = useCallback((newCells: Cell[]) => {
+  // Load cells when opening a notebook (clears stacks since we're switching notebooks)
+  // Call this, then loadHistory() to restore history and rebuild undo stack
+  // The stack clearing is needed because we're switching notebooks - loadHistory will rebuild
+  const loadCells = useCallback((newCells: Cell[]) => {
+    setCellsInternal(newCells);
+    // Clear stacks from previous notebook - loadHistory will rebuild for this notebook
+    undoStackRef.current.length = 0;
+    redoStackRef.current.length = 0;
+    setCanUndo(false);
+    setCanRedo(false);
+    // Initialize content tracking for updateContent operations
+    lastContentRef.current.clear();
+    newCells.forEach(c => lastContentRef.current.set(c.id, c.content));
+    // Note: fullHistoryRef is NOT modified here - loadHistory() will set it
+  }, []);
+
+  // Initialize new history with a snapshot (ONLY for NEW notebooks without existing history)
+  // WARNING: This overwrites any existing history! Only call when creating a new notebook
+  // or when the notebook has no history file.
+  const initializeNewHistory = useCallback((newCells: Cell[]) => {
     setCellsInternal(newCells);
     undoStackRef.current.length = 0; // O(1) clear
     redoStackRef.current.length = 0; // O(1) clear
@@ -896,7 +916,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     redo,
     canUndo,
     canRedo,
-    resetHistory,
+    loadCells,
+    initializeNewHistory,
     saveCheckpoint,
     getFullHistory,
     loadHistory,
