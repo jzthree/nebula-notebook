@@ -618,7 +618,7 @@ export class KernelService {
   }
 
   /**
-   * Restart a kernel
+   * Restart a kernel (in-place, preserving session ID like Python)
    */
   async restartKernel(sessionId: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
@@ -626,21 +626,119 @@ export class KernelService {
       return false;
     }
 
-    const { kernelName, filePath } = session;
+    const { kernelName, filePath, connectionFile: oldConnFile } = session;
 
-    // Stop the existing kernel
-    await this.stopKernel(sessionId);
+    // Set status to restarting
+    session.status = 'starting';
 
-    // Start a new one with the same settings
+    // Close ZeroMQ sockets
+    const sockets = this.zmqSockets.get(sessionId);
+    if (sockets) {
+      try {
+        sockets.shell.close();
+        sockets.iopub.close();
+      } catch {
+        // Ignore close errors
+      }
+      this.zmqSockets.delete(sessionId);
+    }
+
+    // Kill existing kernel process
+    const proc = this.kernelProcesses.get(sessionId);
+    if (proc) {
+      try {
+        proc.kill('SIGTERM');
+        await this.sleep(500);
+        if (!proc.killed) {
+          proc.kill('SIGKILL');
+        }
+      } catch {
+        // Ignore kill errors
+      }
+      this.kernelProcesses.delete(sessionId);
+    }
+
+    // Delete old connection file
+    if (oldConnFile && fs.existsSync(oldConnFile)) {
+      try {
+        fs.unlinkSync(oldConnFile);
+      } catch {
+        // Ignore delete errors
+      }
+    }
+
+    // Get kernel spec
+    const spec = getKernelSpec(kernelName);
+    if (!spec) {
+      session.status = 'dead';
+      return false;
+    }
+
     try {
-      const newSessionId = await this.startKernel({
-        kernelName,
-        filePath: filePath || undefined,
+      // Generate new connection file (reusing same session ID)
+      const { config: connConfig, filePath: connFile } = this.generateConnectionFile(sessionId);
+
+      // Build kernel command
+      const argv = (spec.argv || []).map(arg =>
+        arg.replace('{connection_file}', connFile)
+      );
+
+      // Spawn new kernel process
+      const cwd = filePath ? path.dirname(filePath) : process.cwd();
+      const newProc = spawn(argv[0], argv.slice(1), {
+        cwd,
+        env: { ...process.env, ...spec.env },
+        stdio: ['pipe', 'pipe', 'pipe'],
       });
 
-      // Note: The session ID changes on restart
+      // Log kernel stdout/stderr
+      newProc.stdout?.on('data', (data) => {
+        console.log(`[Kernel ${sessionId.slice(0, 8)}] stdout: ${data.toString().trim()}`);
+      });
+      newProc.stderr?.on('data', (data) => {
+        console.error(`[Kernel ${sessionId.slice(0, 8)}] stderr: ${data.toString().trim()}`);
+      });
+
+      // Update session in-place
+      session.connectionFile = connFile;
+      session.connectionConfig = connConfig;
+      session.pid = newProc.pid || null;
+      session.executionCount = 0;
+      session.lastActivity = Date.now() / 1000;
+
+      this.kernelProcesses.set(sessionId, newProc);
+
+      // Handle process events
+      newProc.on('error', (err) => {
+        console.error(`Kernel ${sessionId} error:`, err);
+        session.status = 'dead';
+      });
+
+      newProc.on('exit', (code) => {
+        console.log(`Kernel ${sessionId} exited with code ${code}`);
+        session.status = 'dead';
+      });
+
+      // Wait for kernel to be ready
+      await this.waitForReady(sessionId);
+
+      // Update persistence store
+      this.sessionStore.saveSession({
+        sessionId,
+        kernelName,
+        filePath,
+        kernelPid: newProc.pid || null,
+        status: 'active',
+        createdAt: session.createdAt,
+        lastHeartbeat: Date.now() / 1000,
+        connectionFile: connFile,
+      });
+
+      session.status = 'idle';
       return true;
-    } catch {
+    } catch (err) {
+      console.error(`Failed to restart kernel ${sessionId}:`, err);
+      session.status = 'dead';
       return false;
     }
   }
