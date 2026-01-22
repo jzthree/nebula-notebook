@@ -311,7 +311,8 @@ router.get('/notebook/has-ui', (req: Request, res: Response) => {
  */
 router.post('/notebook/operation', async (req: Request, res: Response) => {
   try {
-    const operation = req.body;
+    // Python uses {operation: {...}} wrapper via NotebookOperationRequest model
+    const operation = req.body.operation || req.body;
     if (!operation || !operation.type) {
       res.status(400).json({ detail: 'Operation with type is required' });
       return;
