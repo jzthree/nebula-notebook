@@ -332,9 +332,14 @@ class KernelService {
   async interruptKernel(sessionId: string): Promise<void> {
     if (!this.sessions.has(sessionId)) return;
 
-    await fetch(`${API_BASE}/kernels/${sessionId}/interrupt`, {
+    const response = await fetch(`${API_BASE}/kernels/${sessionId}/interrupt`, {
       method: 'POST'
     });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Failed to interrupt kernel' }));
+      throw new Error(error.detail || 'Failed to interrupt kernel');
+    }
   }
 
   /**
@@ -343,9 +348,14 @@ class KernelService {
   async restartKernel(sessionId: string): Promise<void> {
     if (!this.sessions.has(sessionId)) return;
 
-    await fetch(`${API_BASE}/kernels/${sessionId}/restart`, {
+    const response = await fetch(`${API_BASE}/kernels/${sessionId}/restart`, {
       method: 'POST'
     });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Failed to restart kernel' }));
+      throw new Error(error.detail || 'Failed to restart kernel');
+    }
   }
 
   /**

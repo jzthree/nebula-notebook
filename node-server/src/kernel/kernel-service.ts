@@ -280,7 +280,8 @@ export class KernelService {
   }
 
   /**
-   * Send kernel_info_request to verify kernel is ready
+   * Send kernel_info_request and wait for reply to verify kernel is ready
+   * Throws if no reply received within timeout
    */
   private async sendKernelInfoRequest(sessionId: string): Promise<void> {
     const sockets = this.zmqSockets.get(sessionId);
@@ -308,6 +309,20 @@ export class KernelService {
     );
 
     await sockets.shell.send(message);
+
+    // Wait for kernel_info_reply with timeout
+    const receivePromise = sockets.shell.receive();
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Kernel not responding')), 1000);
+    });
+
+    const frames = await Promise.race([receivePromise, timeoutPromise]);
+    const { msgType } = this.parseJupyterMessage(frames);
+
+    if (msgType !== 'kernel_info_reply') {
+      throw new Error(`Unexpected message type: ${msgType}`);
+    }
+    // Kernel is ready!
   }
 
   /**

@@ -25,6 +25,7 @@ vi.mock('../../services/kernelService', () => ({
     installKernel: vi.fn().mockResolvedValue({ kernel_name: 'python3' }),
     onReconnect: vi.fn().mockReturnValue(() => {}),
     onDisconnect: vi.fn().mockReturnValue(() => {}),
+    onStatus: vi.fn().mockReturnValue(() => {}),
   },
   KernelSpec: {},
   PythonEnvironment: {},
@@ -59,6 +60,12 @@ vi.mock('../../services/fileService', () => ({
   saveNotebookHistory: vi.fn().mockResolvedValue(undefined),
   loadNotebookSession: vi.fn().mockResolvedValue({}),
   saveNotebookSession: vi.fn().mockResolvedValue(true),
+  getAgentPermissionStatus: vi.fn().mockResolvedValue({
+    agent_created: false,
+    agent_permitted: false,
+    has_history: false,
+    can_agent_modify: false,
+  }),
 }));
 
 vi.mock('../../services/llmService', () => ({
