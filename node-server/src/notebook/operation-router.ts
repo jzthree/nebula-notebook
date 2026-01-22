@@ -167,10 +167,23 @@ export class OperationRouter {
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         conn.pendingRequests.delete(requestId);
-        resolve({
-          success: false,
-          error: `Operation timed out after ${timeout / 1000}s`,
-        });
+        // For executeCell, timeout means the cell is still running - return busy status, not error
+        if (opType === 'executeCell') {
+          resolve({
+            success: true,
+            executionStatus: 'busy',
+            // Pass through the original cellId/cellIndex from the operation for polling
+            cellId: operation.cellId,
+            cellIndex: operation.cellIndex,
+            outputs: [],
+            message: `Cell still executing after ${timeout / 1000}s. Use read_output with max_wait to poll for results.`,
+          });
+        } else {
+          resolve({
+            success: false,
+            error: `Operation timed out after ${timeout / 1000}s`,
+          });
+        }
       }, timeout);
 
       conn.pendingRequests.set(requestId, { resolve, reject, timeoutId });
