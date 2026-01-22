@@ -52,10 +52,16 @@ export interface WriteFileOptions {
 
 // Notebook cell output types (matching frontend types)
 export interface CellOutput {
-  id: string;
+  id?: string;  // Optional - frontend uses this, API doesn't
   type: 'stdout' | 'stderr' | 'image' | 'html' | 'error';
   content: string;
-  timestamp: number;
+  timestamp?: number;  // Optional - frontend uses this, API doesn't
+}
+
+// API-compatible output format (matches Python backend)
+export interface ApiCellOutput {
+  type: 'stdout' | 'stderr' | 'image' | 'html' | 'error';
+  content: string;
 }
 
 // Internal cell format used by Nebula

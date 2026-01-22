@@ -362,19 +362,49 @@ export class OperationRouter {
           const totalLines = lines.length;
           const totalChars = content.length;
 
-          let truncatedContent = lines.slice(0, linesLimit).join('\n');
-          if (truncatedContent.length > charsLimit) {
-            truncatedContent = truncatedContent.slice(0, charsLimit);
+          // Match Python's truncation logic exactly
+          let truncated = false;
+          let truncationReason: string | null = null;
+          const resultLines: string[] = [];
+          let charCount = 0;
+          const startLine = 0;
+          let endLine = 0;
+
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const newCharCount = charCount + line.length + (i > 0 ? 1 : 0); // +1 for newline
+
+            if (i >= linesLimit) {
+              truncated = true;
+              truncationReason = 'lines';
+              break;
+            }
+
+            if (newCharCount > charsLimit && i > 0) { // Always include at least 1 line
+              truncated = true;
+              truncationReason = 'chars';
+              break;
+            }
+
+            resultLines.push(line);
+            charCount = newCharCount;
+            endLine = startLine + i + 1;
           }
 
-          const truncated = totalLines > linesLimit || totalChars > charsLimit;
+          const truncatedContent = resultLines.join('\n');
 
           return {
             type: outputType,
             content: truncatedContent,
             truncated,
+            truncation_reason: truncationReason,
             total_lines: totalLines,
             total_chars: totalChars,
+            returned_range: {
+              start_line: startLine,
+              end_line: endLine,
+              char_count: truncatedContent.length,
+            },
           };
         }),
       };

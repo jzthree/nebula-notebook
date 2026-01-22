@@ -66,13 +66,8 @@ export function setupNotebookWebSocket(server: HttpServer): WebSocketServer {
           operationRouter.handleUIResponse(notebookPath, message);
         } else if (message.type === 'notebookData') {
           // UI is responding to a readNotebook request
-          operationRouter.handleUIResponse(notebookPath, {
-            requestId: message.requestId,
-            result: {
-              success: true,
-              data: message.data,
-            },
-          });
+          // Pass message directly like Python does - it contains { requestId, result: { success, data } }
+          operationRouter.handleUIResponse(notebookPath, message);
         } else if (message.type === 'ping') {
           // Respond to keep-alive ping with pong
           ws.send(JSON.stringify({ type: 'pong' }));

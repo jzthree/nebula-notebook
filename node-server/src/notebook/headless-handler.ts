@@ -13,13 +13,11 @@ import { FilesystemService } from '../fs/fs-service';
 import { NebulaCell, CellOutput } from '../fs/types';
 import { validateMetadataValue } from './cell-metadata';
 
-// Helper to create a CellOutput with required fields
+// Helper to create a CellOutput (API-compatible format matching Python)
 function createCellOutput(type: CellOutput['type'], content: string): CellOutput {
   return {
-    id: uuidv4(),
     type,
     content,
-    timestamp: Date.now(),
   };
 }
 
@@ -238,6 +236,12 @@ export class HeadlessOperationHandler {
         case 'clearOutputs':
           result = await this.clearOutputs(operation);
           break;
+        case 'executeCell':
+          // Node.js server doesn't have kernel support - execution requires Python backend
+          return {
+            success: false,
+            error: 'Cell execution requires the Python backend with kernel support. The Node.js server does not support kernel execution.',
+          };
         case 'startAgentSession':
           if (this.operationRouter) {
             this.operationRouter.startAgentSession(notebookPath);
@@ -743,7 +747,7 @@ export class HeadlessOperationHandler {
 
     this.invalidate(notebookPath);
 
-    const mtime = fs.statSync(normalizedPath).mtimeMs;
+    const mtime = fs.statSync(normalizedPath).mtimeMs / 1000; // Convert to seconds like Python
 
     return {
       success: true,

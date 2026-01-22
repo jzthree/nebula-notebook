@@ -543,8 +543,9 @@ describe('HeadlessOperationHandler', () => {
       const result = await handler.readNotebook(notebookPath);
 
       expect(result.success).toBe(true);
-      expect(result.data?.cells).toHaveLength(2);
-      expect(result.data?.path).toBe(notebookPath);
+      const data = result.data as { cells: unknown[]; path: string };
+      expect(data.cells).toHaveLength(2);
+      expect(data.path).toBe(notebookPath);
     });
 
     it('should apply output truncation', async () => {
@@ -580,7 +581,8 @@ describe('HeadlessOperationHandler', () => {
       const result = await handler.readNotebook(notebookPath, false);
 
       expect(result.success).toBe(true);
-      expect(result.data?.cells[0].outputs).toEqual([]);
+      const data = result.data as { cells: Array<{ outputs: unknown[] }> };
+      expect(data.cells[0].outputs).toEqual([]);
     });
   });
 
