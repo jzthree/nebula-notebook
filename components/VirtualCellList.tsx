@@ -7,6 +7,16 @@ import { DEFAULT_CELL_HEIGHT_PX } from '../config';
 // Key: cell ID, Value: measured height in pixels
 const cellHeightCache = new Map<string, number>();
 
+// ⚠️ MEMORY MANAGEMENT: Clean up stale entries periodically
+// This prevents memory leaks when cells are deleted
+function cleanupCacheForCells(currentCellIds: Set<string>): void {
+  for (const cachedId of cellHeightCache.keys()) {
+    if (!currentCellIds.has(cachedId)) {
+      cellHeightCache.delete(cachedId);
+    }
+  }
+}
+
 // Estimate cell height based on content (for cells not yet measured)
 // This prevents scroll jumps when scrolling up to tall cells
 function estimateCellHeight(cell: Cell): number {
@@ -77,6 +87,17 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
   // Keep cells ref for height estimation
   const cellsRef = useRef(cells);
   cellsRef.current = cells;
+
+  // ⚠️ MEMORY LEAK FIX: Clean up stale cache entries when cells change
+  // This prevents unbounded growth of cellHeightCache when cells are deleted
+  useEffect(() => {
+    const currentCellIds = new Set<string>(cells.map(c => c.id));
+    // Only cleanup if cache is significantly larger than current cells
+    // This avoids cleanup overhead on every render
+    if (cellHeightCache.size > currentCellIds.size + 10) {
+      cleanupCacheForCells(currentCellIds);
+    }
+  }, [cells]);
 
   useEffect(() => {
     const updateExtension = () => {

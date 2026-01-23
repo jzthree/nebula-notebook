@@ -3,7 +3,7 @@ import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, lineNumbers, highlightSpecialChars, drawSelection } from '@codemirror/view';
-import { Prec, EditorState } from '@codemirror/state';
+import { Prec, EditorState, StateEffect, StateField } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
 import { indentUnit, syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentOnInput } from '@codemirror/language';
@@ -151,83 +151,115 @@ const lightTheme = EditorView.theme({
 const searchHighlightMark = Decoration.mark({ class: 'cm-searchMatch' });
 const currentMatchMark = Decoration.mark({ class: 'cm-searchMatch-current' });
 
+// StateEffect to update the current match position without rebuilding extensions
+const setCurrentMatch = StateEffect.define<{ start: number; end: number } | null>();
+
+// StateField that tracks the current match position
+const currentMatchField = StateField.define<{ start: number; end: number } | null>({
+  create() {
+    return null;
+  },
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setCurrentMatch)) {
+        return effect.value;
+      }
+    }
+    return value;
+  },
+});
+
 // Create extension for search highlighting
+// ⚠️ PERFORMANCE: This extension only rebuilds when search query/options change,
+// NOT when navigating between matches. Current match updates via StateEffect.
 function createSearchHighlightExtension(
   query: string,
   caseSensitive: boolean,
-  useRegex: boolean,
-  currentMatchStart?: number,
-  currentMatchEnd?: number
+  useRegex: boolean
 ) {
-  return ViewPlugin.fromClass(
-    class {
-      decorations: DecorationSet;
+  return [
+    currentMatchField,
+    ViewPlugin.fromClass(
+      class {
+        decorations: DecorationSet;
+        query: string;
+        caseSensitive: boolean;
+        useRegex: boolean;
 
-      constructor(view: EditorView) {
-        this.decorations = this.buildDecorations(view);
-      }
-
-      update(update: ViewUpdate) {
-        if (update.docChanged || update.viewportChanged) {
-          this.decorations = this.buildDecorations(update.view);
+        constructor(view: EditorView) {
+          this.query = query;
+          this.caseSensitive = caseSensitive;
+          this.useRegex = useRegex;
+          this.decorations = this.buildDecorations(view);
         }
-      }
 
-      buildDecorations(view: EditorView): DecorationSet {
-        const builder = new RangeSetBuilder<Decoration>();
+        update(update: ViewUpdate) {
+          // Rebuild decorations if doc changed, viewport changed, or current match changed
+          const currentMatchChanged = update.transactions.some(tr =>
+            tr.effects.some(e => e.is(setCurrentMatch))
+          );
+          if (update.docChanged || update.viewportChanged || currentMatchChanged) {
+            this.decorations = this.buildDecorations(update.view);
+          }
+        }
 
-        if (!query) return builder.finish();
+        buildDecorations(view: EditorView): DecorationSet {
+          const builder = new RangeSetBuilder<Decoration>();
 
-        const doc = view.state.doc.toString();
+          if (!this.query) return builder.finish();
 
-        if (useRegex) {
-          // Regex search
-          try {
-            const regex = new RegExp(query, caseSensitive ? 'g' : 'gi');
-            let match;
-            while ((match = regex.exec(doc)) !== null) {
-              const idx = match.index;
-              const matchLen = match[0].length;
-              if (matchLen === 0) {
-                regex.lastIndex++; // Prevent infinite loop on zero-length matches
-                continue;
+          const doc = view.state.doc.toString();
+          const currentMatch = view.state.field(currentMatchField);
+
+          if (this.useRegex) {
+            // Regex search
+            try {
+              const regex = new RegExp(this.query, this.caseSensitive ? 'g' : 'gi');
+              let match;
+              while ((match = regex.exec(doc)) !== null) {
+                const idx = match.index;
+                const matchLen = match[0].length;
+                if (matchLen === 0) {
+                  regex.lastIndex++; // Prevent infinite loop on zero-length matches
+                  continue;
+                }
+
+                const isCurrentMatch = currentMatch !== null &&
+                  idx === currentMatch.start &&
+                  idx + matchLen === currentMatch.end;
+
+                builder.add(idx, idx + matchLen, isCurrentMatch ? currentMatchMark : searchHighlightMark);
               }
-
-              const isCurrentMatch = currentMatchStart !== undefined &&
-                idx === currentMatchStart &&
-                idx + matchLen === currentMatchEnd;
-
-              builder.add(idx, idx + matchLen, isCurrentMatch ? currentMatchMark : searchHighlightMark);
+            } catch {
+              // Invalid regex, return empty decorations
+              return builder.finish();
             }
-          } catch {
-            // Invalid regex, return empty decorations
-            return builder.finish();
+          } else {
+            // String search
+            const searchStr = this.caseSensitive ? this.query : this.query.toLowerCase();
+            const searchIn = this.caseSensitive ? doc : doc.toLowerCase();
+
+            let pos = 0;
+            while (pos < searchIn.length) {
+              const idx = searchIn.indexOf(searchStr, pos);
+              if (idx === -1) break;
+
+              // Check if this is the current match
+              const isCurrentMatch = currentMatch !== null &&
+                idx === currentMatch.start &&
+                idx + this.query.length === currentMatch.end;
+
+              builder.add(idx, idx + this.query.length, isCurrentMatch ? currentMatchMark : searchHighlightMark);
+              pos = idx + 1;
+            }
           }
-        } else {
-          // String search
-          const searchStr = caseSensitive ? query : query.toLowerCase();
-          const searchIn = caseSensitive ? doc : doc.toLowerCase();
 
-          let pos = 0;
-          while (pos < searchIn.length) {
-            const idx = searchIn.indexOf(searchStr, pos);
-            if (idx === -1) break;
-
-            // Check if this is the current match
-            const isCurrentMatch = currentMatchStart !== undefined &&
-              idx === currentMatchStart &&
-              idx + query.length === currentMatchEnd;
-
-            builder.add(idx, idx + query.length, isCurrentMatch ? currentMatchMark : searchHighlightMark);
-            pos = idx + 1;
-          }
+          return builder.finish();
         }
-
-        return builder.finish();
-      }
-    },
-    { decorations: (v) => v.decorations }
-  );
+      },
+      { decorations: (v) => v.decorations }
+    ),
+  ];
 }
 
 // Extract Python identifiers from code
@@ -446,6 +478,21 @@ export const CodeEditor: React.FC<Props> = ({
   const currentMatchStart = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.startIndex : undefined;
   const currentMatchEnd = isCurrentMatchInThisCell ? searchHighlight?.currentMatch?.endIndex : undefined;
 
+  // ⚠️ PERFORMANCE CRITICAL: Update current match via StateEffect, NOT by rebuilding extensions.
+  // This allows navigating through search results without recreating all CodeMirror extensions.
+  useEffect(() => {
+    if (!editorRef.current?.view) return;
+
+    const view = editorRef.current.view;
+    const matchValue = (currentMatchStart !== undefined && currentMatchEnd !== undefined)
+      ? { start: currentMatchStart, end: currentMatchEnd }
+      : null;
+
+    view.dispatch({
+      effects: setCurrentMatch.of(matchValue),
+    });
+  }, [currentMatchStart, currentMatchEnd]);
+
   // ⚠️ PERFORMANCE CRITICAL: Extensions rebuild when dependencies change.
   // All callbacks (onKeyDown, onFocus, onBlur) MUST be stable - use refs in Cell.tsx
   // to avoid recreating them on every keystroke. If you see typing lag, check if
@@ -567,19 +614,19 @@ export const CodeEditor: React.FC<Props> = ({
     );
 
     // Add search highlighting if active
+    // ⚠️ PERFORMANCE: Current match position is updated via StateEffect in useEffect below,
+    // NOT via dependency array. This prevents full extension rebuild on match navigation.
     if (searchQuery) {
       exts.push(createSearchHighlightExtension(
         searchQuery,
         searchCaseSensitive ?? false,
-        searchUseRegex ?? false,
-        currentMatchStart,
-        currentMatchEnd
+        searchUseRegex ?? false
       ));
     }
 
     return exts;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language, onShiftEnter, onModEnter, onEscape, onSave, isSearchOpen, onCloseSearch, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, currentMatchStart, currentMatchEnd, indentConfig, showLineNumbers]);
+  }, [language, onShiftEnter, onModEnter, onEscape, onSave, isSearchOpen, onCloseSearch, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, indentConfig, showLineNumbers]);
 
   const handleChange = useCallback(
     (val: string) => {
