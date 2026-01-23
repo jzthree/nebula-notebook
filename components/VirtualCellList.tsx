@@ -1,7 +1,7 @@
 import React, { forwardRef, useCallback, useState, useEffect, useRef, useMemo } from 'react';
 import { Cell } from '../types';
 import { Virtuoso, VirtuosoHandle, ListRange } from 'react-virtuoso';
-import { DEFAULT_CELL_HEIGHT_PX } from '../config';
+import { computeDefaultCellHeight } from '../utils/virtualCellMetrics';
 
 // Cache measured cell heights globally to persist across re-renders
 // Key: cell ID, Value: measured height in pixels
@@ -15,38 +15,6 @@ function cleanupCacheForCells(currentCellIds: Set<string>): void {
       cellHeightCache.delete(cachedId);
     }
   }
-}
-
-// Estimate cell height based on content (for cells not yet measured)
-// This prevents scroll jumps when scrolling up to tall cells
-function estimateCellHeight(cell: Cell): number {
-  // Base height: toolbar (40px) + padding (24px) + minimum content (40px)
-  let height = 104;
-
-  // Estimate code editor height: ~20px per line, min 40px
-  const lines = cell.content.split('\n').length;
-  height += Math.max(40, lines * 20);
-
-  // Estimate output height if present
-  if (cell.outputs && cell.outputs.length > 0) {
-    for (const output of cell.outputs) {
-      if (output.type === 'image') {
-        // Images are typically ~300px
-        height += 300;
-      } else if (output.content) {
-        // Text output: ~16px per line
-        const outputLines = output.content.split('\n').length;
-        // If cell is in scroll mode, cap at the scrolled height
-        if (cell.scrolled) {
-          height += Math.min(outputLines * 16, cell.scrolledHeight || 200);
-        } else {
-          height += Math.min(outputLines * 16, 600); // Cap for wrap mode
-        }
-      }
-    }
-  }
-
-  return height;
 }
 
 interface Props {
@@ -88,16 +56,22 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
   const cellsRef = useRef(cells);
   cellsRef.current = cells;
 
-  // ⚠️ MEMORY LEAK FIX: Clean up stale cache entries when cells change
-  // This prevents unbounded growth of cellHeightCache when cells are deleted
+  // ⚠️ MEMORY LEAK FIX: Clean up stale cache entries when cells are deleted
+  // Avoid O(N) work on every keystroke by only running when cell count changes.
+  const prevCellCountRef = useRef(cells.length);
   useEffect(() => {
-    const currentCellIds = new Set<string>(cells.map(c => c.id));
-    // Only cleanup if cache is significantly larger than current cells
-    // This avoids cleanup overhead on every render
-    if (cellHeightCache.size > currentCellIds.size + 10) {
-      cleanupCacheForCells(currentCellIds);
+    const prevCount = prevCellCountRef.current;
+    prevCellCountRef.current = cells.length;
+
+    const cacheTooLarge = cellHeightCache.size > cells.length + 10;
+    const cellsRemoved = cells.length < prevCount;
+    if (!cacheTooLarge && !cellsRemoved) {
+      return;
     }
-  }, [cells]);
+
+    const currentCellIds = new Set<string>(cellsRef.current.map(c => c.id));
+    cleanupCacheForCells(currentCellIds);
+  }, [cells.length]);
 
   useEffect(() => {
     const updateExtension = () => {
@@ -109,29 +83,12 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
   }, []);
 
   // Calculate smart default height based on cells content
-  // This reduces scroll jumps when scrolling up to unmeasured cells
+  // This reduces scroll jumps when scrolling up to unmeasured cells.
+  // ⚠️ PERFORMANCE: Only recompute when cell count changes (not on every keystroke).
   const defaultHeight = useMemo(() => {
-    if (cells.length === 0) return 150;
-
-    // Use cached heights if available, otherwise estimate
-    let totalHeight = 0;
-    let count = 0;
-
-    for (const cell of cells) {
-      const cached = cellHeightCache.get(cell.id);
-      if (cached) {
-        totalHeight += cached;
-        count++;
-      } else {
-        // Include estimates for unmeasured cells too
-        totalHeight += estimateCellHeight(cell);
-        count++;
-      }
-    }
-
-    // Return average, with a minimum of 200 to avoid underestimating
-    return Math.max(200, Math.round(totalHeight / count));
-  }, [cells]);
+    return computeDefaultCellHeight(cellsRef.current, cellHeightCache);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cells.length, renderKey]);
 
   // Cache measured heights when Virtuoso measures items
   const itemSize = useCallback((el: HTMLElement) => {
