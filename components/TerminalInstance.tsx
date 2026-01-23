@@ -39,35 +39,35 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
   useEffect(() => {
     if (!containerRef.current || isInitializedRef.current) return;
 
-    // Create terminal instance
+    // Create terminal instance with light theme matching notebook
     const terminal = new Terminal({
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
       fontSize: 13,
       lineHeight: 1.2,
       cursorBlink: true,
-      cursorStyle: 'block',
+      cursorStyle: 'bar',
       theme: {
-        background: '#1e1e1e',
-        foreground: '#d4d4d4',
-        cursor: '#d4d4d4',
-        cursorAccent: '#1e1e1e',
-        selectionBackground: '#264f78',
-        black: '#000000',
-        red: '#cd3131',
-        green: '#0dbc79',
-        yellow: '#e5e510',
-        blue: '#2472c8',
-        magenta: '#bc3fbc',
-        cyan: '#11a8cd',
-        white: '#e5e5e5',
-        brightBlack: '#666666',
-        brightRed: '#f14c4c',
-        brightGreen: '#23d18b',
-        brightYellow: '#f5f543',
-        brightBlue: '#3b8eea',
-        brightMagenta: '#d670d6',
-        brightCyan: '#29b8db',
-        brightWhite: '#e5e5e5',
+        background: '#f8fafc', // slate-50
+        foreground: '#1e293b', // slate-800
+        cursor: '#1e293b',
+        cursorAccent: '#f8fafc',
+        selectionBackground: '#dbeafe', // blue-100
+        black: '#1e293b',
+        red: '#dc2626', // red-600
+        green: '#16a34a', // green-600
+        yellow: '#ca8a04', // yellow-600
+        blue: '#2563eb', // blue-600
+        magenta: '#9333ea', // purple-600
+        cyan: '#0891b2', // cyan-600
+        white: '#f1f5f9', // slate-100
+        brightBlack: '#64748b', // slate-500
+        brightRed: '#ef4444',
+        brightGreen: '#22c55e',
+        brightYellow: '#eab308',
+        brightBlue: '#3b82f6',
+        brightMagenta: '#a855f7',
+        brightCyan: '#06b6d4',
+        brightWhite: '#ffffff',
       },
     });
 

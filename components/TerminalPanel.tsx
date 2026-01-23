@@ -9,8 +9,6 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Terminal,
   X,
-  Maximize2,
-  Minimize2,
   AlertCircle,
 } from 'lucide-react';
 import { TerminalInstance } from './TerminalInstance';
@@ -43,11 +41,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const [isResizing, setIsResizing] = useState(false);
   const [serverAvailable, setServerAvailable] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isMaximized, setIsMaximized] = useState(false);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const currentNotebookRef = useRef<string | null>(null);
+  const resizeThrottleRef = useRef<number | null>(null);
 
   // Close terminal when notebook changes
   useEffect(() => {
@@ -107,6 +105,16 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     setTerminal(null);
   }, []);
 
+  // Trigger terminal resize (throttled during drag)
+  const triggerTerminalResize = useCallback(() => {
+    if (panelRef.current) {
+      const container = panelRef.current.querySelector('[data-terminal-container]');
+      if (container && (container as any).__terminalResize) {
+        (container as any).__terminalResize();
+      }
+    }
+  }, []);
+
   // Resize handling
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -120,6 +128,14 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       const deltaY = startY - moveEvent.clientY;
       const newHeight = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, startHeight + deltaY));
       setHeight(newHeight);
+
+      // Throttle terminal resize calls during drag (every 50ms)
+      if (!resizeThrottleRef.current) {
+        resizeThrottleRef.current = window.setTimeout(() => {
+          resizeThrottleRef.current = null;
+          triggerTerminalResize();
+        }, 50);
+      }
     };
 
     const handleMouseUp = () => {
@@ -128,13 +144,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       document.removeEventListener('mouseup', handleMouseUp);
       resizeCleanupRef.current = null;
 
-      // Trigger resize on terminal instance
-      if (panelRef.current) {
-        const container = panelRef.current.querySelector('[data-terminal-container]');
-        if (container && (container as any).__terminalResize) {
-          (container as any).__terminalResize();
-        }
+      // Clear any pending throttle and do final resize
+      if (resizeThrottleRef.current) {
+        clearTimeout(resizeThrottleRef.current);
+        resizeThrottleRef.current = null;
       }
+      triggerTerminalResize();
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -144,7 +159,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [height]);
+  }, [height, triggerTerminalResize]);
 
   // Cleanup resize listeners on unmount
   useEffect(() => {
@@ -155,22 +170,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     };
   }, []);
 
-  // Trigger resize when maximized changes
-  useEffect(() => {
-    if (panelRef.current) {
-      const timer = setTimeout(() => {
-        const container = panelRef.current?.querySelector('[data-terminal-container]');
-        if (container && (container as any).__terminalResize) {
-          (container as any).__terminalResize();
-        }
-      }, 250);
-      return () => clearTimeout(timer);
-    }
-  }, [isMaximized]);
-
   if (!isOpen) return null;
-
-  const panelHeight = isMaximized ? '80vh' : `${height}px`;
 
   // Get notebook name for display
   const notebookName = notebookPath
@@ -180,54 +180,32 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   return (
     <div
       ref={panelRef}
-      className="flex-none border-t border-slate-300 bg-white flex flex-col transition-all duration-200"
-      style={{ height: panelHeight }}
+      className="flex-none bg-white flex flex-col"
+      style={{ height: `${height}px` }}
     >
-      {/* Resize Handle - at top edge for bottom panels */}
-      {!isMaximized && (
-        <div
-          className={`h-1.5 cursor-ns-resize transition-colors group relative ${
-            isResizing ? 'bg-blue-500' : 'hover:bg-blue-400'
-          }`}
-          onMouseDown={handleResizeStart}
-        >
-          {/* Visual indicator on hover */}
-          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 bg-slate-300 group-hover:bg-blue-400 transition-colors" />
-        </div>
-      )}
+      {/* Resize Handle - thin line at top */}
+      <div
+        className={`h-px cursor-ns-resize ${isResizing ? 'bg-blue-500' : 'bg-slate-300 hover:bg-blue-400'}`}
+        onMouseDown={handleResizeStart}
+      />
 
       {/* Compact Header */}
-      <div className="flex items-center justify-between px-2 py-0.5 bg-slate-800 text-slate-300">
-        <div className="flex items-center gap-1.5 text-xs font-medium">
-          <Terminal className="w-3 h-3 text-slate-400" />
-          <span className="text-slate-300">{notebookName}</span>
+      <div className="flex items-center justify-between px-2 py-0.5 bg-slate-100 border-b border-slate-200">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+          <Terminal className="w-3 h-3" />
+          <span>{notebookName}</span>
         </div>
-
-        {/* Controls */}
-        <div className="flex items-center">
-          <button
-            onClick={() => setIsMaximized(!isMaximized)}
-            className="p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded transition-colors"
-            title={isMaximized ? 'Restore' : 'Maximize'}
-          >
-            {isMaximized ? (
-              <Minimize2 className="w-3 h-3" />
-            ) : (
-              <Maximize2 className="w-3 h-3" />
-            )}
-          </button>
-          <button
-            onClick={onClose}
-            className="p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded transition-colors"
-            title="Close Panel"
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </div>
+        <button
+          onClick={onClose}
+          className="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded transition-colors"
+          title="Close"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       {/* Terminal Content */}
-      <div className="flex-1 min-h-0 relative bg-slate-900">
+      <div className="flex-1 min-h-0 relative bg-slate-50">
         {serverAvailable === false && (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-50">
             <div className="text-center text-slate-500">
