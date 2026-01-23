@@ -11,6 +11,8 @@ import { KernelService } from '../kernel/kernel-service';
 import { getKernelSearchPaths } from '../kernel/kernelspec';
 
 const router = Router();
+
+// Shared kernel service instance - exported for use by headless handler
 const kernelService = new KernelService();
 
 // Initialize kernel service on module load

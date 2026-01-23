@@ -7,12 +7,13 @@ import { FilesystemService } from '../fs/fs-service';
 import { NebulaCell } from '../fs/types';
 import { operationRouter } from '../notebook/operation-router';
 import { HeadlessOperationHandler } from '../notebook/headless-handler';
+import { kernelService } from './kernel';
 
 const router = Router();
 const fsService = new FilesystemService();
 
-// Initialize headless handler and wire to operation router
-const headlessHandler = new HeadlessOperationHandler(fsService, operationRouter);
+// Initialize headless handler with kernel service for cell execution
+const headlessHandler = new HeadlessOperationHandler(fsService, operationRouter, kernelService);
 operationRouter.setHeadlessHandler(headlessHandler);
 
 /**

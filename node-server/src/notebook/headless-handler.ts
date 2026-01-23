@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { FilesystemService } from '../fs/fs-service';
 import { NebulaCell, CellOutput } from '../fs/types';
 import { validateMetadataValue } from './cell-metadata';
+import { KernelService } from '../kernel/kernel-service';
 
 // Helper to create a CellOutput (API-compatible format matching Python)
 function createCellOutput(type: CellOutput['type'], content: string): CellOutput {
@@ -53,16 +54,19 @@ interface TruncationMetadata {
 
 export class HeadlessOperationHandler {
   private fsService: FilesystemService;
+  private kernelService: KernelService | null;
   private operationRouter: { startAgentSession: (path: string) => void; endAgentSession: (path: string) => void } | null;
   private cache: Map<string, NotebookCache> = new Map();
   private writeLocks: Map<string, Promise<void>> = new Map();
 
   constructor(
     fsService: FilesystemService,
-    operationRouter?: { startAgentSession: (path: string) => void; endAgentSession: (path: string) => void }
+    operationRouter?: { startAgentSession: (path: string) => void; endAgentSession: (path: string) => void },
+    kernelService?: KernelService
   ) {
     this.fsService = fsService;
     this.operationRouter = operationRouter || null;
+    this.kernelService = kernelService || null;
   }
 
   /**
@@ -237,11 +241,8 @@ export class HeadlessOperationHandler {
           result = await this.clearOutputs(operation);
           break;
         case 'executeCell':
-          // Node.js server doesn't have kernel support - execution requires Python backend
-          return {
-            success: false,
-            error: 'Cell execution requires the Python backend with kernel support. The Node.js server does not support kernel execution.',
-          };
+          result = await this.executeCell(operation, notebookPath);
+          break;
         case 'startAgentSession':
           if (this.operationRouter) {
             this.operationRouter.startAgentSession(notebookPath);
@@ -1110,5 +1111,111 @@ export class HeadlessOperationHandler {
       clearedIds,
       notFound: notFound.length > 0 ? notFound : null,
     };
+  }
+
+  /**
+   * Execute a cell using the kernel service.
+   */
+  private async executeCell(operation: Record<string, unknown>, notebookPath: string): Promise<OperationResult> {
+    const cellId = operation.cellId as string | undefined;
+    const cellIndex = operation.cellIndex as number | undefined;
+    const maxWait = (operation.maxWait as number) || 10;
+
+    // Get the cell
+    const cells = this.getCells(notebookPath);
+    let targetIndex: number;
+    let cell: NebulaCell;
+
+    if (cellId) {
+      targetIndex = cells.findIndex(c => c.id === cellId);
+      if (targetIndex === -1) {
+        return { success: false, error: `Cell with ID "${cellId}" not found` };
+      }
+      cell = cells[targetIndex];
+    } else if (cellIndex !== undefined) {
+      if (cellIndex < 0 || cellIndex >= cells.length) {
+        return { success: false, error: `Cell index ${cellIndex} out of range` };
+      }
+      targetIndex = cellIndex;
+      cell = cells[cellIndex];
+    } else {
+      return { success: false, error: 'Must provide cellId or cellIndex' };
+    }
+
+    // Only execute code cells
+    if (cell.type !== 'code') {
+      return { success: false, error: 'Cannot execute non-code cell' };
+    }
+
+    // Check if kernel service is available
+    if (!this.kernelService) {
+      return {
+        success: false,
+        error: 'Kernel service not available. Make sure the Node.js server is properly initialized.',
+      };
+    }
+
+    // Get or create a kernel session for this notebook
+    let sessionId: string;
+    try {
+      sessionId = await this.kernelService.getOrCreateKernel(notebookPath, 'python3');
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: `Failed to start kernel: ${errMsg}` };
+    }
+
+    // Execute the cell
+    const outputs: CellOutput[] = [];
+    const startTime = Date.now();
+    let executionComplete = false;
+
+    try {
+      const executionPromise = this.kernelService.executeCode(
+        sessionId,
+        cell.content || '',
+        async (output) => {
+          outputs.push(createCellOutput(output.type as CellOutput['type'], output.content));
+        }
+      );
+
+      // Wait for execution with timeout
+      const timeoutPromise = new Promise<{ status: 'timeout' }>((resolve) => {
+        setTimeout(() => resolve({ status: 'timeout' }), maxWait * 1000);
+      });
+
+      const result = await Promise.race([executionPromise, timeoutPromise]);
+
+      if ('status' in result && result.status === 'timeout') {
+        // Execution is still running
+        return {
+          success: true,
+          executionStatus: 'busy',
+          cellId: cell.id,
+          cellIndex: targetIndex,
+          outputs: outputs.map(o => ({ type: o.type, content: o.content })),
+          message: `Cell still executing after ${maxWait}s. Use read_output with max_wait to poll for results.`,
+        };
+      }
+
+      executionComplete = true;
+
+      // Update cell with outputs and execution count
+      cell.outputs = outputs;
+      cell.executionCount = result.executionCount;
+      cell.isExecuting = false;
+      this.saveCells(notebookPath, cells);
+
+      return {
+        success: true,
+        executionStatus: result.status === 'ok' ? 'idle' : 'error',
+        cellId: cell.id,
+        cellIndex: targetIndex,
+        executionCount: result.executionCount,
+        outputs: outputs.map(o => ({ type: o.type, content: o.content })),
+      };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: `Execution failed: ${errMsg}` };
+    }
   }
 }
