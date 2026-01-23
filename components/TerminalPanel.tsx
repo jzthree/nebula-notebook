@@ -45,7 +45,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const currentNotebookRef = useRef<string | null>(null);
-  const resizeThrottleRef = useRef<number | null>(null);
 
   // Close terminal when notebook changes
   useEffect(() => {
@@ -105,7 +104,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     setTerminal(null);
   }, []);
 
-  // Trigger terminal resize (throttled during drag)
+  // Trigger terminal resize
   const triggerTerminalResize = useCallback(() => {
     if (panelRef.current) {
       const container = panelRef.current.querySelector('[data-terminal-container]');
@@ -114,6 +113,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       }
     }
   }, []);
+
+  // Trigger terminal resize when height changes (after React updates DOM)
+  useEffect(() => {
+    if (isResizing) {
+      // Use requestAnimationFrame to ensure DOM has updated
+      const rafId = requestAnimationFrame(() => {
+        triggerTerminalResize();
+      });
+      return () => cancelAnimationFrame(rafId);
+    }
+  }, [height, isResizing, triggerTerminalResize]);
 
   // Resize handling
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -128,14 +138,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       const deltaY = startY - moveEvent.clientY;
       const newHeight = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, startHeight + deltaY));
       setHeight(newHeight);
-
-      // Throttle terminal resize calls during drag (every 50ms)
-      if (!resizeThrottleRef.current) {
-        resizeThrottleRef.current = window.setTimeout(() => {
-          resizeThrottleRef.current = null;
-          triggerTerminalResize();
-        }, 50);
-      }
     };
 
     const handleMouseUp = () => {
@@ -143,12 +145,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
       resizeCleanupRef.current = null;
-
-      // Clear any pending throttle and do final resize
-      if (resizeThrottleRef.current) {
-        clearTimeout(resizeThrottleRef.current);
-        resizeThrottleRef.current = null;
-      }
       triggerTerminalResize();
     };
 
