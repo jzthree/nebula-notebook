@@ -44,6 +44,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const resizeRafRef = useRef<number | null>(null);
   const currentNotebookRef = useRef<string | null>(null);
 
   // Close terminal when notebook changes
@@ -114,16 +115,20 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     }
   }, []);
 
+  const scheduleTerminalResize = useCallback(() => {
+    if (resizeRafRef.current !== null) return;
+    if (typeof window === 'undefined') return;
+    resizeRafRef.current = window.requestAnimationFrame(() => {
+      resizeRafRef.current = null;
+      triggerTerminalResize();
+    });
+  }, [triggerTerminalResize]);
+
   // Trigger terminal resize when height changes (after React updates DOM)
   useEffect(() => {
-    if (isResizing) {
-      // Use requestAnimationFrame to ensure DOM has updated
-      const rafId = requestAnimationFrame(() => {
-        triggerTerminalResize();
-      });
-      return () => cancelAnimationFrame(rafId);
-    }
-  }, [height, isResizing, triggerTerminalResize]);
+    if (!isOpen) return;
+    scheduleTerminalResize();
+  }, [height, isOpen, scheduleTerminalResize]);
 
   // Resize handling
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -138,6 +143,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       const deltaY = startY - moveEvent.clientY;
       const newHeight = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, startHeight + deltaY));
       setHeight(newHeight);
+      scheduleTerminalResize();
     };
 
     const handleMouseUp = () => {
@@ -145,7 +151,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
       resizeCleanupRef.current = null;
-      triggerTerminalResize();
+      scheduleTerminalResize();
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -163,6 +169,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       if (resizeCleanupRef.current) {
         resizeCleanupRef.current();
       }
+      if (resizeRafRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafRef.current);
+      }
     };
   }, []);
 
@@ -176,12 +185,14 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   return (
     <div
       ref={panelRef}
-      className="flex-none bg-white flex flex-col"
+      data-testid="terminal-panel"
+      className="flex-none flex flex-col bg-transparent overflow-hidden"
       style={{ height: `${height}px` }}
     >
       {/* Resize Handle - larger hit area, line at bottom touching header */}
       <div
-        className="h-2 cursor-ns-resize flex items-end group flex-shrink-0"
+        data-testid="terminal-resize-handle"
+        className="h-2 cursor-ns-resize flex items-end group flex-shrink-0 bg-transparent"
         onMouseDown={handleResizeStart}
       >
         <div className={`w-full h-px ${isResizing ? 'bg-blue-500' : 'bg-slate-200 group-hover:bg-blue-400'}`} />

@@ -205,6 +205,10 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
     const container = containerRef.current;
     if (container) {
       (container as any).__terminalResize = handleResize;
+      const parent = container.parentElement;
+      if (parent?.hasAttribute('data-terminal-container')) {
+        (parent as any).__terminalResize = handleResize;
+      }
     }
   }, [handleResize]);
 
