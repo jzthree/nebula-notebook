@@ -183,14 +183,16 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       className="flex-none bg-white flex flex-col"
       style={{ height: `${height}px` }}
     >
-      {/* Resize Handle - thin line at top */}
+      {/* Resize Handle - larger hit area, thin visual line */}
       <div
-        className={`h-px cursor-ns-resize ${isResizing ? 'bg-blue-500' : 'bg-slate-300 hover:bg-blue-400'}`}
+        className="h-2 cursor-ns-resize flex items-center group flex-shrink-0"
         onMouseDown={handleResizeStart}
-      />
+      >
+        <div className={`w-full h-px ${isResizing ? 'bg-blue-500' : 'bg-slate-300 group-hover:bg-blue-400'}`} />
+      </div>
 
       {/* Compact Header */}
-      <div className="flex items-center justify-between px-2 py-0.5 bg-slate-100 border-b border-slate-200">
+      <div className="flex items-center justify-between px-2 py-0.5 bg-slate-100 border-b border-slate-200 flex-shrink-0">
         <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
           <Terminal className="w-3 h-3" />
           <span>{notebookName}</span>
