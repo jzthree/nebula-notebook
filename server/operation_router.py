@@ -47,6 +47,9 @@ class OperationRouter:
         router.unregister_ui(notebook_path)
     """
 
+    # Lock timeout in seconds
+    AGENT_LOCK_TIMEOUT = 5 * 60  # 5 minutes
+
     def __init__(self):
         # Map of notebook_path -> UIConnection
         self._ui_connections: Dict[str, UIConnection] = {}
@@ -57,9 +60,9 @@ class OperationRouter:
         # Operation timeout in seconds
         self._operation_timeout = 30.0
 
-        # Track active agent sessions - notebooks locked by agents
-        # These should NOT fall back to headless if UI disconnects
-        self._agent_sessions: set[str] = set()
+        # Track active agent locks - notebooks locked by agents
+        # Dict of notebook_path -> { agent_id: str, expires_at: float }
+        self._agent_locks: Dict[str, Dict[str, Any]] = {}
 
     def set_headless_handler(self, handler: HeadlessOperationHandler):
         """Set the headless operation handler for file-based operations"""
@@ -100,22 +103,99 @@ class OperationRouter:
         normalized_path = str(Path(notebook_path).resolve())
         return normalized_path in self._ui_connections
 
-    def start_agent_session(self, notebook_path: str):
-        """Mark a notebook as being in an agent session"""
-        normalized_path = str(Path(notebook_path).resolve())
-        self._agent_sessions.add(normalized_path)
-        print(f"[OperationRouter] Agent session started for: {normalized_path}")
+    def _cleanup_expired_locks(self):
+        """Remove expired locks"""
+        import time
+        now = time.time()
+        expired = [path for path, lock in self._agent_locks.items() if lock['expires_at'] <= now]
+        for path in expired:
+            lock = self._agent_locks.pop(path)
+            print(f"[OperationRouter] Agent lock expired for: {path} (agent: {lock['agent_id']})")
 
-    def end_agent_session(self, notebook_path: str):
-        """Mark a notebook as no longer in an agent session"""
+    def start_agent_session(self, notebook_path: str, agent_id: str) -> Dict[str, Any]:
+        """
+        Start an agent session with locking.
+        Returns success if lock acquired, error if already locked by another agent.
+        """
+        import time
         normalized_path = str(Path(notebook_path).resolve())
-        self._agent_sessions.discard(normalized_path)
-        print(f"[OperationRouter] Agent session ended for: {normalized_path}")
+
+        # Clean up expired locks first
+        self._cleanup_expired_locks()
+
+        existing_lock = self._agent_locks.get(normalized_path)
+        if existing_lock:
+            if existing_lock['agent_id'] == agent_id:
+                # Same agent re-acquiring lock - refresh timeout
+                existing_lock['expires_at'] = time.time() + self.AGENT_LOCK_TIMEOUT
+                print(f"[OperationRouter] Agent session refreshed for: {normalized_path} (agent: {agent_id})")
+                return {'success': True, 'agentId': agent_id}
+            else:
+                # Different agent has the lock
+                remaining = int(existing_lock['expires_at'] - time.time())
+                print(f"[OperationRouter] Agent session BLOCKED for: {normalized_path} (requested by: {agent_id}, held by: {existing_lock['agent_id']})")
+                return {
+                    'success': False,
+                    'error': f"Notebook is locked by another agent. Lock expires in {remaining}s."
+                }
+
+        # Acquire new lock
+        self._agent_locks[normalized_path] = {
+            'agent_id': agent_id,
+            'expires_at': time.time() + self.AGENT_LOCK_TIMEOUT,
+            'notebook_path': normalized_path,
+        }
+        print(f"[OperationRouter] Agent session started for: {normalized_path} (agent: {agent_id})")
+        return {'success': True, 'agentId': agent_id}
+
+    def end_agent_session(self, notebook_path: str, agent_id: str) -> Dict[str, Any]:
+        """
+        End an agent session and release the lock.
+        Only the lock holder can release the lock.
+        """
+        normalized_path = str(Path(notebook_path).resolve())
+
+        existing_lock = self._agent_locks.get(normalized_path)
+        if not existing_lock:
+            # No lock exists - that's fine
+            return {'success': True}
+
+        if existing_lock['agent_id'] != agent_id:
+            print(f"[OperationRouter] Agent session end REJECTED for: {normalized_path} (requested by: {agent_id}, held by: {existing_lock['agent_id']})")
+            return {
+                'success': False,
+                'error': 'Cannot release lock held by another agent'
+            }
+
+        del self._agent_locks[normalized_path]
+        print(f"[OperationRouter] Agent session ended for: {normalized_path} (agent: {agent_id})")
+        return {'success': True}
 
     def is_agent_session(self, notebook_path: str) -> bool:
         """Check if a notebook is in an agent session"""
+        import time
         normalized_path = str(Path(notebook_path).resolve())
-        return normalized_path in self._agent_sessions
+        lock = self._agent_locks.get(normalized_path)
+        return lock is not None and lock['expires_at'] > time.time()
+
+    def get_agent_lock(self, notebook_path: str) -> Optional[Dict[str, Any]]:
+        """Get the agent lock for a notebook, if any"""
+        import time
+        normalized_path = str(Path(notebook_path).resolve())
+        lock = self._agent_locks.get(normalized_path)
+        if lock and lock['expires_at'] > time.time():
+            return lock
+        return None
+
+    def refresh_agent_lock(self, notebook_path: str, agent_id: str) -> bool:
+        """Refresh lock timeout for an agent operation"""
+        import time
+        normalized_path = str(Path(notebook_path).resolve())
+        lock = self._agent_locks.get(normalized_path)
+        if lock and lock['agent_id'] == agent_id:
+            lock['expires_at'] = time.time() + self.AGENT_LOCK_TIMEOUT
+            return True
+        return False
 
     async def apply_operation(self, operation: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -124,9 +204,17 @@ class OperationRouter:
         Routes to UI if connected, otherwise uses headless manager.
         Returns operation result in unified format.
         """
+        import time
         notebook_path = operation.get('notebookPath', '')
         normalized_path = str(Path(notebook_path).resolve())
         op_type = operation.get('type', 'unknown')
+        agent_id = operation.get('agentId')
+
+        # Clean up expired locks
+        self._cleanup_expired_locks()
+
+        lock = self._agent_locks.get(normalized_path)
+        is_locked = lock is not None and lock['expires_at'] > time.time()
 
         # Debug logging
         print(f"[OperationRouter] apply_operation:")
@@ -135,14 +223,29 @@ class OperationRouter:
         print(f"  normalized_path: {normalized_path}")
         print(f"  registered_uis: {list(self._ui_connections.keys())}")
         print(f"  has_ui: {normalized_path in self._ui_connections}")
-        print(f"  is_agent_session: {normalized_path in self._agent_sessions}")
+        print(f"  is_locked: {is_locked}{f' (by: {lock[\"agent_id\"]})' if lock else ''}")
+        print(f"  request_agent_id: {agent_id or '(none)'}")
+
+        # Check if another agent holds the lock (for write operations)
+        read_only_ops = {'readCell', 'readCellOutput', 'searchCells', 'readNotebook'}
+        if is_locked and lock and lock['agent_id'] != agent_id and op_type not in read_only_ops:
+            remaining = int(lock['expires_at'] - time.time())
+            print(f"  -> BLOCKED: Operation blocked by agent lock")
+            return {
+                'success': False,
+                'error': f"Notebook is locked by another agent ({lock['agent_id']}). Lock expires in {remaining}s."
+            }
+
+        # Refresh lock timeout if this agent holds it
+        if lock and agent_id and lock['agent_id'] == agent_id:
+            lock['expires_at'] = time.time() + self.AGENT_LOCK_TIMEOUT
 
         if normalized_path in self._ui_connections:
             print(f"  -> Routing to UI")
             return await self._forward_to_ui(normalized_path, operation)
         else:
-            # Check if this is an agent session - if so, fail instead of falling back
-            if normalized_path in self._agent_sessions:
+            # Check if this is an agent session (locked but UI disconnected)
+            if is_locked:
                 print(f"  -> FAILING: Agent session but UI disconnected")
                 return {
                     'success': False,

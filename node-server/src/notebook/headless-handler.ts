@@ -52,16 +52,21 @@ interface TruncationMetadata {
   };
 }
 
+interface OperationRouterInterface {
+  startAgentSession: (path: string, agentId: string) => { success: boolean; error?: string; agentId?: string };
+  endAgentSession: (path: string, agentId: string) => { success: boolean; error?: string };
+}
+
 export class HeadlessOperationHandler {
   private fsService: FilesystemService;
   private kernelService: KernelService | null;
-  private operationRouter: { startAgentSession: (path: string) => void; endAgentSession: (path: string) => void } | null;
+  private operationRouter: OperationRouterInterface | null;
   private cache: Map<string, NotebookCache> = new Map();
   private writeLocks: Map<string, Promise<void>> = new Map();
 
   constructor(
     fsService: FilesystemService,
-    operationRouter?: { startAgentSession: (path: string) => void; endAgentSession: (path: string) => void },
+    operationRouter?: OperationRouterInterface,
     kernelService?: KernelService
   ) {
     this.fsService = fsService;
@@ -244,18 +249,24 @@ export class HeadlessOperationHandler {
         case 'executeCell':
           result = await this.executeCell(operation, notebookPath);
           break;
-        case 'startAgentSession':
+        case 'startAgentSession': {
+          const agentId = (operation.agentId as string) || 'unknown';
           if (this.operationRouter) {
-            this.operationRouter.startAgentSession(notebookPath);
+            result = this.operationRouter.startAgentSession(notebookPath, agentId);
+          } else {
+            result = { success: true, agentId };
           }
-          result = { success: true };
           break;
-        case 'endAgentSession':
+        }
+        case 'endAgentSession': {
+          const agentId = (operation.agentId as string) || 'unknown';
           if (this.operationRouter) {
-            this.operationRouter.endAgentSession(notebookPath);
+            result = this.operationRouter.endAgentSession(notebookPath, agentId);
+          } else {
+            result = { success: true };
           }
-          result = { success: true };
           break;
+        }
         case 'undo':
           return { success: false, error: 'Undo requires the notebook to be open in the browser. Undo state is maintained in the UI.' };
         case 'redo':
@@ -329,7 +340,8 @@ export class HeadlessOperationHandler {
         // Skip truncation for binary/image outputs
         if (outputType === 'image' || outputType === 'html') {
           return {
-            ...output,
+            type: outputType,
+            content,
             is_binary: outputType === 'image',
           } as CellOutput;
         }
@@ -341,7 +353,7 @@ export class HeadlessOperationHandler {
         const { truncatedContent, metadata } = this.truncateOutput(content, linesLimit, charsLimit, 0);
 
         return {
-          ...output,
+          type: outputType,
           content: truncatedContent,
           ...metadata,
         } as CellOutput;

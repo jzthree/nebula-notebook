@@ -30,11 +30,19 @@ interface OperationResult {
   [key: string]: unknown;
 }
 
+interface AgentLock {
+  agentId: string;
+  expiresAt: number;
+  notebookPath: string;
+}
+
+const AGENT_LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 export class OperationRouter {
   private uiConnections: Map<string, UIConnection> = new Map();
   private headlessHandler: HeadlessOperationHandler | null = null;
   private operationTimeout = 30000; // 30 seconds
-  private agentSessions: Set<string> = new Set();
+  private agentLocks: Map<string, AgentLock> = new Map(); // path -> lock
 
   setHeadlessHandler(handler: HeadlessOperationHandler): void {
     this.headlessHandler = handler;
@@ -90,21 +98,66 @@ export class OperationRouter {
   }
 
   /**
-   * Mark a notebook as being in an agent session.
+   * Start an agent session with locking.
+   * Returns success if lock acquired, error if already locked by another agent.
    */
-  startAgentSession(notebookPath: string): void {
+  startAgentSession(notebookPath: string, agentId: string): { success: boolean; error?: string; agentId?: string } {
     const normalizedPath = path.resolve(notebookPath);
-    this.agentSessions.add(normalizedPath);
-    console.log(`[OperationRouter] Agent session started for: ${normalizedPath}`);
+
+    // Clean up expired locks first
+    this.cleanupExpiredLocks();
+
+    const existingLock = this.agentLocks.get(normalizedPath);
+    if (existingLock) {
+      if (existingLock.agentId === agentId) {
+        // Same agent re-acquiring lock - refresh timeout
+        existingLock.expiresAt = Date.now() + AGENT_LOCK_TIMEOUT_MS;
+        console.log(`[OperationRouter] Agent session refreshed for: ${normalizedPath} (agent: ${agentId})`);
+        return { success: true, agentId };
+      } else {
+        // Different agent has the lock
+        console.log(`[OperationRouter] Agent session BLOCKED for: ${normalizedPath} (requested by: ${agentId}, held by: ${existingLock.agentId})`);
+        return {
+          success: false,
+          error: `Notebook is locked by another agent. Lock expires in ${Math.ceil((existingLock.expiresAt - Date.now()) / 1000)}s.`
+        };
+      }
+    }
+
+    // Acquire new lock
+    this.agentLocks.set(normalizedPath, {
+      agentId,
+      expiresAt: Date.now() + AGENT_LOCK_TIMEOUT_MS,
+      notebookPath: normalizedPath,
+    });
+    console.log(`[OperationRouter] Agent session started for: ${normalizedPath} (agent: ${agentId})`);
+    return { success: true, agentId };
   }
 
   /**
-   * Mark a notebook as no longer in an agent session.
+   * End an agent session and release the lock.
+   * Only the lock holder can release the lock.
    */
-  endAgentSession(notebookPath: string): void {
+  endAgentSession(notebookPath: string, agentId: string): { success: boolean; error?: string } {
     const normalizedPath = path.resolve(notebookPath);
-    this.agentSessions.delete(normalizedPath);
-    console.log(`[OperationRouter] Agent session ended for: ${normalizedPath}`);
+
+    const existingLock = this.agentLocks.get(normalizedPath);
+    if (!existingLock) {
+      // No lock exists - that's fine
+      return { success: true };
+    }
+
+    if (existingLock.agentId !== agentId) {
+      console.log(`[OperationRouter] Agent session end REJECTED for: ${normalizedPath} (requested by: ${agentId}, held by: ${existingLock.agentId})`);
+      return {
+        success: false,
+        error: 'Cannot release lock held by another agent'
+      };
+    }
+
+    this.agentLocks.delete(normalizedPath);
+    console.log(`[OperationRouter] Agent session ended for: ${normalizedPath} (agent: ${agentId})`);
+    return { success: true };
   }
 
   /**
@@ -112,7 +165,46 @@ export class OperationRouter {
    */
   isAgentSession(notebookPath: string): boolean {
     const normalizedPath = path.resolve(notebookPath);
-    return this.agentSessions.has(normalizedPath);
+    const lock = this.agentLocks.get(normalizedPath);
+    return lock !== undefined && lock.expiresAt > Date.now();
+  }
+
+  /**
+   * Get the agent ID holding the lock, if any.
+   */
+  getAgentLock(notebookPath: string): AgentLock | null {
+    const normalizedPath = path.resolve(notebookPath);
+    const lock = this.agentLocks.get(normalizedPath);
+    if (lock && lock.expiresAt > Date.now()) {
+      return lock;
+    }
+    return null;
+  }
+
+  /**
+   * Refresh lock timeout for an agent operation.
+   */
+  refreshAgentLock(notebookPath: string, agentId: string): boolean {
+    const normalizedPath = path.resolve(notebookPath);
+    const lock = this.agentLocks.get(normalizedPath);
+    if (lock && lock.agentId === agentId) {
+      lock.expiresAt = Date.now() + AGENT_LOCK_TIMEOUT_MS;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Clean up expired locks.
+   */
+  private cleanupExpiredLocks(): void {
+    const now = Date.now();
+    for (const [path, lock] of this.agentLocks) {
+      if (lock.expiresAt <= now) {
+        console.log(`[OperationRouter] Agent lock expired for: ${path} (agent: ${lock.agentId})`);
+        this.agentLocks.delete(path);
+      }
+    }
   }
 
   /**
@@ -122,6 +214,13 @@ export class OperationRouter {
     const notebookPath = (operation.notebookPath as string) || '';
     const normalizedPath = path.resolve(notebookPath);
     const opType = operation.type as string;
+    const agentId = operation.agentId as string | undefined;
+
+    // Clean up expired locks
+    this.cleanupExpiredLocks();
+
+    const lock = this.agentLocks.get(normalizedPath);
+    const isLocked = lock !== undefined && lock.expiresAt > Date.now();
 
     console.log(`[OperationRouter] applyOperation:`);
     console.log(`  op_type: ${opType}`);
@@ -129,14 +228,30 @@ export class OperationRouter {
     console.log(`  normalized_path: ${normalizedPath}`);
     console.log(`  registered_uis: ${Array.from(this.uiConnections.keys())}`);
     console.log(`  has_ui: ${this.uiConnections.has(normalizedPath)}`);
-    console.log(`  is_agent_session: ${this.agentSessions.has(normalizedPath)}`);
+    console.log(`  is_locked: ${isLocked}${lock ? ` (by: ${lock.agentId})` : ''}`);
+    console.log(`  request_agent_id: ${agentId || '(none)'}`);
+
+    // Check if another agent holds the lock (for write operations)
+    const readOnlyOps = new Set(['readCell', 'readCellOutput', 'searchCells', 'readNotebook']);
+    if (isLocked && lock && lock.agentId !== agentId && !readOnlyOps.has(opType)) {
+      console.log(`  -> BLOCKED: Operation blocked by agent lock`);
+      return {
+        success: false,
+        error: `Notebook is locked by another agent (${lock.agentId}). Lock expires in ${Math.ceil((lock.expiresAt - Date.now()) / 1000)}s.`,
+      };
+    }
+
+    // Refresh lock timeout if this agent holds it
+    if (lock && agentId && lock.agentId === agentId) {
+      lock.expiresAt = Date.now() + AGENT_LOCK_TIMEOUT_MS;
+    }
 
     if (this.uiConnections.has(normalizedPath)) {
       console.log(`  -> Routing to UI`);
       return await this.forwardToUI(normalizedPath, operation);
     } else {
-      // Check if this is an agent session
-      if (this.agentSessions.has(normalizedPath)) {
+      // Check if this is an agent session (locked but UI disconnected)
+      if (isLocked) {
         console.log(`  -> FAILING: Agent session but UI disconnected`);
         return {
           success: false,

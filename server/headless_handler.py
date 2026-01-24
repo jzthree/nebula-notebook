@@ -308,14 +308,18 @@ class HeadlessOperationHandler:
                 result = await self._execute_cell(operation)
             elif op_type == 'startAgentSession':
                 # Track agent session in router to prevent headless fallback
+                agent_id = operation.get('agentId', 'unknown')
                 if self._operation_router:
-                    self._operation_router.start_agent_session(notebook_path)
-                result = {'success': True}
+                    result = self._operation_router.start_agent_session(notebook_path, agent_id)
+                else:
+                    result = {'success': True, 'agentId': agent_id}
             elif op_type == 'endAgentSession':
                 # End agent session tracking in router
+                agent_id = operation.get('agentId', 'unknown')
                 if self._operation_router:
-                    self._operation_router.end_agent_session(notebook_path)
-                result = {'success': True}
+                    result = self._operation_router.end_agent_session(notebook_path, agent_id)
+                else:
+                    result = {'success': True}
             elif op_type == 'undo':
                 # Undo requires UI to be connected (undo state is maintained in browser)
                 return {
