@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Folder, Bot, Check, Palette, Bell, Volume2, AlignLeft, Hash, Key, Eye, EyeOff, AlertTriangle } from 'lucide-react';
+import { X, Folder, Bot, Check, Palette, Bell, Volume2, AlignLeft, Hash, Key, Eye, EyeOff, AlertTriangle, Settings, Sparkles } from 'lucide-react';
 import {
   getSettings,
   saveSettings,
@@ -16,11 +16,14 @@ interface Props {
   onRefresh: () => void;
 }
 
+type SettingsTab = 'general' | 'ai' | 'appearance' | 'notifications';
+
 export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) => {
   const [settings, setSettings] = useState<NebulaSettings>(getSettings());
   const [providers, setProviders] = useState<Record<string, string[]>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   useEffect(() => {
     if (isOpen) {
@@ -68,6 +71,13 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
   const availableProviders = Object.keys(providers) as LLMProvider[];
   const availableModels = providers[settings.llmProvider] || [];
 
+  const tabs: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
+    { id: 'general', label: 'General', icon: <Settings className="w-4 h-4" /> },
+    { id: 'ai', label: 'AI', icon: <Sparkles className="w-4 h-4" /> },
+    { id: 'appearance', label: 'Appearance', icon: <Palette className="w-4 h-4" /> },
+    { id: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
+  ];
+
   return (
     <>
       {/* Backdrop */}
@@ -79,7 +89,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
       {/* Modal */}
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
-          className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+          className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -93,291 +103,334 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
             </button>
           </div>
 
-          {/* Content */}
-          <div className="px-6 py-4 space-y-6">
-            {/* Root Directory */}
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                <Folder className="w-4 h-4" />
-                Root Directory
-              </label>
-              <input
-                type="text"
-                value={settings.rootDirectory}
-                onChange={(e) => setSettings({ ...settings, rootDirectory: e.target.value })}
-                placeholder="/Users/username or ~"
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-              <p className="mt-1 text-xs text-slate-500">
-                The default directory for the file browser. Use ~ for home directory.
-              </p>
-            </div>
-
-            {/* LLM Provider */}
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                <Bot className="w-4 h-4" />
-                AI Provider
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['google', 'openai', 'anthropic'] as LLMProvider[]).map((provider) => {
-                  // Provider is available if server has env var OR user has configured API key in settings
-                  const hasServerKey = availableProviders.includes(provider);
-                  const hasClientKey = !!settings.apiKeys?.[provider];
-                  const isAvailable = hasServerKey || hasClientKey;
-                  const isSelected = settings.llmProvider === provider;
-
-                  return (
-                    <button
-                      key={provider}
-                      onClick={() => handleProviderChange(provider)}
-                      className={`
-                        relative px-3 py-2 rounded-lg text-xs font-medium transition-all
-                        ${isSelected
-                          ? 'bg-blue-600 text-white ring-2 ring-blue-200'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                        }
-                      `}
-                    >
-                      {isSelected && (
-                        <Check className="absolute top-1 right-1 w-3 h-3" />
-                      )}
-                      {provider === 'google' && 'Google'}
-                      {provider === 'openai' && 'OpenAI'}
-                      {provider === 'anthropic' && 'Anthropic'}
-                      {!isAvailable && (
-                        <span className="ml-1 text-amber-500" title="No API key configured">⚠</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-              {availableProviders.length === 0 && !Object.values(settings.apiKeys || {}).some(k => k) && (
-                <p className="mt-2 text-xs text-amber-600">
-                  No API keys configured. Add keys below or in the server .env file.
-                </p>
-              )}
-            </div>
-
-            {/* Model Selection */}
-            <div>
-              <label className="text-sm font-medium text-slate-700 mb-2 block">
-                Model
-              </label>
-              <select
-                value={settings.llmModel}
-                onChange={(e) => setSettings({ ...settings, llmModel: e.target.value })}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+          {/* Tabs */}
+          <div className="flex border-b border-slate-200 px-4">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === tab.id
+                    ? 'border-blue-600 text-blue-600'
+                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                }`}
               >
-                {availableModels.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-            </div>
+                {tab.icon}
+                {tab.label}
+              </button>
+            ))}
+          </div>
 
-            {/* API Keys */}
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                <Key className="w-4 h-4" />
-                API Keys
-              </label>
-              <div className="space-y-3">
-                {(['google', 'openai', 'anthropic'] as const).map((provider) => {
-                  const providerNames = { google: 'Google (Gemini)', openai: 'OpenAI', anthropic: 'Anthropic' };
-                  const apiKey = settings.apiKeys?.[provider] || '';
-                  const isVisible = showApiKeys[provider];
+          {/* Content */}
+          <div className="px-6 py-4 space-y-5 min-h-[320px] max-h-[60vh] overflow-y-auto">
+            {/* General Tab */}
+            {activeTab === 'general' && (
+              <>
+                {/* Root Directory */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                    <Folder className="w-4 h-4" />
+                    Root Directory
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.rootDirectory}
+                    onChange={(e) => setSettings({ ...settings, rootDirectory: e.target.value })}
+                    placeholder="/Users/username or ~"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    The default directory for the file browser. Use ~ for home directory.
+                  </p>
+                </div>
 
-                  return (
-                    <div key={provider} className="relative">
-                      <label className="text-xs text-slate-500 mb-1 block">{providerNames[provider]}</label>
-                      <div className="flex gap-2">
-                        <div className="relative flex-1">
-                          <input
-                            type={isVisible ? 'text' : 'password'}
-                            value={apiKey}
-                            onChange={(e) => setSettings({
-                              ...settings,
-                              apiKeys: { ...settings.apiKeys, [provider]: e.target.value }
-                            })}
-                            placeholder={`Enter ${providerNames[provider]} API key`}
-                            className="w-full px-3 py-2 pr-10 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowApiKeys({ ...showApiKeys, [provider]: !isVisible })}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
-                          >
-                            {isVisible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                          </button>
+                {/* Indentation */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                    <AlignLeft className="w-4 h-4" />
+                    Indentation
+                  </label>
+                  <select
+                    value={settings.indentation || 'auto'}
+                    onChange={(e) => setSettings({ ...settings, indentation: e.target.value as IndentationPreference })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                  >
+                    <option value="auto">Auto-detect</option>
+                    <option value="2">2 spaces</option>
+                    <option value="4">4 spaces</option>
+                    <option value="8">8 spaces</option>
+                    <option value="tab">Tabs</option>
+                  </select>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Auto-detect analyzes file content. Default is 4 spaces when content is ambiguous.
+                  </p>
+                </div>
+
+                {/* Line Numbers */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                    <Hash className="w-4 h-4" />
+                    Line Numbers
+                  </label>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                    <div className="flex-1">
+                      <p className="text-sm text-slate-700">Show Line Numbers</p>
+                      <p className="text-xs text-slate-500">
+                        Display line numbers in code cells
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setSettings({ ...settings, showLineNumbers: !settings.showLineNumbers })}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        settings.showLineNumbers ? 'bg-blue-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          settings.showLineNumbers ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* AI Tab */}
+            {activeTab === 'ai' && (
+              <>
+                {/* LLM Provider */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                    <Bot className="w-4 h-4" />
+                    AI Provider
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['google', 'openai', 'anthropic'] as LLMProvider[]).map((provider) => {
+                      // Provider is available if server has env var OR user has configured API key in settings
+                      const hasServerKey = availableProviders.includes(provider);
+                      const hasClientKey = !!settings.apiKeys?.[provider];
+                      const isAvailable = hasServerKey || hasClientKey;
+                      const isSelected = settings.llmProvider === provider;
+
+                      return (
+                        <button
+                          key={provider}
+                          onClick={() => handleProviderChange(provider)}
+                          className={`
+                            relative px-3 py-2 rounded-lg text-xs font-medium transition-all
+                            ${isSelected
+                              ? 'bg-blue-600 text-white ring-2 ring-blue-200'
+                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                            }
+                          `}
+                        >
+                          {isSelected && (
+                            <Check className="absolute top-1 right-1 w-3 h-3" />
+                          )}
+                          {provider === 'google' && 'Google'}
+                          {provider === 'openai' && 'OpenAI'}
+                          {provider === 'anthropic' && 'Anthropic'}
+                          {!isAvailable && (
+                            <span className="ml-1 text-amber-500" title="No API key configured">⚠</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {availableProviders.length === 0 && !Object.values(settings.apiKeys || {}).some(k => k) && (
+                    <p className="mt-2 text-xs text-amber-600">
+                      No API keys configured. Add keys below or in the server .env file.
+                    </p>
+                  )}
+                </div>
+
+                {/* Model Selection */}
+                <div>
+                  <label className="text-sm font-medium text-slate-700 mb-2 block">
+                    Model
+                  </label>
+                  <select
+                    value={settings.llmModel}
+                    onChange={(e) => setSettings({ ...settings, llmModel: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                  >
+                    {availableModels.map((model) => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* API Keys */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                    <Key className="w-4 h-4" />
+                    API Keys
+                  </label>
+                  <div className="space-y-3">
+                    {(['google', 'openai', 'anthropic'] as const).map((provider) => {
+                      const providerNames = { google: 'Google (Gemini)', openai: 'OpenAI', anthropic: 'Anthropic' };
+                      const apiKey = settings.apiKeys?.[provider] || '';
+                      const isVisible = showApiKeys[provider];
+
+                      return (
+                        <div key={provider} className="relative">
+                          <label className="text-xs text-slate-500 mb-1 block">{providerNames[provider]}</label>
+                          <div className="flex gap-2">
+                            <div className="relative flex-1">
+                              <input
+                                type={isVisible ? 'text' : 'password'}
+                                value={apiKey}
+                                onChange={(e) => setSettings({
+                                  ...settings,
+                                  apiKeys: { ...settings.apiKeys, [provider]: e.target.value }
+                                })}
+                                placeholder={`Enter ${providerNames[provider]} API key`}
+                                className="w-full px-3 py-2 pr-10 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowApiKeys({ ...showApiKeys, [provider]: !isVisible })}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
+                              >
+                                {isVisible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                              </button>
+                            </div>
+                            {apiKey && (
+                              <button
+                                onClick={() => setSettings({
+                                  ...settings,
+                                  apiKeys: { ...settings.apiKeys, [provider]: '' }
+                                })}
+                                className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded"
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        {apiKey && (
-                          <button
-                            onClick={() => setSettings({
-                              ...settings,
-                              apiKeys: { ...settings.apiKeys, [provider]: '' }
-                            })}
-                            className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded"
-                          >
-                            Clear
-                          </button>
-                        )}
+                      );
+                    })}
+                  </div>
+                  <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded-lg flex gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-700">
+                      API keys are stored in your browser's local storage. Avoid using on shared computers.
+                      Keys configured here override server environment variables.
+                    </p>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Appearance Tab */}
+            {activeTab === 'appearance' && (
+              <>
+                {/* Notebook Icons */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                    <Palette className="w-4 h-4" />
+                    Notebook Icons
+                  </label>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                    <div className="flex-1">
+                      <p className="text-sm text-slate-700">AI-Generated Icons</p>
+                      <p className="text-xs text-slate-500">
+                        Use AI to generate unique icons for each notebook (uses API credits)
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setSettings({ ...settings, useAIAvatars: !settings.useAIAvatars })}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        settings.useAIAvatars ? 'bg-blue-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          settings.useAIAvatars ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    When disabled, colorful auto-generated icons based on notebook name are used (no API calls).
+                  </p>
+                </div>
+              </>
+            )}
+
+            {/* Notifications Tab */}
+            {activeTab === 'notifications' && (
+              <>
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                    <Bell className="w-4 h-4" />
+                    Long-Running Job Alerts
+                  </label>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                    <div className="flex-1">
+                      <p className="text-sm text-slate-700">Browser Notifications</p>
+                      <p className="text-xs text-slate-500">
+                        Notify when queued cells finish after threshold
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setSettings({ ...settings, notifyOnLongRun: !settings.notifyOnLongRun })}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        settings.notifyOnLongRun ? 'bg-blue-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          settings.notifyOnLongRun ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  {settings.notifyOnLongRun && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <label className="text-xs text-slate-600">Threshold:</label>
+                      <input
+                        type="number"
+                        min="10"
+                        max="600"
+                        step="10"
+                        value={settings.notifyThresholdSeconds ?? 60}
+                        onChange={(e) => setSettings({ ...settings, notifyThresholdSeconds: parseInt(e.target.value) || 60 })}
+                        className="w-20 px-2 py-1 border border-slate-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <span className="text-xs text-slate-500">seconds</span>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <Volume2 className="w-4 h-4 text-slate-500" />
+                      <div>
+                        <p className="text-sm text-slate-700">Sound Alert</p>
+                        <p className="text-xs text-slate-500">Play sound when job completes</p>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-              <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded-lg flex gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-                <p className="text-xs text-amber-700">
-                  API keys are stored in your browser's local storage. Avoid using on shared computers.
-                  Keys configured here override server environment variables.
-                </p>
-              </div>
-            </div>
-
-            {/* Notebook Icons */}
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                <Palette className="w-4 h-4" />
-                Notebook Icons
-              </label>
-              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                <div className="flex-1">
-                  <p className="text-sm text-slate-700">AI-Generated Icons</p>
-                  <p className="text-xs text-slate-500">
-                    Use AI to generate unique icons for each notebook (uses API credits)
-                  </p>
+                    <button
+                      onClick={() => setSettings({ ...settings, notifySoundEnabled: !settings.notifySoundEnabled })}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        settings.notifySoundEnabled ? 'bg-blue-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          settings.notifySoundEnabled ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
-                <button
-                  onClick={() => setSettings({ ...settings, useAIAvatars: !settings.useAIAvatars })}
-                  className={`relative w-11 h-6 rounded-full transition-colors ${
-                    settings.useAIAvatars ? 'bg-blue-600' : 'bg-slate-300'
-                  }`}
-                >
-                  <span
-                    className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      settings.useAIAvatars ? 'translate-x-5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-              <p className="mt-1 text-xs text-slate-500">
-                When disabled, colorful auto-generated icons based on notebook name are used (no API calls).
-              </p>
-            </div>
-
-            {/* Notifications */}
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                <Bell className="w-4 h-4" />
-                Notifications
-              </label>
-              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                <div className="flex-1">
-                  <p className="text-sm text-slate-700">Long-Running Job Alerts</p>
-                  <p className="text-xs text-slate-500">
-                    Browser notification when queued cells finish after threshold
-                  </p>
-                </div>
-                <button
-                  onClick={() => setSettings({ ...settings, notifyOnLongRun: !settings.notifyOnLongRun })}
-                  className={`relative w-11 h-6 rounded-full transition-colors ${
-                    settings.notifyOnLongRun ? 'bg-blue-600' : 'bg-slate-300'
-                  }`}
-                >
-                  <span
-                    className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      settings.notifyOnLongRun ? 'translate-x-5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-              {settings.notifyOnLongRun && (
-                <div className="mt-2 flex items-center gap-2">
-                  <label className="text-xs text-slate-600">Threshold:</label>
-                  <input
-                    type="number"
-                    min="10"
-                    max="600"
-                    step="10"
-                    value={settings.notifyThresholdSeconds ?? 60}
-                    onChange={(e) => setSettings({ ...settings, notifyThresholdSeconds: parseInt(e.target.value) || 60 })}
-                    className="w-20 px-2 py-1 border border-slate-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <span className="text-xs text-slate-500">seconds</span>
-                </div>
-              )}
-              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg mt-2">
-                <div className="flex items-center gap-2">
-                  <Volume2 className="w-4 h-4 text-slate-500" />
-                  <p className="text-sm text-slate-700">Sound Alert</p>
-                </div>
-                <button
-                  onClick={() => setSettings({ ...settings, notifySoundEnabled: !settings.notifySoundEnabled })}
-                  className={`relative w-11 h-6 rounded-full transition-colors ${
-                    settings.notifySoundEnabled ? 'bg-blue-600' : 'bg-slate-300'
-                  }`}
-                >
-                  <span
-                    className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      settings.notifySoundEnabled ? 'translate-x-5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-            </div>
-
-            {/* Indentation */}
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                <AlignLeft className="w-4 h-4" />
-                Indentation
-              </label>
-              <select
-                value={settings.indentation || 'auto'}
-                onChange={(e) => setSettings({ ...settings, indentation: e.target.value as IndentationPreference })}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-              >
-                <option value="auto">Auto-detect</option>
-                <option value="2">2 spaces</option>
-                <option value="4">4 spaces</option>
-                <option value="8">8 spaces</option>
-                <option value="tab">Tabs</option>
-              </select>
-              <p className="mt-1 text-xs text-slate-500">
-                Auto-detect analyzes file content. Default is 4 spaces when content is ambiguous.
-              </p>
-            </div>
-
-            {/* Line Numbers */}
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                <Hash className="w-4 h-4" />
-                Line Numbers
-              </label>
-              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                <div className="flex-1">
-                  <p className="text-sm text-slate-700">Show Line Numbers</p>
-                  <p className="text-xs text-slate-500">
-                    Display line numbers in code cells
-                  </p>
-                </div>
-                <button
-                  onClick={() => setSettings({ ...settings, showLineNumbers: !settings.showLineNumbers })}
-                  className={`relative w-11 h-6 rounded-full transition-colors ${
-                    settings.showLineNumbers ? 'bg-blue-600' : 'bg-slate-300'
-                  }`}
-                >
-                  <span
-                    className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      settings.showLineNumbers ? 'translate-x-5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-            </div>
+              </>
+            )}
           </div>
 
           {/* Footer */}
