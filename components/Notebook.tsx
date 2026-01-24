@@ -842,6 +842,11 @@ export const Notebook: React.FC = () => {
       // Only handle reconnection for current file's kernel
       if (!currentFileId || filePath !== currentFileId) return;
 
+      if (kernelSessionId !== sessionId) {
+        console.log(`Kernel session updated for ${filePath}: ${kernelSessionId} -> ${sessionId}`);
+        setKernelSessionId(sessionId);
+      }
+
       console.log('Kernel reconnected, checking for file changes...');
       setKernelStatus('idle');
       setIsKernelReady(true);
@@ -957,10 +962,12 @@ export const Notebook: React.FC = () => {
       return;
     }
 
+    let notFoundCount = 0;
     const updateMemory = async () => {
       try {
         const response = await fetch(`/api/kernels/${kernelSessionId}/status`);
         if (response.ok) {
+          notFoundCount = 0; // Reset on success
           const status = await response.json();
           if (status.memory_mb != null) {
             setMemoryUsage({
@@ -968,9 +975,20 @@ export const Notebook: React.FC = () => {
               total: 0 // Not applicable for kernel memory
             });
           }
+        } else if (response.status === 404) {
+          notFoundCount++;
+          // After 2 consecutive 404s, clear stale session (server probably restarted)
+          if (notFoundCount >= 2) {
+            console.log('[Notebook] Kernel session not found on server, clearing stale session');
+            toast('Kernel session was lost on the server. Reconnect to start a new kernel.', 'warning', 4000);
+            setKernelSessionId(null);
+            setKernelStatus('disconnected');
+            setIsKernelReady(false);
+            setMemoryUsage(null);
+          }
         }
       } catch {
-        // Ignore fetch errors
+        // Ignore fetch errors (network issues)
       }
     };
     updateMemory();

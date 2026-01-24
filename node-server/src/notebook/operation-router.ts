@@ -275,14 +275,32 @@ export class OperationRouter {
       return result;
     }
 
-    // Check if another agent holds the lock (for write operations)
+    // Enforce agent session for write operations
     const readOnlyOps = new Set(['readCell', 'readCellOutput', 'searchCells', 'readNotebook']);
-    if (isLocked && lock && lock.agentId !== agentId && !readOnlyOps.has(opType)) {
-      console.log(`  -> BLOCKED: Operation blocked by agent lock`);
-      return {
-        success: false,
-        error: `Notebook is locked by another agent (${lock.agentId}). Lock expires in ${Math.ceil((lock.expiresAt - Date.now()) / 1000)}s.`,
-      };
+    const sessionOps = new Set(['startAgentSession', 'endAgentSession']);
+    const isWrite = !readOnlyOps.has(opType) && !sessionOps.has(opType);
+    if (isWrite) {
+      if (!isLocked) {
+        console.log(`  -> BLOCKED: Write requires active agent session`);
+        return {
+          success: false,
+          error: 'Agent session required for write operations. Call startAgentSession first.',
+        };
+      }
+      if (!agentId) {
+        console.log(`  -> BLOCKED: Missing agentId for write operation`);
+        return {
+          success: false,
+          error: 'Agent session required for write operations (missing agentId).',
+        };
+      }
+      if (lock && lock.agentId !== agentId) {
+        console.log(`  -> BLOCKED: Operation blocked by agent lock`);
+        return {
+          success: false,
+          error: `Notebook is locked by another agent (${lock.agentId}). Lock expires in ${Math.ceil((lock.expiresAt - Date.now()) / 1000)}s.`,
+        };
+      }
     }
 
     // Refresh lock timeout if this agent holds it
@@ -294,14 +312,6 @@ export class OperationRouter {
       console.log(`  -> Routing to UI`);
       return await this.forwardToUI(normalizedPath, operation);
     } else {
-      // Check if this is an agent session (locked but UI disconnected)
-      if (isLocked) {
-        console.log(`  -> FAILING: Agent session but UI disconnected`);
-        return {
-          success: false,
-          error: 'Agent session active but UI disconnected. Cannot fall back to headless mode during agent session.',
-        };
-      }
       console.log(`  -> Routing to HEADLESS`);
       return await this.applyHeadless(operation);
     }

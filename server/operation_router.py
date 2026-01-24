@@ -265,15 +265,30 @@ class OperationRouter:
 
             return result
 
-        # Check if another agent holds the lock (for write operations)
+        # Enforce agent session for write operations
         read_only_ops = {'readCell', 'readCellOutput', 'searchCells', 'readNotebook'}
-        if is_locked and lock and lock['agent_id'] != agent_id and op_type not in read_only_ops:
-            remaining = int(lock['expires_at'] - time.time())
-            print(f"  -> BLOCKED: Operation blocked by agent lock")
-            return {
-                'success': False,
-                'error': f"Notebook is locked by another agent ({lock['agent_id']}). Lock expires in {remaining}s."
-            }
+        session_ops = {'startAgentSession', 'endAgentSession'}
+        is_write = op_type not in read_only_ops and op_type not in session_ops
+        if is_write:
+            if not is_locked:
+                print(f"  -> BLOCKED: Write requires active agent session")
+                return {
+                    'success': False,
+                    'error': 'Agent session required for write operations. Call startAgentSession first.'
+                }
+            if not agent_id:
+                print(f"  -> BLOCKED: Missing agentId for write operation")
+                return {
+                    'success': False,
+                    'error': 'Agent session required for write operations (missing agentId).'
+                }
+            if lock and lock['agent_id'] != agent_id:
+                remaining = int(lock['expires_at'] - time.time())
+                print(f"  -> BLOCKED: Operation blocked by agent lock")
+                return {
+                    'success': False,
+                    'error': f"Notebook is locked by another agent ({lock['agent_id']}). Lock expires in {remaining}s."
+                }
 
         # Refresh lock timeout if this agent holds it
         if lock and agent_id and lock['agent_id'] == agent_id:
@@ -283,13 +298,6 @@ class OperationRouter:
             print(f"  -> Routing to UI")
             return await self._forward_to_ui(normalized_path, operation)
         else:
-            # Check if this is an agent session (locked but UI disconnected)
-            if is_locked:
-                print(f"  -> FAILING: Agent session but UI disconnected")
-                return {
-                    'success': False,
-                    'error': 'Agent session active but UI disconnected. Cannot fall back to headless mode during agent session.'
-                }
             print(f"  -> Routing to HEADLESS")
             return await self._apply_headless(operation)
 
