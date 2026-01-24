@@ -1574,7 +1574,7 @@ class HeadlessOperationHandler:
         if save_outputs:
             self._save_cells(notebook_path, cells)
 
-        return {
+        result = {
             'success': True,
             'cellId': cell_id,
             'cellIndex': cell_index,
@@ -1585,3 +1585,7 @@ class HeadlessOperationHandler:
             'sessionId': session_id,
             'error': execution_error
         }
+        # Add helpful message when cell is still running
+        if status == 'busy':
+            result['message'] = f'Cell still executing after {max_wait}s. Use read_output with max_wait to poll for results.'
+        return result

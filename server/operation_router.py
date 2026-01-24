@@ -190,6 +190,16 @@ class OperationRouter:
             return result
 
         except asyncio.TimeoutError:
+            # For executeCell, timeout means the cell is still running - return busy status, not error
+            if op_type == 'executeCell':
+                return {
+                    'success': True,
+                    'executionStatus': 'busy',
+                    'cellId': operation.get('cellId'),
+                    'cellIndex': operation.get('cellIndex'),
+                    'outputs': [],
+                    'message': f'Cell still executing after {timeout}s. Use read_output with max_wait to poll for results.',
+                }
             return {
                 'success': False,
                 'error': f'Operation timed out after {timeout}s'
