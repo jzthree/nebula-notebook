@@ -239,6 +239,32 @@ class OperationRouter:
         print(f"  is_locked: {is_locked}{f' (by: {lock[\"agent_id\"]})' if lock else ''}")
         print(f"  request_agent_id: {agent_id or '(none)'}")
 
+        # Handle startAgentSession/endAgentSession at router level BEFORE forwarding to UI
+        # This ensures server-side lock is always acquired, regardless of UI connection
+        if op_type == 'startAgentSession':
+            req_agent_id = operation.get('agentId', 'unknown')
+            client_name = operation.get('clientName')
+            client_version = operation.get('clientVersion')
+            result = self.start_agent_session(notebook_path, req_agent_id, client_name, client_version)
+
+            # Also forward to UI for badge update if lock acquired
+            if result.get('success') and normalized_path in self._ui_connections:
+                print(f"  -> Lock acquired, forwarding to UI for badge update")
+                await self._forward_to_ui(normalized_path, operation)
+
+            return result
+
+        if op_type == 'endAgentSession':
+            req_agent_id = operation.get('agentId', 'unknown')
+            result = self.end_agent_session(notebook_path, req_agent_id)
+
+            # Also forward to UI to clear badge if lock released
+            if result.get('success') and normalized_path in self._ui_connections:
+                print(f"  -> Lock released, forwarding to UI for badge update")
+                await self._forward_to_ui(normalized_path, operation)
+
+            return result
+
         # Check if another agent holds the lock (for write operations)
         read_only_ops = {'readCell', 'readCellOutput', 'searchCells', 'readNotebook'}
         if is_locked and lock and lock['agent_id'] != agent_id and op_type not in read_only_ops:

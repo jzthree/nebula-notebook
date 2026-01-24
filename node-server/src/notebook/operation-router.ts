@@ -245,6 +245,36 @@ export class OperationRouter {
     console.log(`  is_locked: ${isLocked}${lock ? ` (by: ${lock.agentId})` : ''}`);
     console.log(`  request_agent_id: ${agentId || '(none)'}`);
 
+    // Handle startAgentSession/endAgentSession at router level (before forwarding to UI)
+    // This ensures server-side lock is always managed regardless of UI connection
+    if (opType === 'startAgentSession') {
+      const reqAgentId = (operation.agentId as string) || 'unknown';
+      const clientName = operation.clientName as string | undefined;
+      const clientVersion = operation.clientVersion as string | undefined;
+      const result = this.startAgentSession(notebookPath, reqAgentId, { clientName, clientVersion });
+
+      // Also forward to UI for UI state update (badge display)
+      if (result.success && this.uiConnections.has(normalizedPath)) {
+        console.log(`  -> Lock acquired, forwarding to UI for badge update`);
+        await this.forwardToUI(normalizedPath, operation);
+      }
+
+      return result;
+    }
+
+    if (opType === 'endAgentSession') {
+      const reqAgentId = (operation.agentId as string) || 'unknown';
+      const result = this.endAgentSession(notebookPath, reqAgentId);
+
+      // Also forward to UI for UI state update (remove badge)
+      if (result.success && this.uiConnections.has(normalizedPath)) {
+        console.log(`  -> Lock released, forwarding to UI for badge update`);
+        await this.forwardToUI(normalizedPath, operation);
+      }
+
+      return result;
+    }
+
     // Check if another agent holds the lock (for write operations)
     const readOnlyOps = new Set(['readCell', 'readCellOutput', 'searchCells', 'readNotebook']);
     if (isLocked && lock && lock.agentId !== agentId && !readOnlyOps.has(opType)) {

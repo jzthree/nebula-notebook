@@ -570,6 +570,8 @@ describe('HeadlessOperationHandler', () => {
       expect(outputs[0].truncated).toBe(true);
       expect(outputs[0].total_lines).toBeGreaterThan(0);
       expect(outputs[0].returned_range).toBeDefined();
+      expect('id' in outputs[0]).toBe(false);
+      expect('timestamp' in outputs[0]).toBe(false);
     });
 
     it('should strip outputs when include_outputs is false', async () => {

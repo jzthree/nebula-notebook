@@ -18,6 +18,16 @@ import { SessionStore } from '../kernel/session-store';
 import { KernelService } from '../kernel/kernel-service';
 import { PersistedSession } from '../kernel/types';
 
+const createDeferred = <T>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
+
 describe('Kernelspec Discovery', () => {
   describe('discoverKernelSpecs', () => {
     it('should return an array of kernelspecs', () => {
@@ -416,6 +426,63 @@ describe('KernelService', () => {
     it('should return empty array when no sessions', () => {
       const sessions = service.getAllSessions();
       expect(sessions).toEqual([]);
+    });
+  });
+
+  describe('executeCode queueing', () => {
+    it('should serialize executeCode calls for the same session', async () => {
+      const calls: string[] = [];
+      const first = createDeferred<void>();
+      const second = createDeferred<void>();
+
+      const internal = vi.fn()
+        .mockImplementationOnce(async () => {
+          calls.push('first-start');
+          await first.promise;
+          calls.push('first-end');
+          return { status: 'ok', executionCount: 1 };
+        })
+        .mockImplementationOnce(async () => {
+          calls.push('second-start');
+          await second.promise;
+          calls.push('second-end');
+          return { status: 'ok', executionCount: 2 };
+        });
+
+      (service as any).executeCodeInternal = internal;
+
+      const onOutput = vi.fn(async () => {});
+
+      const p1 = service.executeCode('session-1', 'print(1)', onOutput);
+      const p2 = service.executeCode('session-1', 'print(2)', onOutput);
+
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(calls).toEqual(['first-start']);
+
+      first.resolve();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(calls).toEqual(['first-start', 'first-end', 'second-start']);
+
+      second.resolve();
+      const [r1, r2] = await Promise.all([p1, p2]);
+      expect(r1.executionCount).toBe(1);
+      expect(r2.executionCount).toBe(2);
+      expect(calls).toEqual(['first-start', 'first-end', 'second-start', 'second-end']);
+    });
+
+    it('should return a friendly error when the socket is busy', async () => {
+      const busyError = new Error('Socket is busy reading; only one receive operation may be in progress at any time');
+      (service as any).executeCodeInternal = vi.fn(async () => { throw busyError; });
+
+      const onOutput = vi.fn(async () => {});
+      const result = await service.executeCode('session-1', 'print(1)', onOutput);
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('another execution');
+      expect(onOutput).toHaveBeenCalledWith({
+        type: 'error',
+        content: expect.stringContaining('another execution'),
+      });
     });
   });
 

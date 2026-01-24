@@ -48,6 +48,7 @@ export class KernelService {
   private kernelSpecsCache: KernelSpec[] | null = null;
   private ready: boolean = false;
   private zmq: ZmqModule | null = null;
+  private executionQueues: Map<string, Promise<unknown>> = new Map();
 
   constructor(config?: KernelServiceConfig, sessionStore?: SessionStore) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -401,6 +402,43 @@ export class KernelService {
     code: string,
     onOutput: (output: KernelOutput) => Promise<void>
   ): Promise<ExecutionResult> {
+    return this.enqueueExecution(sessionId, async () => {
+      try {
+        return await this.executeCodeInternal(sessionId, code, onOutput);
+      } catch (err) {
+        const errorMsg = this.formatExecutionError(err);
+        await onOutput({ type: 'error', content: errorMsg });
+        return { status: 'error', executionCount: null, error: errorMsg };
+      }
+    });
+  }
+
+  private enqueueExecution<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.executionQueues.get(sessionId) || Promise.resolve();
+    const run = previous.catch(() => undefined).then(task);
+    const chain = run.catch(() => undefined);
+    this.executionQueues.set(sessionId, chain);
+    chain.finally(() => {
+      if (this.executionQueues.get(sessionId) === chain) {
+        this.executionQueues.delete(sessionId);
+      }
+    });
+    return run;
+  }
+
+  private formatExecutionError(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('Socket is busy reading')) {
+      return 'Kernel output stream is busy because another execution is running. Wait for it to finish or poll with read_output before starting a new execute_cell.';
+    }
+    return message;
+  }
+
+  private async executeCodeInternal(
+    sessionId: string,
+    code: string,
+    onOutput: (output: KernelOutput) => Promise<void>
+  ): Promise<ExecutionResult> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
@@ -408,8 +446,9 @@ export class KernelService {
 
     if (!this.zmq || !this.zmqSockets.has(sessionId)) {
       // Fallback: no ZeroMQ, cannot execute
-      await onOutput({ type: 'error', content: 'ZeroMQ not available for kernel communication' });
-      return { status: 'error', executionCount: null, error: 'ZeroMQ not available' };
+      const errorMsg = 'ZeroMQ not available for kernel communication';
+      await onOutput({ type: 'error', content: errorMsg });
+      return { status: 'error', executionCount: null, error: errorMsg };
     }
 
     session.status = 'busy';
@@ -488,7 +527,7 @@ export class KernelService {
       return { status: 'ok', executionCount: execCount };
     } catch (err) {
       session.status = 'idle';
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = this.formatExecutionError(err);
       await onOutput({ type: 'error', content: errorMsg });
       return { status: 'error', executionCount: null, error: errorMsg };
     }
