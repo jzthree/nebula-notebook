@@ -811,8 +811,9 @@ export class HeadlessOperationHandler {
     const maxCharsError = (operation.max_chars_error as number) ?? OUTPUT_DEFAULT_MAX_CHARS_ERROR;
     const lineOffset = (operation.line_offset as number) ?? 0;
     const saveToFile = (operation.save_to_file as boolean) ?? false;
+    const maxWait = (operation.maxWait as number) ?? 0; // Polling timeout in seconds
 
-    const cells = this.getCells(notebookPath);
+    let cells = this.getCells(notebookPath);
 
     let targetIndex: number | null = null;
     let cell: NebulaCell | null = null;
@@ -831,6 +832,29 @@ export class HeadlessOperationHandler {
       cell = cells[cellIndex];
     } else {
       return { success: false, error: 'Must provide cellId or cellIndex' };
+    }
+
+    // Poll for new outputs if maxWait > 0
+    if (maxWait > 0) {
+      const initialOutputCount = (cell.outputs || []).length;
+      const initialOutputChars = (cell.outputs || []).reduce((sum, o) => sum + (o.content?.length || 0), 0);
+      const startTime = Date.now();
+      const pollInterval = 500; // Poll every 500ms like Python
+
+      while ((Date.now() - startTime) < maxWait * 1000) {
+        await this.sleep(pollInterval);
+        // Re-read cells to get updated outputs
+        this.invalidate(notebookPath); // Clear cache to get fresh data
+        cells = this.getCells(notebookPath);
+        cell = cells[targetIndex!];
+        const currentOutputCount = (cell.outputs || []).length;
+        const currentOutputChars = (cell.outputs || []).reduce((sum, o) => sum + (o.content?.length || 0), 0);
+
+        // Check if outputs changed (more outputs or more content)
+        if (currentOutputCount > initialOutputCount || currentOutputChars > initialOutputChars) {
+          break; // New output arrived
+        }
+      }
     }
 
     const processedOutputs: Record<string, unknown>[] = [];
@@ -887,6 +911,10 @@ export class HeadlessOperationHandler {
       output_count: processedOutputs.length,
       temp_files: tempFiles.length > 0 ? tempFiles : null,
     };
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private saveOutputToTempFile(content: string, cellId: string): string {
@@ -1115,11 +1143,13 @@ export class HeadlessOperationHandler {
 
   /**
    * Execute a cell using the kernel service.
+   * Matches Python headless_handler._execute_cell() behavior.
    */
   private async executeCell(operation: Record<string, unknown>, notebookPath: string): Promise<OperationResult> {
     const cellId = operation.cellId as string | undefined;
     const cellIndex = operation.cellIndex as number | undefined;
     const maxWait = (operation.maxWait as number) || 10;
+    const saveOutputs = (operation.saveOutputs as boolean) ?? true;
 
     // Get the cell
     const cells = this.getCells(notebookPath);
@@ -1142,9 +1172,30 @@ export class HeadlessOperationHandler {
       return { success: false, error: 'Must provide cellId or cellIndex' };
     }
 
+    const actualCellId = cell.id;
+
     // Only execute code cells
     if (cell.type !== 'code') {
-      return { success: false, error: 'Cannot execute non-code cell' };
+      return { success: false, error: `Cell ${targetIndex} is not a code cell` };
+    }
+
+    const code = cell.content || '';
+
+    // Handle empty cells - just clear outputs
+    if (!code.trim()) {
+      cell.outputs = [];
+      cell.executionCount = null;
+      if (saveOutputs) {
+        this.saveCells(notebookPath, cells);
+      }
+      return {
+        success: true,
+        cellId: actualCellId,
+        cellIndex: targetIndex,
+        executionStatus: 'idle',
+        outputs: [],
+        executionCount: null,
+      };
     }
 
     // Check if kernel service is available
@@ -1164,54 +1215,88 @@ export class HeadlessOperationHandler {
       return { success: false, error: `Failed to start kernel: ${errMsg}` };
     }
 
-    // Execute the cell
+    // Execute the cell with periodic output saving
     const outputs: CellOutput[] = [];
     const startTime = Date.now();
+    let executionCount: number | null = null;
+    let executionError: string | null = null;
     let executionComplete = false;
 
-    try {
-      const executionPromise = this.kernelService.executeCode(
-        sessionId,
-        cell.content || '',
-        async (output) => {
-          outputs.push(createCellOutput(output.type as CellOutput['type'], output.content));
-        }
-      );
+    const outputCallback = async (output: { type: string; content: string }) => {
+      outputs.push(createCellOutput(output.type as CellOutput['type'], output.content));
+      // Save outputs periodically (every 5 outputs) like Python
+      if (saveOutputs && outputs.length % 5 === 0) {
+        cell.outputs = [...outputs];
+        this.saveCells(notebookPath, cells);
+      }
+    };
 
-      // Wait for execution with timeout
-      const timeoutPromise = new Promise<{ status: 'timeout' }>((resolve) => {
-        setTimeout(() => resolve({ status: 'timeout' }), maxWait * 1000);
+    try {
+      // Create execution promise
+      const executeTask = async () => {
+        try {
+          const result = await this.kernelService!.executeCode(sessionId, code, outputCallback);
+          executionCount = result.executionCount;
+          if (result.status === 'error') {
+            executionError = result.error || 'Unknown error';
+          }
+        } catch (err) {
+          executionError = err instanceof Error ? err.message : String(err);
+        } finally {
+          executionComplete = true;
+        }
+      };
+
+      // Start execution
+      const executionPromise = executeTask();
+
+      // Wait for completion or timeout
+      const timeoutPromise = new Promise<void>((resolve) => {
+        setTimeout(resolve, maxWait * 1000);
       });
 
-      const result = await Promise.race([executionPromise, timeoutPromise]);
+      await Promise.race([executionPromise, timeoutPromise]);
 
-      if ('status' in result && result.status === 'timeout') {
+      const elapsed = Date.now() - startTime;
+      const status = executionComplete
+        ? (executionError ? 'error' : 'idle')
+        : 'busy';
+
+      // Update cell with outputs
+      cell.outputs = [...outputs];
+      if (executionCount !== null) {
+        cell.executionCount = executionCount;
+      }
+      cell.isExecuting = !executionComplete;
+
+      if (saveOutputs) {
+        this.saveCells(notebookPath, cells);
+      }
+
+      if (!executionComplete) {
         // Execution is still running
         return {
           success: true,
           executionStatus: 'busy',
-          cellId: cell.id,
+          cellId: actualCellId,
           cellIndex: targetIndex,
           outputs: outputs.map(o => ({ type: o.type, content: o.content })),
+          executionTime: elapsed,
+          sessionId,
           message: `Cell still executing after ${maxWait}s. Use read_output with max_wait to poll for results.`,
         };
       }
 
-      executionComplete = true;
-
-      // Update cell with outputs and execution count
-      cell.outputs = outputs;
-      cell.executionCount = result.executionCount;
-      cell.isExecuting = false;
-      this.saveCells(notebookPath, cells);
-
       return {
         success: true,
-        executionStatus: result.status === 'ok' ? 'idle' : 'error',
-        cellId: cell.id,
+        cellId: actualCellId,
         cellIndex: targetIndex,
-        executionCount: result.executionCount,
+        executionStatus: status,
+        executionCount,
         outputs: outputs.map(o => ({ type: o.type, content: o.content })),
+        executionTime: elapsed,
+        sessionId,
+        error: executionError || undefined,
       };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
