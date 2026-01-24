@@ -31,9 +31,12 @@ interface OperationResult {
 }
 
 interface AgentLock {
-  agentId: string;
+  agentId: string;        // Unique identifier for locking (sessionId)
+  clientName?: string;    // Display name (e.g., "claude-code", "cursor")
+  clientVersion?: string; // Client version
   expiresAt: number;
   notebookPath: string;
+  lockedAt: number;       // When lock was first acquired
 }
 
 const AGENT_LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -101,7 +104,11 @@ export class OperationRouter {
    * Start an agent session with locking.
    * Returns success if lock acquired, error if already locked by another agent.
    */
-  startAgentSession(notebookPath: string, agentId: string): { success: boolean; error?: string; agentId?: string } {
+  startAgentSession(
+    notebookPath: string,
+    agentId: string,
+    metadata?: { clientName?: string; clientVersion?: string }
+  ): { success: boolean; error?: string; lock?: AgentLock } {
     const normalizedPath = path.resolve(notebookPath);
 
     // Clean up expired locks first
@@ -113,25 +120,32 @@ export class OperationRouter {
         // Same agent re-acquiring lock - refresh timeout
         existingLock.expiresAt = Date.now() + AGENT_LOCK_TIMEOUT_MS;
         console.log(`[OperationRouter] Agent session refreshed for: ${normalizedPath} (agent: ${agentId})`);
-        return { success: true, agentId };
+        return { success: true, lock: existingLock };
       } else {
         // Different agent has the lock
-        console.log(`[OperationRouter] Agent session BLOCKED for: ${normalizedPath} (requested by: ${agentId}, held by: ${existingLock.agentId})`);
+        const lockedBy = existingLock.clientName || existingLock.agentId;
+        console.log(`[OperationRouter] Agent session BLOCKED for: ${normalizedPath} (requested by: ${agentId}, held by: ${lockedBy})`);
         return {
           success: false,
-          error: `Notebook is locked by another agent. Lock expires in ${Math.ceil((existingLock.expiresAt - Date.now()) / 1000)}s.`
+          error: `Notebook is locked by ${lockedBy}. Lock expires in ${Math.ceil((existingLock.expiresAt - Date.now()) / 1000)}s.`,
+          lock: existingLock,
         };
       }
     }
 
     // Acquire new lock
-    this.agentLocks.set(normalizedPath, {
+    const now = Date.now();
+    const newLock: AgentLock = {
       agentId,
-      expiresAt: Date.now() + AGENT_LOCK_TIMEOUT_MS,
+      clientName: metadata?.clientName,
+      clientVersion: metadata?.clientVersion,
+      expiresAt: now + AGENT_LOCK_TIMEOUT_MS,
       notebookPath: normalizedPath,
-    });
-    console.log(`[OperationRouter] Agent session started for: ${normalizedPath} (agent: ${agentId})`);
-    return { success: true, agentId };
+      lockedAt: now,
+    };
+    this.agentLocks.set(normalizedPath, newLock);
+    console.log(`[OperationRouter] Agent session started for: ${normalizedPath} (agent: ${agentId}, client: ${metadata?.clientName || 'unknown'})`);
+    return { success: true, lock: newLock };
   }
 
   /**

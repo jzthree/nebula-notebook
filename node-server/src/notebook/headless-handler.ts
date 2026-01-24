@@ -52,8 +52,16 @@ interface TruncationMetadata {
   };
 }
 
+interface AgentLockInfo {
+  agentId: string;
+  clientName?: string;
+  clientVersion?: string;
+  expiresAt: number;
+  lockedAt: number;
+}
+
 interface OperationRouterInterface {
-  startAgentSession: (path: string, agentId: string) => { success: boolean; error?: string; agentId?: string };
+  startAgentSession: (path: string, agentId: string, metadata?: { clientName?: string; clientVersion?: string }) => { success: boolean; error?: string; lock?: AgentLockInfo };
   endAgentSession: (path: string, agentId: string) => { success: boolean; error?: string };
 }
 
@@ -251,10 +259,12 @@ export class HeadlessOperationHandler {
           break;
         case 'startAgentSession': {
           const agentId = (operation.agentId as string) || 'unknown';
+          const clientName = operation.clientName as string | undefined;
+          const clientVersion = operation.clientVersion as string | undefined;
           if (this.operationRouter) {
-            result = this.operationRouter.startAgentSession(notebookPath, agentId);
+            result = this.operationRouter.startAgentSession(notebookPath, agentId, { clientName, clientVersion });
           } else {
-            result = { success: true, agentId };
+            result = { success: true, lock: { agentId, clientName, clientVersion, expiresAt: Date.now() + 5 * 60 * 1000, lockedAt: Date.now() } };
           }
           break;
         }

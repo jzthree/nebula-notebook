@@ -309,10 +309,25 @@ class HeadlessOperationHandler:
             elif op_type == 'startAgentSession':
                 # Track agent session in router to prevent headless fallback
                 agent_id = operation.get('agentId', 'unknown')
+                client_name = operation.get('clientName')
+                client_version = operation.get('clientVersion')
                 if self._operation_router:
-                    result = self._operation_router.start_agent_session(notebook_path, agent_id)
+                    result = self._operation_router.start_agent_session(
+                        notebook_path, agent_id, client_name, client_version
+                    )
                 else:
-                    result = {'success': True, 'agentId': agent_id}
+                    import time
+                    now = time.time()
+                    result = {
+                        'success': True,
+                        'lock': {
+                            'agent_id': agent_id,
+                            'client_name': client_name,
+                            'client_version': client_version,
+                            'expires_at': now + 5 * 60,
+                            'locked_at': now
+                        }
+                    }
             elif op_type == 'endAgentSession':
                 # End agent session tracking in router
                 agent_id = operation.get('agentId', 'unknown')

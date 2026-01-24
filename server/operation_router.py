@@ -61,7 +61,7 @@ class OperationRouter:
         self._operation_timeout = 30.0
 
         # Track active agent locks - notebooks locked by agents
-        # Dict of notebook_path -> { agent_id: str, expires_at: float }
+        # Dict of notebook_path -> { agent_id, client_name, client_version, expires_at, locked_at }
         self._agent_locks: Dict[str, Dict[str, Any]] = {}
 
     def set_headless_handler(self, handler: HeadlessOperationHandler):
@@ -112,7 +112,13 @@ class OperationRouter:
             lock = self._agent_locks.pop(path)
             print(f"[OperationRouter] Agent lock expired for: {path} (agent: {lock['agent_id']})")
 
-    def start_agent_session(self, notebook_path: str, agent_id: str) -> Dict[str, Any]:
+    def start_agent_session(
+        self,
+        notebook_path: str,
+        agent_id: str,
+        client_name: Optional[str] = None,
+        client_version: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Start an agent session with locking.
         Returns success if lock acquired, error if already locked by another agent.
@@ -129,24 +135,31 @@ class OperationRouter:
                 # Same agent re-acquiring lock - refresh timeout
                 existing_lock['expires_at'] = time.time() + self.AGENT_LOCK_TIMEOUT
                 print(f"[OperationRouter] Agent session refreshed for: {normalized_path} (agent: {agent_id})")
-                return {'success': True, 'agentId': agent_id}
+                return {'success': True, 'lock': existing_lock}
             else:
                 # Different agent has the lock
+                locked_by = existing_lock.get('client_name') or existing_lock['agent_id']
                 remaining = int(existing_lock['expires_at'] - time.time())
-                print(f"[OperationRouter] Agent session BLOCKED for: {normalized_path} (requested by: {agent_id}, held by: {existing_lock['agent_id']})")
+                print(f"[OperationRouter] Agent session BLOCKED for: {normalized_path} (requested by: {agent_id}, held by: {locked_by})")
                 return {
                     'success': False,
-                    'error': f"Notebook is locked by another agent. Lock expires in {remaining}s."
+                    'error': f"Notebook is locked by {locked_by}. Lock expires in {remaining}s.",
+                    'lock': existing_lock
                 }
 
         # Acquire new lock
-        self._agent_locks[normalized_path] = {
+        now = time.time()
+        new_lock = {
             'agent_id': agent_id,
-            'expires_at': time.time() + self.AGENT_LOCK_TIMEOUT,
+            'client_name': client_name,
+            'client_version': client_version,
+            'expires_at': now + self.AGENT_LOCK_TIMEOUT,
             'notebook_path': normalized_path,
+            'locked_at': now,
         }
-        print(f"[OperationRouter] Agent session started for: {normalized_path} (agent: {agent_id})")
-        return {'success': True, 'agentId': agent_id}
+        self._agent_locks[normalized_path] = new_lock
+        print(f"[OperationRouter] Agent session started for: {normalized_path} (agent: {agent_id}, client: {client_name or 'unknown'})")
+        return {'success': True, 'lock': new_lock}
 
     def end_agent_session(self, notebook_path: str, agent_id: str) -> Dict[str, Any]:
         """
