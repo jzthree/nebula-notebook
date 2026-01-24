@@ -198,8 +198,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         <div className={`w-full h-px ${isResizing ? 'bg-blue-500' : 'bg-slate-200 group-hover:bg-blue-400'}`} />
       </div>
 
-      {/* Compact Header - z-10 to stay above terminal content */}
-      <div className="flex items-center justify-between px-2 py-0.5 bg-slate-100 border-b border-slate-200 flex-shrink-0 z-10 relative">
+      {/* Compact Header - z-10 to stay above terminal content, clickable to close */}
+      <div
+        className="flex items-center justify-between px-2 py-0.5 bg-slate-100 border-b border-slate-200 flex-shrink-0 z-10 relative cursor-pointer hover:bg-slate-200 transition-colors"
+        onClick={onClose}
+      >
         <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
           <Terminal className="w-3 h-3" />
           <span>{notebookName}</span>
