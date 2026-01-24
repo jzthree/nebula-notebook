@@ -5,7 +5,7 @@
  * when no UI is connected (file-based mode).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -567,6 +567,9 @@ describe('HeadlessOperationHandler', () => {
       const outputContent = outputs[0].content as string;
       // Original is 400 chars (200 * 2), truncated to 50 lines max
       expect(outputContent.length).toBeLessThan(longOutput.length);
+      expect(outputs[0].truncated).toBe(true);
+      expect(outputs[0].total_lines).toBeGreaterThan(0);
+      expect(outputs[0].returned_range).toBeDefined();
     });
 
     it('should strip outputs when include_outputs is false', async () => {
@@ -583,6 +586,152 @@ describe('HeadlessOperationHandler', () => {
       expect(result.success).toBe(true);
       const data = result.data as { cells: Array<{ outputs: unknown[] }> };
       expect(data.cells[0].outputs).toEqual([]);
+    });
+
+    it('should return empty notebook metadata in headless mode', async () => {
+      const notebookPath = createTestNotebook('metadata.ipynb', [
+        { id: 'cell-1', content: 'x=1' },
+      ]);
+
+      const result = await handler.readNotebook(notebookPath);
+
+      expect(result.success).toBe(true);
+      const data = result.data as Record<string, unknown>;
+      expect(data.metadata).toEqual({});
+    });
+
+    it('should honor cell id when nebula_id metadata is missing', async () => {
+      const notebookPath = path.join(testDir, 'cell-id.ipynb');
+      const notebook = {
+        cells: [
+          {
+            id: 'external-id',
+            cell_type: 'code',
+            source: ['x=1'],
+            metadata: {},
+            outputs: [],
+            execution_count: null,
+          },
+        ],
+        metadata: {
+          kernelspec: { name: 'python3', display_name: 'Python 3' },
+        },
+        nbformat: 4,
+        nbformat_minor: 5,
+      };
+      fs.writeFileSync(notebookPath, JSON.stringify(notebook));
+
+      const result = await handler.readNotebook(notebookPath);
+
+      expect(result.success).toBe(true);
+      const data = result.data as Record<string, unknown>;
+      const cells = data.cells as Array<Record<string, unknown>>;
+      expect(cells[0].id).toBe('external-id');
+    });
+
+    it('should mark image outputs as binary', async () => {
+      const notebookPath = path.join(testDir, 'image-output.ipynb');
+      const notebook = {
+        cells: [
+          {
+            cell_type: 'code',
+            source: [''],
+            metadata: { nebula_id: 'cell-1' },
+            outputs: [
+              {
+                output_type: 'display_data',
+                data: { 'image/png': 'abcd' },
+                metadata: {},
+              },
+            ],
+            execution_count: null,
+          },
+        ],
+        metadata: {
+          kernelspec: { name: 'python3', display_name: 'Python 3' },
+        },
+        nbformat: 4,
+        nbformat_minor: 5,
+      };
+      fs.writeFileSync(notebookPath, JSON.stringify(notebook));
+
+      const result = await handler.readNotebook(notebookPath);
+
+      expect(result.success).toBe(true);
+      const data = result.data as Record<string, unknown>;
+      const cells = data.cells as Array<Record<string, unknown>>;
+      const outputs = cells[0].outputs as Array<Record<string, unknown>>;
+      expect(outputs[0].is_binary).toBe(true);
+    });
+  });
+
+  describe('readCellOutput', () => {
+    it('should not drop cached outputs during maxWait polling', async () => {
+      const notebookPath = createTestNotebook('polling-output.ipynb', [
+        {
+          id: 'cell-1',
+          content: 'print("old")',
+          outputs: [{ type: 'stdout', content: 'old' }],
+        },
+      ]);
+
+      const saveSpy = vi
+        .spyOn(fsService, 'saveNotebookCells')
+        .mockImplementation(() => ({ success: true, mtime: 0 }));
+
+      await handler.applyOperation({
+        type: 'updateOutputs',
+        notebookPath,
+        cellId: 'cell-1',
+        outputs: [{ type: 'stdout', content: 'new' }],
+      });
+
+      const result = await handler.applyOperation({
+        type: 'readCellOutput',
+        notebookPath,
+        cellId: 'cell-1',
+        maxWait: 0.2,
+      });
+
+      saveSpy.mockRestore();
+
+      expect(result.success).toBe(true);
+      const outputs = result.outputs as Array<Record<string, unknown>>;
+      expect(outputs[0].content).toBe('new');
+    });
+  });
+
+  describe('executeCell', () => {
+    it('should use provided sessionId when executing', async () => {
+      const notebookPath = createTestNotebook('execute-session.ipynb', [
+        { id: 'cell-1', content: 'print("hi")' },
+      ]);
+
+      const kernelService = {
+        hasSession: vi.fn((sessionId: string) => sessionId === 'session-1'),
+        getOrCreateKernel: vi.fn(async () => 'session-auto'),
+        executeCode: vi.fn(async (_sessionId: string, _code: string, onOutput: (output: any) => Promise<void>) => {
+          await onOutput({ type: 'stdout', content: 'ok' });
+          return { status: 'ok', executionCount: 1 };
+        }),
+      };
+
+      handler = new HeadlessOperationHandler(fsService, router, kernelService as unknown as any);
+
+      const result = await handler.applyOperation({
+        type: 'executeCell',
+        notebookPath,
+        cellId: 'cell-1',
+        sessionId: 'session-1',
+      });
+
+      expect(result.success).toBe(true);
+      expect(kernelService.getOrCreateKernel).not.toHaveBeenCalled();
+      expect(kernelService.executeCode).toHaveBeenCalledWith(
+        'session-1',
+        'print(\"hi\")',
+        expect.any(Function)
+      );
     });
   });
 

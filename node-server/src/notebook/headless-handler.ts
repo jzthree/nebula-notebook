@@ -75,9 +75,10 @@ export class HeadlessOperationHandler {
   private getCachedNotebook(notebookPath: string): NotebookCache {
     if (!this.cache.has(notebookPath)) {
       const result = this.fsService.getNotebookCells(notebookPath);
+      const metadata = (result as { metadata?: Record<string, unknown> }).metadata || {};
       this.cache.set(notebookPath, {
         cells: result.cells || [],
-        metadata: typeof result.kernelspec === 'string' ? { name: result.kernelspec } : (result.kernelspec as Record<string, unknown>) || {},
+        metadata,
         dirty: false,
       });
     }
@@ -327,19 +328,23 @@ export class HeadlessOperationHandler {
 
         // Skip truncation for binary/image outputs
         if (outputType === 'image' || outputType === 'html') {
-          return output;
+          return {
+            ...output,
+            is_binary: outputType === 'image',
+          } as CellOutput;
         }
 
         // Use separate limits for error outputs
         const linesLimit = outputType === 'error' ? maxLinesError : maxLines;
         const charsLimit = outputType === 'error' ? maxCharsError : maxChars;
 
-        const { truncatedContent } = this.truncateOutput(content, linesLimit, charsLimit, 0);
+        const { truncatedContent, metadata } = this.truncateOutput(content, linesLimit, charsLimit, 0);
 
         return {
           ...output,
           content: truncatedContent,
-        };
+          ...metadata,
+        } as CellOutput;
       }),
     }));
   }
@@ -843,8 +848,7 @@ export class HeadlessOperationHandler {
 
       while ((Date.now() - startTime) < maxWait * 1000) {
         await this.sleep(pollInterval);
-        // Re-read cells to get updated outputs
-        this.invalidate(notebookPath); // Clear cache to get fresh data
+        // Re-read cells from cache to detect new outputs
         cells = this.getCells(notebookPath);
         cell = cells[targetIndex!];
         const currentOutputCount = (cell.outputs || []).length;
@@ -1207,12 +1211,20 @@ export class HeadlessOperationHandler {
     }
 
     // Get or create a kernel session for this notebook
+    const requestedSessionId = operation.sessionId as string | undefined;
     let sessionId: string;
-    try {
-      sessionId = await this.kernelService.getOrCreateKernel(notebookPath, 'python3');
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      return { success: false, error: `Failed to start kernel: ${errMsg}` };
+    if (requestedSessionId) {
+      if (!this.kernelService.hasSession(requestedSessionId)) {
+        return { success: false, error: `Session ${requestedSessionId} not found` };
+      }
+      sessionId = requestedSessionId;
+    } else {
+      try {
+        sessionId = await this.kernelService.getOrCreateKernel(notebookPath, 'python3');
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: `Failed to start kernel: ${errMsg}` };
+      }
     }
 
     // Execute the cell with periodic output saving

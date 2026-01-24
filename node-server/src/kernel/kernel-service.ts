@@ -387,6 +387,13 @@ export class KernelService {
   }
 
   /**
+   * Check if a kernel session exists.
+   */
+  hasSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId);
+  }
+
+  /**
    * Execute code in a kernel session
    */
   async executeCode(

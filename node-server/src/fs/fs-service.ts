@@ -684,7 +684,7 @@ export class FilesystemService {
       let cellType: 'code' | 'markdown' = nbCell.cell_type === 'markdown' ? 'markdown' : 'code';
 
       const content = this.sourceToString(nbCell.source);
-      const cellId = nbCell.metadata?.nebula_id || `cell-${i}`;
+      const cellId = nbCell.metadata?.nebula_id || (nbCell as { id?: string }).id || `cell-${i}`;
       const outputs = this.convertOutputs(nbCell.outputs, i);
 
       const cell: NebulaCell = {
