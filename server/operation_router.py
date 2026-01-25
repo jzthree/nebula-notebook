@@ -125,6 +125,12 @@ class OperationRouter:
         """
         import time
         normalized_path = str(Path(notebook_path).resolve())
+        path_obj = Path(normalized_path)
+        if not path_obj.exists() or not path_obj.is_file():
+            return {
+                'success': False,
+                'error': f'Notebook not found: {normalized_path}'
+            }
 
         # Clean up expired locks first
         self._cleanup_expired_locks()
@@ -222,6 +228,8 @@ class OperationRouter:
         normalized_path = str(Path(notebook_path).resolve())
         op_type = operation.get('type', 'unknown')
         agent_id = operation.get('agentId')
+        has_ui = normalized_path in self._ui_connections
+        backend_hint = 'ui' if has_ui else 'headless'
 
         # Clean up expired locks
         self._cleanup_expired_locks()
@@ -235,7 +243,7 @@ class OperationRouter:
         print(f"  notebook_path: {notebook_path}")
         print(f"  normalized_path: {normalized_path}")
         print(f"  registered_uis: {list(self._ui_connections.keys())}")
-        print(f"  has_ui: {normalized_path in self._ui_connections}")
+        print(f"  has_ui: {has_ui}")
         print(f"  is_locked: {is_locked}{f' (by: {lock[\"agent_id\"]})' if lock else ''}")
         print(f"  request_agent_id: {agent_id or '(none)'}")
 
@@ -248,10 +256,12 @@ class OperationRouter:
             result = self.start_agent_session(notebook_path, req_agent_id, client_name, client_version)
 
             # Also forward to UI for badge update if lock acquired
-            if result.get('success') and normalized_path in self._ui_connections:
+            if result.get('success') and has_ui:
                 print(f"  -> Lock acquired, forwarding to UI for badge update")
                 await self._forward_to_ui(normalized_path, operation)
 
+            if isinstance(result, dict) and 'backend' not in result:
+                result['backend'] = backend_hint
             return result
 
         if op_type == 'endAgentSession':
@@ -259,10 +269,12 @@ class OperationRouter:
             result = self.end_agent_session(notebook_path, req_agent_id)
 
             # Also forward to UI to clear badge if lock released
-            if result.get('success') and normalized_path in self._ui_connections:
+            if result.get('success') and has_ui:
                 print(f"  -> Lock released, forwarding to UI for badge update")
                 await self._forward_to_ui(normalized_path, operation)
 
+            if isinstance(result, dict) and 'backend' not in result:
+                result['backend'] = backend_hint
             return result
 
         # Enforce agent session for write operations
@@ -274,32 +286,41 @@ class OperationRouter:
                 print(f"  -> BLOCKED: Write requires active agent session")
                 return {
                     'success': False,
-                    'error': 'Agent session required for write operations. Call startAgentSession first.'
+                    'error': 'Agent session required for write operations. Call startAgentSession first.',
+                    'backend': backend_hint
                 }
             if not agent_id:
                 print(f"  -> BLOCKED: Missing agentId for write operation")
                 return {
                     'success': False,
-                    'error': 'Agent session required for write operations (missing agentId).'
+                    'error': 'Agent session required for write operations (missing agentId).',
+                    'backend': backend_hint
                 }
             if lock and lock['agent_id'] != agent_id:
                 remaining = int(lock['expires_at'] - time.time())
                 print(f"  -> BLOCKED: Operation blocked by agent lock")
                 return {
                     'success': False,
-                    'error': f"Notebook is locked by another agent ({lock['agent_id']}). Lock expires in {remaining}s."
+                    'error': f"Notebook is locked by another agent ({lock['agent_id']}). Lock expires in {remaining}s.",
+                    'backend': backend_hint
                 }
 
         # Refresh lock timeout if this agent holds it
         if lock and agent_id and lock['agent_id'] == agent_id:
             lock['expires_at'] = time.time() + self.AGENT_LOCK_TIMEOUT
 
-        if normalized_path in self._ui_connections:
+        if has_ui:
             print(f"  -> Routing to UI")
-            return await self._forward_to_ui(normalized_path, operation)
+            result = await self._forward_to_ui(normalized_path, operation)
+            if isinstance(result, dict) and 'backend' not in result:
+                result['backend'] = 'ui'
+            return result
         else:
             print(f"  -> Routing to HEADLESS")
-            return await self._apply_headless(operation)
+            result = await self._apply_headless(operation)
+            if isinstance(result, dict) and 'backend' not in result:
+                result['backend'] = 'headless'
+            return result
 
     async def _forward_to_ui(self, notebook_path: str, operation: Dict[str, Any]) -> Dict[str, Any]:
         """Forward operation to connected UI and wait for response"""
@@ -451,6 +472,8 @@ class OperationRouter:
                 response_future,
                 timeout=self._operation_timeout
             )
+            if isinstance(result, dict) and 'backend' not in result:
+                result['backend'] = 'ui'
             return result
 
         except asyncio.TimeoutError:
@@ -460,7 +483,8 @@ class OperationRouter:
         except Exception as e:
             return {
                 'success': False,
-                'error': f'Failed to read from UI: {str(e)}'
+                'error': f'Failed to read from UI: {str(e)}',
+                'backend': 'ui'
             }
         finally:
             conn.pending_requests.pop(request_id, None)
@@ -478,10 +502,11 @@ class OperationRouter:
         if self._headless_manager is None:
             return {
                 'success': False,
-                'error': 'Headless manager not configured'
+                'error': 'Headless manager not configured',
+                'backend': 'headless'
             }
 
-        return await self._headless_manager.read_notebook(
+        result = await self._headless_manager.read_notebook(
             notebook_path,
             include_outputs=include_outputs,
             max_lines=max_lines,
@@ -489,6 +514,9 @@ class OperationRouter:
             max_lines_error=max_lines_error,
             max_chars_error=max_chars_error
         )
+        if isinstance(result, dict) and 'backend' not in result:
+            result['backend'] = 'headless'
+        return result
 
     def _apply_output_truncation(
         self,

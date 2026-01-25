@@ -9,6 +9,7 @@
  */
 
 import * as path from 'path';
+import * as fs from 'fs';
 import { WebSocket } from 'ws';
 import { HeadlessOperationHandler } from './headless-handler';
 
@@ -113,6 +114,14 @@ export class OperationRouter {
     metadata?: { clientName?: string; clientVersion?: string }
   ): { success: boolean; error?: string; lock?: AgentLock } {
     const normalizedPath = path.resolve(notebookPath);
+    try {
+      const stat = fs.statSync(normalizedPath);
+      if (!stat.isFile()) {
+        return { success: false, error: `Notebook not found: ${normalizedPath}` };
+      }
+    } catch {
+      return { success: false, error: `Notebook not found: ${normalizedPath}` };
+    }
 
     // Clean up expired locks first
     this.cleanupExpiredLocks();
@@ -232,6 +241,8 @@ export class OperationRouter {
     const normalizedPath = path.resolve(notebookPath);
     const opType = operation.type as string;
     const agentId = operation.agentId as string | undefined;
+    const hasUI = this.uiConnections.has(normalizedPath);
+    const backend: Backend = hasUI ? 'ui' : 'headless';
 
     // Clean up expired locks
     this.cleanupExpiredLocks();
@@ -244,7 +255,7 @@ export class OperationRouter {
     console.log(`  notebook_path: ${notebookPath}`);
     console.log(`  normalized_path: ${normalizedPath}`);
     console.log(`  registered_uis: ${Array.from(this.uiConnections.keys())}`);
-    console.log(`  has_ui: ${this.uiConnections.has(normalizedPath)}`);
+    console.log(`  has_ui: ${hasUI}`);
     console.log(`  is_locked: ${isLocked}${lock ? ` (by: ${lock.agentId})` : ''}`);
     console.log(`  request_agent_id: ${agentId || '(none)'}`);
 
@@ -257,12 +268,12 @@ export class OperationRouter {
       const result = this.startAgentSession(notebookPath, reqAgentId, { clientName, clientVersion });
 
       // Also forward to UI for UI state update (badge display)
-      if (result.success && this.uiConnections.has(normalizedPath)) {
+      if (result.success && hasUI) {
         console.log(`  -> Lock acquired, forwarding to UI for badge update`);
         await this.forwardToUI(normalizedPath, operation);
       }
 
-      return result;
+      return { ...result, backend };
     }
 
     if (opType === 'endAgentSession') {
@@ -270,12 +281,12 @@ export class OperationRouter {
       const result = this.endAgentSession(notebookPath, reqAgentId);
 
       // Also forward to UI for UI state update (remove badge)
-      if (result.success && this.uiConnections.has(normalizedPath)) {
+      if (result.success && hasUI) {
         console.log(`  -> Lock released, forwarding to UI for badge update`);
         await this.forwardToUI(normalizedPath, operation);
       }
 
-      return result;
+      return { ...result, backend };
     }
 
     // Enforce agent session for write operations
@@ -288,6 +299,7 @@ export class OperationRouter {
         return {
           success: false,
           error: 'Agent session required for write operations. Call startAgentSession first.',
+          backend,
         };
       }
       if (!agentId) {
@@ -295,6 +307,7 @@ export class OperationRouter {
         return {
           success: false,
           error: 'Agent session required for write operations (missing agentId).',
+          backend,
         };
       }
       if (lock && lock.agentId !== agentId) {
@@ -302,6 +315,7 @@ export class OperationRouter {
         return {
           success: false,
           error: `Notebook is locked by another agent (${lock.agentId}). Lock expires in ${Math.ceil((lock.expiresAt - Date.now()) / 1000)}s.`,
+          backend,
         };
       }
     }
@@ -311,7 +325,7 @@ export class OperationRouter {
       lock.expiresAt = Date.now() + AGENT_LOCK_TIMEOUT_MS;
     }
 
-    if (this.uiConnections.has(normalizedPath)) {
+    if (hasUI) {
       console.log(`  -> Routing to UI`);
       const result = await this.forwardToUI(normalizedPath, operation);
       return { ...result, backend: 'ui' as Backend };
@@ -434,12 +448,21 @@ export class OperationRouter {
       const result = await this.readFromUI(normalizedPath);
       if (result.success) {
         const truncated = this.applyOutputTruncation(result, includeOutputs, maxLines, maxChars, maxLinesError, maxCharsError);
-        return { ...truncated, backend: 'ui' as Backend };
+        if (!truncated.backend) {
+          truncated.backend = 'ui' as Backend;
+        }
+        return truncated;
       }
-      return { ...result, backend: 'ui' as Backend };
+      if (!result.backend) {
+        result.backend = 'ui' as Backend;
+      }
+      return result;
     } else {
       const result = await this.readFromFile(notebookPath, includeOutputs, maxLines, maxChars, maxLinesError, maxCharsError);
-      return { ...result, backend: 'headless' as Backend };
+      if (!result.backend) {
+        result.backend = 'headless' as Backend;
+      }
+      return result;
     }
   }
 
@@ -473,6 +496,7 @@ export class OperationRouter {
         resolve({
           success: false,
           error: `Failed to read from UI: ${err}`,
+          backend: 'ui' as Backend,
         });
       }
     });
@@ -490,10 +514,11 @@ export class OperationRouter {
       return {
         success: false,
         error: 'Headless manager not configured',
+        backend: 'headless' as Backend,
       };
     }
 
-    return await this.headlessHandler.readNotebook(
+    const result = await this.headlessHandler.readNotebook(
       notebookPath,
       includeOutputs,
       maxLines,
@@ -501,6 +526,10 @@ export class OperationRouter {
       maxLinesError,
       maxCharsError
     );
+    if (!result.backend) {
+      result.backend = 'headless' as Backend;
+    }
+    return result;
   }
 
   private applyOutputTruncation(
