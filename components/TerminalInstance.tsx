@@ -91,8 +91,10 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
     // Connect WebSocket
     const ws = connectTerminal(terminalId);
     wsRef.current = ws;
+    let isUnmounting = false;  // Track if component is unmounting to suppress errors
 
     ws.onopen = () => {
+      if (isUnmounting) return;
       // Send initial size
       const dimensions = fitAddon.proposeDimensions();
       if (dimensions) {
@@ -105,6 +107,7 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
     };
 
     ws.onmessage = (event) => {
+      if (isUnmounting) return;
       try {
         const message: TerminalServerMessage = JSON.parse(event.data);
 
@@ -129,11 +132,15 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
     };
 
     ws.onerror = (error) => {
+      // Suppress errors during unmount (e.g., "closed before established")
+      if (isUnmounting) return;
       console.error('[Terminal] WebSocket error:', error);
       terminal.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n');
     };
 
     ws.onclose = () => {
+      // Suppress close message during unmount
+      if (isUnmounting) return;
       terminal.write('\r\n\x1b[90m[Disconnected]\x1b[0m\r\n');
     };
 
@@ -148,7 +155,10 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
 
     // Cleanup
     return () => {
-      ws.close();
+      isUnmounting = true;  // Suppress error/close handlers
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
       terminal.dispose();
       isInitializedRef.current = false;
     };
