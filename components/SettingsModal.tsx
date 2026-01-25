@@ -9,6 +9,7 @@ import {
   DEFAULT_MODELS,
   IndentationPreference
 } from '../services/llmService';
+import { useNotification } from './NotificationSystem';
 
 interface Props {
   isOpen: boolean;
@@ -24,6 +25,26 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
   const [isSaving, setIsSaving] = useState(false);
   const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const { toast } = useNotification();
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('nebula-settings');
+      if (!stored) {
+        saveSettings({ notifyOnLongRun: false });
+        setSettings(prev => ({ ...prev, notifyOnLongRun: false }));
+        return;
+      }
+
+      const parsed = JSON.parse(stored) as Partial<NebulaSettings> | null;
+      if (parsed && parsed.notifyOnLongRun === undefined) {
+        saveSettings({ notifyOnLongRun: false });
+        setSettings(prev => ({ ...prev, notifyOnLongRun: false }));
+      }
+    } catch (error) {
+      console.warn('Failed to apply default notification setting:', error);
+    }
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -64,6 +85,36 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
       llmProvider: provider,
       llmModel: models[0] || DEFAULT_MODELS[provider]
     });
+  };
+
+  const handleToggleLongRunNotifications = async () => {
+    const nextEnabled = !settings.notifyOnLongRun;
+
+    if (nextEnabled) {
+      if (typeof window === 'undefined' || !('Notification' in window)) {
+        toast('Browser notifications are not supported in this environment.', 'warning');
+        setSettings(prev => ({ ...prev, notifyOnLongRun: false }));
+        return;
+      }
+
+      if (Notification.permission === 'default') {
+        try {
+          const permission = await Notification.requestPermission();
+          if (permission === 'granted') {
+            toast('Browser notifications enabled.', 'success', 3000);
+          } else {
+            toast('Browser notifications were not granted. Enable them in your browser settings.', 'warning', 5000);
+          }
+        } catch (error) {
+          console.warn('Failed to request notification permission:', error);
+          toast('Could not request notification permission.', 'error', 5000);
+        }
+      } else if (Notification.permission === 'denied') {
+        toast('Browser notifications are blocked in your browser settings.', 'warning', 5000);
+      }
+    }
+
+    setSettings(prev => ({ ...prev, notifyOnLongRun: nextEnabled }));
   };
 
   if (!isOpen) return null;
@@ -377,7 +428,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                       </p>
                     </div>
                     <button
-                      onClick={() => setSettings({ ...settings, notifyOnLongRun: !settings.notifyOnLongRun })}
+                      onClick={handleToggleLongRunNotifications}
                       className={`relative w-11 h-6 rounded-full transition-colors ${
                         settings.notifyOnLongRun ? 'bg-blue-600' : 'bg-slate-300'
                       }`}
