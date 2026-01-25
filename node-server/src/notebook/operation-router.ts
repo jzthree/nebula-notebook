@@ -24,9 +24,12 @@ interface UIConnection {
   pendingRequests: Map<string, PendingRequest>;
 }
 
+type Backend = 'ui' | 'headless';
+
 interface OperationResult {
   success: boolean;
   error?: string;
+  backend?: Backend;
   [key: string]: unknown;
 }
 
@@ -310,10 +313,12 @@ export class OperationRouter {
 
     if (this.uiConnections.has(normalizedPath)) {
       console.log(`  -> Routing to UI`);
-      return await this.forwardToUI(normalizedPath, operation);
+      const result = await this.forwardToUI(normalizedPath, operation);
+      return { ...result, backend: 'ui' as Backend };
     } else {
       console.log(`  -> Routing to HEADLESS`);
-      return await this.applyHeadless(operation);
+      const result = await this.applyHeadless(operation);
+      return { ...result, backend: 'headless' as Backend };
     }
   }
 
@@ -428,11 +433,13 @@ export class OperationRouter {
     if (this.uiConnections.has(normalizedPath)) {
       const result = await this.readFromUI(normalizedPath);
       if (result.success) {
-        return this.applyOutputTruncation(result, includeOutputs, maxLines, maxChars, maxLinesError, maxCharsError);
+        const truncated = this.applyOutputTruncation(result, includeOutputs, maxLines, maxChars, maxLinesError, maxCharsError);
+        return { ...truncated, backend: 'ui' as Backend };
       }
-      return result;
+      return { ...result, backend: 'ui' as Backend };
     } else {
-      return await this.readFromFile(notebookPath, includeOutputs, maxLines, maxChars, maxLinesError, maxCharsError);
+      const result = await this.readFromFile(notebookPath, includeOutputs, maxLines, maxChars, maxLinesError, maxCharsError);
+      return { ...result, backend: 'headless' as Backend };
     }
   }
 
