@@ -182,6 +182,8 @@ export interface StartAgentSessionOp {
   type: 'startAgentSession';
   notebookPath: string;
   agentId?: string;  // Optional identifier for the agent
+  clientName?: string;  // e.g., "claude-code", "cursor"
+  clientVersion?: string;  // Client app version
 }
 
 export interface EndAgentSessionOp {
@@ -282,6 +284,8 @@ export interface AgentOperationInfo {
 /** Info about active agent session */
 export interface AgentSessionInfo {
   agentId?: string;
+  clientName?: string;
+  clientVersion?: string;
   startedAt: number;
 }
 
@@ -830,7 +834,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
         }
 
         case 'startAgentSession': {
-          const { agentId } = operation;
+          const { agentId, clientName, clientVersion } = operation;
 
           // Check if there's already an active session
           if (agentSessionRef.current) {
@@ -844,6 +848,8 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
           setAgentSession({
             agentId,
+            clientName,
+            clientVersion,
             startedAt: Date.now(),
           });
 
