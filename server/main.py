@@ -1,6 +1,10 @@
 """
-Nebula Notebook Backend Server
-FastAPI server for Jupyter kernel management, LLM, and filesystem operations
+Nebula Notebook Backend Server (Python, deprecated)
+
+FastAPI server for Jupyter kernel management, LLM, and filesystem operations.
+
+Deprecated: This Python backend is being phased out in favor of the Node backend.
+No new feature development should be added here; only critical fixes.
 """
 import os
 import asyncio

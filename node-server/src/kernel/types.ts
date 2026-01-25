@@ -81,12 +81,24 @@ export interface KernelOutput {
 }
 
 /**
+ * Execution queue metadata for a kernel session.
+ */
+export interface ExecutionQueueInfo {
+  /** Zero-based position of this request in the session queue. */
+  queuePosition: number;
+  /** Total number of requests queued for the session at enqueue time (includes this request). */
+  queueLength: number;
+}
+
+/**
  * Execution result
  */
 export interface ExecutionResult {
   status: 'ok' | 'error';
   executionCount: number | null;
   error?: string;
+  queuePosition?: number;
+  queueLength?: number;
 }
 
 /**

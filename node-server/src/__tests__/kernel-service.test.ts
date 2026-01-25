@@ -467,6 +467,10 @@ describe('KernelService', () => {
       const [r1, r2] = await Promise.all([p1, p2]);
       expect(r1.executionCount).toBe(1);
       expect(r2.executionCount).toBe(2);
+      expect(r1.queuePosition).toBe(0);
+      expect(r1.queueLength).toBe(1);
+      expect(r2.queuePosition).toBe(1);
+      expect(r2.queueLength).toBe(2);
       expect(calls).toEqual(['first-start', 'first-end', 'second-start', 'second-end']);
     });
 

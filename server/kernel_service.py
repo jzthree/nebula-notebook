@@ -1,5 +1,8 @@
 """
-Jupyter Kernel Service - Manages real Jupyter kernels
+Jupyter Kernel Service (Python, deprecated)
+
+Deprecated: This Python backend is being phased out in favor of the Node backend.
+No new feature development should be added here; only critical fixes.
 """
 from __future__ import annotations
 import asyncio

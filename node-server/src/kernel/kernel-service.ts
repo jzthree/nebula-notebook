@@ -15,6 +15,7 @@ import {
   KernelSession,
   KernelOutput,
   ExecutionResult,
+  ExecutionQueueInfo,
   StartKernelOptions,
   SessionInfo,
   KernelServiceConfig,
@@ -49,6 +50,7 @@ export class KernelService {
   private ready: boolean = false;
   private zmq: ZmqModule | null = null;
   private executionQueues: Map<string, Promise<unknown>> = new Map();
+  private executionQueueSizes: Map<string, number> = new Map();
 
   constructor(config?: KernelServiceConfig, sessionStore?: SessionStore) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -400,15 +402,23 @@ export class KernelService {
   async executeCode(
     sessionId: string,
     code: string,
-    onOutput: (output: KernelOutput) => Promise<void>
+    onOutput: (output: KernelOutput) => Promise<void>,
+    onQueueInfo?: (info: ExecutionQueueInfo) => void
   ): Promise<ExecutionResult> {
+    const queueInfo = this.reserveExecutionSlot(sessionId);
+    if (onQueueInfo) {
+      onQueueInfo(queueInfo);
+    }
     return this.enqueueExecution(sessionId, async () => {
       try {
-        return await this.executeCodeInternal(sessionId, code, onOutput);
+        const result = await this.executeCodeInternal(sessionId, code, onOutput);
+        return { ...result, ...queueInfo };
       } catch (err) {
         const errorMsg = this.formatExecutionError(err);
         await onOutput({ type: 'error', content: errorMsg });
-        return { status: 'error', executionCount: null, error: errorMsg };
+        return { status: 'error', executionCount: null, error: errorMsg, ...queueInfo };
+      } finally {
+        this.releaseExecutionSlot(sessionId);
       }
     });
   }
@@ -424,6 +434,25 @@ export class KernelService {
       }
     });
     return run;
+  }
+
+  private reserveExecutionSlot(sessionId: string): ExecutionQueueInfo {
+    const currentSize = this.executionQueueSizes.get(sessionId) ?? 0;
+    const info = {
+      queuePosition: currentSize,
+      queueLength: currentSize + 1,
+    };
+    this.executionQueueSizes.set(sessionId, currentSize + 1);
+    return info;
+  }
+
+  private releaseExecutionSlot(sessionId: string): void {
+    const currentSize = this.executionQueueSizes.get(sessionId) ?? 0;
+    if (currentSize <= 1) {
+      this.executionQueueSizes.delete(sessionId);
+    } else {
+      this.executionQueueSizes.set(sessionId, currentSize - 1);
+    }
   }
 
   private formatExecutionError(error: unknown): string {
@@ -660,6 +689,9 @@ export class KernelService {
       // Update persistence store
       this.sessionStore.deleteSession(sessionId);
     }
+
+    this.executionQueues.delete(sessionId);
+    this.executionQueueSizes.delete(sessionId);
   }
 
   /**

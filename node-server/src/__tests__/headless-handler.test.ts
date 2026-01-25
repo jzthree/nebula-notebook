@@ -712,9 +712,15 @@ describe('HeadlessOperationHandler', () => {
       const kernelService = {
         hasSession: vi.fn((sessionId: string) => sessionId === 'session-1'),
         getOrCreateKernel: vi.fn(async () => 'session-auto'),
-        executeCode: vi.fn(async (_sessionId: string, _code: string, onOutput: (output: any) => Promise<void>) => {
+        executeCode: vi.fn(async (
+          _sessionId: string,
+          _code: string,
+          onOutput: (output: any) => Promise<void>,
+          onQueueInfo?: (info: { queuePosition: number; queueLength: number }) => void
+        ) => {
+          onQueueInfo?.({ queuePosition: 0, queueLength: 1 });
           await onOutput({ type: 'stdout', content: 'ok' });
-          return { status: 'ok', executionCount: 1 };
+          return { status: 'ok', executionCount: 1, queuePosition: 0, queueLength: 1 };
         }),
       };
 
@@ -728,10 +734,13 @@ describe('HeadlessOperationHandler', () => {
       });
 
       expect(result.success).toBe(true);
+      expect(result.queuePosition).toBe(0);
+      expect(result.queueLength).toBe(1);
       expect(kernelService.getOrCreateKernel).not.toHaveBeenCalled();
       expect(kernelService.executeCode).toHaveBeenCalledWith(
         'session-1',
         'print(\"hi\")',
+        expect.any(Function),
         expect.any(Function)
       );
     });

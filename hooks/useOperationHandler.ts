@@ -275,6 +275,8 @@ export interface OperationResult {
   executionStatus?: 'idle' | 'busy' | 'error';
   executionTime?: number;
   sessionId?: string;
+  queuePosition?: number;
+  queueLength?: number;
   // For undo/redo operations
   affectedCellIds?: string[];
   operationType?: string;
@@ -357,6 +359,8 @@ interface UseOperationHandlerOptions {
     executionTime?: number;
     outputs?: Array<{ type: string; content: string }>;
     sessionId?: string;
+    queuePosition?: number;
+    queueLength?: number;
     error?: string;
   }>;
 
@@ -993,6 +997,8 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             executionTime: result.executionTime,
             outputs: result.outputs,
             sessionId: result.sessionId,
+            queuePosition: result.queuePosition,
+            queueLength: result.queueLength,
             error: result.error,
           };
         }

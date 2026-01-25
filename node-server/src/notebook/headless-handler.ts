@@ -1255,6 +1255,7 @@ export class HeadlessOperationHandler {
     let executionCount: number | null = null;
     let executionError: string | null = null;
     let executionComplete = false;
+    let queueInfo: { queuePosition: number; queueLength: number } | null = null;
 
     const outputCallback = async (output: { type: string; content: string }) => {
       outputs.push(createCellOutput(output.type as CellOutput['type'], output.content));
@@ -1269,8 +1270,13 @@ export class HeadlessOperationHandler {
       // Create execution promise
       const executeTask = async () => {
         try {
-          const result = await this.kernelService!.executeCode(sessionId, code, outputCallback);
+          const result = await this.kernelService!.executeCode(sessionId, code, outputCallback, (info) => {
+            queueInfo = info;
+          });
           executionCount = result.executionCount;
+          if (!queueInfo && result.queuePosition !== undefined && result.queueLength !== undefined) {
+            queueInfo = { queuePosition: result.queuePosition, queueLength: result.queueLength };
+          }
           if (result.status === 'error') {
             executionError = result.error || 'Unknown error';
           }
@@ -1317,6 +1323,8 @@ export class HeadlessOperationHandler {
           outputs: outputs.map(o => ({ type: o.type, content: o.content })),
           executionTime: elapsed,
           sessionId,
+          queuePosition: queueInfo?.queuePosition,
+          queueLength: queueInfo?.queueLength,
           message: `Cell still executing after ${maxWait}s. Use read_output with max_wait to poll for results.`,
         };
       }
@@ -1330,6 +1338,8 @@ export class HeadlessOperationHandler {
         outputs: outputs.map(o => ({ type: o.type, content: o.content })),
         executionTime: elapsed,
         sessionId,
+        queuePosition: queueInfo?.queuePosition,
+        queueLength: queueInfo?.queueLength,
         error: executionError || undefined,
       };
     } catch (err) {
