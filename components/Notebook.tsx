@@ -911,7 +911,7 @@ export const Notebook: React.FC = () => {
     if (executionQueue.length === 0) {
       setIsExecutionQueueOpen(false);
     }
-  }, [executionQueue.length, currentFilename]);
+  }, [executionQueue.length]);
 
   // Memoize execution indicator state to avoid O(N) findIndex on every render
   const executionIndicator = useMemo(() => {
