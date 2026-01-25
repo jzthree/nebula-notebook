@@ -903,6 +903,7 @@ export const Notebook: React.FC = () => {
     status: 'completed' | 'error';
     elapsedMs: number;
   } | null>(null);
+  const lastCompletedCellRef = useRef<{ cellId: string; cellIndex: number } | null>(null);
   const cellExecutionStartRef = useRef<number | null>(null); // Track when current cell started
 
   // Close execution queue dropdown when queue becomes empty
@@ -910,7 +911,7 @@ export const Notebook: React.FC = () => {
     if (executionQueue.length === 0) {
       setIsExecutionQueueOpen(false);
     }
-  }, [executionQueue.length]);
+  }, [executionQueue.length, currentFilename]);
 
   // Memoize execution indicator state to avoid O(N) findIndex on every render
   const executionIndicator = useMemo(() => {
@@ -2094,6 +2095,7 @@ export const Notebook: React.FC = () => {
         // Handle error: clear queue and show error indicator
         if (hasError) {
           setExecutionQueue([]); // Clear remaining queue on error
+          lastCompletedCellRef.current = { cellId, cellIndex };
           setLastExecutionResult({
             cellId,
             cellIndex,
@@ -2107,6 +2109,7 @@ export const Notebook: React.FC = () => {
             const remainingQueue = prev.slice(1);
             if (remainingQueue.length === 0) {
               // Queue complete - show success indicator
+              lastCompletedCellRef.current = { cellId, cellIndex };
               setLastExecutionResult({
                 cellId,
                 cellIndex,
@@ -2119,6 +2122,9 @@ export const Notebook: React.FC = () => {
         }
       } else {
         // Non-code cell or cell not found, just mark as done
+        if (cellIndex >= 0) {
+          lastCompletedCellRef.current = { cellId, cellIndex };
+        }
         setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: false } : c));
         setExecutionQueue(prev => prev.slice(1));
       }
@@ -2161,12 +2167,25 @@ export const Notebook: React.FC = () => {
             const minutes = Math.floor(elapsedSeconds / 60);
             const seconds = Math.floor(elapsedSeconds % 60);
             const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+            const lastCell = lastCompletedCellRef.current;
+            const cellLabel = lastCell && lastCell.cellIndex >= 0
+              ? `Cell #${lastCell.cellIndex + 1}`
+              : 'Cell completed';
+            const notebookLabel = currentFilename || 'Untitled';
 
-            new Notification('Nebula Notebook', {
-              body: `Execution completed in ${timeStr}`,
+            const notification = new Notification('Nebula Notebook', {
+              body: `${notebookLabel} - ${cellLabel} - completed in ${timeStr}`,
               icon: '/favicon.svg',
               tag: 'execution-complete', // Prevents duplicate notifications
             });
+            notification.onclick = () => {
+              window.focus();
+              if (lastCell && lastCell.cellIndex >= 0) {
+                setActiveCellId(lastCell.cellId);
+                scrollToCell(lastCell.cellIndex, { behavior: 'auto', retryOnce: true });
+              }
+              notification.close();
+            };
           } else if (Notification.permission === 'default') {
             // Request permission for future notifications
             Notification.requestPermission();
@@ -2178,7 +2197,7 @@ export const Notebook: React.FC = () => {
     }
 
     prevQueueLengthRef.current = currentLength;
-  }, [executionQueue.length]);
+  }, [executionQueue.length, currentFilename, scrollToCell]);
 
   const getKernelDisplayName = () => {
     const kernel = availableKernels.find(k => k.name === currentKernel);
