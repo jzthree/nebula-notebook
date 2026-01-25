@@ -2751,7 +2751,7 @@ export const Notebook: React.FC = () => {
         />
 
         {/* Virtuoso Scrollable Area */}
-        <div className="flex-1 min-h-0 pt-3">
+        <div className="flex-1 min-h-0">
             {/* Force remount when file changes to recalculate cell heights */}
             <VirtualCellList
               key={currentFileId || 'empty'}
