@@ -189,31 +189,34 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       className="flex-none flex flex-col bg-transparent overflow-hidden"
       style={{ height: `${height}px` }}
     >
-      {/* Resize Handle - larger hit area, line at bottom touching header */}
-      <div
-        data-testid="terminal-resize-handle"
-        className="h-2 cursor-ns-resize flex items-end group flex-shrink-0 bg-transparent"
-        onMouseDown={handleResizeStart}
-      >
-        <div className={`w-full h-px ${isResizing ? 'bg-blue-500' : 'bg-slate-200 group-hover:bg-blue-400'}`} />
-      </div>
-
-      {/* Compact Header - z-10 to stay above terminal content, clickable to close */}
-      <div
-        className="flex items-center justify-between px-2 py-0.5 bg-slate-100 border-b border-slate-200 flex-shrink-0 z-10 relative cursor-pointer hover:bg-slate-200 transition-colors"
-        onClick={onClose}
-      >
-        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
-          <Terminal className="w-3 h-3" />
-          <span>{notebookName}</span>
-        </div>
-        <button
-          onClick={onClose}
-          className="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded transition-colors"
-          title="Close"
+      {/* Compact Header with resize handle at top edge */}
+      <div className="relative flex-shrink-0">
+        {/* Resize Handle - overlays top edge of header for larger hit area */}
+        <div
+          data-testid="terminal-resize-handle"
+          className="absolute -top-1 left-0 right-0 h-3 cursor-ns-resize z-20 group"
+          onMouseDown={handleResizeStart}
         >
-          <X className="w-3.5 h-3.5" />
-        </button>
+          <div className={`absolute bottom-0 left-0 right-0 h-px ${isResizing ? 'bg-blue-500' : 'bg-slate-300 group-hover:bg-blue-400'}`} />
+        </div>
+
+        {/* Header bar */}
+        <div
+          className="flex items-center justify-between px-2 py-0.5 bg-slate-100 border-b border-slate-200 z-10 relative cursor-pointer hover:bg-slate-200 transition-colors"
+          onClick={onClose}
+        >
+          <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+            <Terminal className="w-3 h-3" />
+            <span>{notebookName}</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded transition-colors"
+            title="Close"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Terminal Content */}
