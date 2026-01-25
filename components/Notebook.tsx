@@ -2422,19 +2422,24 @@ export const Notebook: React.FC = () => {
                       </div>
 
                       {/* Agent Session Indicator - only shows when session is active */}
-                      {agentSession && (
-                        <span
-                          className="flex items-center gap-1 text-xs mr-2 px-1.5 py-0.5 rounded text-purple-800 bg-purple-200 border border-purple-300"
-                          title={`Agent session active - notebook locked for agent use${agentSession.clientName ? ` (${agentSession.clientName})` : ''}`}
-                        >
-                          <Bot className="w-3 h-3 animate-pulse" />
-                          <span>
-                            {agentOperation
-                              ? agentOperation.type.replace(/([A-Z])/g, ' $1').trim()
-                              : agentSession.clientName || 'Agent'}
+                      {agentSession && (() => {
+                        const shortId = agentSession.agentId?.slice(0, 8) || '';
+                        const displayName = agentSession.clientName || 'Agent';
+                        const fullLabel = shortId ? `${displayName} (${shortId})` : displayName;
+                        return (
+                          <span
+                            className="flex items-center gap-1 text-xs mr-2 px-1.5 py-0.5 rounded text-purple-800 bg-purple-200 border border-purple-300"
+                            title={`Agent session active - notebook locked by ${fullLabel}`}
+                          >
+                            <Bot className="w-3 h-3 animate-pulse" />
+                            <span>
+                              {agentOperation
+                                ? agentOperation.type.replace(/([A-Z])/g, ' $1').trim()
+                                : fullLabel}
+                            </span>
                           </span>
-                        </span>
-                      )}
+                        );
+                      })()}
 
                       {/* Save Status Indicator */}
                       <span className="flex items-center gap-1 text-xs">
