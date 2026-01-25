@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { X, Folder, Bot, Check, Palette, Bell, Volume2, AlignLeft, Hash, Key, Eye, EyeOff, AlertTriangle, Settings, Sparkles } from 'lucide-react';
 import {
   getSettings,
@@ -26,6 +26,11 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
   const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const { toast } = useNotification();
+
+  const persistSettings = useCallback((next: Partial<NebulaSettings>) => {
+    setSettings(prev => ({ ...prev, ...next }));
+    saveSettings(next);
+  }, []);
 
   useEffect(() => {
     try {
@@ -93,7 +98,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
     if (nextEnabled) {
       if (typeof window === 'undefined' || !('Notification' in window)) {
         toast('Browser notifications are not supported in this environment.', 'warning');
-        setSettings(prev => ({ ...prev, notifyOnLongRun: false }));
+        persistSettings({ notifyOnLongRun: false });
         return;
       }
 
@@ -114,7 +119,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
       }
     }
 
-    setSettings(prev => ({ ...prev, notifyOnLongRun: nextEnabled }));
+    persistSettings({ notifyOnLongRun: nextEnabled });
   };
 
   if (!isOpen) return null;
@@ -445,11 +450,14 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                       <label className="text-xs text-slate-600">Threshold:</label>
                       <input
                         type="number"
-                        min="10"
+                        min="1"
                         max="600"
-                        step="10"
+                        step="1"
                         value={settings.notifyThresholdSeconds ?? 60}
-                        onChange={(e) => setSettings({ ...settings, notifyThresholdSeconds: parseInt(e.target.value) || 60 })}
+                        onChange={(e) => {
+                          const nextValue = parseInt(e.target.value, 10);
+                          persistSettings({ notifyThresholdSeconds: Number.isFinite(nextValue) ? nextValue : 60 });
+                        }}
                         className="w-20 px-2 py-1 border border-slate-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
                       <span className="text-xs text-slate-500">seconds</span>
@@ -467,7 +475,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                       </div>
                     </div>
                     <button
-                      onClick={() => setSettings({ ...settings, notifySoundEnabled: !settings.notifySoundEnabled })}
+                      onClick={() => persistSettings({ notifySoundEnabled: !settings.notifySoundEnabled })}
                       className={`relative w-11 h-6 rounded-full transition-colors ${
                         settings.notifySoundEnabled ? 'bg-blue-600' : 'bg-slate-300'
                       }`}

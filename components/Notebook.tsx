@@ -325,6 +325,8 @@ export const Notebook: React.FC = () => {
     executionTime?: number;
     outputs?: Array<{ type: string; content: string }>;
     sessionId?: string;
+    queuePosition?: number;
+    queueLength?: number;
     error?: string;
   }> => {
     // Use ref for current cell state
@@ -359,6 +361,11 @@ export const Notebook: React.FC = () => {
     const maxWait = (options?.maxWait ?? 10) * 1000; // Convert to ms
     const pollInterval = 100; // Poll every 100ms
 
+    const currentQueue = executionQueueRef.current;
+    const existingIndex = currentQueue.indexOf(cellId);
+    const queuePosition = existingIndex >= 0 ? existingIndex : currentQueue.length;
+    const queueLength = existingIndex >= 0 ? currentQueue.length : currentQueue.length + 1;
+
     // Add to execution queue - this triggers the existing UI execution logic
     // The useEffect execution processor will handle the actual execution
     setExecutionQueue(prev => prev.includes(cellId) ? prev : [...prev, cellId]);
@@ -380,6 +387,8 @@ export const Notebook: React.FC = () => {
             error: 'Cell was deleted during execution',
             executionTime: elapsed,
             sessionId: effectiveSessionId,
+            queuePosition,
+            queueLength,
           });
           return;
         }
@@ -400,6 +409,8 @@ export const Notebook: React.FC = () => {
             executionTime: elapsed,
             outputs: currentCell.outputs.map(o => ({ type: o.type, content: o.content })),
             sessionId: effectiveSessionId,
+            queuePosition,
+            queueLength,
           });
           return;
         }
@@ -413,6 +424,8 @@ export const Notebook: React.FC = () => {
             executionTime: elapsed,
             outputs: currentCell.outputs.map(o => ({ type: o.type, content: o.content })),
             sessionId: effectiveSessionId,
+            queuePosition,
+            queueLength,
           });
           return;
         }
@@ -518,6 +531,7 @@ export const Notebook: React.FC = () => {
   // FIFO queue for cells (separate from clipboard) - enqueue with 'e', dequeue with 'd'
   const [cellQueue, setCellQueue] = useState<CellClipboardItem[]>([]);
   const cellQueueRef = useRef<CellClipboardItem[]>([]);
+  const executionQueueRef = useRef<string[]>([]);
 
   const cellsRef = useRef<Cell[]>(cells);
   const activeCellIdRef = useRef<string | null>(activeCellId);
@@ -927,6 +941,7 @@ export const Notebook: React.FC = () => {
     executionQueue.forEach((id, idx) => map.set(id, idx));
     return map;
   }, [executionQueue]);
+  executionQueueRef.current = executionQueue;
   queuePositionMapRef.current = queuePositionMap;
 
   // Timer to update elapsed time while execution is in progress
@@ -2163,7 +2178,9 @@ export const Notebook: React.FC = () => {
 
         // Send browser notification if enabled
         if (settings.notifyOnLongRun) {
-          if (Notification.permission === 'granted') {
+          if (typeof window === 'undefined' || !('Notification' in window)) {
+            // Notification API not available in this environment
+          } else if (Notification.permission === 'granted') {
             const minutes = Math.floor(elapsedSeconds / 60);
             const seconds = Math.floor(elapsedSeconds % 60);
             const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
@@ -2172,11 +2189,12 @@ export const Notebook: React.FC = () => {
               ? `Cell #${lastCell.cellIndex + 1}`
               : 'Cell completed';
             const notebookLabel = currentFilename || 'Untitled';
-
             const notification = new Notification('Nebula Notebook', {
               body: `${notebookLabel} - ${cellLabel} - completed in ${timeStr}`,
               icon: '/favicon.svg',
               tag: 'execution-complete', // Prevents duplicate notifications
+              renotify: true,
+              requireInteraction: true,
             });
             notification.onclick = () => {
               window.focus();
@@ -2189,6 +2207,8 @@ export const Notebook: React.FC = () => {
           } else if (Notification.permission === 'default') {
             // Request permission for future notifications
             Notification.requestPermission();
+          } else {
+            // Permission denied - do nothing
           }
         }
       }
