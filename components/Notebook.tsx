@@ -2426,10 +2426,20 @@ export const Notebook: React.FC = () => {
                         const shortId = agentSession.agentId?.slice(0, 8) || '';
                         const displayName = agentSession.clientName || 'Agent';
                         const fullLabel = shortId ? `${displayName} (${shortId})` : displayName;
+                        const durationSec = Math.floor((Date.now() - agentSession.startedAt) / 1000);
+                        const durationStr = durationSec < 60
+                          ? `${durationSec}s`
+                          : `${Math.floor(durationSec / 60)}m ${durationSec % 60}s`;
+                        const tooltipLines = [
+                          `🤖 Agent Session Active`,
+                          `Client: ${agentSession.clientName || 'Unknown'}${agentSession.clientVersion ? ` v${agentSession.clientVersion}` : ''}`,
+                          `Session ID: ${agentSession.agentId || 'N/A'}`,
+                          `Duration: ${durationStr}`,
+                        ];
                         return (
                           <span
-                            className="flex items-center gap-1 text-xs mr-2 px-1.5 py-0.5 rounded text-purple-800 bg-purple-200 border border-purple-300"
-                            title={`Agent session active - notebook locked by ${fullLabel}`}
+                            className="flex items-center gap-1 text-xs mr-2 px-1.5 py-0.5 rounded text-purple-800 bg-purple-200 border border-purple-300 cursor-help"
+                            title={tooltipLines.join('\n')}
                           >
                             <Bot className="w-3 h-3 animate-pulse" />
                             <span>
