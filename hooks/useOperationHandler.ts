@@ -157,6 +157,14 @@ export interface ReadCellOutputOp {
   cellIndex?: number;
 }
 
+export interface SearchCellsOp {
+  type: 'searchCells';
+  notebookPath: string;
+  query: string;
+  includeOutputs?: boolean;
+  limit?: number;
+}
+
 export interface ClearNotebookOp {
   type: 'clearNotebook';
   notebookPath: string;
@@ -214,6 +222,7 @@ export type NotebookOperation =
   | CreateNotebookOp
   | ReadCellOp
   | ReadCellOutputOp
+  | SearchCellsOp
   | ClearNotebookOp
   | ClearOutputsOp
   | ExecuteCellOp
@@ -241,6 +250,19 @@ export interface OperationResult {
   // For readCellOutput operation
   outputs?: Array<{ type: string; content: string }>;
   executionCount?: number;
+  // For searchCells operation
+  query?: string;
+  matchCount?: number;
+  matches?: Array<{
+    cellId: string;
+    cellIndex: number;
+    matchLocation: 'source' | 'output';
+    matchLine?: number;
+    outputIndex?: number;
+    outputType?: string;
+    preview: string;
+  }>;
+  hasMore?: boolean;
   // For clearNotebook operation
   deletedCount?: number;
   // For clearOutputs operation
@@ -812,6 +834,66 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             cellIndex: targetIndex,
             outputs: cell.outputs.map(o => ({ type: o.type, content: o.content })),
             executionCount: cell.executionCount,
+          };
+        }
+
+        case 'searchCells': {
+          const { query, includeOutputs = false, limit = 10 } = operation as SearchCellsOp;
+
+          if (!query) {
+            return { success: false, error: 'No search query provided' };
+          }
+
+          const queryLower = query.toLowerCase();
+          const matches: NonNullable<OperationResult['matches']> = [];
+
+          for (let i = 0; i < currentCells.length && matches.length < limit; i++) {
+            const cell = currentCells[i];
+            const content = cell.content || '';
+
+            if (content.toLowerCase().includes(queryLower)) {
+              const lines = content.split('\n');
+              let matchLine: number | null = null;
+              for (let j = 0; j < lines.length; j++) {
+                if (lines[j].toLowerCase().includes(queryLower)) {
+                  matchLine = j;
+                  break;
+                }
+              }
+
+              matches.push({
+                cellId: cell.id,
+                cellIndex: i,
+                matchLocation: 'source',
+                matchLine: matchLine ?? undefined,
+                preview: content.slice(0, 200) + (content.length > 200 ? '...' : ''),
+              });
+            }
+
+            if (includeOutputs) {
+              for (let j = 0; j < (cell.outputs || []).length; j++) {
+                const output = cell.outputs[j];
+                const outContent = output.content || '';
+                if (outContent.toLowerCase().includes(queryLower)) {
+                  matches.push({
+                    cellId: cell.id,
+                    cellIndex: i,
+                    matchLocation: 'output',
+                    outputIndex: j,
+                    outputType: output.type || 'unknown',
+                    preview: outContent.slice(0, 200) + (outContent.length > 200 ? '...' : ''),
+                  });
+                }
+              }
+            }
+          }
+
+          return {
+            success: true,
+            query,
+            matchCount: matches.length,
+            matches: matches.slice(0, limit),
+            hasMore: matches.length > limit,
           };
         }
 
