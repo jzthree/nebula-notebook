@@ -12,7 +12,7 @@
     "node-server": "cd node-server && npm run dev",
     "node-server:build": "cd node-server && npm run build",
     "setup": "node setup.cjs",
-    "postinstall": "cd node-server && npm install || echo '⚠️  Node server install failed (node-pty requires native compilation). Terminal feature will be unavailable.'",
+    "postinstall": "cd node-server && npm install || echo '⚠️  Node server install failed. Terminal feature will be unavailable.'",
     "prestart": "node setup.cjs",
     "start": "concurrently --kill-others --kill-signal SIGTERM --raw \"npm run server\" \"npm run node-server || true\" \"npm run dev\"",
     "start:prod": "npm run build && npm run server:prod",
