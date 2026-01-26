@@ -36,10 +36,11 @@ import { useConflictResolution } from '../hooks/useConflictResolution';
 import { detectIndentationFromCells, IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 import { getNotebookAvatar, updateFavicon, resetFavicon } from '../utils/notebookAvatar';
 import { playSuccessSound } from '../utils/notificationSound';
+import { generateCellId } from '../utils/cellId';
 
 // Initial cell for reset
 const INITIAL_CELL: Cell = {
-  id: crypto.randomUUID(),
+  id: generateCellId(),
   type: 'code',
   content: '',
   outputs: [],
@@ -198,6 +199,7 @@ export const Notebook: React.FC = () => {
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
   const [showLineNumbers, setShowLineNumbers] = useState<boolean>(() => getSettings().showLineNumbers ?? false);
+  const [showCellIds, setShowCellIds] = useState<boolean>(() => getSettings().showCellIds ?? false);
 
   // Conflict resolution hook
   // Note: When loading remote version during conflict, we initialize fresh history
@@ -1362,6 +1364,7 @@ export const Notebook: React.FC = () => {
     refreshFileList();
     const settings = getSettings();
     setShowLineNumbers(settings.showLineNumbers ?? false);
+    setShowCellIds(settings.showCellIds ?? false);
   }, []);
 
   // Get current notebook filename (without extension)
@@ -1678,9 +1681,9 @@ export const Notebook: React.FC = () => {
 
     const currentCells = cellsRef.current;
     const existingIds = new Set(currentCells.map(c => c.id));
-    let newId = crypto.randomUUID();
+    let newId = generateCellId();
     while (existingIds.has(newId)) {
-      newId = crypto.randomUUID();
+      newId = generateCellId();
     }
 
     const newCell: Cell = {
@@ -2477,11 +2480,11 @@ export const Notebook: React.FC = () => {
                         ];
                         return (
                           <span
-                            className="flex items-center gap-1 text-xs mr-2 px-1.5 py-0.5 rounded text-purple-800 bg-purple-200 border border-purple-300 cursor-help"
+                            className="flex items-center gap-1 text-xs mr-2 px-1.5 py-0.5 rounded text-purple-800 bg-purple-200 border border-purple-300 cursor-help max-w-[240px]"
                             title={tooltipLines.join('\n')}
                           >
-                            <Bot className="w-3 h-3 animate-pulse" />
-                            <span>
+                            <Bot className="w-3 h-3 animate-pulse flex-shrink-0" />
+                            <span className="min-w-0 truncate">
                               {agentOperation
                                 ? agentOperation.type.replace(/([A-Z])/g, ' $1').trim()
                                 : fullLabel}
@@ -2798,7 +2801,7 @@ export const Notebook: React.FC = () => {
               virtuosoRef={virtuosoRef}
               className="h-full"
               onRangeChange={handleRangeChange}
-              renderKey={showLineNumbers ? 'line-numbers-on' : 'line-numbers-off'}
+              renderKey={`${showLineNumbers ? 'line-numbers-on' : 'line-numbers-off'}-${showCellIds ? 'cell-ids-on' : 'cell-ids-off'}`}
               renderCell={(cell, idx) => (
                   <CellComponent
                   key={cell.id}
@@ -2831,6 +2834,7 @@ export const Notebook: React.FC = () => {
                   isSearchOpen={isSearchOpen}
                   onCloseSearch={handleSearchClose}
                   showLineNumbers={showLineNumbers}
+                  showCellIds={showCellIds}
                 />
               )}
             />

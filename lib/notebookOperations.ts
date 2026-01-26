@@ -16,6 +16,7 @@
  */
 
 import { Cell, CellType } from '../types';
+import { generateCellId } from '../utils/cellId';
 import { Patch, applyPatch, reversePatch, hashNotebookState } from './diffUtils';
 
 // ============================================================================
@@ -370,7 +371,7 @@ export function validateHistory(history: HistoryEntry[]): { valid: boolean; erro
 
 export function createCell(type: CellType = 'code', content: string = ''): Cell {
   return {
-    id: crypto.randomUUID(),
+    id: generateCellId(),
     type,
     content,
     outputs: [],

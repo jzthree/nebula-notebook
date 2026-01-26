@@ -444,6 +444,7 @@ export interface NebulaSettings {
   notifySoundEnabled?: boolean; // Play sound when long-running jobs complete
   indentation?: IndentationPreference; // Indentation style: 'auto' (detect), '2', '4', '8', or 'tab'
   showLineNumbers?: boolean; // Show line numbers in code cells
+  showCellIds?: boolean; // Show cell IDs in the cell header
   // API Keys (stored in localStorage - use with caution on shared machines)
   apiKeys?: {
     google?: string;    // Gemini API key
@@ -471,7 +472,8 @@ export const getSettings = (): NebulaSettings => {
     notifyOnLongRun: true,
     notifySoundEnabled: true,
     notifyThresholdSeconds: 60,
-    indentation: 'auto'
+    indentation: 'auto',
+    showCellIds: false
   };
 };
 

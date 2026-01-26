@@ -249,6 +249,34 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                     </button>
                   </div>
                 </div>
+
+                {/* Cell IDs */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                    <Hash className="w-4 h-4" />
+                    Cell IDs
+                  </label>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                    <div className="flex-1">
+                      <p className="text-sm text-slate-700">Show Cell IDs</p>
+                      <p className="text-xs text-slate-500">
+                        Display cell IDs in the header (advanced)
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setSettings({ ...settings, showCellIds: !settings.showCellIds })}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        settings.showCellIds ? 'bg-blue-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          settings.showCellIds ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
               </>
             )}
 

@@ -442,8 +442,11 @@ describe('Notebook', () => {
         expect(screen.getByText('#3')).toBeInTheDocument();
       });
 
-      expect(getOrderedCellIds()).toEqual(['cell-1', 'new-cell-1', 'cell-2']);
-      expect(screen.getByTestId('cell-content-new-cell-1')).toHaveTextContent('print("hello")');
+      const orderedIds = getOrderedCellIds();
+      const insertedId = orderedIds.find(id => id !== 'cell-1' && id !== 'cell-2');
+      expect(insertedId).toBeTruthy();
+      expect(orderedIds).toEqual(['cell-1', insertedId!, 'cell-2']);
+      expect(screen.getByTestId(`cell-content-${insertedId}`)).toHaveTextContent('print("hello")');
     });
 
     it('pressing "Shift+V" pastes cell above focused cell', async () => {
@@ -470,8 +473,11 @@ describe('Notebook', () => {
         expect(screen.getByText('#3')).toBeInTheDocument();
       });
 
-      expect(getOrderedCellIds()).toEqual(['new-cell-1', 'cell-1', 'cell-2']);
-      expect(screen.getByTestId('cell-content-new-cell-1')).toHaveTextContent('x = 1');
+      const orderedIds = getOrderedCellIds();
+      const insertedId = orderedIds.find(id => id !== 'cell-1' && id !== 'cell-2');
+      expect(insertedId).toBeTruthy();
+      expect(orderedIds).toEqual([insertedId!, 'cell-1', 'cell-2']);
+      expect(screen.getByTestId(`cell-content-${insertedId}`)).toHaveTextContent('x = 1');
     });
 
     it('paste works multiple times after copy', async () => {

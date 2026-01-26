@@ -46,6 +46,7 @@ interface Props {
   isSearchOpen?: boolean; // When true, Escape closes search instead of exiting edit mode
   onCloseSearch?: () => void; // Close search bar
   showLineNumbers?: boolean; // Show line numbers in editor
+  showCellIds?: boolean; // Show cell IDs in the cell header
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -78,6 +79,7 @@ const CellComponent: React.FC<Props> = ({
   isSearchOpen = false,
   onCloseSearch,
   showLineNumbers = false,
+  showCellIds = false,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -356,6 +358,14 @@ const CellComponent: React.FC<Props> = ({
           <span className="text-[10px] font-mono font-bold text-slate-400 min-w-[24px]">
             #{index + 1}
           </span>
+          {showCellIds && (
+            <span
+              className="text-[10px] font-mono text-slate-300 truncate max-w-[180px]"
+              title={cell.id}
+            >
+              {cell.id}
+            </span>
+          )}
           {/* Execution feedback: [ ] = never run, [*] = executing/queued, [n] = executed n times */}
           {cell.isExecuting ? (
             <span className="text-[10px] font-mono text-amber-600 animate-pulse" title="Executing...">
