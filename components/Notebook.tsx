@@ -4,7 +4,7 @@ import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
 import { getSettings, saveSettings, IndentationPreference } from '../services/llmService';
-import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal } from 'lucide-react';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -16,6 +16,8 @@ import {
   loadNotebookHistory,
   loadNotebookSession,
   saveNotebookSession,
+  saveNotebookCells,
+  saveNotebookHistory,
   getAgentPermissionStatus,
   setAgentPermission,
   AgentPermissionStatus
@@ -23,6 +25,8 @@ import {
 import { FileBrowser } from './FileBrowser';
 import { AIChatSidebar } from './AIChatSidebar';
 import { TerminalPanel } from './TerminalPanel';
+import { HistoryPanel } from './HistoryPanel';
+import { RestoreDialog } from './RestoreDialog';
 import { VirtualCellList } from './VirtualCellList';
 import { useUndoRedo } from '../hooks/useUndoRedo';
 import { useOperationHandler } from '../hooks/useOperationHandler';
@@ -37,6 +41,7 @@ import { detectIndentationFromCells, IndentationConfig, DEFAULT_INDENTATION } fr
 import { getNotebookAvatar, updateFavicon, resetFavicon } from '../utils/notebookAvatar';
 import { playSuccessSound } from '../utils/notificationSound';
 import { generateCellId } from '../utils/cellId';
+import { reconstructStateAt, HistoryEntry } from '../lib/notebookOperations';
 
 // Initial cell for reset
 const INITIAL_CELL: Cell = {
@@ -112,6 +117,11 @@ export const Notebook: React.FC = () => {
   const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  // History preview - timestamp of the point in history to preview (null = present)
+  const [previewTimestamp, setPreviewTimestamp] = useState<number | null>(null);
+  // Restore dialog state
+  const [restoreDialogTimestamp, setRestoreDialogTimestamp] = useState<number | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isKernelManagerOpen, setIsKernelManagerOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -195,6 +205,44 @@ export const Notebook: React.FC = () => {
     getUnflushedState,
     setUnflushedState,
   } = useUndoRedo([]);  // Start with empty cells
+
+  // Compute preview cells when viewing history
+  const previewCells = useMemo(() => {
+    if (!previewTimestamp) return null;
+    const history = getFullHistory();
+    // Cast to HistoryEntry[] - types are structurally compatible
+    const state = reconstructStateAt(history as unknown as HistoryEntry[], previewTimestamp);
+    return state?.cells ?? null;
+  }, [previewTimestamp, getFullHistory]);
+
+  // Cells to display - either preview or current
+  const displayCells = previewCells ?? cells;
+  const isPreviewMode = previewTimestamp !== null;
+
+  // Compute diff between preview and current for highlighting
+  // 'same' = unchanged, 'modified' = content differs, 'deleted' = exists in preview but not current
+  type CellDiffStatus = 'same' | 'modified' | 'deleted';
+  const previewDiffMap = useMemo(() => {
+    const map = new Map<string, CellDiffStatus>();
+    if (!previewCells) return map;
+
+    const currentCellMap = new Map(cells.map(c => [c.id, c]));
+
+    for (const previewCell of previewCells) {
+      const currentCell = currentCellMap.get(previewCell.id);
+      if (!currentCell) {
+        // Cell was deleted after this point in history
+        map.set(previewCell.id, 'deleted');
+      } else if (currentCell.content !== previewCell.content || currentCell.type !== previewCell.type) {
+        // Cell content or type changed
+        map.set(previewCell.id, 'modified');
+      } else {
+        map.set(previewCell.id, 'same');
+      }
+    }
+
+    return map;
+  }, [previewCells, cells]);
 
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
@@ -1589,6 +1637,136 @@ export const Notebook: React.FC = () => {
     handleManualSaveRef.current = handleManualSave;
   }, [handleManualSave]);
 
+  // --- RESTORE OPERATIONS ---
+
+  // Generate a suggested filename for restored notebook
+  const generateRestoredFilename = useCallback((originalPath: string, timestamp: number): string => {
+    const date = new Date(timestamp);
+    const dateStr = date.toISOString().slice(0, 10); // YYYY-MM-DD
+    const timeStr = date.toTimeString().slice(0, 5).replace(':', ''); // HHMM
+
+    // Extract directory and filename from path
+    const lastSlash = originalPath.lastIndexOf('/');
+    const dir = lastSlash >= 0 ? originalPath.slice(0, lastSlash) : '';
+    const filename = lastSlash >= 0 ? originalPath.slice(lastSlash + 1) : originalPath;
+    const baseName = filename.replace(/\.ipynb$/, '');
+
+    return `${dir}/${baseName}_restored_${dateStr}_${timeStr}.ipynb`;
+  }, []);
+
+  // Handle "Restore Here" - generates new operations to transform current to target state
+  const handleRestoreHere = useCallback(async () => {
+    if (!restoreDialogTimestamp || !previewCells) return;
+
+    // Flush any pending edits first
+    flushActiveCell();
+    commitHistoryBeforeKeyframe();
+
+    // Build maps for efficient lookup
+    const currentMap = new Map(cells.map((c, i) => [c.id, { cell: c, index: i }]));
+    const previewMap = new Map(previewCells.map((c, i) => [c.id, { cell: c, index: i }]));
+
+    // Compute operations needed to transform current → preview
+    // Strategy: Use batch of operations to do this atomically
+
+    // 1. Delete cells that don't exist in preview (in reverse order to preserve indices)
+    const cellsToDelete: { id: string; index: number }[] = [];
+    for (const [id, { index }] of currentMap) {
+      if (!previewMap.has(id)) {
+        cellsToDelete.push({ id, index });
+      }
+    }
+    // Sort by index descending so we delete from end first
+    cellsToDelete.sort((a, b) => b.index - a.index);
+    for (const { index } of cellsToDelete) {
+      undoableDeleteCell(index);
+    }
+
+    // 2. Update content for cells that exist in both but have different content
+    // Need to re-compute current indices after deletions
+    const remainingCells = cells.filter(c => previewMap.has(c.id));
+    for (const currentCell of remainingCells) {
+      const previewData = previewMap.get(currentCell.id);
+      if (previewData && (currentCell.content !== previewData.cell.content || currentCell.type !== previewData.cell.type)) {
+        // Update content
+        updateContent(currentCell.id, previewData.cell.content);
+        // Update type if different
+        if (currentCell.type !== previewData.cell.type) {
+          changeType(currentCell.id, previewData.cell.type);
+        }
+      }
+    }
+
+    // 3. Insert cells that exist in preview but not in current
+    // We need to insert them at the correct positions according to preview order
+    const currentCellIds = new Set(cells.map(c => c.id));
+    const cellsToInsert: { cell: Cell; targetIndex: number }[] = [];
+    previewCells.forEach((previewCell, targetIndex) => {
+      if (!currentCellIds.has(previewCell.id)) {
+        cellsToInsert.push({
+          cell: {
+            ...previewCell,
+            outputs: [], // Don't restore outputs
+            isExecuting: false,
+          },
+          targetIndex
+        });
+      }
+    });
+
+    // Insert in order (adjusting indices as we go)
+    let insertionOffset = 0;
+    for (const { cell, targetIndex } of cellsToInsert) {
+      undoableInsertCell(targetIndex + insertionOffset, cell);
+      insertionOffset++;
+    }
+
+    // Clear preview mode and close dialog
+    setPreviewTimestamp(null);
+    setRestoreDialogTimestamp(null);
+
+    toast('Notebook restored to previous state', 'success', 2000);
+  }, [restoreDialogTimestamp, previewCells, cells, flushActiveCell, commitHistoryBeforeKeyframe, undoableDeleteCell, updateContent, changeType, undoableInsertCell, toast]);
+
+  // Handle "Save as New File" - creates new file with truncated history
+  const handleSaveAsNew = useCallback(async () => {
+    if (!restoreDialogTimestamp || !previewCells || !currentFileId) return;
+
+    try {
+      // Generate new filename
+      const newPath = generateRestoredFilename(currentFileId, restoreDialogTimestamp);
+
+      // Get truncated history (all entries up to and including target timestamp)
+      const fullHistory = getFullHistory();
+      const truncatedHistory = fullHistory.filter(entry => entry.timestamp <= restoreDialogTimestamp);
+
+      // Clear outputs from cells (they won't be valid after restore)
+      const cellsToSave = previewCells.map(cell => ({
+        ...cell,
+        outputs: [],
+        isExecuting: false,
+      }));
+
+      // Save the new notebook with truncated history
+      await saveNotebookCells(newPath, cellsToSave, currentKernel || undefined, truncatedHistory);
+
+      // Also save the history file separately (in case the combined save doesn't handle it)
+      await saveNotebookHistory(newPath, truncatedHistory);
+
+      // Clear preview mode and close dialog
+      setPreviewTimestamp(null);
+      setRestoreDialogTimestamp(null);
+
+      // Refresh file list to show new file
+      await refreshFileList();
+
+      toast(`Saved restored notebook to ${newPath.split('/').pop()}`, 'success', 3000);
+    } catch (error) {
+      console.error('Failed to save restored notebook:', error);
+      toast('Failed to save restored notebook', 'error');
+    }
+  }, [restoreDialogTimestamp, previewCells, currentFileId, generateRestoredFilename, getFullHistory, currentKernel, toast, refreshFileList]);
+
   // Toggle agent permission for the notebook
   const handleToggleAgentPermission = useCallback(async () => {
     if (!currentFileId) return;
@@ -2792,25 +2970,57 @@ export const Notebook: React.FC = () => {
           onNavigate={navigateToCell}
         />
 
+        {/* History Preview Banner */}
+        {isPreviewMode && (
+          <div className="px-3 py-2 bg-blue-50 border-b border-blue-200 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm text-blue-700">
+              <History className="w-4 h-4" />
+              <span>
+                Previewing notebook at{' '}
+                <span className="font-medium">
+                  {new Date(previewTimestamp!).toLocaleString()}
+                </span>
+              </span>
+              <span className="text-blue-500 text-xs">(read-only, outputs not shown)</span>
+              <span className="flex items-center gap-3 ml-4 text-xs">
+                <span className="flex items-center gap-1">
+                  <span className="w-3 h-3 rounded border-2 border-orange-400 bg-orange-50"></span>
+                  <span className="text-slate-500">Modified</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-3 h-3 rounded border-2 border-red-400 bg-red-50"></span>
+                  <span className="text-slate-500">Deleted</span>
+                </span>
+              </span>
+            </div>
+            <button
+              onClick={() => setPreviewTimestamp(null)}
+              className="flex items-center gap-1.5 px-3 py-1 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded transition-colors"
+            >
+              Return to present
+            </button>
+          </div>
+        )}
+
         {/* Virtuoso Scrollable Area */}
         <div className="flex-1 min-h-0">
             {/* Force remount when file changes to recalculate cell heights */}
             <VirtualCellList
               key={currentFileId || 'empty'}
-              cells={cells}
+              cells={displayCells}
               virtuosoRef={virtuosoRef}
               className="h-full"
               onRangeChange={handleRangeChange}
-              renderKey={`${showLineNumbers ? 'line-numbers-on' : 'line-numbers-off'}-${showCellIds ? 'cell-ids-on' : 'cell-ids-off'}`}
+              renderKey={`${showLineNumbers ? 'line-numbers-on' : 'line-numbers-off'}-${showCellIds ? 'cell-ids-on' : 'cell-ids-off'}-${isPreviewMode ? 'preview' : 'live'}`}
               renderCell={(cell, idx) => (
                   <CellComponent
                   key={cell.id}
                   cell={cell}
                   index={idx}
-                  isActive={activeCellId === cell.id}
+                  isActive={!isPreviewMode && activeCellId === cell.id}
                   isHighlighted={highlightedCellIds.has(cell.id)}
-                  isLocked={agentSession !== null}
-                  allCells={cells}
+                  isLocked={agentSession !== null || isPreviewMode}
+                  allCells={displayCells}
                   onUpdate={handleUpdateCell}
                   onAIUpdate={handleAIUpdateCell}
                   onFlush={flushCell}
@@ -2835,6 +3045,7 @@ export const Notebook: React.FC = () => {
                   onCloseSearch={handleSearchClose}
                   showLineNumbers={showLineNumbers}
                   showCellIds={showCellIds}
+                  previewDiffStatus={isPreviewMode ? previewDiffMap.get(cell.id) : undefined}
                 />
               )}
             />
@@ -2846,6 +3057,31 @@ export const Notebook: React.FC = () => {
           onClose={() => setIsTerminalOpen(false)}
           notebookPath={currentFileId}
         />
+
+        {/* History Panel - toggle with ?history=true or status bar */}
+        <HistoryPanel
+          isOpen={isHistoryOpen}
+          onClose={() => setIsHistoryOpen(false)}
+          history={getFullHistory()}
+          onPreview={setPreviewTimestamp}
+          onExitPreview={() => setPreviewTimestamp(null)}
+          previewTimestamp={previewTimestamp}
+          onRequestRestore={setRestoreDialogTimestamp}
+        />
+
+        {/* Restore Dialog */}
+        {restoreDialogTimestamp && previewCells && (
+          <RestoreDialog
+            isOpen={true}
+            onClose={() => setRestoreDialogTimestamp(null)}
+            targetTimestamp={restoreDialogTimestamp}
+            currentCells={cells}
+            previewCells={previewCells}
+            onRestoreHere={handleRestoreHere}
+            onSaveAsNew={handleSaveAsNew}
+            suggestedFilename={currentFileId ? generateRestoredFilename(currentFileId, restoreDialogTimestamp) : undefined}
+          />
+        )}
 
         {/* Status Bar */}
         <div className="h-6 flex items-center justify-between px-2 bg-slate-100 dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-400 select-none shrink-0">
@@ -2862,6 +3098,18 @@ export const Notebook: React.FC = () => {
             >
               <Terminal className="w-3 h-3" />
               <span>Terminal</span>
+            </button>
+            <button
+              onClick={() => setIsHistoryOpen(!isHistoryOpen)}
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-colors ${
+                isHistoryOpen
+                  ? 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                  : 'hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+              title="Toggle History Panel"
+            >
+              <History className="w-3 h-3" />
+              <span>History</span>
             </button>
           </div>
 

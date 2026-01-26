@@ -47,6 +47,7 @@ interface Props {
   onCloseSearch?: () => void; // Close search bar
   showLineNumbers?: boolean; // Show line numbers in editor
   showCellIds?: boolean; // Show cell IDs in the cell header
+  previewDiffStatus?: 'same' | 'modified' | 'deleted'; // For history preview: how this cell differs from current
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -80,6 +81,7 @@ const CellComponent: React.FC<Props> = ({
   onCloseSearch,
   showLineNumbers = false,
   showCellIds = false,
+  previewDiffStatus,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -254,10 +256,14 @@ const CellComponent: React.FC<Props> = ({
   // - editor (blue): CodeMirror has focus, handles keyboard
   // - cell (green): cell div has focus, cell-level commands
   // - none (slate): unfocused
+  // In preview mode, show diff highlighting
   const getBorderClass = () => {
     if (hasError) return 'border-red-200';
     if (focusState === 'editor') return 'border-blue-400 ring-1 ring-blue-100';
     if (focusState === 'cell') return 'border-green-500 ring-1 ring-green-100';
+    // Preview diff highlighting
+    if (previewDiffStatus === 'modified') return 'border-orange-400 ring-2 ring-orange-100 bg-orange-50/30';
+    if (previewDiffStatus === 'deleted') return 'border-red-400 ring-2 ring-red-100 bg-red-50/30';
     return 'border-slate-200 hover:border-slate-300';
   };
 
@@ -553,10 +559,12 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     prevProps.index === nextProps.index &&
     prevProps.isActive === nextProps.isActive &&
     prevProps.isHighlighted === nextProps.isHighlighted &&
+    prevProps.isLocked === nextProps.isLocked &&
     prevProps.searchHighlight === nextProps.searchHighlight &&
     prevProps.queuePosition === nextProps.queuePosition &&
     prevProps.indentConfig === nextProps.indentConfig &&
     prevProps.requestedFocusMode === nextProps.requestedFocusMode &&
-    prevProps.isSearchOpen === nextProps.isSearchOpen
+    prevProps.isSearchOpen === nextProps.isSearchOpen &&
+    prevProps.previewDiffStatus === nextProps.previewDiffStatus
   );
 });
