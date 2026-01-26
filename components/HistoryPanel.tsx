@@ -555,7 +555,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
           <div className="flex items-center gap-2 text-xs text-blue-700">
             <Eye className="w-3.5 h-3.5" />
             <span>Previewing: {formatTime(previewTimestamp)}</span>
-            <span className="text-blue-500">(outputs not shown)</span>
+            <span className="text-blue-500">(outputs preserved if not re-executed)</span>
           </div>
           <div className="flex items-center gap-2">
             {onRequestRestore && (

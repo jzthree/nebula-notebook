@@ -207,6 +207,7 @@ export const Notebook: React.FC = () => {
   } = useUndoRedo([]);  // Start with empty cells
 
   // Compute preview cells when viewing history
+  // Reconstruct cells at preview timestamp
   const previewCells = useMemo(() => {
     if (!previewTimestamp) return null;
     const history = getFullHistory();
@@ -215,9 +216,44 @@ export const Notebook: React.FC = () => {
     return state?.cells ?? null;
   }, [previewTimestamp, getFullHistory]);
 
-  // Cells to display - either preview or current
-  const displayCells = previewCells ?? cells;
   const isPreviewMode = previewTimestamp !== null;
+
+  // Map of current cells for O(1) lookup - reused by multiple computations
+  const currentCellMap = useMemo(() =>
+    new Map(cells.map(c => [c.id, c])),
+  [cells]);
+
+  // Set of cell IDs that were executed after the preview timestamp
+  // If a cell wasn't re-run, its current outputs are still valid for preview
+  const cellsExecutedAfterPreview = useMemo(() => {
+    if (!previewTimestamp) return new Set<string>();
+
+    const executed = new Set<string>();
+    const history = getFullHistory();
+
+    for (const entry of history) {
+      if (entry.timestamp > previewTimestamp && entry.type === 'runCell') {
+        executed.add((entry as any).cellId);
+      }
+    }
+    return executed;
+  }, [previewTimestamp, getFullHistory]);
+
+  // Cells to display - preview cells with preserved outputs where possible
+  const displayCells = useMemo(() => {
+    if (!previewCells) return cells;
+
+    return previewCells.map(previewCell => {
+      const currentCell = currentCellMap.get(previewCell.id);
+
+      // Preserve outputs if cell exists and wasn't re-run after preview point
+      if (currentCell && !cellsExecutedAfterPreview.has(previewCell.id)) {
+        return { ...previewCell, outputs: currentCell.outputs };
+      }
+
+      return previewCell;
+    });
+  }, [previewCells, cells, currentCellMap, cellsExecutedAfterPreview]);
 
   // Compute diff between preview and current for highlighting
   // 'same' = unchanged, 'modified' = content differs, 'deleted' = exists in preview but not current
@@ -225,8 +261,6 @@ export const Notebook: React.FC = () => {
   const previewDiffMap = useMemo(() => {
     const map = new Map<string, CellDiffStatus>();
     if (!previewCells) return map;
-
-    const currentCellMap = new Map(cells.map(c => [c.id, c]));
 
     for (const previewCell of previewCells) {
       const currentCell = currentCellMap.get(previewCell.id);
@@ -242,7 +276,7 @@ export const Notebook: React.FC = () => {
     }
 
     return map;
-  }, [previewCells, cells]);
+  }, [previewCells, currentCellMap]);
 
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
@@ -1740,12 +1774,26 @@ export const Notebook: React.FC = () => {
       const fullHistory = getFullHistory();
       const truncatedHistory = fullHistory.filter(entry => entry.timestamp <= restoreDialogTimestamp);
 
-      // Clear outputs from cells (they won't be valid after restore)
-      const cellsToSave = previewCells.map(cell => ({
-        ...cell,
-        outputs: [],
-        isExecuting: false,
-      }));
+      // Find cells that were executed after restore point - their outputs are stale
+      const cellsExecutedAfter = new Set<string>();
+      for (const entry of fullHistory) {
+        if (entry.timestamp > restoreDialogTimestamp && entry.type === 'runCell') {
+          cellsExecutedAfter.add((entry as any).cellId);
+        }
+      }
+
+      // Preserve outputs for cells that weren't re-executed after restore point
+      const cellsToSave = previewCells.map(cell => {
+        const currentCell = currentCellMap.get(cell.id);
+
+        // If cell exists in current state and wasn't re-run, preserve its outputs
+        if (currentCell && !cellsExecutedAfter.has(cell.id)) {
+          return { ...cell, outputs: currentCell.outputs, isExecuting: false };
+        }
+
+        // Otherwise clear outputs (cell was re-run or doesn't exist)
+        return { ...cell, outputs: [], isExecuting: false };
+      });
 
       // Save the new notebook with truncated history
       await saveNotebookCells(newPath, cellsToSave, currentKernel || undefined, truncatedHistory);
@@ -1765,7 +1813,7 @@ export const Notebook: React.FC = () => {
       console.error('Failed to save restored notebook:', error);
       toast('Failed to save restored notebook', 'error');
     }
-  }, [restoreDialogTimestamp, previewCells, currentFileId, generateRestoredFilename, getFullHistory, currentKernel, toast, refreshFileList]);
+  }, [restoreDialogTimestamp, previewCells, currentFileId, currentCellMap, generateRestoredFilename, getFullHistory, currentKernel, toast, refreshFileList]);
 
   // Toggle agent permission for the notebook
   const handleToggleAgentPermission = useCallback(async () => {
@@ -2981,7 +3029,7 @@ export const Notebook: React.FC = () => {
                   {new Date(previewTimestamp!).toLocaleString()}
                 </span>
               </span>
-              <span className="text-blue-500 text-xs">(read-only, outputs not shown)</span>
+              <span className="text-blue-500 text-xs">(read-only, outputs shown for cells not re-executed)</span>
               <span className="flex items-center gap-3 ml-4 text-xs">
                 <span className="flex items-center gap-1">
                   <span className="w-3 h-3 rounded border-2 border-orange-400 bg-orange-50"></span>
