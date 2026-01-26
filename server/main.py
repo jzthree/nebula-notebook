@@ -416,6 +416,14 @@ async def kernel_websocket(websocket: WebSocket, session_id: str):
                 await websocket.send_json({"type": "result", "result": result})
                 await websocket.send_json({"type": "status", "status": "idle"})
 
+            elif data.get("type") == "complete":
+                # Code completion request
+                code = data.get("code", "")
+                cursor_pos = data.get("cursor_pos", len(code))
+
+                result = await kernel_service.complete(session_id, code, cursor_pos)
+                await websocket.send_json({"type": "complete_reply", "result": result})
+
     except WebSocketDisconnect:
         print(f"WebSocket disconnected for session {session_id}")
     except Exception as e:

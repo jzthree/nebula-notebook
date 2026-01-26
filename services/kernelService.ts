@@ -3,6 +3,7 @@
  * Supports multiple concurrent kernel sessions
  */
 import { CellOutput } from '../types';
+import { authService } from './authService';
 
 const API_BASE = '/api';
 
@@ -41,6 +42,15 @@ export interface PythonEnvironmentsResponse {
   };
 }
 
+// Completion result from kernel
+export interface CompletionResult {
+  status: string;
+  matches: string[];
+  cursor_start: number;
+  cursor_end: number;
+  metadata?: Record<string, any>;
+}
+
 // Internal session state for each kernel session
 interface SessionState {
   sessionId: string;
@@ -50,6 +60,10 @@ interface SessionState {
     reject: (error: any) => void;
     onOutput: (output: CellOutput) => void;
   }>;
+  pendingCompletion?: {
+    resolve: (result: CompletionResult) => void;
+    reject: (error: any) => void;
+  };
   filePath?: string; // Associated notebook file path
   kernelName?: string; // Kernel name for reconnection
 }
@@ -187,7 +201,8 @@ class KernelService {
 
     return new Promise((resolve, reject) => {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}${API_BASE}/kernels/${sessionId}/ws`;
+      const baseWsUrl = `${protocol}//${window.location.host}${API_BASE}/kernels/${sessionId}/ws`;
+      const wsUrl = authService.getAuthenticatedWebSocketUrl(baseWsUrl);
 
       const ws = new WebSocket(wsUrl);
 
@@ -271,6 +286,14 @@ class KernelService {
           }
         }
         break;
+
+      case 'complete_reply':
+        // Code completion response
+        if (session.pendingCompletion) {
+          session.pendingCompletion.resolve(data.result);
+          session.pendingCompletion = undefined;
+        }
+        break;
     }
   }
 
@@ -300,6 +323,60 @@ class KernelService {
       session.ws!.send(JSON.stringify({
         type: 'execute',
         code: code
+      }));
+    });
+  }
+
+  /**
+   * Request code completion from kernel
+   * @param sessionId - The session to use
+   * @param code - The code context
+   * @param cursorPos - Cursor position in the code
+   * @returns Completion matches from kernel
+   */
+  async complete(
+    sessionId: string,
+    code: string,
+    cursorPos: number
+  ): Promise<CompletionResult> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return { status: 'error', matches: [], cursor_start: cursorPos, cursor_end: cursorPos };
+    }
+
+    if (!session.ws || session.ws.readyState !== WebSocket.OPEN) {
+      return { status: 'error', matches: [], cursor_start: cursorPos, cursor_end: cursorPos };
+    }
+
+    // Cancel any pending completion
+    if (session.pendingCompletion) {
+      session.pendingCompletion.reject(new Error('Cancelled'));
+    }
+
+    return new Promise((resolve, reject) => {
+      // Set timeout for completion
+      const timeout = setTimeout(() => {
+        if (session.pendingCompletion) {
+          session.pendingCompletion = undefined;
+          resolve({ status: 'timeout', matches: [], cursor_start: cursorPos, cursor_end: cursorPos });
+        }
+      }, 3000);
+
+      session.pendingCompletion = {
+        resolve: (result) => {
+          clearTimeout(timeout);
+          resolve(result);
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        }
+      };
+
+      session.ws!.send(JSON.stringify({
+        type: 'complete',
+        code: code,
+        cursor_pos: cursorPos
       }));
     });
   }

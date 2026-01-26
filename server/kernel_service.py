@@ -471,6 +471,53 @@ class KernelService:
             await on_output(error_output)
             return {"status": "error", "error": str(e)}
 
+    async def complete(
+        self,
+        session_id: str,
+        code: str,
+        cursor_pos: int
+    ) -> dict:
+        """
+        Request code completion from the kernel
+
+        Args:
+            session_id: The kernel session ID
+            code: The code context
+            cursor_pos: Cursor position in the code
+
+        Returns:
+            Completion result with matches and cursor positions
+        """
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        try:
+            # Send complete_request to kernel
+            msg_id = session.client.complete(code, cursor_pos)
+
+            # Wait for complete_reply on shell channel
+            reply = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: session.client.get_shell_msg(timeout=5.0)
+            )
+
+            if reply.get('msg_type') == 'complete_reply':
+                content = reply.get('content', {})
+                return {
+                    "status": content.get("status", "ok"),
+                    "matches": content.get("matches", []),
+                    "cursor_start": content.get("cursor_start", cursor_pos),
+                    "cursor_end": content.get("cursor_end", cursor_pos),
+                    "metadata": content.get("metadata", {})
+                }
+
+            return {"status": "error", "matches": [], "cursor_start": cursor_pos, "cursor_end": cursor_pos}
+
+        except Exception as e:
+            print(f"Completion error: {e}")
+            return {"status": "error", "matches": [], "cursor_start": cursor_pos, "cursor_end": cursor_pos}
+
     def _process_message(self, msg_type: str, content: dict) -> Optional[dict]:
         """Process a kernel message and return formatted output"""
 

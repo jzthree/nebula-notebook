@@ -3,6 +3,7 @@
  *
  * Connects to the Node.js terminal server via /api/terminals endpoints.
  */
+import { authService } from './authService';
 
 // Terminal API is now part of the main API server
 const TERMINAL_API_PREFIX = '/api';
@@ -123,7 +124,9 @@ export async function resizeTerminal(id: string, cols: number, rows: number): Pr
  * Connect to a terminal via WebSocket
  */
 export function connectTerminal(id: string): WebSocket {
-  return new WebSocket(`${getTerminalWsUrl()}/ws?id=${id}`);
+  const baseUrl = `${getTerminalWsUrl()}/ws?id=${id}`;
+  const wsUrl = authService.getAuthenticatedWebSocketUrl(baseUrl);
+  return new WebSocket(wsUrl);
 }
 
 /**

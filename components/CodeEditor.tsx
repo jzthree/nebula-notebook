@@ -7,10 +7,11 @@ import { Prec, EditorState, StateEffect, StateField } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
 import { indentUnit, syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentOnInput } from '@codemirror/language';
-import { autocompletion, closeBrackets, closeBracketsKeymap, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
+import { autocompletion, closeBrackets, closeBracketsKeymap, CompletionContext, CompletionResult, Completion } from '@codemirror/autocomplete';
 import { history, defaultKeymap, historyKeymap } from '@codemirror/commands';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
+import { kernelService, CompletionResult as KernelCompletionResult } from '../services/kernelService';
 
 interface CurrentMatch {
   cellId: string;
@@ -46,6 +47,7 @@ interface Props {
   indentConfig?: IndentationConfig; // Detected indentation configuration
   allCellsRef?: React.RefObject<Array<{ type: string; content: string }>>; // Ref to all cells for lazy autocomplete
   showLineNumbers?: boolean; // Show line numbers in gutter
+  kernelSessionId?: string; // Kernel session for live completions (file paths, attributes)
 }
 
 // Light theme that matches our existing style
@@ -410,6 +412,116 @@ function createPythonCompletionSource(allCellsRef: React.RefObject<Array<{ type:
   };
 }
 
+// Check if cursor is inside a string literal
+function isInsideString(textBefore: string): boolean {
+  // Count quotes to determine if we're inside a string
+  // This is a simplified check - doesn't handle escaped quotes perfectly
+  let inSingle = false;
+  let inDouble = false;
+  let inTripleSingle = false;
+  let inTripleDouble = false;
+
+  for (let i = 0; i < textBefore.length; i++) {
+    const char = textBefore[i];
+    const next2 = textBefore.slice(i, i + 3);
+
+    if (next2 === '"""' && !inSingle && !inTripleSingle) {
+      inTripleDouble = !inTripleDouble;
+      i += 2;
+    } else if (next2 === "'''" && !inDouble && !inTripleDouble) {
+      inTripleSingle = !inTripleSingle;
+      i += 2;
+    } else if (char === '"' && !inSingle && !inTripleSingle && !inTripleDouble) {
+      inDouble = !inDouble;
+    } else if (char === "'" && !inDouble && !inTripleSingle && !inTripleDouble) {
+      inSingle = !inSingle;
+    }
+  }
+
+  return inSingle || inDouble || inTripleSingle || inTripleDouble;
+}
+
+// Create kernel completion source for file paths and attributes
+function createKernelCompletionSource(kernelSessionIdRef: React.RefObject<string | undefined>) {
+  return async (context: CompletionContext): Promise<CompletionResult | null> => {
+    const sessionId = kernelSessionIdRef.current;
+    if (!sessionId) return null;
+
+    try {
+      // Get all text up to cursor
+      const doc = context.state.doc;
+      const pos = context.pos;
+
+      // For kernel completions, send the full line context
+      const line = doc.lineAt(pos);
+      const lineText = line.text;
+      const cursorInLine = pos - line.from;
+
+      // Request completion from kernel
+      const result = await kernelService.complete(sessionId, lineText, cursorInLine);
+
+      if (result.status !== 'ok' || result.matches.length === 0) {
+        return null;
+      }
+
+      // Convert kernel matches to CodeMirror format
+      const options: Completion[] = result.matches.map((match, idx) => ({
+        label: match,
+        type: match.endsWith('/') ? 'folder' : 'file',
+        boost: result.matches.length - idx, // Preserve kernel's ordering
+      }));
+
+      // Adjust cursor positions relative to document
+      const from = line.from + result.cursor_start;
+
+      return {
+        from,
+        options,
+        validFor: /^[\w./~-]*$/,
+      };
+    } catch (e) {
+      console.error('Kernel completion error:', e);
+      return null;
+    }
+  };
+}
+
+// Create combined completion source with context-based routing
+function createCombinedCompletionSource(
+  allCellsRef: React.RefObject<Array<{ type: string; content: string }> | null>,
+  kernelSessionIdRef: React.RefObject<string | undefined>
+) {
+  const staticSource = createPythonCompletionSource(allCellsRef);
+  const kernelSource = createKernelCompletionSource(kernelSessionIdRef);
+
+  return async (context: CompletionContext): Promise<CompletionResult | null> => {
+    const line = context.state.doc.lineAt(context.pos);
+    const textBefore = line.text.slice(0, context.pos - line.from);
+
+    // Inside string → kernel (file paths)
+    if (isInsideString(textBefore)) {
+      const result = await kernelSource(context);
+      if (result && result.options.length > 0) return result;
+      // Fall through to static if kernel returns nothing
+    }
+
+    // After dot → kernel (object attributes)
+    if (textBefore.match(/\.\w*$/)) {
+      const result = await kernelSource(context);
+      if (result && result.options.length > 0) return result;
+    }
+
+    // After import/from → kernel (module names)
+    if (textBefore.match(/^\s*(from|import)\s+[\w.]*$/)) {
+      const result = await kernelSource(context);
+      if (result && result.options.length > 0) return result;
+    }
+
+    // Default → static completions (instant, no latency)
+    return staticSource(context);
+  };
+}
+
 export const CodeEditor: React.FC<Props> = ({
   value,
   onChange,
@@ -430,12 +542,17 @@ export const CodeEditor: React.FC<Props> = ({
   indentConfig = DEFAULT_INDENTATION,
   allCellsRef,
   showLineNumbers = false,
+  kernelSessionId,
 }) => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
 
   // Fallback ref if none provided (for standalone usage)
   const fallbackRef = useRef<Array<{ type: string; content: string }>>([]);
   const effectiveAllCellsRef = allCellsRef || fallbackRef;
+
+  // Ref for kernel session ID (for stable closure in completion source)
+  const kernelSessionIdRef = useRef<string | undefined>(kernelSessionId);
+  kernelSessionIdRef.current = kernelSessionId;
 
   // Focus editor when shouldFocus becomes true
   useEffect(() => {
@@ -533,11 +650,12 @@ export const CodeEditor: React.FC<Props> = ({
       exts.push(lineNumbers());
     }
 
-    // Add autocompletion for Python - uses ref so no rebuild on content changes
+    // Add autocompletion for Python - uses refs so no rebuild on content changes
+    // Combined source: static for variables, kernel for paths/attributes/imports
     if (language === 'python') {
       exts.push(
         autocompletion({
-          override: [createPythonCompletionSource(effectiveAllCellsRef)],
+          override: [createCombinedCompletionSource(effectiveAllCellsRef, kernelSessionIdRef)],
           activateOnTyping: true,
           defaultKeymap: true,
         })

@@ -27,6 +27,14 @@ export function setupNotebookWebSocket(server: HttpServer): WebSocketServer {
     // Match /api/notebook/{encoded_path}/ws
     const match = pathname.match(/^\/api\/notebook\/(.+)\/ws$/);
     if (match) {
+      // Authenticate WebSocket connection
+      const { authWebSocketMiddleware } = require('../auth');
+      if (!authWebSocketMiddleware(request)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });

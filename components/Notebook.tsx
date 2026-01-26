@@ -3094,6 +3094,7 @@ export const Notebook: React.FC = () => {
                   showLineNumbers={showLineNumbers}
                   showCellIds={showCellIds}
                   previewDiffStatus={isPreviewMode ? previewDiffMap.get(cell.id) : undefined}
+                  kernelSessionId={kernelSessionId ?? undefined}
                 />
               )}
             />

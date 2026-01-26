@@ -48,6 +48,7 @@ interface Props {
   showLineNumbers?: boolean; // Show line numbers in editor
   showCellIds?: boolean; // Show cell IDs in the cell header
   previewDiffStatus?: 'same' | 'modified' | 'deleted'; // For history preview: how this cell differs from current
+  kernelSessionId?: string; // Kernel session for live completions
 }
 
 const CellComponent: React.FC<Props> = ({
@@ -82,6 +83,7 @@ const CellComponent: React.FC<Props> = ({
   showLineNumbers = false,
   showCellIds = false,
   previewDiffStatus,
+  kernelSessionId,
 }) => {
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
@@ -529,6 +531,7 @@ const CellComponent: React.FC<Props> = ({
           allCellsRef={allCellsRef}
           showLineNumbers={cell.type === 'code' && showLineNumbers}
           readOnly={isLocked}
+          kernelSessionId={kernelSessionId}
         />
       </div>
 

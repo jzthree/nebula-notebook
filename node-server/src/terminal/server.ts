@@ -108,6 +108,14 @@ export function setupTerminalWebSocket(server: HttpServer): WebSocketServer {
     const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
 
     if (pathname === '/ws') {
+      // Authenticate WebSocket connection
+      const { authWebSocketMiddleware } = require('../auth');
+      if (!authWebSocketMiddleware(request)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });

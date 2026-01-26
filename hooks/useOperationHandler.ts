@@ -78,6 +78,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Cell, CellType } from '../types';
 import { validateMetadataValue, CELL_METADATA_SCHEMA } from '../lib/cellMetadata';
+import { authService } from '../services/authService';
 
 // Operation types (matching backend/MCP types)
 export interface InsertCellOp {
@@ -1159,9 +1160,10 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
     const encodedPath = encodeURIComponent(filePath);
-    const wsUrl = `${protocol}//${host}/api/notebook/${encodedPath}/ws`;
+    const baseWsUrl = `${protocol}//${host}/api/notebook/${encodedPath}/ws`;
+    const wsUrl = authService.getAuthenticatedWebSocketUrl(baseWsUrl);
 
-    console.log('[OperationHandler] Connecting to:', wsUrl);
+    console.log('[OperationHandler] Connecting to:', baseWsUrl);
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

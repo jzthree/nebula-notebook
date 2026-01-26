@@ -23,6 +23,10 @@ import llmRoutes, { llmService } from './routes/llm';
 import fsRoutes from './routes/fs';
 import notebookRoutes from './routes/notebook';
 import pythonRoutes from './routes/python';
+import authRoutes from './routes/auth';
+
+// Import auth
+import { authService, authMiddleware, authWebSocketMiddleware } from './auth';
 
 // Import terminal routes (existing)
 import { setupTerminalRoutes, setupTerminalWebSocket, cleanupTerminals } from './terminal/server';
@@ -30,7 +34,7 @@ import { setupTerminalRoutes, setupTerminalWebSocket, cleanupTerminals } from '.
 // Import notebook WebSocket
 import { setupNotebookWebSocket } from './notebook/notebook-websocket';
 
-const PORT = process.env.PORT || process.env.NODE_SERVER_PORT || 8000;
+const PORT = process.env.PORT || process.env.NODE_SERVER_PORT || 3000;
 const DEV_MODE = process.env.DEV_MODE === 'true' || process.argv.includes('--dev');
 
 /**
@@ -83,7 +87,13 @@ function createApp(): Express {
     res.json({ status: 'ready' });
   });
 
-  // API routes
+  // Auth routes (public - no auth required)
+  app.use('/api', authRoutes);
+
+  // Auth middleware - protect all other API routes
+  app.use('/api', authMiddleware);
+
+  // API routes (protected)
   app.use('/api', kernelRoutes);
   app.use('/api', llmRoutes);
   app.use('/api', fsRoutes);
@@ -113,6 +123,13 @@ function setupWebSockets(server: ReturnType<typeof createServer>): void {
 
     // Route to kernel WebSocket
     if (pathname.match(/^\/api\/kernels\/[^/]+\/ws$/)) {
+      // Authenticate WebSocket connection
+      if (!authWebSocketMiddleware(request)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
@@ -162,6 +179,14 @@ function setupStaticServing(app: Express): void {
  */
 async function main(): Promise<void> {
   console.log('[Server] Starting Nebula Node Server...');
+
+  // Initialize authentication
+  const setupNeeded = await authService.initialize();
+  if (setupNeeded) {
+    authService.printSetupInstructions();
+  } else {
+    console.log('[Auth] 2FA configured and ready');
+  }
 
   // Create Express app
   const app = createApp();
