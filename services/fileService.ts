@@ -109,19 +109,15 @@ export const readFile = async (path: string): Promise<{ path: string; type: stri
  * Download a file to the user's computer
  */
 export const downloadFile = async (path: string, filename: string): Promise<void> => {
-  const fileData = await readFile(path);
+  // Use dedicated download endpoint that streams raw file content
+  const response = await fetch(`${API_BASE}/fs/download?path=${encodeURIComponent(path)}`);
 
-  let blob: Blob;
-  if (fileData.type === 'notebook') {
-    // For notebooks, stringify the JSON content
-    blob = new Blob([JSON.stringify(fileData.content, null, 2)], { type: 'application/json' });
-  } else if (fileData.type === 'text') {
-    blob = new Blob([fileData.content], { type: 'text/plain' });
-  } else {
-    // For binary files, the content might be base64 encoded
-    blob = new Blob([fileData.content], { type: 'application/octet-stream' });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to download file');
   }
 
+  const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

@@ -228,6 +228,77 @@ router.post('/fs/duplicate', (req: Request, res: Response) => {
 });
 
 /**
+ * Download a file (raw stream with proper headers)
+ */
+router.get('/fs/download', (req: Request, res: Response) => {
+  try {
+    const filePath = req.query.path as string;
+    if (!filePath) {
+      res.status(400).json({ detail: 'path query parameter is required' });
+      return;
+    }
+
+    const normalizedPath = fsService.normalizePath(filePath);
+    const fs = require('fs');
+    const pathModule = require('path');
+
+    if (!fs.existsSync(normalizedPath)) {
+      res.status(404).json({ detail: `File not found: ${normalizedPath}` });
+      return;
+    }
+
+    const stat = fs.statSync(normalizedPath);
+    if (stat.isDirectory()) {
+      res.status(400).json({ detail: 'Cannot download a directory' });
+      return;
+    }
+
+    const filename = pathModule.basename(normalizedPath);
+    const extension = pathModule.extname(normalizedPath).toLowerCase();
+
+    // Set content type based on extension
+    const mimeTypes: Record<string, string> = {
+      '.txt': 'text/plain',
+      '.json': 'application/json',
+      '.ipynb': 'application/json',
+      '.py': 'text/x-python',
+      '.js': 'application/javascript',
+      '.ts': 'application/typescript',
+      '.html': 'text/html',
+      '.css': 'text/css',
+      '.csv': 'text/csv',
+      '.md': 'text/markdown',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.pdf': 'application/pdf',
+      '.zip': 'application/zip',
+    };
+
+    const contentType = mimeTypes[extension] || 'application/octet-stream';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', stat.size);
+
+    const stream = fs.createReadStream(normalizedPath);
+    stream.pipe(res);
+  } catch (err) {
+    if (err instanceof Error) {
+      if (err.message.includes('not found') || err.message.includes('ENOENT')) {
+        res.status(404).json({ detail: err.message });
+      } else {
+        res.status(500).json({ detail: err.message });
+      }
+    } else {
+      res.status(500).json({ detail: 'Unknown error' });
+    }
+  }
+});
+
+/**
  * Upload a file
  */
 router.post('/fs/upload', upload.single('file'), async (req: Request, res: Response) => {
