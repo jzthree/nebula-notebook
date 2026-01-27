@@ -2165,10 +2165,14 @@ export const Notebook: React.FC = () => {
   queueExecutionRef.current = queueExecution;
 
   // Navigate to a specific cell (used by search)
-  const navigateToCell = useCallback((cellIndex: number, cellId: string) => {
+  const navigateToCell = useCallback((_cellIndex: number, cellId: string) => {
     setActiveCellId(cellId);
-    scrollToCell(cellIndex);
-  }, [scrollToCell]);
+    // Find current index by ID in case cells have been modified since search
+    const currentIndex = cells.findIndex(c => c.id === cellId);
+    if (currentIndex !== -1) {
+      scrollToCell(currentIndex, { retryOnce: true });
+    }
+  }, [cells, scrollToCell]);
 
   // Navigate to adjacent cell with virtualization support (used by arrow keys in cell mode)
   const navigateCellRelative = useCallback((fromCellId: string, direction: 'up' | 'down') => {
