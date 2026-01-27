@@ -4,7 +4,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { act } from 'react';
-import userEvent from '@testing-library/user-event';
 
 // Mock all the services before importing Notebook
 vi.mock('../../services/kernelService', () => ({
@@ -197,9 +196,9 @@ describe('Notebook', () => {
     vi.clearAllMocks();
     // Mock window.confirm
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    // Mock crypto.randomUUID
+    // Mock crypto.randomUUID with valid UUID format
     let uuidCounter = 0;
-    vi.spyOn(crypto, 'randomUUID').mockImplementation(() => `new-cell-${++uuidCounter}`);
+    vi.spyOn(crypto, 'randomUUID').mockImplementation(() => `00000000-0000-0000-0000-00000000000${++uuidCounter}` as `${string}-${string}-${string}-${string}-${string}`);
   });
 
   afterEach(() => {

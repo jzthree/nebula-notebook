@@ -51,6 +51,7 @@ export class KernelService {
   private zmq: ZmqModule | null = null;
   private executionQueues: Map<string, Promise<unknown>> = new Map();
   private executionQueueSizes: Map<string, number> = new Map();
+  private shellRequestQueues: Map<string, Promise<unknown>> = new Map();
 
   constructor(config?: KernelServiceConfig, sessionStore?: SessionStore) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -436,6 +437,22 @@ export class KernelService {
     return run;
   }
 
+  /**
+   * Queue shell socket requests to prevent concurrent receive operations
+   */
+  private enqueueShellRequest<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.shellRequestQueues.get(sessionId) || Promise.resolve();
+    const run = previous.catch(() => undefined).then(task);
+    const chain = run.catch(() => undefined);
+    this.shellRequestQueues.set(sessionId, chain);
+    chain.finally(() => {
+      if (this.shellRequestQueues.get(sessionId) === chain) {
+        this.shellRequestQueues.delete(sessionId);
+      }
+    });
+    return run;
+  }
+
   private reserveExecutionSlot(sessionId: string): ExecutionQueueInfo {
     const currentSize = this.executionQueueSizes.get(sessionId) ?? 0;
     const info = {
@@ -559,6 +576,105 @@ export class KernelService {
       const errorMsg = this.formatExecutionError(err);
       await onOutput({ type: 'error', content: errorMsg });
       return { status: 'error', executionCount: null, error: errorMsg };
+    }
+  }
+
+  /**
+   * Request code completion from the kernel
+   * Uses a separate queue for shell socket operations to avoid "socket busy" errors
+   */
+  async complete(
+    sessionId: string,
+    code: string,
+    cursorPos: number
+  ): Promise<{ status: string; matches: string[]; cursor_start: number; cursor_end: number }> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return { status: 'error', matches: [], cursor_start: cursorPos, cursor_end: cursorPos };
+    }
+
+    if (!this.zmq || !this.zmqSockets.has(sessionId)) {
+      return { status: 'error', matches: [], cursor_start: cursorPos, cursor_end: cursorPos };
+    }
+
+    // Queue completion requests to avoid "socket busy" errors
+    return this.enqueueShellRequest(sessionId, () =>
+      this.completeInternal(sessionId, code, cursorPos)
+    );
+  }
+
+  /**
+   * Internal completion implementation (runs within shell queue)
+   */
+  private async completeInternal(
+    sessionId: string,
+    code: string,
+    cursorPos: number
+  ): Promise<{ status: string; matches: string[]; cursor_start: number; cursor_end: number }> {
+    const session = this.sessions.get(sessionId);
+    const sockets = this.zmqSockets.get(sessionId);
+
+    if (!session || !sockets) {
+      return { status: 'error', matches: [], cursor_start: cursorPos, cursor_end: cursorPos };
+    }
+
+    try {
+      // Create complete_request message
+      const msgId = uuidv4();
+      const header = {
+        msg_id: msgId,
+        session: sessionId,
+        username: 'nebula',
+        msg_type: 'complete_request',
+        version: '5.3',
+        date: new Date().toISOString(),
+      };
+
+      const content = {
+        code,
+        cursor_pos: cursorPos,
+      };
+
+      const message = this.createJupyterMessage(
+        header,
+        {},
+        content,
+        session.connectionConfig!.key
+      );
+
+      await sockets.shell.send(message);
+
+      // Wait for complete_reply with timeout
+      const timeoutPromise = new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), 3000);
+      });
+
+      const receivePromise = (async () => {
+        while (true) {
+          const frames = await sockets.shell.receive();
+          const { msgType, content: msgContent, parentMsgId } = this.parseJupyterMessage(frames);
+
+          if (parentMsgId === msgId && msgType === 'complete_reply') {
+            return {
+              status: (msgContent.status as string) || 'ok',
+              matches: (msgContent.matches as string[]) || [],
+              cursor_start: (msgContent.cursor_start as number) ?? cursorPos,
+              cursor_end: (msgContent.cursor_end as number) ?? cursorPos,
+            };
+          }
+        }
+      })();
+
+      const result = await Promise.race([receivePromise, timeoutPromise]);
+
+      if (result === null) {
+        return { status: 'timeout', matches: [], cursor_start: cursorPos, cursor_end: cursorPos };
+      }
+
+      return result;
+    } catch (err) {
+      console.error('[KernelService] Completion error:', err);
+      return { status: 'error', matches: [], cursor_start: cursorPos, cursor_end: cursorPos };
     }
   }
 
@@ -692,6 +808,7 @@ export class KernelService {
 
     this.executionQueues.delete(sessionId);
     this.executionQueueSizes.delete(sessionId);
+    this.shellRequestQueues.delete(sessionId);
   }
 
   /**

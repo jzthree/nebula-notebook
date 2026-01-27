@@ -458,9 +458,12 @@ function createKernelCompletionSource(kernelSessionIdRef: React.RefObject<string
       const cursorInLine = pos - line.from;
 
       // Request completion from kernel
+      console.log('[Completion] Requesting from kernel:', { sessionId, lineText, cursorInLine });
       const result = await kernelService.complete(sessionId, lineText, cursorInLine);
+      console.log('[Completion] Kernel service returned:', result);
 
       if (result.status !== 'ok' || result.matches.length === 0) {
+        console.log('[Completion] No matches or error status');
         return null;
       }
 
@@ -497,23 +500,30 @@ function createCombinedCompletionSource(
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
     const line = context.state.doc.lineAt(context.pos);
     const textBefore = line.text.slice(0, context.pos - line.from);
+    const sessionId = kernelSessionIdRef.current;
 
     // Inside string → kernel (file paths)
     if (isInsideString(textBefore)) {
+      console.log('[Completion] Inside string, using kernel. SessionId:', sessionId);
       const result = await kernelSource(context);
+      console.log('[Completion] Kernel result:', result);
       if (result && result.options.length > 0) return result;
       // Fall through to static if kernel returns nothing
     }
 
     // After dot → kernel (object attributes)
     if (textBefore.match(/\.\w*$/)) {
+      console.log('[Completion] After dot, using kernel. SessionId:', sessionId, 'textBefore:', textBefore);
       const result = await kernelSource(context);
+      console.log('[Completion] Kernel result:', result);
       if (result && result.options.length > 0) return result;
     }
 
     // After import/from → kernel (module names)
     if (textBefore.match(/^\s*(from|import)\s+[\w.]*$/)) {
+      console.log('[Completion] After import, using kernel. SessionId:', sessionId);
       const result = await kernelSource(context);
+      console.log('[Completion] Kernel result:', result);
       if (result && result.options.length > 0) return result;
     }
 
@@ -629,7 +639,10 @@ export const CodeEditor: React.FC<Props> = ({
       EditorState.tabSize.of(indentConfig.tabSize),
       // Core editing features (minimal setup)
       highlightSpecialChars(),
-      history(),
+      // ⚠️ PERFORMANCE: Limit CodeMirror's internal history to prevent unbounded growth.
+      // The notebook has its own undo system for structural changes, so we only need
+      // per-cell text undo. Default (100) can cause lag after extended use.
+      history({ minDepth: 50, newGroupDelay: 300 }),
       drawSelection(),
       EditorState.allowMultipleSelections.of(true),
       indentOnInput(),

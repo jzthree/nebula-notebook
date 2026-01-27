@@ -249,6 +249,30 @@ class KernelService {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
+    // Handle status updates first - these don't require a pending handler
+    // This is important for receiving initial status on WebSocket connect
+    if (data.type === 'status') {
+      const status = data.status as 'idle' | 'busy' | 'starting';
+      for (const callback of this.onStatusCallbacks) {
+        try {
+          callback(sessionId, status);
+        } catch (e) {
+          console.error('Status callback error:', e);
+        }
+      }
+      return;
+    }
+
+    // Handle completion replies - also don't require execution handler
+    if (data.type === 'complete_reply') {
+      if (session.pendingCompletion) {
+        session.pendingCompletion.resolve(data.result);
+        session.pendingCompletion = undefined;
+      }
+      return;
+    }
+
+    // Other message types require an active execution handler
     const handler = session.messageQueue[0];
     if (!handler) return;
 
@@ -273,26 +297,6 @@ class KernelService {
       case 'error':
         session.messageQueue.shift();
         handler.reject(new Error(data.error));
-        break;
-
-      case 'status':
-        // Status updates (busy/idle) - notify listeners
-        const status = data.status as 'idle' | 'busy' | 'starting';
-        for (const callback of this.onStatusCallbacks) {
-          try {
-            callback(sessionId, status);
-          } catch (e) {
-            console.error('Status callback error:', e);
-          }
-        }
-        break;
-
-      case 'complete_reply':
-        // Code completion response
-        if (session.pendingCompletion) {
-          session.pendingCompletion.resolve(data.result);
-          session.pendingCompletion = undefined;
-        }
         break;
     }
   }

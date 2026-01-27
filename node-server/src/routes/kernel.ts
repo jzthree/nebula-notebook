@@ -278,6 +278,12 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
           // Send result and idle status
           ws.send(JSON.stringify({ type: 'result', result }));
           ws.send(JSON.stringify({ type: 'status', status: 'idle' }));
+        } else if (message.type === 'complete') {
+          const code = message.code || '';
+          const cursorPos = message.cursor_pos ?? code.length;
+
+          const result = await kernelService.complete(sessionId, code, cursorPos);
+          ws.send(JSON.stringify({ type: 'complete_reply', result }));
         }
       } catch (err) {
         const errMessage = err instanceof Error ? err.message : 'Unknown error';

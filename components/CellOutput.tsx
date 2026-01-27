@@ -212,7 +212,8 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
       truncated.push({
         id: `display-truncated-${Date.now()}`,
         type: 'stderr',
-        content: `\n⚠️ Output limit reached (${totalLines.toLocaleString()} lines). Additional output not displayed.`
+        content: `\n⚠️ Output limit reached (${totalLines.toLocaleString()} lines). Additional output not displayed.`,
+        timestamp: Date.now(),
       });
     }
 

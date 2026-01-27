@@ -4,22 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Nebula Notebook is a web-based Jupyter notebook alternative with AI integration. It uses real Jupyter kernels, supports multiple LLM providers (Gemini, OpenAI, Anthropic), and provides real filesystem access.
+Nebula Notebook is a web-based Jupyter notebook alternative with AI integration. It uses real Jupyter kernels via ZeroMQ, supports multiple LLM providers (Gemini, OpenAI, Anthropic), and provides real filesystem access. The backend is Node.js/TypeScript with Express, communicating with Jupyter kernels via the ZeroMQ protocol.
 
 ## Development Commands
 
 ```bash
 # Install dependencies
-npm install                    # Frontend
-cd server && pip install -r requirements.txt  # Backend
+npm install                    # Frontend + backend dependencies
+cd node-server && npm install  # Backend dependencies
 
 # Run the application
-npm run start                  # Start both frontend and backend concurrently
-npm run dev                    # Frontend only (Vite, port 3000)
-npm run server                 # Backend only (FastAPI with hot reload, port 8000)
+npm run dev                    # Development mode with hot reload (Vite on :3000, Node on :8000)
+npm run start                  # Alias for npm run dev
+npm run prod                   # Production mode (Node.js on :3000 only)
 
 # Build
-npm run build                  # Production build
+npm run build                  # Production build (frontend + backend)
 npm run preview                # Preview production build
 ```
 
@@ -28,44 +28,69 @@ npm run preview                # Preview production build
 **Frontend (React 19 + TypeScript + Vite)**
 - `components/Notebook.tsx` - Main notebook component: file management, kernel sessions, cell state, execution queue, autosave
 - `components/Cell.tsx` - Individual cell editor with execution controls and keyboard shortcuts
-- `components/CodeEditor.tsx` - CodeMirror 6 editor with syntax highlighting
+- `components/CodeEditor.tsx` - CodeMirror 6 editor with syntax highlighting and kernel-based autocompletion
 - `components/VirtualCellList.tsx` - React Virtuoso for large notebook performance
 - `components/AIChatSidebar.tsx` - AI chat interface (per-notebook instance)
-- `components/ErrorBoundary.tsx` - React error boundary for graceful error handling
+- `components/AuthGate.tsx` - 2FA authentication gate
+- `components/TOTPLogin.tsx` - TOTP code entry UI
 - `services/kernelService.ts` - Multi-session kernel management, WebSocket handling
+- `services/authService.ts` - Authentication token management
 - `services/llmService.ts` - Multi-provider LLM client (Gemini, OpenAI, Anthropic)
 - `services/fileService.ts` - Filesystem operations
 - `hooks/useAutosave.ts` - Debounced autosave (1s) with localStorage crash recovery
 - `hooks/useUndoRedo.ts` - Cell state history management
 - `types.ts` - Core types: `Cell`, `Tab`, `NotebookState`, `KernelStatus`
 
-**Backend (Python + FastAPI)**
-- `server/main.py` - API endpoints and WebSocket handlers
-- `server/kernel_service.py` - Jupyter kernel session management
-- `server/llm_service.py` - LLM provider abstraction layer
-- `server/fs_service.py` - Filesystem operations (read/write/list)
-- `server/python_discovery.py` - VS Code-style Python environment detection (system, conda, pyenv, venv, homebrew)
+**Backend (Node.js + TypeScript + Express)**
+- `node-server/src/index.ts` - Express server, WebSocket setup, auth initialization
+- `node-server/src/kernel/kernel-service.ts` - Jupyter kernel management via ZeroMQ
+- `node-server/src/kernel/kernelspec.ts` - Kernel discovery (finds installed Jupyter kernels)
+- `node-server/src/auth/auth-service.ts` - TOTP 2FA and JWT token management
+- `node-server/src/auth/auth-middleware.ts` - Route and WebSocket authentication
+- `node-server/src/routes/kernel.ts` - Kernel API endpoints and WebSocket handler
+- `node-server/src/routes/notebook.ts` - Notebook file operations
+- `node-server/src/routes/auth.ts` - Authentication endpoints
 
 **Communication Pattern**
 - REST API for CRUD operations
-- WebSocket (`/api/kernels/{session_id}/ws`) for streaming kernel output during execution
+- WebSocket (`/api/kernels/{session_id}/ws`) for streaming kernel output and code completion
+- WebSocket (`/api/notebook/{path}/ws`) for real-time notebook sync
+- ZeroMQ for direct kernel communication (shell, iopub channels)
 
 ## Key API Endpoints
 
+**Authentication** (unprotected)
+- `GET /api/auth/status` - Check if 2FA is configured and if request is authenticated
+- `POST /api/auth/verify` - Verify TOTP code and get JWT token
+
+**Kernels** (protected)
 - `GET /api/kernels` - List available kernelspecs
 - `POST /api/kernels/start` - Start a kernel session
-- `WS /api/kernels/{session_id}/ws` - Stream execution output
-- `POST /api/python/environments` - Discover Python environments
-- `POST /api/generate` - LLM code generation
-- `POST /api/chat` - LLM chat/analysis
+- `POST /api/kernels/for-file` - Get or create kernel for a notebook file
+- `WS /api/kernels/{session_id}/ws` - Stream execution output and code completion
+- `POST /api/kernels/{session_id}/interrupt` - Interrupt kernel execution
+- `POST /api/kernels/{session_id}/restart` - Restart kernel
+
+**Notebook** (protected)
+- `WS /api/notebook/{path}/ws` - Real-time notebook sync
 - `/api/fs/*` - Filesystem operations
 
 ## Configuration
 
-- Frontend dev server proxies `/api/*` to backend (configured in `vite.config.ts`)
-- Environment variables in `server/.env` (copy from `server/.env.example`)
-- Required: At least one LLM API key (GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)
+- Frontend dev server proxies `/api/*` to Node.js backend (configured in `vite.config.ts`)
+- 2FA config stored in `~/.nebula/auth.json` (mode 0600)
 - TypeScript paths: `@/*` maps to project root
+
+## Authentication (2FA)
+
+Nebula uses TOTP-based two-factor authentication:
+
+1. **First Start**: Server prints QR code to terminal. Scan with authenticator app (Google Authenticator, Authy, etc.)
+2. **Login**: Enter 6-digit code in the UI
+3. **Trust Browser**: Check "Trust this browser" for 30-day sessions (vs 24 hours)
+4. **Rate Limiting**: 5 attempts per 30 seconds to prevent brute force
+
+Config file: `~/.nebula/auth.json` contains the TOTP secret. Multiple servers sharing the same home directory share the same 2FA.
 
 ## Feature Development Workflow
 
@@ -97,11 +122,11 @@ npm run preview                # Preview production build
 ```bash
 npm test              # Run all frontend tests (vitest)
 npm test -- --watch   # Watch mode for TDD
-cd server && pytest   # Run backend tests
+cd node-server && npm test   # Run backend tests
 ```
 
 ### Test Locations
-- Backend: `server/tests/` (pytest)
+- Backend: `node-server/src/__tests__/` (vitest)
 - Frontend: `__tests__/` directories alongside components (vitest)
 
 ### Git Commits

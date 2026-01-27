@@ -45,6 +45,8 @@ describe('Cell', () => {
     onChangeType: vi.fn(),
     onClick: vi.fn(),
     onAddCell: vi.fn(),
+    onActivate: vi.fn(),
+    onNavigateCell: vi.fn(),
   };
 
   beforeEach(() => {

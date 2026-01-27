@@ -98,7 +98,7 @@ export function validateMetadataValue(
       }
       break;
     case 'enum':
-      if (!schema.values?.includes(value as string)) {
+      if (!(schema.values as readonly string[] | undefined)?.includes(value as string)) {
         return { valid: false, error: `Field "${key}" must be one of: ${schema.values?.join(', ')}` };
       }
       break;

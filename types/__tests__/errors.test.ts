@@ -111,7 +111,7 @@ describe('NebulaError', () => {
         json: async () => {
           throw new Error('Invalid JSON');
         },
-      } as Response;
+      } as unknown as Response;
 
       const error = await NebulaError.fromResponse(mockResponse);
 

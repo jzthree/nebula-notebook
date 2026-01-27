@@ -42,6 +42,7 @@ import { getNotebookAvatar, updateFavicon, resetFavicon } from '../utils/noteboo
 import { playSuccessSound } from '../utils/notificationSound';
 import { generateCellId } from '../utils/cellId';
 import { reconstructStateAt, HistoryEntry } from '../lib/notebookOperations';
+import { perfDebugger } from '../lib/performanceDebugger';
 
 // Initial cell for reset
 const INITIAL_CELL: Cell = {
@@ -452,7 +453,12 @@ export const Notebook: React.FC = () => {
 
     // Add to execution queue - this triggers the existing UI execution logic
     // The useEffect execution processor will handle the actual execution
-    setExecutionQueue(prev => prev.includes(cellId) ? prev : [...prev, cellId]);
+    // Only add and log if not already in queue (matches queueExecution behavior)
+    if (existingIndex < 0) {
+      setExecutionQueue(prev => [...prev, cellId]);
+      // Log cell run for history (same as UI queueExecution)
+      logOperation({ type: 'runCell', cellId, cellIndex });
+    }
 
     // Wait for execution to complete (isExecuting becomes false) or timeout
     return new Promise((resolve) => {
@@ -620,6 +626,7 @@ export const Notebook: React.FC = () => {
   const cellsRef = useRef<Cell[]>(cells);
   const activeCellIdRef = useRef<string | null>(activeCellId);
   const cellClipboardRef = useRef<CellClipboardItem | null>(cellClipboard);
+  const getFullHistoryRef = useRef(getFullHistory);
 
   // ⚠️ PERFORMANCE CRITICAL: Refs for renderCell callback stability
   // These allow the memoized renderCell to access current values without recreating
@@ -636,6 +643,7 @@ export const Notebook: React.FC = () => {
   activeCellIdRef.current = activeCellId;
   cellClipboardRef.current = cellClipboard;
   cellQueueRef.current = cellQueue;
+  getFullHistoryRef.current = getFullHistory;
   // Note: Other ref updates for renderCell stability are done after their state is defined
 
   // Flush active cell's pending content changes before keyframe operations
@@ -749,6 +757,29 @@ export const Notebook: React.FC = () => {
         clearTimeout(scrollTimeoutRef.current);
       }
     };
+  }, []);
+
+  // Enable performance debugger once on mount
+  useEffect(() => {
+    perfDebugger.enable();
+    console.log('[PerfDebug] Use Ctrl+Shift+P to toggle profiling, or window.__nebulaPerf in console');
+  }, []);
+
+  // Register performance debugger callbacks once (uses refs defined above)
+  useEffect(() => {
+    perfDebugger.registerCallbacks({
+      getHistorySize: () => getFullHistoryRef.current().length,
+      getCellCount: () => cellsRef.current.length,
+      getTotalOutputSize: () => {
+        let total = 0;
+        for (const cell of cellsRef.current) {
+          for (const output of cell.outputs) {
+            total += output.content.length;
+          }
+        }
+        return total;
+      },
+    });
   }, []);
 
   // Helper to check if ANY part of a cell is currently visible
@@ -1608,7 +1639,24 @@ export const Notebook: React.FC = () => {
       const sessionId = await kernelService.getOrCreateKernelForFile(id, kernelToUse);
       setKernelSessionId(sessionId);
       setIsKernelReady(true);
-      setKernelStatus('idle');
+      // Note: Don't set status to 'idle' here - the WebSocket will send the actual status
+      // which could be 'busy' if a cell was executing when the page was refreshed
+
+      // Query the kernel's execution count so cell counters continue from where they left off
+      // Also get the actual status (could be 'busy' if execution was in progress during refresh)
+      const status = await kernelService.getStatus(sessionId);
+      if (status) {
+        if (status.execution_count != null) {
+          setKernelExecutionCount(status.execution_count);
+        }
+        // Set status from query (WebSocket may also update this, which is fine)
+        if (status.status === 'idle' || status.status === 'busy') {
+          setKernelStatus(status.status);
+        }
+      } else {
+        // Fallback if status query fails
+        setKernelStatus('idle');
+      }
     } catch (error) {
       console.error('Failed to get/create kernel for file:', error);
       setKernelStatus('disconnected');
@@ -2081,6 +2129,11 @@ export const Notebook: React.FC = () => {
     // Keyframe: flush active cell before execution
     flushActiveCell();
 
+    // Check if already in queue (idempotent - safe to call multiple times)
+    if (executionQueueRef.current.includes(id)) {
+      return;
+    }
+
     setExecutionQueue(prev => [...prev, id]);
     // Log cell run for history
     // Note: content is NOT stored here - it's reconstructed from edit history + snapshot
@@ -2275,7 +2328,8 @@ export const Notebook: React.FC = () => {
               allOutputs.push({
                 id: `limit-${Date.now()}`,
                 type: 'stderr',
-                content: `\n⚠️ Output limit reached (${totalOutputLines.toLocaleString()} lines). Additional output not displayed.`
+                content: `\n⚠️ Output limit reached (${totalOutputLines.toLocaleString()} lines). Additional output not displayed.`,
+                timestamp: Date.now(),
               });
               // Cancel any pending flush and flush immediately
               if (pendingFlush !== null) {
@@ -2424,7 +2478,7 @@ export const Notebook: React.FC = () => {
               tag: 'execution-complete', // Prevents duplicate notifications
               renotify: true,
               requireInteraction: true,
-            });
+            } as NotificationOptions);
             notification.onclick = () => {
               window.focus();
               if (lastCell && lastCell.cellIndex >= 0) {

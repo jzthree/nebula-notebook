@@ -41,7 +41,7 @@ describe('conflictService', () => {
     });
 
     it('should return no conflict when remote mtime equals local mtime', async () => {
-      mockGetFileMtime.mockResolvedValue({ mtime: 1000 });
+      mockGetFileMtime.mockResolvedValue({ path: '/path/to/file.ipynb', mtime: 1000 });
 
       const result = await checkForConflict('/path/to/file.ipynb', 1000);
 
@@ -50,7 +50,7 @@ describe('conflictService', () => {
     });
 
     it('should return no conflict when remote mtime is older than local', async () => {
-      mockGetFileMtime.mockResolvedValue({ mtime: 900 });
+      mockGetFileMtime.mockResolvedValue({ path: '/path/to/file.ipynb', mtime: 900 });
 
       const result = await checkForConflict('/path/to/file.ipynb', 1000);
 
@@ -59,7 +59,7 @@ describe('conflictService', () => {
     });
 
     it('should detect conflict when remote mtime is significantly newer', async () => {
-      mockGetFileMtime.mockResolvedValue({ mtime: 2000 });
+      mockGetFileMtime.mockResolvedValue({ path: '/path/to/file.ipynb', mtime: 2000 });
 
       const result = await checkForConflict('/path/to/file.ipynb', 1000);
 
@@ -70,7 +70,7 @@ describe('conflictService', () => {
     it('should NOT detect conflict for small mtime differences (within tolerance)', async () => {
       // Small differences can occur due to floating-point precision or filesystem timing
       // These should NOT trigger a false positive conflict
-      mockGetFileMtime.mockResolvedValue({ mtime: 1000.3 });
+      mockGetFileMtime.mockResolvedValue({ path: '/path/to/file.ipynb', mtime: 1000.3 });
 
       const result = await checkForConflict('/path/to/file.ipynb', 1000);
 
@@ -90,7 +90,7 @@ describe('conflictService', () => {
 
     it('should detect conflict at exact tolerance boundary (0.5s)', async () => {
       // Exactly at tolerance boundary (0.5s) should NOT be a conflict
-      mockGetFileMtime.mockResolvedValue({ mtime: 1000.5 });
+      mockGetFileMtime.mockResolvedValue({ path: '/path/to/file.ipynb', mtime: 1000.5 });
 
       const result = await checkForConflict('/path/to/file.ipynb', 1000);
 
@@ -100,7 +100,7 @@ describe('conflictService', () => {
 
     it('should detect conflict just above tolerance boundary', async () => {
       // Just over tolerance (0.51s) SHOULD be a conflict
-      mockGetFileMtime.mockResolvedValue({ mtime: 1000.51 });
+      mockGetFileMtime.mockResolvedValue({ path: '/path/to/file.ipynb', mtime: 1000.51 });
 
       const result = await checkForConflict('/path/to/file.ipynb', 1000);
 
@@ -124,8 +124,8 @@ describe('conflictService', () => {
     ];
 
     it('should save successfully when no conflict exists', async () => {
-      mockGetFileMtime.mockResolvedValue({ mtime: 1000 });
-      mockSaveFileContentWithMtime.mockResolvedValue({ mtime: 1001 });
+      mockGetFileMtime.mockResolvedValue({ path: '/path/to/file.ipynb', mtime: 1000 });
+      mockSaveFileContentWithMtime.mockResolvedValue({ success: true, mtime: 1001 });
 
       const result = await saveWithConflictCheck(
         '/path/to/file.ipynb',
@@ -140,7 +140,7 @@ describe('conflictService', () => {
     });
 
     it('should return conflict info when remote is newer', async () => {
-      mockGetFileMtime.mockResolvedValue({ mtime: 2000 });
+      mockGetFileMtime.mockResolvedValue({ path: '/path/to/file.ipynb', mtime: 2000 });
 
       const result = await saveWithConflictCheck(
         '/path/to/file.ipynb',
@@ -157,7 +157,7 @@ describe('conflictService', () => {
     });
 
     it('should save when lastKnownMtime is null (new file)', async () => {
-      mockSaveFileContentWithMtime.mockResolvedValue({ mtime: 1000 });
+      mockSaveFileContentWithMtime.mockResolvedValue({ success: true, mtime: 1000 });
 
       const result = await saveWithConflictCheck(
         '/path/to/file.ipynb',
@@ -173,7 +173,7 @@ describe('conflictService', () => {
     });
 
     it('should handle save errors', async () => {
-      mockGetFileMtime.mockResolvedValue({ mtime: 1000 });
+      mockGetFileMtime.mockResolvedValue({ path: '/path/to/file.ipynb', mtime: 1000 });
       mockSaveFileContentWithMtime.mockRejectedValue(new Error('Save failed'));
 
       const result = await saveWithConflictCheck(
@@ -188,7 +188,7 @@ describe('conflictService', () => {
     });
 
     it('should handle null response from save', async () => {
-      mockGetFileMtime.mockResolvedValue({ mtime: 1000 });
+      mockGetFileMtime.mockResolvedValue({ path: '/path/to/file.ipynb', mtime: 1000 });
       mockSaveFileContentWithMtime.mockResolvedValue(null);
 
       const result = await saveWithConflictCheck(
@@ -203,8 +203,8 @@ describe('conflictService', () => {
     });
 
     it('should pass history to save function', async () => {
-      mockGetFileMtime.mockResolvedValue({ mtime: 1000 });
-      mockSaveFileContentWithMtime.mockResolvedValue({ mtime: 1001 });
+      mockGetFileMtime.mockResolvedValue({ path: '/path/to/file.ipynb', mtime: 1000 });
+      mockSaveFileContentWithMtime.mockResolvedValue({ success: true, mtime: 1001 });
 
       const mockHistory = [{ type: 'insertCell', index: 0, cell: mockCells[0] }];
 
@@ -231,7 +231,7 @@ describe('conflictService', () => {
     ];
 
     it('should save without checking for conflicts', async () => {
-      mockSaveFileContentWithMtime.mockResolvedValue({ mtime: 3000 });
+      mockSaveFileContentWithMtime.mockResolvedValue({ success: true, mtime: 3000 });
 
       const result = await forceSaveLocal('/path/to/file.ipynb', mockCells, 'python3');
 
@@ -260,7 +260,7 @@ describe('conflictService', () => {
     });
 
     it('should pass history to save function', async () => {
-      mockSaveFileContentWithMtime.mockResolvedValue({ mtime: 3000 });
+      mockSaveFileContentWithMtime.mockResolvedValue({ success: true, mtime: 3000 });
 
       const mockHistory = [{ type: 'insertCell', index: 0, cell: mockCells[0] }];
 

@@ -47,9 +47,14 @@ export interface VerifyResult {
   error?: string;
 }
 
+// Rate limiting: max 5 attempts per 30 seconds
+const MAX_ATTEMPTS = 5;
+const WINDOW_MS = 30000;
+
 class AuthService {
   private config: AuthConfig | null = null;
   private initialized = false;
+  private failedAttempts: number[] = []; // timestamps of failed attempts
 
   /**
    * Initialize the auth service
@@ -84,6 +89,9 @@ class AuthService {
       setupComplete: false,
       createdAt: Date.now(),
     };
+
+    // Save immediately so secret persists across restarts during setup
+    this.saveConfig();
 
     this.initialized = true;
     return true; // Setup needed
@@ -154,6 +162,16 @@ class AuthService {
       return { success: false, error: 'Auth not initialized' };
     }
 
+    // Rate limiting: clean old attempts and check
+    const now = Date.now();
+    this.failedAttempts = this.failedAttempts.filter(t => now - t < WINDOW_MS);
+
+    if (this.failedAttempts.length >= MAX_ATTEMPTS) {
+      const oldestAttempt = this.failedAttempts[0];
+      const waitSeconds = Math.ceil((WINDOW_MS - (now - oldestAttempt)) / 1000);
+      return { success: false, error: `Too many attempts. Try again in ${waitSeconds}s` };
+    }
+
     // Verify TOTP code
     const isValid = authenticator.verify({
       token: code,
@@ -161,8 +179,13 @@ class AuthService {
     });
 
     if (!isValid) {
-      return { success: false, error: 'Invalid verification code' };
+      this.failedAttempts.push(now);
+      const remaining = MAX_ATTEMPTS - this.failedAttempts.length;
+      return { success: false, error: `Invalid code. ${remaining} attempts remaining` };
     }
+
+    // Success - clear failed attempts
+    this.failedAttempts = [];
 
     // Mark setup as complete on first successful verification
     if (!this.config.setupComplete) {

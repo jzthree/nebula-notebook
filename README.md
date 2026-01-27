@@ -8,16 +8,14 @@ Nebula is what notebooks should feel like in 2025 — built for what's coming ne
 git clone https://github.com/jzthree/nebula-notebook.git
 cd nebula-notebook
 npm install
-cd server && pip install -r requirements.txt && cd ..
-
-# Configure API keys (optional, for AI features)
-cp server/.env.example server/.env
-# Edit server/.env with your API keys
+cd node-server && npm install && cd ..
 
 npm run start
 ```
 
-Open http://localhost:3000
+On first start, a QR code will appear in the terminal. Scan it with an authenticator app (Google Authenticator, Authy, etc.) to set up 2FA.
+
+Open http://localhost:3000 and enter your 6-digit code.
 
 ## Features
 
@@ -52,8 +50,7 @@ Open http://localhost:3000
 ## Prerequisites
 
 - Node.js 18+
-- Python 3.10+
-- Jupyter kernels (`pip install ipykernel`)
+- Python 3.10+ with Jupyter kernels (`pip install ipykernel`)
 
 ## Project Structure
 
@@ -63,18 +60,30 @@ nebula-notebook/
 ├── hooks/            # Custom React hooks
 ├── lib/              # Core utilities (diff, operations)
 ├── services/         # Frontend API clients
-├── server/           # Python FastAPI backend
-│   ├── main.py
-│   ├── kernel_service.py
-│   ├── llm_service.py
-│   └── fs_service.py
+├── node-server/      # Node.js Express backend
+│   └── src/
+│       ├── index.ts          # Server entry point
+│       ├── kernel/           # Jupyter kernel management (ZeroMQ)
+│       ├── auth/             # 2FA authentication
+│       └── routes/           # API routes
 └── types.ts
 ```
+
+## Authentication
+
+Nebula uses TOTP-based two-factor authentication:
+
+1. **First Start**: QR code printed to terminal - scan with authenticator app
+2. **Login**: Enter 6-digit code in browser
+3. **Trust Browser**: Check option for 30-day sessions
+
+Config stored in `~/.nebula/auth.json`. Multiple servers sharing the same home directory share the same 2FA.
 
 ## Tech Stack
 
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, CodeMirror
-- **Backend**: FastAPI, jupyter_client
+- **Backend**: Node.js, Express, ZeroMQ (Jupyter kernel protocol)
+- **Auth**: TOTP (otplib), JWT (jsonwebtoken)
 - **AI**: OpenAI, Anthropic, Google GenAI SDKs
 
 ## License

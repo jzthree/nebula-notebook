@@ -174,7 +174,8 @@ export interface ClearNotebookOp {
 export interface ClearOutputsOp {
   type: 'clearOutputs';
   notebookPath: string;
-  cellIds?: string[];  // If not provided, clears all cells
+  cellId?: string;     // Single cell ID (for convenience)
+  cellIds?: string[];  // Multiple cell IDs; if neither provided, clears all cells
 }
 
 export interface ExecuteCellOp {
@@ -268,6 +269,8 @@ export interface OperationResult {
   deletedCount?: number;
   // For clearOutputs operation
   clearedCount?: number;
+  clearedIds?: string[];
+  notFound?: string[];
   // For session operations
   warning?: string;
   previousSession?: AgentSessionInfo;
@@ -601,7 +604,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           const metadataChanges: Record<string, { old: unknown; new: unknown }> = {};
           for (const [key, newValue] of Object.entries(changes)) {
             if (key === 'id') continue; // Skip ID (handled above)
-            const oldValue = (cell as Record<string, unknown>)[key];
+            const oldValue = (cell as unknown as Record<string, unknown>)[key];
             metadataChanges[key] = { old: oldValue, new: newValue };
           }
 

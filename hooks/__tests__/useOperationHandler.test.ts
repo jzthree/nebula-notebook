@@ -63,10 +63,10 @@ const originalWebSocket = global.WebSocket;
 
 // Import after WebSocket mock is set up
 import { useOperationHandler, NotebookOperation, OperationResult } from '../useOperationHandler';
-import { Cell, CellType } from '../../types';
+import { Cell, CellType, CellOutput } from '../../types';
 
 describe('useOperationHandler', () => {
-  // Mock callbacks
+  // Mock callbacks - use ReturnType<typeof vi.fn> and cast when passing to hook
   let mockInsertCell: ReturnType<typeof vi.fn>;
   let mockDeleteCell: ReturnType<typeof vi.fn>;
   let mockMoveCell: ReturnType<typeof vi.fn>;
@@ -111,13 +111,13 @@ describe('useOperationHandler', () => {
       useOperationHandler({
         filePath,
         cells,
-        insertCell: mockInsertCell,
-        deleteCell: mockDeleteCell,
-        moveCell: mockMoveCell,
-        updateContent: mockUpdateContent,
-        updateContentAI: mockUpdateContentAI,
-        updateMetadata: mockUpdateMetadata,
-        setCellOutputs: mockSetCellOutputs,
+        insertCell: mockInsertCell as (index: number, cell: Cell) => void,
+        deleteCell: mockDeleteCell as (index: number) => void,
+        moveCell: mockMoveCell as (fromIndex: number, toIndex: number) => void,
+        updateContent: mockUpdateContent as (cellId: string, content: string) => void,
+        updateContentAI: mockUpdateContentAI as (cellId: string, content: string) => void,
+        updateMetadata: mockUpdateMetadata as (cellId: string, changes: Record<string, { old: unknown; new: unknown }>) => void,
+        setCellOutputs: mockSetCellOutputs as (cellId: string, outputs: CellOutput[], executionCount?: number) => void,
       })
     );
   };
@@ -344,13 +344,13 @@ describe('useOperationHandler', () => {
         useOperationHandler({
           filePath: '/test/notebook.ipynb',
           cells: initialCells,
-          insertCell: mockInsertCell,
-          deleteCell: mockDeleteCell,
-          moveCell: mockMoveCell,
-          updateContent: mockUpdateContent,
+          insertCell: mockInsertCell as (index: number, cell: Cell) => void,
+          deleteCell: mockDeleteCell as (index: number) => void,
+          moveCell: mockMoveCell as (fromIndex: number, toIndex: number) => void,
+          updateContent: mockUpdateContent as (cellId: string, content: string) => void,
           // No updateContentAI
-          updateMetadata: mockUpdateMetadata,
-          setCellOutputs: mockSetCellOutputs,
+          updateMetadata: mockUpdateMetadata as (cellId: string, changes: Record<string, { old: unknown; new: unknown }>) => void,
+          setCellOutputs: mockSetCellOutputs as (cellId: string, outputs: CellOutput[], executionCount?: number) => void,
         })
       );
 
