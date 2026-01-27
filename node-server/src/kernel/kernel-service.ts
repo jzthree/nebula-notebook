@@ -24,7 +24,6 @@ import {
 } from './types';
 import { SessionStore } from './session-store';
 import { discoverKernelSpecs, getKernelSpec, KernelSpec } from './kernelspec';
-import { resizeImageIfNeeded } from '../utils/imageResize';
 
 // ZeroMQ types - imported dynamically to handle missing native bindings
 type ZmqSocket = {
@@ -552,7 +551,7 @@ export class KernelService {
             content: msgContent.text as string,
           });
         } else if (msgType === 'execute_result' || msgType === 'display_data') {
-          const output = await this.formatDisplayData(msgContent.data as Record<string, string>);
+          const output = this.formatDisplayData(msgContent.data as Record<string, string>);
           if (output) {
             await onOutput(output);
           }
@@ -716,13 +715,10 @@ export class KernelService {
 
   /**
    * Format display data for output
-   * Resizes images that exceed Claude API limits (2000px max dimension)
    */
-  private async formatDisplayData(data: Record<string, string>): Promise<KernelOutput | null> {
+  private formatDisplayData(data: Record<string, string>): KernelOutput | null {
     if ('image/png' in data) {
-      // Resize image if it exceeds Claude's multi-image limit (2000px)
-      const resizedContent = await resizeImageIfNeeded(data['image/png']);
-      return { type: 'image', content: resizedContent };
+      return { type: 'image', content: data['image/png'] };
     }
     if ('text/html' in data) {
       return { type: 'html', content: data['text/html'] };
