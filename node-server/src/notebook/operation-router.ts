@@ -234,6 +234,18 @@ export class OperationRouter {
   }
 
   /**
+   * Get the first available UI connection (for operations that can use any UI).
+   */
+  private getAnyUIConnection(): { path: string; connection: UIConnection } | null {
+    for (const [uiPath, conn] of this.uiConnections) {
+      if (conn.websocket.readyState === WebSocket.OPEN) {
+        return { path: uiPath, connection: conn };
+      }
+    }
+    return null;
+  }
+
+  /**
    * Apply a notebook operation.
    */
   async applyOperation(operation: Record<string, unknown>): Promise<OperationResult> {
@@ -241,7 +253,12 @@ export class OperationRouter {
     const normalizedPath = path.resolve(notebookPath);
     const opType = operation.type as string;
     const agentId = operation.agentId as string | undefined;
-    const hasUI = this.uiConnections.has(normalizedPath);
+
+    // For createNotebook, route to ANY connected UI (not path-specific)
+    // This allows the UI to open the new notebook in a new tab
+    const isCreateNotebook = opType === 'createNotebook';
+    const anyUI = isCreateNotebook ? this.getAnyUIConnection() : null;
+    const hasUI = isCreateNotebook ? (anyUI !== null) : this.uiConnections.has(normalizedPath);
     const backend: Backend = hasUI ? 'ui' : 'headless';
 
     // Clean up expired locks
@@ -327,8 +344,10 @@ export class OperationRouter {
     }
 
     if (hasUI) {
-      console.log(`  -> Routing to UI`);
-      const result = await this.forwardToUI(normalizedPath, operation);
+      // For createNotebook, use any available UI connection
+      const uiPath = isCreateNotebook && anyUI ? anyUI.path : normalizedPath;
+      console.log(`  -> Routing to UI (via ${uiPath})`);
+      const result = await this.forwardToUI(uiPath, operation);
       return { ...result, backend: 'ui' as Backend };
     } else {
       console.log(`  -> Routing to HEADLESS`);
