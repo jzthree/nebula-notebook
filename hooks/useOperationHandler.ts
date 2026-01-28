@@ -286,6 +286,9 @@ export interface OperationResult {
   operationType?: string;
   canUndo?: boolean;
   canRedo?: boolean;
+  // For createNotebook operation (popup handling)
+  popupBlocked?: boolean;
+  popupMessage?: string;
 }
 
 interface OperationMessage {
@@ -745,11 +748,28 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           }
 
           const result = await createNotebookRef.current(notebookPath, overwrite, kernelName);
+
+          // If creation succeeded, try to open in a new tab
+          let popupBlocked = false;
+          let popupMessage: string | undefined;
+
+          if (result.success) {
+            const newTabUrl = `${window.location.origin}?file=${encodeURIComponent(notebookPath)}`;
+            const popup = window.open(newTabUrl, '_blank');
+
+            if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+              popupBlocked = true;
+              popupMessage = `Notebook created at ${notebookPath}. To open it automatically, please allow popups for this site.`;
+            }
+          }
+
           return {
             success: result.success,
             path: notebookPath,
             mtime: result.mtime,
             error: result.error,
+            popupBlocked,
+            popupMessage,
           };
         }
 
