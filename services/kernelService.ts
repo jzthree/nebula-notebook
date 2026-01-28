@@ -390,18 +390,16 @@ class KernelService {
    * @param sessionId - The session to stop
    */
   async stopKernel(sessionId: string): Promise<void> {
+    // Clean up local session if we have it
     const session = this.sessions.get(sessionId);
-    if (!session) return;
-
-    // Close WebSocket
-    if (session.ws) {
-      session.ws.close();
+    if (session) {
+      if (session.ws) {
+        session.ws.close();
+      }
+      this.sessions.delete(sessionId);
     }
 
-    // Remove from sessions map
-    this.sessions.delete(sessionId);
-
-    // Stop kernel on server
+    // Always send DELETE to server (kernel may exist even if not in local sessions)
     await fetch(`${API_BASE}/kernels/${sessionId}`, {
       method: 'DELETE'
     });
