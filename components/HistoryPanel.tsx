@@ -337,10 +337,7 @@ function getOperationDescription(op: TimestampedOperation): string {
 
 // Check if operation is from AI
 function isAIOperation(op: TimestampedOperation): boolean {
-  if (op.type === 'updateContent' || op.type === 'updateContentPatch') {
-    return (op as any).source === 'ai';
-  }
-  return false;
+  return (op as any).source === 'ai';
 }
 
 // Filter options

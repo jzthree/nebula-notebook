@@ -79,6 +79,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Cell, CellType } from '../types';
 import { validateMetadataValue, CELL_METADATA_SCHEMA } from '../lib/cellMetadata';
 import { authService } from '../services/authService';
+import { EditSource } from './useUndoRedo';
 
 // Operation types (matching backend/MCP types)
 export interface InsertCellOp {
@@ -350,22 +351,22 @@ interface UseOperationHandlerOptions {
   cells: Cell[];
 
   /** Insert cell callback (from useUndoRedo) */
-  insertCell: (index: number, cell: Cell) => void;
+  insertCell: (index: number, cell: Cell, source?: EditSource) => void;
 
   /** Delete cell callback (from useUndoRedo) */
-  deleteCell: (index: number) => void;
+  deleteCell: (index: number, source?: EditSource) => Cell | null;
 
   /** Move cell callback (from useUndoRedo) */
-  moveCell: (fromIndex: number, toIndex: number) => void;
+  moveCell: (fromIndex: number, toIndex: number, source?: EditSource) => void;
 
   /** Update cell content callback (from useUndoRedo) */
-  updateContent: (cellId: string, content: string) => void;
+  updateContent: (cellId: string, content: string, source?: EditSource) => void;
 
   /** Update cell content from AI callback (from useUndoRedo) */
   updateContentAI?: (cellId: string, content: string) => void;
 
   /** Generic metadata update callback (from useUndoRedo) - schema-driven */
-  updateMetadata: (cellId: string, changes: Record<string, { old: unknown; new: unknown }>) => void;
+  updateMetadata: (cellId: string, changes: Record<string, { old: unknown; new: unknown }>, source?: EditSource) => void;
 
   /** Set cell outputs callback */
   setCellOutputs?: (cellId: string, outputs: Cell['outputs'], executionCount?: number) => void;
@@ -544,7 +545,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             ? currentCells.length
             : index;
 
-          insertCellRef.current(actualIndex, newCell);
+          insertCellRef.current(actualIndex, newCell, 'ai');
 
           // Update cellsRef immediately to avoid stale reads before re-render
           const updatedCells = [...currentCells];
@@ -579,7 +580,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             return { success: false, error: 'Must provide cellId or cellIndex' };
           }
 
-          deleteCellRef.current(targetIndex);
+          deleteCellRef.current(targetIndex, 'ai');
 
           // Update cellsRef immediately to avoid stale reads before re-render
           cellsRef.current = currentCells.filter((_, i) => i !== targetIndex);
@@ -647,7 +648,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
           // Apply all changes through the generic updateMetadata callback
           if (Object.keys(metadataChanges).length > 0) {
-            updateMetadataRef.current(cellId, metadataChanges);
+            updateMetadataRef.current(cellId, metadataChanges, 'ai');
           }
 
           return {
@@ -667,7 +668,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             return { success: false, error: `Target index ${toIndex} out of range` };
           }
 
-          moveCellRef.current(fromIndex, toIndex);
+          moveCellRef.current(fromIndex, toIndex, 'ai');
 
           return { success: true };
         }

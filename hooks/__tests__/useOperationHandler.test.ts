@@ -111,12 +111,12 @@ describe('useOperationHandler', () => {
       useOperationHandler({
         filePath,
         cells,
-        insertCell: mockInsertCell as (index: number, cell: Cell) => void,
-        deleteCell: mockDeleteCell as (index: number) => void,
-        moveCell: mockMoveCell as (fromIndex: number, toIndex: number) => void,
-        updateContent: mockUpdateContent as (cellId: string, content: string) => void,
-        updateContentAI: mockUpdateContentAI as (cellId: string, content: string) => void,
-        updateMetadata: mockUpdateMetadata as (cellId: string, changes: Record<string, { old: unknown; new: unknown }>) => void,
+        insertCell: mockInsertCell as any,
+        deleteCell: mockDeleteCell as any,
+        moveCell: mockMoveCell as any,
+        updateContent: mockUpdateContent as any,
+        updateContentAI: mockUpdateContentAI as any,
+        updateMetadata: mockUpdateMetadata as any,
         setCellOutputs: mockSetCellOutputs as (cellId: string, outputs: CellOutput[], executionCount?: number) => void,
       })
     );
@@ -344,12 +344,12 @@ describe('useOperationHandler', () => {
         useOperationHandler({
           filePath: '/test/notebook.ipynb',
           cells: initialCells,
-          insertCell: mockInsertCell as (index: number, cell: Cell) => void,
-          deleteCell: mockDeleteCell as (index: number) => void,
-          moveCell: mockMoveCell as (fromIndex: number, toIndex: number) => void,
-          updateContent: mockUpdateContent as (cellId: string, content: string) => void,
+          insertCell: mockInsertCell as any,
+          deleteCell: mockDeleteCell as any,
+          moveCell: mockMoveCell as any,
+          updateContent: mockUpdateContent as any,
           // No updateContentAI
-          updateMetadata: mockUpdateMetadata as (cellId: string, changes: Record<string, { old: unknown; new: unknown }>) => void,
+          updateMetadata: mockUpdateMetadata as any,
           setCellOutputs: mockSetCellOutputs as (cellId: string, outputs: CellOutput[], executionCount?: number) => void,
         })
       );

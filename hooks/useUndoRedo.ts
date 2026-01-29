@@ -62,14 +62,15 @@ export type EditSource = 'user' | 'ai';
 export type MetadataChanges = Record<string, { old: unknown; new: unknown }>;
 
 // Undoable operations - can be reversed
+// All operations can have a source field to track if they came from user or AI
 export type UndoableOperation =
-  | { type: 'insertCell'; index: number; cell: Cell }
-  | { type: 'deleteCell'; index: number; cell: Cell }
-  | { type: 'moveCell'; fromIndex: number; toIndex: number }
+  | { type: 'insertCell'; index: number; cell: Cell; source?: EditSource }
+  | { type: 'deleteCell'; index: number; cell: Cell; source?: EditSource }
+  | { type: 'moveCell'; fromIndex: number; toIndex: number; source?: EditSource }
   | { type: 'updateContent'; cellId: string; oldContent: string; newContent: string; source?: EditSource }
   | { type: 'updateContentPatch'; cellId: string; patch: Patch; oldHash: string; newHash: string; source?: EditSource }
-  | { type: 'updateMetadata'; cellId: string; changes: MetadataChanges }
-  | { type: 'batch'; operations: UndoableOperation[] };
+  | { type: 'updateMetadata'; cellId: string; changes: MetadataChanges; source?: EditSource }
+  | { type: 'batch'; operations: UndoableOperation[]; source?: EditSource };
 
 // Non-undoable operations - for tracking/logging only
 // Note: runCell does NOT include content - it can be reconstructed from edit history
@@ -384,26 +385,26 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   }, [addToFullHistory, convertRedoStackToHistory]);
 
   // Insert a cell at index
-  const insertCell = useCallback((index: number, cell: Cell) => {
+  const insertCell = useCallback((index: number, cell: Cell, source: EditSource = 'user') => {
     const snapshot = cloneCell(cell);
     // Initialize content tracking for the new cell
     lastContentRef.current.set(snapshot.id, snapshot.content);
-    executeOperation({ type: 'insertCell', index, cell: snapshot });
+    executeOperation({ type: 'insertCell', index, cell: snapshot, source });
   }, [executeOperation]);
 
   // Delete a cell at index, returns the deleted cell
-  const deleteCell = useCallback((index: number): Cell | null => {
+  const deleteCell = useCallback((index: number, source: EditSource = 'user'): Cell | null => {
     const cellToDelete = cells[index];
     if (!cellToDelete) return null;
     const snapshot = cloneCell(cellToDelete);
-    executeOperation({ type: 'deleteCell', index, cell: snapshot });
+    executeOperation({ type: 'deleteCell', index, cell: snapshot, source });
     return snapshot;
   }, [cells, executeOperation]);
 
   // Move a cell from one index to another
-  const moveCell = useCallback((fromIndex: number, toIndex: number) => {
+  const moveCell = useCallback((fromIndex: number, toIndex: number, source: EditSource = 'user') => {
     if (fromIndex === toIndex) return;
-    executeOperation({ type: 'moveCell', fromIndex, toIndex });
+    executeOperation({ type: 'moveCell', fromIndex, toIndex, source });
   }, [executeOperation]);
 
   // Update cell content - tracks old content for undo
@@ -455,7 +456,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Change cell type
   // Generic metadata update - the stable core that never needs to change
   // New cell properties just need to be passed in the changes object
-  const updateMetadata = useCallback((cellId: string, changes: MetadataChanges) => {
+  const updateMetadata = useCallback((cellId: string, changes: MetadataChanges, source: EditSource = 'user') => {
     // Read current cells to compute changes (this is a synchronous read, not inside a state updater)
     const currentCells = cellsRef.current;
     const cell = currentCells.find(c => c.id === cellId);
@@ -485,7 +486,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     const op: Operation = {
       type: 'updateMetadata',
       cellId,
-      changes: actualChanges
+      changes: actualChanges,
+      source
     };
 
     // Add to history first to get the operationId (side effect, but only runs once per call)
