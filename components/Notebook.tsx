@@ -4,7 +4,7 @@ import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
 import { getSettings, saveSettings, IndentationPreference } from '../services/llmService';
-import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History } from 'lucide-react';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -205,6 +205,7 @@ export const Notebook: React.FC = () => {
     hasRedoToFlush,
     getUnflushedState,
     setUnflushedState,
+    getUserChangesSince,
   } = useUndoRedo([]);  // Start with empty cells
 
   // Compute preview cells when viewing history
@@ -546,6 +547,7 @@ export const Notebook: React.FC = () => {
     redo: rawRedo,
     canUndo,
     canRedo,
+    getUserChangesSince,
     onAgentOperation: useCallback((operation, result) => {
       // Skip read-only operations
       if (operation.type === 'readCell' || operation.type === 'readCellOutput') return;
@@ -1086,7 +1088,7 @@ export const Notebook: React.FC = () => {
     setLastExecutionResult(null);
   }, []);
 
-  // Kernel memory usage tracking
+  // Kernel memory usage tracking (only when tab is visible)
   useEffect(() => {
     if (!kernelSessionId) {
       setMemoryUsage(null);
@@ -1095,6 +1097,9 @@ export const Notebook: React.FC = () => {
 
     let notFoundCount = 0;
     const updateMemory = async () => {
+      // Skip polling when tab is hidden to reduce load
+      if (document.hidden) return;
+
       try {
         const response = await fetch(`/api/kernels/${kernelSessionId}/status`);
         if (response.ok) {
@@ -1123,7 +1128,7 @@ export const Notebook: React.FC = () => {
       }
     };
     updateMemory();
-    const interval = setInterval(updateMemory, 5000); // Update every 5 seconds
+    const interval = setInterval(updateMemory, 10000); // Update every 10 seconds (reduced from 5)
     return () => clearInterval(interval);
   }, [kernelSessionId]);
 
@@ -1887,6 +1892,7 @@ export const Notebook: React.FC = () => {
     setIsKernelMenuOpen(false);
     setKernelStatus('starting');
     setIsKernelReady(false);
+    setCurrentKernel(kernelName); // Update name immediately so UI shows new kernel with "starting" status
 
     try {
       // Use getOrCreateKernelForFile which handles kernel switching on the backend
@@ -1902,9 +1908,11 @@ export const Notebook: React.FC = () => {
         const newSessionId = await kernelService.startKernel(kernelName);
         setKernelSessionId(newSessionId);
       }
-      setCurrentKernel(kernelName);
       setIsKernelReady(true);
       setKernelStatus('idle');
+      // Reset execution counter since it's a new kernel
+      setCells(prev => prev.map(c => ({ ...c, executionCount: undefined })));
+      setKernelExecutionCount(0);
       saveSettings({ lastKernel: kernelName });
     } catch (error) {
       console.error('Failed to switch kernel:', error);
@@ -1928,6 +1936,28 @@ export const Notebook: React.FC = () => {
       logOperation({ type: 'restartKernel' });
     } catch (error) {
       console.error('Failed to restart kernel:', error);
+      // If session not found, start a fresh kernel
+      if (error instanceof Error && error.message.includes('Session not found')) {
+        console.log('[Notebook] Session not found, starting fresh kernel');
+        try {
+          // Clear stale session
+          setKernelSessionId(null);
+          // Start a new kernel (use getOrCreateKernelForFile if file is open)
+          const kernelToUse = currentKernel || 'python3';
+          const newSessionId = currentFileId
+            ? await kernelService.getOrCreateKernelForFile(currentFileId, kernelToUse)
+            : await kernelService.startKernel(kernelToUse);
+          setKernelSessionId(newSessionId);
+          setKernelStatus('idle');
+          setIsKernelReady(true);
+          setCells(prev => prev.map(c => ({ ...c, executionCount: undefined })));
+          setKernelExecutionCount(0);
+          logOperation({ type: 'restartKernel' });
+          return;
+        } catch (startError) {
+          console.error('Failed to start fresh kernel:', startError);
+        }
+      }
       setKernelStatus('disconnected');
     }
   };
@@ -2592,7 +2622,7 @@ export const Notebook: React.FC = () => {
                           onChange={(e) => setRenameValue(e.target.value)}
                           onBlur={finishRenameNotebook}
                           onKeyDown={handleRenameKeyDown}
-                          className="text-lg font-bold bg-white border border-blue-400 rounded px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-[200px]"
+                          className="text-lg font-bold bg-white border-2 border-blue-400 rounded px-1 py-0 focus:outline-none focus:border-blue-500 max-w-[200px] leading-normal"
                           autoFocus
                         />
                       ) : isLoadingFile ? (
@@ -2680,10 +2710,10 @@ export const Notebook: React.FC = () => {
                                 key={kernel.name}
                                 onClick={() => switchKernel(kernel.name)}
                                 className={`w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 ${
-                                  kernel.name === currentKernel ? 'bg-blue-50 text-blue-700' : 'text-slate-700'
+                                  kernel.name === currentKernel ? 'bg-green-50 text-green-700' : 'text-slate-700'
                                 }`}
                               >
-                                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${kernel.name === currentKernel ? 'bg-blue-500' : 'bg-green-500'}`}></span>
+                                <span className="w-2 h-2 rounded-full flex-shrink-0 bg-green-500"></span>
                                 <span className="truncate flex-1">{kernel.display_name}</span>
                                 <span className="text-[10px] text-slate-400">{kernel.language}</span>
                               </button>
@@ -3230,9 +3260,9 @@ export const Notebook: React.FC = () => {
 
             {/* Kernel memory usage */}
             {memoryUsage && (
-              <span className="flex items-center gap-1 tabular-nums" title={`Kernel memory: ${(memoryUsage.used / 1024 / 1024).toFixed(0)}MB`}>
-                <Cpu className="w-3 h-3" />
-                Kernel: {(memoryUsage.used / 1024 / 1024).toFixed(0)}MB
+              <span className="flex items-center gap-1 tabular-nums" title="Kernel memory (RSS)">
+                <MemoryStick className="w-3 h-3" />
+                {(memoryUsage.used / 1024 / 1024).toFixed(0)} MB
               </span>
             )}
           </div>

@@ -105,6 +105,15 @@ export interface UnflushedState {
   lastFlushedContent: string;
 }
 
+/** Summary of a user change for agent awareness */
+export interface UserChangeSummary {
+  type: string;
+  cellId?: string;
+  cellIndex?: number;
+  timestamp: number;
+  description: string;
+}
+
 interface UseUndoRedoResult {
   cells: Cell[];
   setCells: (newCells: Cell[] | ((prev: Cell[]) => Cell[])) => void;
@@ -152,6 +161,8 @@ interface UseUndoRedoResult {
   // Session state for unflushed edits
   getUnflushedState: (activeCellId: string | null, cells: Cell[]) => UnflushedState | null;
   setUnflushedState: (state: UnflushedState | null) => void;
+  // User change tracking for agent awareness
+  getUserChangesSince: (sinceTimestamp: number) => UserChangeSummary[];
 }
 
 function cloneCell(cell: Cell): Cell {
@@ -896,6 +907,84 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     return redoStackRef.current.length > 0;
   }, []);
 
+  // Get user changes since a timestamp (for agent awareness)
+  // Returns summaries of user operations, filtering out AI operations
+  const getUserChangesSince = useCallback((sinceTimestamp: number): UserChangeSummary[] => {
+    const currentCells = cellsRef.current;
+    const summaries: UserChangeSummary[] = [];
+
+    for (const op of fullHistoryRef.current) {
+      // Skip operations before the timestamp
+      if (op.timestamp <= sinceTimestamp) continue;
+      // Skip undo operations (they're tracked separately)
+      if ((op as any).isUndo) continue;
+      // Skip AI-sourced operations
+      if ((op as any).source === 'ai') continue;
+      // Skip log-only operations (runCell, etc.) - they don't change content
+      if (op.type === 'runCell' || op.type === 'runAllCells' ||
+          op.type === 'interruptKernel' || op.type === 'restartKernel' ||
+          op.type === 'executionComplete' || op.type === 'snapshot') continue;
+
+      // Build a human-readable summary
+      let description = '';
+      let cellId: string | undefined;
+      let cellIndex: number | undefined;
+
+      switch (op.type) {
+        case 'insertCell':
+          cellId = op.cell.id;
+          cellIndex = op.index;
+          description = `Inserted ${op.cell.type} cell at #${op.index + 1}`;
+          break;
+        case 'deleteCell':
+          cellId = op.cell.id;
+          cellIndex = op.index;
+          description = `Deleted cell #${op.index + 1}`;
+          break;
+        case 'moveCell':
+          // Find cell at the destination index
+          if (op.toIndex >= 0 && op.toIndex < currentCells.length) {
+            cellId = currentCells[op.toIndex].id;
+          }
+          description = `Moved cell from #${op.fromIndex + 1} to #${op.toIndex + 1}`;
+          break;
+        case 'updateContent':
+        case 'updateContentPatch':
+          cellId = op.cellId;
+          cellIndex = currentCells.findIndex(c => c.id === op.cellId);
+          if (cellIndex === -1) cellIndex = undefined;
+          const preview = op.type === 'updateContent'
+            ? op.newContent.slice(0, 50).replace(/\n/g, ' ')
+            : '[content updated]';
+          description = `Edited cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}: "${preview}${preview.length >= 50 ? '...' : ''}"`;
+          break;
+        case 'updateMetadata':
+          cellId = op.cellId;
+          cellIndex = currentCells.findIndex(c => c.id === op.cellId);
+          if (cellIndex === -1) cellIndex = undefined;
+          const changes = Object.keys(op.changes).join(', ');
+          description = `Changed ${changes} on cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}`;
+          break;
+        case 'batch':
+          description = `Batch operation (${op.operations.length} changes)`;
+          break;
+        default:
+          // This handles any unexpected operation types
+          description = `Operation: ${(op as TimestampedOperation).type}`;
+      }
+
+      summaries.push({
+        type: (op as TimestampedOperation).type,
+        cellId,
+        cellIndex,
+        timestamp: (op as TimestampedOperation).timestamp,
+        description,
+      });
+    }
+
+    return summaries;
+  }, []);
+
   return {
     cells,
     setCells,
@@ -929,5 +1018,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     // Session state for unflushed edits
     getUnflushedState,
     setUnflushedState,
+    // User change tracking for agent awareness
+    getUserChangesSince,
   };
 };

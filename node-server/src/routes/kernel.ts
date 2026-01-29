@@ -92,8 +92,9 @@ router.get('/kernels/debug', (_req: Request, res: Response) => {
  * List all active kernel sessions
  * Transforms to snake_case to match Python API format expected by frontend
  */
-router.get('/kernels/sessions', (_req: Request, res: Response) => {
-  const sessions = kernelService.getAllSessions().map(s => ({
+router.get('/kernels/sessions', async (_req: Request, res: Response) => {
+  const allSessions = await kernelService.getAllSessions();
+  const sessions = allSessions.map(s => ({
     id: s.id,
     kernel_name: s.kernelName,
     file_path: s.filePath,
@@ -214,10 +215,19 @@ router.post('/kernels/:sessionId/restart', async (req: Request, res: Response) =
 /**
  * Get kernel session status
  */
-router.get('/kernels/:sessionId/status', (req: Request, res: Response) => {
-  const status = kernelService.getSessionStatus(req.params.sessionId);
+router.get('/kernels/:sessionId/status', async (req: Request, res: Response) => {
+  const status = await kernelService.getSessionStatus(req.params.sessionId);
   if (status) {
-    res.json(status);
+    // Convert to snake_case for frontend compatibility
+    res.json({
+      id: status.id,
+      kernel_name: status.kernelName,
+      file_path: status.filePath,
+      status: status.status,
+      execution_count: status.executionCount,
+      memory_mb: status.memoryMb,
+      pid: status.pid,
+    });
   } else {
     res.status(404).json({ detail: 'Session not found' });
   }

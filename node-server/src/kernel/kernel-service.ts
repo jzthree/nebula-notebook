@@ -10,7 +10,10 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, exec, ChildProcess } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 import {
   KernelSession,
   KernelOutput,
@@ -155,6 +158,7 @@ export class KernelService {
 
     const sessionId = uuidv4();
     const normalizedFilePath = options.filePath ? this.normalizePath(options.filePath) : null;
+
 
     // Generate connection file
     const { config: connConfig, filePath: connFile } = this.generateConnectionFile(sessionId);
@@ -956,11 +960,13 @@ export class KernelService {
   /**
    * Get session status
    */
-  getSessionStatus(sessionId: string): SessionInfo | null {
+  async getSessionStatus(sessionId: string): Promise<SessionInfo | null> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return null;
     }
+
+    const memoryMap = session.pid ? await this.getProcessMemoryMap([session.pid]) : new Map();
 
     return {
       id: session.id,
@@ -969,16 +975,24 @@ export class KernelService {
       status: session.status,
       executionCount: session.executionCount,
       pid: session.pid,
-      memoryMb: null, // Would need platform-specific code
+      memoryMb: session.pid ? (memoryMap.get(session.pid) ?? null) : null,
     };
   }
 
   /**
    * Get all sessions
    */
-  getAllSessions(): SessionInfo[] {
-    const sessions: SessionInfo[] = [];
+  async getAllSessions(): Promise<SessionInfo[]> {
+    // Collect all PIDs for batch memory lookup
+    const pids: number[] = [];
+    for (const session of this.sessions.values()) {
+      if (session.pid) pids.push(session.pid);
+    }
 
+    // Single ps call for all PIDs
+    const memoryMap = await this.getProcessMemoryMap(pids);
+
+    const sessions: SessionInfo[] = [];
     for (const [_, session] of this.sessions) {
       sessions.push({
         id: session.id,
@@ -987,7 +1001,7 @@ export class KernelService {
         status: session.status,
         executionCount: session.executionCount,
         pid: session.pid,
-        memoryMb: null,
+        memoryMb: session.pid ? (memoryMap.get(session.pid) ?? null) : null,
       });
     }
 
@@ -1010,6 +1024,37 @@ export class KernelService {
    */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Get memory usage (RSS) for multiple processes in MB
+   * Returns a map of pid -> memoryMb
+   */
+  private async getProcessMemoryMap(pids: number[]): Promise<Map<number, number>> {
+    const result = new Map<number, number>();
+    if (pids.length === 0) return result;
+
+    try {
+      // Use single ps command for all PIDs (more efficient)
+      // ps -o pid=,rss= -p pid1,pid2,pid3 outputs: "pid rss\npid rss\n..."
+      const pidList = pids.join(',');
+      const { stdout } = await execAsync(`ps -o pid=,rss= -p ${pidList}`, { timeout: 500 });
+
+      for (const line of stdout.trim().split('\n')) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 2) {
+          const pid = parseInt(parts[0], 10);
+          const rssKb = parseInt(parts[1], 10);
+          if (!isNaN(pid) && !isNaN(rssKb)) {
+            result.set(pid, Math.round(rssKb / 1024 * 10) / 10);
+          }
+        }
+      }
+    } catch {
+      // ps command failed or timed out - return empty map
+    }
+
+    return result;
   }
 }
 

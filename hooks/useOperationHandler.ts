@@ -194,6 +194,7 @@ export interface StartAgentSessionOp {
   agentId?: string;  // Optional identifier for the agent
   clientName?: string;  // e.g., "claude-code", "cursor"
   clientVersion?: string;  // Client app version
+  force?: boolean;  // Force steal lock even if another session is active (use with user permission only)
 }
 
 export interface EndAgentSessionOp {
@@ -209,6 +210,12 @@ export interface UndoOp {
 export interface RedoOp {
   type: 'redo';
   notebookPath: string;
+}
+
+export interface GetUserChangesOp {
+  type: 'getUserChanges';
+  notebookPath: string;
+  sinceTimestamp: number;
 }
 
 export type NotebookOperation =
@@ -229,7 +236,8 @@ export type NotebookOperation =
   | ClearOutputsOp
   | ExecuteCellOp
   | UndoOp
-  | RedoOp;
+  | RedoOp
+  | GetUserChangesOp;
 
 export interface OperationResult {
   success: boolean;
@@ -289,6 +297,16 @@ export interface OperationResult {
   // For createNotebook operation (popup handling)
   popupBlocked?: boolean;
   popupMessage?: string;
+  // For getUserChanges operation
+  userChanges?: Array<{
+    type: string;
+    cellId?: string;
+    cellIndex?: number;
+    timestamp: number;
+    description: string;
+  }>;
+  // Server timestamp for tracking (returned with every operation)
+  serverTimestamp?: number;
 }
 
 interface OperationMessage {
@@ -318,7 +336,11 @@ export interface AgentSessionInfo {
   clientName?: string;
   clientVersion?: string;
   startedAt: number;
+  lastActivityAt: number;  // Updated on each operation
 }
+
+/** Session timeout in milliseconds (5 minutes of inactivity) */
+const AGENT_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface UseOperationHandlerOptions {
   /** Current file path (null if no file open) */
@@ -385,6 +407,15 @@ interface UseOperationHandlerOptions {
 
   /** Whether redo is available */
   canRedo?: boolean;
+
+  /** Get user changes since a timestamp (from useUndoRedo) */
+  getUserChangesSince?: (sinceTimestamp: number) => Array<{
+    type: string;
+    cellId?: string;
+    cellIndex?: number;
+    timestamp: number;
+    description: string;
+  }>;
 }
 
 export function useOperationHandler(options: UseOperationHandlerOptions) {
@@ -405,6 +436,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     redo,
     canUndo,
     canRedo,
+    getUserChangesSince,
   } = options;
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -428,6 +460,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const redoRef = useRef(redo);
   const canUndoRef = useRef(canUndo);
   const canRedoRef = useRef(canRedo);
+  const getUserChangesSinceRef = useRef(getUserChangesSince);
 
   // Update refs on each render
   cellsRef.current = cells;
@@ -445,6 +478,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   redoRef.current = redo;
   canUndoRef.current = canUndo;
   canRedoRef.current = canRedo;
+  getUserChangesSinceRef.current = getUserChangesSince;
 
   const [isConnected, setIsConnected] = useState(false);
   const [activeOperation, setActiveOperation] = useState<AgentOperationInfo | null>(null);
@@ -944,10 +978,27 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
         }
 
         case 'startAgentSession': {
-          const { agentId, clientName, clientVersion } = operation;
+          const { agentId, clientName, clientVersion, force } = operation as StartAgentSessionOp;
+          const now = Date.now();
 
           // Check if there's already an active session
           if (agentSessionRef.current) {
+            if (force) {
+              // Force steal the lock - end previous session and start new one
+              console.warn('[OperationHandler] Force-ending previous agent session');
+              const previousSession = agentSessionRef.current;
+              setAgentSession({
+                agentId,
+                clientName,
+                clientVersion,
+                startedAt: now,
+                lastActivityAt: now,
+              });
+              return {
+                success: true,
+                warning: `Forcibly ended previous session from ${previousSession.clientName || 'unknown agent'}.`,
+              };
+            }
             console.warn('[OperationHandler] Starting new agent session without ending previous one');
             return {
               success: true,
@@ -960,7 +1011,8 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             agentId,
             clientName,
             clientVersion,
-            startedAt: Date.now(),
+            startedAt: now,
+            lastActivityAt: now,
           });
 
           return { success: true };
@@ -1075,6 +1127,25 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           };
         }
 
+        case 'getUserChanges': {
+          const { sinceTimestamp } = operation as GetUserChangesOp;
+
+          if (!getUserChangesSinceRef.current) {
+            return {
+              success: true,
+              userChanges: [],
+              serverTimestamp: Date.now(),
+            };
+          }
+
+          const changes = getUserChangesSinceRef.current(sinceTimestamp);
+          return {
+            success: true,
+            userChanges: changes,
+            serverTimestamp: Date.now(),
+          };
+        }
+
         default:
           return { success: false, error: `Unknown operation type: ${(operation as any).type}` };
       }
@@ -1101,18 +1172,34 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
       const cellId = 'cellId' in operation ? operation.cellId :
                      'cell' in operation ? (operation as InsertCellOp).cell.id : undefined;
 
-      // Set active operation for UI indicator
-      setActiveOperation({
-        type: operation.type,
-        cellIndex,
-        cellId,
-        timestamp: Date.now(),
-      });
+      // Skip noisy polling operations from UI indicator (readCellOutput polls repeatedly)
+      const isNoisyOperation = operation.type === 'readCellOutput';
+
+      if (!isNoisyOperation) {
+        // Set active operation for UI indicator
+        setActiveOperation({
+          type: operation.type,
+          cellIndex,
+          cellId,
+          timestamp: Date.now(),
+        });
+      }
 
       const result = await applyOperation(operation);
 
+      // Update session activity timestamp on operations (keeps session alive)
+      // Skip for session management and read-only operations
+      const isSessionOp = operation.type === 'startAgentSession' || operation.type === 'endAgentSession';
+      const isReadOnlyOp = operation.type === 'readCell' || operation.type === 'readCellOutput' ||
+                          operation.type === 'searchCells' || operation.type === 'getUserChanges';
+      if (agentSessionRef.current && !isSessionOp && !isReadOnlyOp) {
+        agentSessionRef.current.lastActivityAt = Date.now();
+      }
+
       // Clear active operation after a brief delay (for visual feedback)
-      setTimeout(() => setActiveOperation(null), 300);
+      if (!isNoisyOperation) {
+        setTimeout(() => setActiveOperation(null), 300);
+      }
 
       // Call the notification callback if provided
       if (onAgentOperationRef.current) {
@@ -1278,6 +1365,23 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
       disconnect();
     };
   }, [filePath, connect, disconnect]);
+
+  // Auto-expire agent sessions after inactivity
+  useEffect(() => {
+    const checkExpiration = () => {
+      if (agentSessionRef.current) {
+        const elapsed = Date.now() - agentSessionRef.current.lastActivityAt;
+        if (elapsed > AGENT_SESSION_TIMEOUT_MS) {
+          console.log(`[OperationHandler] Agent session expired after ${Math.round(elapsed / 1000)}s of inactivity`);
+          setAgentSession(null);
+        }
+      }
+    };
+
+    // Check every 30 seconds
+    const interval = setInterval(checkExpiration, 30 * 1000);
+    return () => clearInterval(interval);
+  }, [setAgentSession]);
 
   return {
     isConnected,
