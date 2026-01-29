@@ -514,7 +514,7 @@ describe('KernelService', () => {
       // Wait a bit for kernel to stabilize
       await new Promise(r => setTimeout(r, 2000));
 
-      const status = service.getSessionStatus(sessionId);
+      const status = await service.getSessionStatus(sessionId);
       expect(status).not.toBeNull();
       expect(status?.kernelName).toBe('python3');
     }, 60000);
@@ -525,7 +525,7 @@ describe('KernelService', () => {
         await new Promise(r => setTimeout(r, 2000));
       }
 
-      const status = service.getSessionStatus(sessionId);
+      const status = await service.getSessionStatus(sessionId);
       if (!status || status.status === 'dead') {
         console.log('Kernel not available, skipping test');
         return;
@@ -550,7 +550,7 @@ describe('KernelService', () => {
         await new Promise(r => setTimeout(r, 2000));
       }
 
-      const status = service.getSessionStatus(sessionId);
+      const status = await service.getSessionStatus(sessionId);
       if (!status || status.status === 'dead') {
         console.log('Kernel not available, skipping test');
         return;

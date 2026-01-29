@@ -145,14 +145,14 @@ router.post('/kernels/for-file', async (req: Request, res: Response) => {
 /**
  * Check if a kernel exists for a file
  */
-router.get('/kernels/for-file', (req: Request, res: Response) => {
+router.get('/kernels/for-file', async (req: Request, res: Response) => {
   const filePath = req.query.file_path as string;
   if (!filePath) {
     res.status(400).json({ detail: 'file_path query parameter is required' });
     return;
   }
   // We don't have a direct method, so check sessions
-  const sessions = kernelService.getAllSessions();
+  const sessions = await kernelService.getAllSessions();
   const session = sessions.find(s => s.filePath === filePath);
   if (session) {
     res.json({ session_id: session.id, exists: true });
@@ -249,7 +249,7 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
     const sessionId = match[1];
 
     // Validate session exists
-    const session = kernelService.getSessionStatus(sessionId);
+    const session = await kernelService.getSessionStatus(sessionId);
     if (!session) {
       console.log(`[Kernel WS] Session ${sessionId} not found, closing connection`);
       ws.send(JSON.stringify({ type: 'error', error: 'Session not found' }));

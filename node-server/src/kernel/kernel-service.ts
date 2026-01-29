@@ -1029,29 +1029,55 @@ export class KernelService {
   /**
    * Get memory usage (RSS) for multiple processes in MB
    * Returns a map of pid -> memoryMb
+   * Cross-platform: uses /proc on Linux, ps on macOS
    */
   private async getProcessMemoryMap(pids: number[]): Promise<Map<number, number>> {
     const result = new Map<number, number>();
     if (pids.length === 0) return result;
 
-    try {
-      // Use single ps command for all PIDs (more efficient)
-      // ps -o pid=,rss= -p pid1,pid2,pid3 outputs: "pid rss\npid rss\n..."
-      const pidList = pids.join(',');
-      const { stdout } = await execAsync(`ps -o pid=,rss= -p ${pidList}`, { timeout: 500 });
+    const isLinux = process.platform === 'linux';
 
-      for (const line of stdout.trim().split('\n')) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 2) {
-          const pid = parseInt(parts[0], 10);
-          const rssKb = parseInt(parts[1], 10);
-          if (!isNaN(pid) && !isNaN(rssKb)) {
-            result.set(pid, Math.round(rssKb / 1024 * 10) / 10);
+    if (isLinux) {
+      // On Linux, read directly from /proc/{pid}/statm (more reliable)
+      // statm format: size resident shared text lib data dt (all in pages)
+      // resident (2nd field) * page_size = RSS in bytes
+      const pageSize = 4096; // Standard page size, could use os.constants.POSIX.PAGE_SIZE
+      const fs = await import('fs/promises');
+
+      await Promise.all(pids.map(async (pid) => {
+        try {
+          const statm = await fs.readFile(`/proc/${pid}/statm`, 'utf8');
+          const fields = statm.trim().split(/\s+/);
+          if (fields.length >= 2) {
+            const residentPages = parseInt(fields[1], 10);
+            if (!isNaN(residentPages)) {
+              const rssBytes = residentPages * pageSize;
+              result.set(pid, Math.round(rssBytes / 1024 / 1024 * 10) / 10);
+            }
+          }
+        } catch {
+          // Process may have exited or permission denied
+        }
+      }));
+    } else {
+      // macOS/BSD: use ps command with comma-separated PIDs
+      try {
+        const pidList = pids.join(',');
+        const { stdout } = await execAsync(`ps -o pid=,rss= -p ${pidList}`, { timeout: 500 });
+
+        for (const line of stdout.trim().split('\n')) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 2) {
+            const pid = parseInt(parts[0], 10);
+            const rssKb = parseInt(parts[1], 10);
+            if (!isNaN(pid) && !isNaN(rssKb)) {
+              result.set(pid, Math.round(rssKb / 1024 * 10) / 10);
+            }
           }
         }
+      } catch {
+        // ps command failed or timed out
       }
-    } catch {
-      // ps command failed or timed out - return empty map
     }
 
     return result;
