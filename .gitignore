@@ -57,3 +57,6 @@ Thumbs.db
 
 # SQLite session database
 server/sessions.db
+
+# Electron viewer app (separate project)
+nebula-notebook-viewer/
