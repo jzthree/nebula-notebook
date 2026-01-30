@@ -4,7 +4,7 @@
 
 import { Router, Request, Response } from 'express';
 import { PythonDiscoveryService } from '../discovery/discovery-service';
-import { discoverKernelSpecs } from '../kernel/kernelspec';
+import { discoverKernelSpecs, invalidateKernelspecCache } from '../kernel/kernelspec';
 
 const router = Router();
 const discoveryService = new PythonDiscoveryService();
@@ -18,7 +18,7 @@ router.get('/python/environments', async (req: Request, res: Response) => {
     const refresh = req.query.refresh === 'true';
 
     // Get Jupyter kernelspecs and transform to snake_case
-    const kernelspecs = discoverKernelSpecs().map(k => ({
+    const kernelspecs = discoverKernelSpecs(refresh).map(k => ({
       name: k.name,
       display_name: k.displayName,
       language: k.language,
@@ -64,6 +64,8 @@ router.post('/python/install-kernel', async (req: Request, res: Response) => {
     }
 
     const result = await discoveryService.installKernel(python_path, kernel_name);
+    // Invalidate kernelspec cache so the new kernel is discovered
+    invalidateKernelspecCache();
     res.json(result);
   } catch (err) {
     if (err instanceof Error) {

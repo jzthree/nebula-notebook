@@ -13,6 +13,11 @@ import { KernelSpec } from './types';
 // Re-export KernelSpec for convenience
 export type { KernelSpec } from './types';
 
+// In-memory cache for kernelspecs (avoids repeated disk I/O)
+let kernelspecCache: KernelSpec[] | null = null;
+let kernelspecCacheTime: number = 0;
+const KERNELSPEC_CACHE_TTL_MS = 60 * 1000; // 60 seconds
+
 /**
  * Standard kernelspec search paths
  */
@@ -109,9 +114,9 @@ function readKernelSpec(kernelDir: string): KernelSpec | null {
 }
 
 /**
- * Discover all available kernelspecs on the system
+ * Perform actual kernelspec discovery (disk I/O)
  */
-export function discoverKernelSpecs(): KernelSpec[] {
+function performKernelspecDiscovery(): KernelSpec[] {
   const specs: KernelSpec[] = [];
   const seenNames = new Set<string>();
 
@@ -149,6 +154,33 @@ export function discoverKernelSpecs(): KernelSpec[] {
   }
 
   return specs;
+}
+
+/**
+ * Discover all available kernelspecs on the system
+ * Uses 60-second in-memory cache to avoid repeated disk I/O
+ */
+export function discoverKernelSpecs(forceRefresh = false): KernelSpec[] {
+  const now = Date.now();
+
+  // Return from cache if valid
+  if (!forceRefresh && kernelspecCache && (now - kernelspecCacheTime) < KERNELSPEC_CACHE_TTL_MS) {
+    return kernelspecCache;
+  }
+
+  // Perform discovery and update cache
+  kernelspecCache = performKernelspecDiscovery();
+  kernelspecCacheTime = now;
+
+  return kernelspecCache;
+}
+
+/**
+ * Invalidate the kernelspec cache (call after installing a new kernel)
+ */
+export function invalidateKernelspecCache(): void {
+  kernelspecCache = null;
+  kernelspecCacheTime = 0;
 }
 
 /**
