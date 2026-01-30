@@ -9,6 +9,17 @@ import * as path from 'path';
 import * as os from 'os';
 import { KernelService } from '../kernel/kernel-service';
 import { getKernelSearchPaths } from '../kernel/kernelspec';
+import {
+  isProxiedSession,
+  parseSessionId,
+  startRemoteKernel,
+  interruptRemoteKernel,
+  restartRemoteKernel,
+  shutdownRemoteKernel,
+  getRemoteKernelStatus,
+  createWebSocketProxy,
+} from '../cluster/kernel-proxy';
+import { serverRegistry } from '../cluster/server-registry';
 
 const router = Router();
 
@@ -108,16 +119,28 @@ router.get('/kernels/sessions', async (_req: Request, res: Response) => {
 
 /**
  * Start a new kernel session
+ * If server_id is provided and not local, starts on remote server
  */
 router.post('/kernels/start', async (req: Request, res: Response) => {
   try {
-    const { kernel_name = 'python3', cwd, file_path } = req.body;
+    const { kernel_name = 'python3', cwd, file_path, server_id } = req.body;
+
+    // Check if we should start on a remote server
+    const localServerId = serverRegistry.getLocalServerId();
+    if (server_id && server_id !== localServerId && server_id !== 'local') {
+      // Start on remote server
+      const result = await startRemoteKernel(server_id, kernel_name, file_path);
+      res.json({ session_id: result.sessionId, kernel_name, server_id });
+      return;
+    }
+
+    // Start locally
     const sessionId = await kernelService.startKernel({
       kernelName: kernel_name,
       cwd,
       filePath: file_path,
     });
-    res.json({ session_id: sessionId, kernel_name });
+    res.json({ session_id: sessionId, kernel_name, server_id: localServerId });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ detail: message });
@@ -126,16 +149,28 @@ router.post('/kernels/start', async (req: Request, res: Response) => {
 
 /**
  * Get or create kernel for a notebook file
+ * If server_id is provided and not local, starts on remote server
  */
 router.post('/kernels/for-file', async (req: Request, res: Response) => {
   try {
-    const { file_path, kernel_name = 'python3' } = req.body;
+    const { file_path, kernel_name = 'python3', server_id } = req.body;
     if (!file_path) {
       res.status(400).json({ detail: 'file_path is required' });
       return;
     }
+
+    // Check if we should start on a remote server
+    const localServerId = serverRegistry.getLocalServerId();
+    if (server_id && server_id !== localServerId && server_id !== 'local') {
+      // Start on remote server
+      const result = await startRemoteKernel(server_id, kernel_name, file_path);
+      res.json({ session_id: result.sessionId, kernel_name, file_path, server_id });
+      return;
+    }
+
+    // Start locally
     const sessionId = await kernelService.getOrCreateKernel(file_path, kernel_name);
-    res.json({ session_id: sessionId, kernel_name, file_path });
+    res.json({ session_id: sessionId, kernel_name, file_path, server_id: localServerId });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ detail: message });
@@ -166,7 +201,16 @@ router.get('/kernels/for-file', async (req: Request, res: Response) => {
  */
 router.delete('/kernels/:sessionId', async (req: Request, res: Response) => {
   try {
-    const success = await kernelService.stopKernel(req.params.sessionId);
+    const { sessionId } = req.params;
+
+    // Check if this is a proxied session
+    if (isProxiedSession(sessionId)) {
+      await shutdownRemoteKernel(sessionId);
+      res.json({ status: 'ok' });
+      return;
+    }
+
+    const success = await kernelService.stopKernel(sessionId);
     if (success) {
       res.json({ status: 'ok' });
     } else {
@@ -183,7 +227,16 @@ router.delete('/kernels/:sessionId', async (req: Request, res: Response) => {
  */
 router.post('/kernels/:sessionId/interrupt', async (req: Request, res: Response) => {
   try {
-    const success = await kernelService.interruptKernel(req.params.sessionId);
+    const { sessionId } = req.params;
+
+    // Check if this is a proxied session
+    if (isProxiedSession(sessionId)) {
+      await interruptRemoteKernel(sessionId);
+      res.json({ status: 'ok' });
+      return;
+    }
+
+    const success = await kernelService.interruptKernel(sessionId);
     if (success) {
       res.json({ status: 'ok' });
     } else {
@@ -200,7 +253,16 @@ router.post('/kernels/:sessionId/interrupt', async (req: Request, res: Response)
  */
 router.post('/kernels/:sessionId/restart', async (req: Request, res: Response) => {
   try {
-    const success = await kernelService.restartKernel(req.params.sessionId);
+    const { sessionId } = req.params;
+
+    // Check if this is a proxied session
+    if (isProxiedSession(sessionId)) {
+      await restartRemoteKernel(sessionId);
+      res.json({ status: 'ok' });
+      return;
+    }
+
+    const success = await kernelService.restartKernel(sessionId);
     if (success) {
       res.json({ status: 'ok' });
     } else {
@@ -216,7 +278,21 @@ router.post('/kernels/:sessionId/restart', async (req: Request, res: Response) =
  * Get kernel session status
  */
 router.get('/kernels/:sessionId/status', async (req: Request, res: Response) => {
-  const status = await kernelService.getSessionStatus(req.params.sessionId);
+  const { sessionId } = req.params;
+
+  // Check if this is a proxied session
+  if (isProxiedSession(sessionId)) {
+    try {
+      const remoteStatus = await getRemoteKernelStatus(sessionId);
+      res.json(remoteStatus);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(500).json({ detail: message });
+    }
+    return;
+  }
+
+  const status = await kernelService.getSessionStatus(sessionId);
   if (status) {
     // Convert to snake_case for frontend compatibility
     res.json({
@@ -246,7 +322,18 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
       return;
     }
 
-    const sessionId = match[1];
+    const sessionId = decodeURIComponent(match[1]);
+
+    // Check if this is a proxied session
+    if (isProxiedSession(sessionId)) {
+      console.log(`[Kernel WS] Creating proxy for remote session ${sessionId}`);
+      const remoteWs = createWebSocketProxy(sessionId, ws);
+      if (!remoteWs) {
+        ws.send(JSON.stringify({ type: 'error', error: 'Failed to connect to remote server' }));
+        ws.close(1008, 'Failed to connect to remote server');
+      }
+      return;
+    }
 
     // Validate session exists
     const session = await kernelService.getSessionStatus(sessionId);

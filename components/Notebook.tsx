@@ -3,8 +3,9 @@ import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMe
 import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
+import { getClusterInfo, ClusterServer, ClusterInfo } from '../services/clusterService';
 import { getSettings, saveSettings, IndentationPreference } from '../services/llmService';
-import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick } from 'lucide-react';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -170,6 +171,10 @@ export const Notebook: React.FC = () => {
   const [kernelStatus, setKernelStatus] = useState<'idle' | 'busy' | 'starting' | 'disconnected'>('disconnected');
   const [isDiscoveringPythons, setIsDiscoveringPythons] = useState(false);
   const [isInstallingKernel, setIsInstallingKernel] = useState<string | null>(null);
+
+  // Cluster State
+  const [clusterInfo, setClusterInfo] = useState<ClusterInfo | null>(null);
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null); // null = local
 
   // Agent permission state
   const [agentPermissionStatus, setAgentPermissionStatus] = useState<AgentPermissionStatus | null>(null);
@@ -1184,6 +1189,17 @@ export const Notebook: React.FC = () => {
 
         // Load Python environments in background (uses cache)
         loadPythonEnvironments(false);
+
+        // Load cluster info for multi-server support
+        try {
+          const cluster = await getClusterInfo();
+          setClusterInfo(cluster);
+          // Default to local server
+          setSelectedServerId(cluster.localServerId);
+        } catch (clusterError) {
+          console.error('Failed to load cluster info:', clusterError);
+          // Cluster feature is optional, continue without it
+        }
       } catch (error) {
         console.error('Failed to load kernels:', error);
       }
@@ -1888,24 +1904,27 @@ export const Notebook: React.FC = () => {
 
   // --- KERNEL OPERATIONS ---
 
-  const switchKernel = async (kernelName: string) => {
+  const switchKernel = async (kernelName: string, serverId?: string | null) => {
     setIsKernelMenuOpen(false);
     setKernelStatus('starting');
     setIsKernelReady(false);
     setCurrentKernel(kernelName); // Update name immediately so UI shows new kernel with "starting" status
 
+    // Use provided serverId or fall back to currently selected server
+    const targetServerId = serverId !== undefined ? serverId : selectedServerId;
+
     try {
       // Use getOrCreateKernelForFile which handles kernel switching on the backend
       // (it will stop the old kernel if kernel type differs)
       if (currentFileId) {
-        const newSessionId = await kernelService.getOrCreateKernelForFile(currentFileId, kernelName);
+        const newSessionId = await kernelService.getOrCreateKernelForFile(currentFileId, kernelName, targetServerId);
         setKernelSessionId(newSessionId);
       } else {
         // No file open, just start a standalone kernel
         if (kernelSessionId) {
           await kernelService.stopKernel(kernelSessionId);
         }
-        const newSessionId = await kernelService.startKernel(kernelName);
+        const newSessionId = await kernelService.startKernel(kernelName, undefined, undefined, targetServerId);
         setKernelSessionId(newSessionId);
       }
       setIsKernelReady(true);
@@ -1917,6 +1936,30 @@ export const Notebook: React.FC = () => {
     } catch (error) {
       console.error('Failed to switch kernel:', error);
       setKernelStatus('disconnected');
+    }
+  };
+
+  /**
+   * Switch to a different server for kernel execution
+   * This will stop the current kernel and start a new one on the target server
+   */
+  const switchServer = async (serverId: string) => {
+    if (serverId === selectedServerId) return; // No change
+
+    setSelectedServerId(serverId);
+
+    // If we have an active kernel, switch it to the new server
+    if (kernelSessionId) {
+      // Stop the current kernel
+      try {
+        await kernelService.stopKernel(kernelSessionId);
+      } catch (e) {
+        console.error('Failed to stop kernel:', e);
+      }
+      setKernelSessionId(null);
+
+      // Start new kernel on the selected server
+      await switchKernel(currentKernel, serverId);
     }
   };
 
@@ -2665,7 +2708,14 @@ export const Notebook: React.FC = () => {
                           <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between">
                              <div>
                                <div className="text-xs font-semibold text-slate-900">Active Kernel</div>
-                               <div className="text-[10px] text-slate-500">{getKernelDisplayName()} ({kernelStatus})</div>
+                               <div className="text-[10px] text-slate-500">
+                                 {getKernelDisplayName()} ({kernelStatus})
+                                 {clusterInfo && clusterInfo.servers.length > 1 && selectedServerId && (
+                                   <span className="text-blue-500 ml-1">
+                                     @ {clusterInfo.servers.find(s => s.id === selectedServerId)?.name || selectedServerId}
+                                   </span>
+                                 )}
+                               </div>
                              </div>
                              <button
                                onClick={(e) => { e.stopPropagation(); loadPythonEnvironments(true); }}
@@ -2701,6 +2751,33 @@ export const Notebook: React.FC = () => {
                           </div>
 
                           <div className="overflow-y-auto flex-1">
+                            {/* Server Selector (only show if cluster has multiple servers) */}
+                            {clusterInfo && clusterInfo.servers.length > 1 && (
+                              <>
+                                <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50 flex items-center gap-1">
+                                  <Server className="w-3 h-3" />
+                                  <span>Server</span>
+                                </div>
+                                {clusterInfo.servers.map(server => (
+                                  <button
+                                    key={server.id}
+                                    onClick={() => switchServer(server.id)}
+                                    disabled={server.status !== 'online'}
+                                    className={`w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 ${
+                                      server.id === selectedServerId ? 'bg-blue-50 text-blue-700' : 'text-slate-700'
+                                    } ${server.status !== 'online' ? 'opacity-50' : ''}`}
+                                  >
+                                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                      server.status === 'online' ? 'bg-green-500' : 'bg-red-500'
+                                    }`}></span>
+                                    <span className="truncate flex-1">{server.name}</span>
+                                    {server.isLocal && <span className="text-[10px] text-slate-400">(local)</span>}
+                                    {server.status !== 'online' && <span className="text-[10px] text-red-400">offline</span>}
+                                  </button>
+                                ))}
+                              </>
+                            )}
+
                             {/* Registered Kernels */}
                             <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50">
                               Jupyter Kernels

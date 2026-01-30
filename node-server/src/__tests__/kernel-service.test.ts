@@ -416,15 +416,15 @@ describe('KernelService', () => {
   });
 
   describe('getSessionStatus', () => {
-    it('should return null for non-existent session', () => {
-      const status = service.getSessionStatus('nonexistent');
+    it('should return null for non-existent session', async () => {
+      const status = await service.getSessionStatus('nonexistent');
       expect(status).toBeNull();
     });
   });
 
   describe('getAllSessions', () => {
-    it('should return empty array when no sessions', () => {
-      const sessions = service.getAllSessions();
+    it('should return empty array when no sessions', async () => {
+      const sessions = await service.getAllSessions();
       expect(sessions).toEqual([]);
     });
   });

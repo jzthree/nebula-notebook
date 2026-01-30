@@ -5,7 +5,7 @@
 import { CellOutput } from '../types';
 import { authService } from './authService';
 
-const API_BASE = '/api';
+export const API_BASE = '/api';
 
 export interface KernelSpec {
   name: string;
@@ -100,15 +100,19 @@ class KernelService {
    * @param kernelName - The kernel to start (e.g., 'python3')
    * @param cwd - Optional working directory for the kernel
    * @param filePath - Optional file path for "one notebook = one kernel"
+   * @param serverId - Optional server ID for cluster support (null for local)
    * @returns The session ID
    */
-  async startKernel(kernelName: string = 'python3', cwd?: string, filePath?: string): Promise<string> {
-    const body: { kernel_name: string; cwd?: string; file_path?: string } = { kernel_name: kernelName };
+  async startKernel(kernelName: string = 'python3', cwd?: string, filePath?: string, serverId?: string | null): Promise<string> {
+    const body: { kernel_name: string; cwd?: string; file_path?: string; server_id?: string } = { kernel_name: kernelName };
     if (cwd) {
       body.cwd = cwd;
     }
     if (filePath) {
       body.file_path = filePath;
+    }
+    if (serverId) {
+      body.server_id = serverId;
     }
 
     const response = await fetch(`${API_BASE}/kernels/start`, {
@@ -143,16 +147,22 @@ class KernelService {
    * Implements "one notebook = one kernel" - multiple tabs share the same kernel
    * @param filePath - The notebook file path
    * @param kernelName - The kernel to start if creating new
+   * @param serverId - Optional server ID for cluster support (null for local)
    * @returns The session ID
    */
-  async getOrCreateKernelForFile(filePath: string, kernelName: string = 'python3'): Promise<string> {
+  async getOrCreateKernelForFile(filePath: string, kernelName: string = 'python3', serverId?: string | null): Promise<string> {
+    const body: { file_path: string; kernel_name: string; server_id?: string } = {
+      file_path: filePath,
+      kernel_name: kernelName
+    };
+    if (serverId) {
+      body.server_id = serverId;
+    }
+
     const response = await fetch(`${API_BASE}/kernels/for-file`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        file_path: filePath,
-        kernel_name: kernelName
-      })
+      body: JSON.stringify(body)
     });
 
     if (!response.ok) {
@@ -201,7 +211,9 @@ class KernelService {
 
     return new Promise((resolve, reject) => {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const baseWsUrl = `${protocol}//${window.location.host}${API_BASE}/kernels/${sessionId}/ws`;
+      // Encode session ID to handle proxied sessions with "::" in the ID
+      const encodedSessionId = encodeURIComponent(sessionId);
+      const baseWsUrl = `${protocol}//${window.location.host}${API_BASE}/kernels/${encodedSessionId}/ws`;
       const wsUrl = authService.getAuthenticatedWebSocketUrl(baseWsUrl);
 
       const ws = new WebSocket(wsUrl);
@@ -400,7 +412,7 @@ class KernelService {
     }
 
     // Always send DELETE to server (kernel may exist even if not in local sessions)
-    await fetch(`${API_BASE}/kernels/${sessionId}`, {
+    await fetch(`${API_BASE}/kernels/${encodeURIComponent(sessionId)}`, {
       method: 'DELETE'
     });
   }
@@ -411,7 +423,7 @@ class KernelService {
   async interruptKernel(sessionId: string): Promise<void> {
     if (!this.sessions.has(sessionId)) return;
 
-    const response = await fetch(`${API_BASE}/kernels/${sessionId}/interrupt`, {
+    const response = await fetch(`${API_BASE}/kernels/${encodeURIComponent(sessionId)}/interrupt`, {
       method: 'POST'
     });
 
@@ -427,7 +439,7 @@ class KernelService {
   async restartKernel(sessionId: string): Promise<void> {
     if (!this.sessions.has(sessionId)) return;
 
-    const response = await fetch(`${API_BASE}/kernels/${sessionId}/restart`, {
+    const response = await fetch(`${API_BASE}/kernels/${encodeURIComponent(sessionId)}/restart`, {
       method: 'POST'
     });
 
@@ -443,7 +455,7 @@ class KernelService {
   async getStatus(sessionId: string): Promise<KernelSession | null> {
     if (!this.sessions.has(sessionId)) return null;
 
-    const response = await fetch(`${API_BASE}/kernels/${sessionId}/status`);
+    const response = await fetch(`${API_BASE}/kernels/${encodeURIComponent(sessionId)}/status`);
     if (!response.ok) return null;
 
     return response.json();

@@ -24,6 +24,11 @@ import fsRoutes from './routes/fs';
 import notebookRoutes from './routes/notebook';
 import pythonRoutes from './routes/python';
 import authRoutes from './routes/auth';
+import clusterRoutes from './routes/cluster';
+
+// Import cluster
+import { serverRegistry } from './cluster/server-registry';
+import { clientRegistration } from './cluster/client-registration';
 
 // Import auth
 import { authService, authMiddleware, authWebSocketMiddleware } from './auth';
@@ -99,6 +104,7 @@ function createApp(): Express {
   app.use('/api', fsRoutes);
   app.use('/api', notebookRoutes);
   app.use('/api', pythonRoutes);
+  app.use('/api', clusterRoutes);
 
   // Terminal routes
   setupTerminalRoutes(app);
@@ -188,6 +194,12 @@ async function main(): Promise<void> {
     console.log('[Auth] 2FA configured and ready');
   }
 
+  // Set local server ID from hostname
+  const os = await import('os');
+  const localServerId = `${os.hostname()}:${PORT}`;
+  serverRegistry.setLocalServerId(localServerId);
+  console.log(`[Cluster] Local server ID: ${localServerId}`);
+
   // Create Express app
   const app = createApp();
 
@@ -220,6 +232,14 @@ async function main(): Promise<void> {
       console.error('[Server] Error during kernel cleanup:', err);
     }
 
+    // Cleanup cluster registration
+    try {
+      await clientRegistration.shutdown();
+      serverRegistry.shutdown();
+    } catch (err) {
+      console.error('[Server] Error during cluster cleanup:', err);
+    }
+
     server.close(() => {
       console.log('[Server] Server closed');
       process.exit(0);
@@ -243,6 +263,9 @@ async function main(): Promise<void> {
     console.log(`[Server] Kernel WebSocket: ws://localhost:${PORT}/api/kernels/{session_id}/ws`);
     console.log(`[Server] Notebook WebSocket: ws://localhost:${PORT}/api/notebook/{path}/ws`);
     console.log(`[Server] Terminal WebSocket: ws://localhost:${PORT}/ws?id={terminal_id}`);
+
+    // Initialize client registration (if NEBULA_MAIN_SERVER is set)
+    clientRegistration.initFromEnv(Number(PORT));
   });
 }
 

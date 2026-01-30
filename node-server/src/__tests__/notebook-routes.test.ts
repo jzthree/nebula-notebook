@@ -452,11 +452,23 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
+      const agentId = 'test-agent-insert';
+
+      // Start agent session first
+      await request(app)
+        .post('/api/notebook/operation')
+        .send({
+          type: 'startAgentSession',
+          notebookPath,
+          agentId,
+        });
+
       const response = await request(app)
         .post('/api/notebook/operation')
         .send({
           type: 'insertCell',
           notebookPath,
+          agentId,
           index: 0,
           cell: { id: 'new-cell', type: 'code', content: 'print("hello")' },
         });
@@ -476,11 +488,23 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
+      const agentId = 'test-agent-delete';
+
+      // Start agent session first
+      await request(app)
+        .post('/api/notebook/operation')
+        .send({
+          type: 'startAgentSession',
+          notebookPath,
+          agentId,
+        });
+
       const response = await request(app)
         .post('/api/notebook/operation')
         .send({
           type: 'deleteCell',
           notebookPath,
+          agentId,
           cellId: 'cell-to-delete',
         });
 
@@ -499,11 +523,23 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
+      const agentId = 'test-agent-update';
+
+      // Start agent session first
+      await request(app)
+        .post('/api/notebook/operation')
+        .send({
+          type: 'startAgentSession',
+          notebookPath,
+          agentId,
+        });
+
       const response = await request(app)
         .post('/api/notebook/operation')
         .send({
           type: 'updateContent',
           notebookPath,
+          agentId,
           cellId: 'cell-1',
           content: 'new content',
         });
