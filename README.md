@@ -64,6 +64,7 @@ nebula-notebook/
 │   └── src/
 │       ├── index.ts          # Server entry point
 │       ├── kernel/           # Jupyter kernel management (ZeroMQ)
+│       ├── cluster/          # Multi-server cluster support
 │       ├── auth/             # 2FA authentication
 │       └── routes/           # API routes
 └── types.ts
@@ -78,6 +79,52 @@ Nebula uses TOTP-based two-factor authentication:
 3. **Trust Browser**: Check option for 30-day sessions
 
 Config stored in `~/.nebula/auth.json`. Multiple servers sharing the same home directory share the same 2FA.
+
+## Multi-Server Cluster
+
+Run kernels on multiple machines while accessing them from a single UI. Useful for:
+- Offloading compute to more powerful servers
+- Using different Python environments on different machines
+- Distributed team setups with shared filesystem
+
+### Setup
+
+**Main Server** (the one you access in the browser):
+```bash
+npm run start
+```
+
+**Client Server** (additional compute nodes):
+```bash
+export NEBULA_MAIN_SERVER=http://main-server-hostname:3000
+export NEBULA_SERVER_NAME="GPU Server"  # optional display name
+npm run start
+```
+
+The client will automatically register with the main server and appear in the kernel menu.
+
+### Usage
+
+1. Click the kernel indicator in the toolbar
+2. If multiple servers are registered, a **Server** section appears at the top
+3. Select a server to run your kernels on that machine
+4. Kernels, interrupt, and restart all work transparently across servers
+
+### Security
+
+For production deployments, set a shared secret on all servers:
+
+```bash
+export NEBULA_CLUSTER_SECRET="your-secret-key"
+```
+
+Servers without the correct secret will be rejected during registration.
+
+### Requirements
+
+- All servers must have network access to each other
+- Client servers need access to the same filesystem paths as the main server (for notebook files)
+- Each server runs its own Jupyter kernels locally
 
 ## Tech Stack
 
