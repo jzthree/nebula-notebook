@@ -8,6 +8,7 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        allowedHosts: true, // Allow all hosts (for internal cluster access)
         proxy: {
           '/api': {
             target: 'http://localhost:8000',
