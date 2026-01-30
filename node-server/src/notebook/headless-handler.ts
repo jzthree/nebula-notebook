@@ -1313,6 +1313,9 @@ export class HeadlessOperationHandler {
         this.saveCells(notebookPath, cells);
       }
 
+      // Cast queueInfo to avoid TS narrowing issues with async closures
+      const qi = queueInfo as { queuePosition: number; queueLength: number } | null;
+
       if (!executionComplete) {
         // Execution is still running
         return {
@@ -1323,8 +1326,8 @@ export class HeadlessOperationHandler {
           outputs: outputs.map(o => ({ type: o.type, content: o.content })),
           executionTime: elapsed,
           sessionId,
-          queuePosition: queueInfo?.queuePosition,
-          queueLength: queueInfo?.queueLength,
+          queuePosition: qi?.queuePosition,
+          queueLength: qi?.queueLength,
           message: `Cell still executing after ${maxWait}s. Use read_output with max_wait to poll for results.`,
         };
       }
@@ -1338,8 +1341,8 @@ export class HeadlessOperationHandler {
         outputs: outputs.map(o => ({ type: o.type, content: o.content })),
         executionTime: elapsed,
         sessionId,
-        queuePosition: queueInfo?.queuePosition,
-        queueLength: queueInfo?.queueLength,
+        queuePosition: qi?.queuePosition,
+        queueLength: qi?.queueLength,
         error: executionError || undefined,
       };
     } catch (err) {

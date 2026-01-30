@@ -46,6 +46,7 @@ export class PythonDiscoveryService {
   private condaListTimeoutMs: number;
   private kernelInstallTimeoutMs: number;
   private registrationTimeoutMs: number;
+  private backgroundRefreshInProgress: boolean = false;
 
   constructor(options: DiscoveryServiceOptions = {}) {
     this.cacheFile = options.cacheFile || DEFAULT_CACHE_FILE;
@@ -123,12 +124,13 @@ export class PythonDiscoveryService {
   /**
    * Get cache info
    */
-  getCacheInfo(): CacheInfo {
+  getCacheInfo(): CacheInfo & { refreshing: boolean } {
     return {
       cachedCount: Object.keys(this.cache).length,
       cacheAgeHours: this.cacheTimestamp > 0 ? (Date.now() - this.cacheTimestamp) / (1000 * 60 * 60) : null,
       cacheValid: this.isCacheValid(),
       cacheFile: this.cacheFile,
+      refreshing: this.backgroundRefreshInProgress,
     };
   }
 
@@ -527,16 +529,9 @@ export class PythonDiscoveryService {
   }
 
   /**
-   * Discover all Python environments
+   * Perform the actual discovery (internal, always runs full scan)
    */
-  async discover(options: { forceRefresh?: boolean } = {}): Promise<PythonEnvironment[]> {
-    const { forceRefresh = false } = options;
-
-    // Use cache if valid and not forcing refresh
-    if (!forceRefresh && this.isCacheValid()) {
-      return this.sortEnvironments(Object.values(this.cache));
-    }
-
+  private async performDiscovery(): Promise<PythonEnvironment[]> {
     console.log('Discovering Python environments...');
 
     // Collect all candidates
@@ -564,6 +559,69 @@ export class PythonDiscoveryService {
 
     console.log(`Discovered ${sorted.length} Python environments`);
     return sorted;
+  }
+
+  /**
+   * Trigger background refresh (non-blocking)
+   */
+  private triggerBackgroundRefresh(): void {
+    if (this.backgroundRefreshInProgress) {
+      return; // Already refreshing
+    }
+
+    this.backgroundRefreshInProgress = true;
+    console.log('Starting background Python environment refresh...');
+
+    // Run discovery in background, don't await
+    this.performDiscovery()
+      .then(() => {
+        console.log('Background Python environment refresh complete');
+      })
+      .catch((e) => {
+        console.warn('Background Python environment refresh failed:', e);
+      })
+      .finally(() => {
+        this.backgroundRefreshInProgress = false;
+      });
+  }
+
+  /**
+   * Discover all Python environments
+   *
+   * Uses stale-while-revalidate pattern:
+   * - If cache exists (even stale): return immediately, refresh in background if stale
+   * - If no cache: block and perform full discovery
+   * - If forceRefresh: block and perform full discovery
+   */
+  async discover(options: { forceRefresh?: boolean } = {}): Promise<PythonEnvironment[]> {
+    const { forceRefresh = false } = options;
+
+    // Force refresh: always block and run full discovery
+    if (forceRefresh) {
+      return this.performDiscovery();
+    }
+
+    // Cache valid: return immediately
+    if (this.isCacheValid()) {
+      return this.sortEnvironments(Object.values(this.cache));
+    }
+
+    // Cache exists but stale: return stale cache, refresh in background
+    const cachedEnvs = this.getFromCache();
+    if (cachedEnvs) {
+      this.triggerBackgroundRefresh();
+      return this.sortEnvironments(Object.values(cachedEnvs));
+    }
+
+    // No cache at all: must block and discover
+    return this.performDiscovery();
+  }
+
+  /**
+   * Check if background refresh is in progress
+   */
+  isRefreshing(): boolean {
+    return this.backgroundRefreshInProgress;
   }
 
   /**
