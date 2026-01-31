@@ -22,7 +22,7 @@ import {
   Filter,
   Cpu,
   Activity,
-  Zap,
+  Lightbulb,
   Upload,
 } from 'lucide-react';
 import {
@@ -286,9 +286,19 @@ export const Dashboard: React.FC = () => {
       <header className="bg-slate-50/90 backdrop-blur border-b border-slate-200 px-4 py-3 sticky top-0 z-20">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shadow-sm">
-              <Zap className="w-5 h-5 text-white" />
-            </div>
+            {/* Nebula logo - matches favicon design */}
+            <svg className="w-9 h-9" viewBox="0 0 32 32">
+              <defs>
+                <linearGradient id="nebula-logo" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" style={{stopColor:'#8b5cf6'}}/>
+                  <stop offset="50%" style={{stopColor:'#6366f1'}}/>
+                  <stop offset="100%" style={{stopColor:'#3b82f6'}}/>
+                </linearGradient>
+              </defs>
+              <rect width="32" height="32" rx="6" fill="url(#nebula-logo)"/>
+              <path d="M8 10h16M8 16h12M8 22h14" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
+              <circle cx="24" cy="22" r="3" fill="#fbbf24"/>
+            </svg>
             <div>
               <h1 className="text-lg font-bold text-slate-800">Nebula Notebook</h1>
               <p className="text-xs text-slate-500">Interactive Computing Environment</p>
@@ -297,14 +307,14 @@ export const Dashboard: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               onClick={() => handleOpenTerminal('default')}
-              className="flex items-center gap-2 px-3 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-slate-600 hover:bg-slate-200 rounded-lg text-sm font-medium transition-colors"
             >
               <Terminal className="w-4 h-4" />
               <span className="hidden sm:inline">Terminal</span>
             </button>
             <button
               onClick={handleNewNotebook}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">New Notebook</span>
@@ -323,13 +333,13 @@ export const Dashboard: React.FC = () => {
                 <button
                   key={session.id}
                   onClick={() => handleOpenNotebookNewTab(session.file_path!)}
-                  className="flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 rounded-lg transition-colors group"
+                  className="flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors group"
                 >
                   <span className={`w-2 h-2 rounded-full ${
                     session.status === 'busy' ? 'bg-amber-500 animate-pulse' : 'bg-green-500'
                   }`} />
                   <Book className="w-4 h-4 text-orange-500" />
-                  <span className="text-sm text-slate-700 group-hover:text-blue-600 max-w-[150px] truncate">
+                  <span className="text-sm text-slate-700 group-hover:text-slate-900 max-w-[150px] truncate">
                     {getFilename(session.file_path!).replace('.ipynb', '')}
                   </span>
                   {session.memory_mb && (
@@ -450,7 +460,7 @@ export const Dashboard: React.FC = () => {
                 <button
                   onClick={() => setShowNotebooksOnly(!showNotebooksOnly)}
                   className={`p-2 rounded-lg flex items-center gap-1 text-xs font-medium transition-colors ${
-                    showNotebooksOnly ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500'
+                    showNotebooksOnly ? 'bg-purple-100 text-purple-700' : 'hover:bg-slate-100 text-slate-500'
                   }`}
                   title="Show notebooks only"
                 >
@@ -602,13 +612,13 @@ export const Dashboard: React.FC = () => {
             </div>
 
             {/* Tip */}
-            <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-xl border border-blue-100 p-4">
+            <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
               <div className="flex items-start gap-3">
-                <Zap className="w-5 h-5 text-blue-500 mt-0.5" />
+                <Lightbulb className="w-5 h-5 text-amber-500 mt-0.5" />
                 <div className="text-sm text-slate-700">
                   <p className="font-medium">Pro Tip</p>
                   <p className="mt-1 text-slate-600 text-xs">
-                    Bookmark notebook URLs for quick access. Use <code className="bg-blue-100 px-1 rounded">?terminal=name</code> for persistent named terminals.
+                    Bookmark notebook URLs for quick access. Use <code className="bg-slate-200 px-1 rounded">?terminal=name</code> for persistent named terminals.
                   </p>
                 </div>
               </div>
