@@ -164,6 +164,14 @@ export const createFile = async (path: string, isDirectory: boolean = false): Pr
 };
 
 /**
+ * Create a new folder (convenience wrapper for createFile)
+ */
+export const createFolder = async (parentDir: string, name: string): Promise<FileItem> => {
+  const folderPath = parentDir.endsWith('/') ? `${parentDir}${name}` : `${parentDir}/${name}`;
+  return createFile(folderPath, true);
+};
+
+/**
  * Delete a file or directory
  */
 export const deleteFile = async (path: string): Promise<void> => {

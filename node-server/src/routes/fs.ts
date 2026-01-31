@@ -201,7 +201,7 @@ router.post('/fs/rename', (req: Request, res: Response) => {
 });
 
 /**
- * Duplicate a file
+ * Duplicate a file or directory
  */
 router.post('/fs/duplicate', (req: Request, res: Response) => {
   try {
@@ -216,8 +216,6 @@ router.post('/fs/duplicate', (req: Request, res: Response) => {
     if (err instanceof Error) {
       if (err.message.includes('not found')) {
         res.status(404).json({ detail: err.message });
-      } else if (err.message.includes('directory')) {
-        res.status(400).json({ detail: err.message });
       } else {
         res.status(500).json({ detail: err.message });
       }

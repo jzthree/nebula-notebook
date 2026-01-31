@@ -471,7 +471,30 @@ export class FilesystemService {
   }
 
   /**
-   * Duplicate a file with _copy suffix
+   * Recursively copy a directory
+   */
+  private copyDirectoryRecursive(src: string, dest: string): void {
+    fs.mkdirSync(dest, { recursive: true });
+    const entries = fs.readdirSync(src, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const srcPath = path.join(src, entry.name);
+      const destPath = path.join(dest, entry.name);
+
+      if (entry.isDirectory()) {
+        this.copyDirectoryRecursive(srcPath, destPath);
+      } else {
+        fs.copyFileSync(srcPath, destPath);
+        // For notebooks, also duplicate history and session files
+        if (entry.name.toLowerCase().endsWith('.ipynb')) {
+          this.duplicateNotebookMetadata(srcPath, destPath);
+        }
+      }
+    }
+  }
+
+  /**
+   * Duplicate a file or directory with _copy suffix
    */
   duplicateFile(filePath: string): FileInfoResponse {
     const normalizedPath = this.normalizePath(filePath);
@@ -481,12 +504,10 @@ export class FilesystemService {
     }
 
     const stat = fs.statSync(normalizedPath);
-    if (stat.isDirectory()) {
-      throw new Error(`Cannot duplicate directories: ${normalizedPath}`);
-    }
+    const isDirectory = stat.isDirectory();
 
     const parentDir = path.dirname(normalizedPath);
-    const ext = path.extname(normalizedPath);
+    const ext = isDirectory ? '' : path.extname(normalizedPath);
     const name = path.basename(normalizedPath, ext);
 
     // Find a unique name
@@ -499,12 +520,17 @@ export class FilesystemService {
       counter++;
     }
 
-    // Copy the file
-    fs.copyFileSync(normalizedPath, newPath);
+    if (isDirectory) {
+      // Recursively copy directory
+      this.copyDirectoryRecursive(normalizedPath, newPath);
+    } else {
+      // Copy the file
+      fs.copyFileSync(normalizedPath, newPath);
 
-    // For notebooks, also duplicate history and session files
-    if (ext.toLowerCase() === '.ipynb') {
-      this.duplicateNotebookMetadata(normalizedPath, newPath);
+      // For notebooks, also duplicate history and session files
+      if (ext.toLowerCase() === '.ipynb') {
+        this.duplicateNotebookMetadata(normalizedPath, newPath);
+      }
     }
 
     return this.toFileInfoResponse(this.getFileInfo(newPath));

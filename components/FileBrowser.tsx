@@ -4,6 +4,7 @@ import {
   Plus,
   X,
   FolderOpen,
+  FolderPlus,
   Filter,
   Search,
   ChevronRight,
@@ -20,10 +21,12 @@ import {
   listDirectory,
   getDirectoryMtime,
   createNotebook,
+  createFolder,
   deleteFile,
   duplicateFile,
   downloadFile,
   uploadFile,
+  renameFile,
   FileItem,
   DirectoryListing
 } from '../services/fileService';
@@ -36,8 +39,16 @@ interface Props {
   currentFileId: string | null;
   onSelect: (id: string) => void;
   onRefresh: () => void;
-  isOpen: boolean;
-  onClose: () => void;
+  isOpen?: boolean;
+  onClose?: () => void;
+  /** 'sidebar' for sliding panel (Notebook), 'inline' for embedded (Dashboard) */
+  variant?: 'sidebar' | 'inline';
+  /** Initial directory path (defaults to settings.rootDirectory or '~') */
+  initialPath?: string;
+  /** Max height for inline variant (e.g., '60vh') */
+  maxHeight?: string;
+  /** Class name for the container */
+  className?: string;
 }
 
 export const FileBrowser: React.FC<Props> = ({
@@ -45,11 +56,16 @@ export const FileBrowser: React.FC<Props> = ({
   currentFileId,
   onSelect,
   onRefresh,
-  isOpen,
-  onClose
+  isOpen = true,
+  onClose,
+  variant = 'sidebar',
+  initialPath,
+  maxHeight = '60vh',
+  className = '',
 }) => {
   const { toast, confirm } = useNotification();
   const [currentPath, setCurrentPath] = useState<string>(() => {
+    if (initialPath) return initialPath;
     const settings = getSettings();
     return settings.rootDirectory || '~';
   });
@@ -60,13 +76,42 @@ export const FileBrowser: React.FC<Props> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [showNotebooksOnly, setShowNotebooksOnly] = useState(false);
+  const [showNotebooksOnly, setShowNotebooksOnly] = useState(() => {
+    try {
+      return localStorage.getItem('nebula-filter-notebooks-only') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'modified'>('modified');
+
+  // Persist notebook filter preference
+  const toggleNotebooksOnly = () => {
+    const newValue = !showNotebooksOnly;
+    setShowNotebooksOnly(newValue);
+    try {
+      localStorage.setItem('nebula-filter-notebooks-only', String(newValue));
+    } catch {
+      // Ignore storage errors
+    }
+  };
 
   // Upload state
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Inline rename state
+  const [editingItem, setEditingItem] = useState<FileItem | null>(null);
+  const [editValue, setEditValue] = useState('');
+
+  // Update path when initialPath changes
+  useEffect(() => {
+    if (initialPath && initialPath !== currentPath) {
+      setCurrentPath(initialPath);
+    }
+  }, [initialPath]);
 
   // Load directory on first open or when path changes
   useEffect(() => {
@@ -154,6 +199,19 @@ export const FileBrowser: React.FC<Props> = ({
     }
   };
 
+  const handleCreateFolder = async () => {
+    const name = prompt('Enter folder name:');
+    if (name) {
+      try {
+        await createFolder(currentPath, name);
+        loadDirectory(currentPath);
+        onRefresh();
+        toast(`Created folder "${name}"`, 'success');
+      } catch (err: any) {
+        toast(err.message || 'Failed to create folder', 'error');
+      }
+    }
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -175,6 +233,42 @@ export const FileBrowser: React.FC<Props> = ({
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+    }
+  };
+
+  // Drag-and-drop upload handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+
+    setIsUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        await uploadFile(currentPath, file);
+      }
+      toast(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}`, 'success');
+      loadDirectory(currentPath);
+      onRefresh();
+    } catch (err: any) {
+      toast(err.message || 'Failed to upload file', 'error');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -200,9 +294,10 @@ export const FileBrowser: React.FC<Props> = ({
   };
 
   const handleDeleteItem = async (item: FileItem) => {
+    const itemType = item.isDirectory ? 'folder' : 'file';
     const confirmed = await confirm({
-      title: 'Delete File',
-      message: `Are you sure you want to delete "${item.name}"?`,
+      title: `Delete ${item.isDirectory ? 'Folder' : 'File'}`,
+      message: `Are you sure you want to delete "${item.name}"?${item.isDirectory ? ' This will delete all contents.' : ''}`,
       confirmLabel: 'Delete',
       variant: 'danger',
     });
@@ -211,15 +306,64 @@ export const FileBrowser: React.FC<Props> = ({
         await deleteFile(item.path);
         loadDirectory(currentPath);
         onRefresh();
+        toast(`Deleted ${item.name}`, 'success');
       } catch (err: any) {
-        toast(err.message || 'Failed to delete file', 'error');
+        toast(err.message || `Failed to delete ${itemType}`, 'error');
       }
     }
+  };
+
+  // Inline rename handlers
+  const handleStartEdit = (item: FileItem) => {
+    setEditingItem(item);
+    setEditValue(item.name);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingItem(null);
+    setEditValue('');
+  };
+
+  const handleConfirmEdit = async () => {
+    if (!editingItem) return;
+
+    const newName = editValue.trim();
+    if (!newName || newName === editingItem.name) {
+      handleCancelEdit();
+      return;
+    }
+
+    const itemType = editingItem.isDirectory ? 'folder' : 'file';
+    try {
+      const parentDir = editingItem.path.substring(0, editingItem.path.lastIndexOf('/'));
+      const newPath = `${parentDir}/${newName}`;
+      await renameFile(editingItem.path, newPath);
+      loadDirectory(currentPath);
+      onRefresh();
+      toast(`Renamed to "${newName}"`, 'success');
+    } catch (err: any) {
+      toast(err.message || `Failed to rename ${itemType}`, 'error');
+    } finally {
+      handleCancelEdit();
+    }
+  };
+
+  const handleRenameItem = async (item: FileItem, newName: string) => {
+    // This is called from FileListItem but we use inline editing now
+    // Keep for compatibility but actual rename happens in handleConfirmEdit
   };
 
   const handleOpenNewTab = (path: string) => {
     const baseUrl = window.location.pathname;
     window.open(`${baseUrl}?file=${path}`, '_blank');
+  };
+
+  const handleSelectFile = (path: string) => {
+    onSelect(path);
+    // Close sidebar on mobile for sidebar variant
+    if (variant === 'sidebar' && window.innerWidth < 1024 && onClose) {
+      onClose();
+    }
   };
 
   const filteredItems = useMemo(() => {
@@ -253,6 +397,219 @@ export const FileBrowser: React.FC<Props> = ({
     pathParts.unshift('/');
   }
 
+  // Shared content for both variants
+  const browserContent = (
+    <>
+      {/* Hidden file input for upload */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        onChange={handleFileUpload}
+        multiple
+      />
+
+      {/* Header */}
+      <div className={`p-4 border-b border-slate-200 bg-white flex justify-between items-center ${variant === 'inline' ? 'rounded-t-xl' : ''}`}>
+        <h2 className="font-semibold text-slate-800 flex items-center gap-2 text-sm uppercase tracking-wider">
+          <FolderOpen className="w-4 h-4 text-slate-500" />
+          Explorer
+        </h2>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleCreate}
+            className="p-1.5 hover:bg-slate-100 rounded text-slate-600"
+            title="New Notebook"
+          >
+            <Plus className="w-4 h-4" />
+          </button>
+          <button
+            onClick={handleCreateFolder}
+            className="p-1.5 hover:bg-slate-100 rounded text-slate-600"
+            title="New Folder"
+          >
+            <FolderPlus className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            className="p-1.5 hover:bg-slate-100 rounded text-slate-600 disabled:opacity-50"
+            title="Upload files"
+          >
+            <Upload className={`w-4 h-4 ${isUploading ? 'animate-pulse' : ''}`} />
+          </button>
+          <button
+            onClick={() => loadDirectory(currentPath)}
+            className="p-1.5 hover:bg-slate-100 rounded text-slate-600"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </button>
+          {variant === 'sidebar' && onClose && (
+            <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded lg:hidden">
+              <X className="w-4 h-4 text-slate-500" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Path Navigation - combined row */}
+      <div className="px-3 py-2 border-b border-slate-200 bg-white">
+        <div className="flex items-center gap-1 text-xs text-slate-600 overflow-x-auto scrollbar-hide">
+          <button
+            onClick={handleGoHome}
+            className="p-1 hover:bg-slate-100 rounded text-slate-500 flex-shrink-0"
+            title="Go to root"
+          >
+            <Home className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={handleGoUp}
+            disabled={!parentPath}
+            className="p-1 hover:bg-slate-100 rounded text-slate-500 disabled:opacity-30 flex-shrink-0"
+            title="Go up"
+          >
+            <ArrowUp className="w-3.5 h-3.5" />
+          </button>
+          <div className="w-[1px] h-4 bg-slate-200 mx-1 flex-shrink-0" />
+          {pathParts.map((part, idx) => {
+            const fullPath = idx === 0 && part === '/'
+              ? '/'
+              : '/' + pathParts.slice(part === '/' ? 1 : 0, idx + 1).filter(p => p !== '/').join('/');
+
+            return (
+              <React.Fragment key={idx}>
+                {idx > 0 && <ChevronRight className="w-3 h-3 text-slate-400 flex-shrink-0" />}
+                <button
+                  onClick={() => handleNavigate(fullPath)}
+                  className="hover:text-blue-600 hover:underline truncate max-w-[100px] flex-shrink-0"
+                  title={fullPath}
+                >
+                  {part === '/' ? 'Root' : part}
+                </button>
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Toolbar & Search */}
+      <div className="p-3 border-b border-slate-200 bg-white space-y-2">
+        <div className="relative">
+          <Search className="w-3 h-3 absolute left-2.5 top-2.5 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search files..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-8 pr-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold text-slate-400 uppercase">Files</span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setSortBy(sortBy === 'name' ? 'modified' : 'name')}
+              className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${sortBy === 'modified' ? 'bg-purple-100 text-purple-700' : 'hover:bg-slate-100 text-slate-500'}`}
+              title={sortBy === 'modified' ? 'Sorted by modified time' : 'Sorted by name'}
+            >
+              {sortBy === 'modified' ? <Clock className="w-3 h-3" /> : <ArrowDownAZ className="w-3 h-3" />}
+            </button>
+            <button
+              onClick={toggleNotebooksOnly}
+              className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${showNotebooksOnly ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500'}`}
+              title="Filter Notebooks"
+            >
+              <Filter className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* File List */}
+      <div
+        className="flex-1 overflow-y-auto p-2 relative"
+        style={variant === 'inline' ? { maxHeight } : undefined}
+      >
+        {/* Drag overlay */}
+        {isDragging && (
+          <div className="absolute inset-0 flex items-center justify-center bg-blue-50/80 border-2 border-dashed border-blue-400 rounded-lg z-10 pointer-events-none">
+            <div className="text-center">
+              <Upload className="w-8 h-8 text-blue-500 mx-auto mb-2" />
+              <p className="text-sm font-medium text-blue-600">Drop files to upload</p>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="text-center py-4 text-red-500 text-xs">
+            {error}
+          </div>
+        )}
+
+        {/* Only show loading screen on initial load (no items yet) */}
+        {isLoading && items.length === 0 && (
+          <div className="text-center py-8 text-slate-400 text-xs">
+            Loading...
+          </div>
+        )}
+
+        {/* Show files even during background refresh */}
+        {!error && filteredItems.map(item => (
+          <FileListItem
+            key={item.id}
+            item={item}
+            isCurrentFile={item.path === currentFileId}
+            onNavigate={handleNavigate}
+            onSelect={handleSelectFile}
+            onOpenNewTab={handleOpenNewTab}
+            onRename={handleRenameItem}
+            onDuplicate={handleDuplicateItem}
+            onDownload={handleDownloadItem}
+            onDelete={handleDeleteItem}
+            compact={variant === 'sidebar'}
+            isEditing={editingItem?.id === item.id}
+            editValue={editingItem?.id === item.id ? editValue : ''}
+            onEditChange={setEditValue}
+            onStartEdit={handleStartEdit}
+            onCancelEdit={handleCancelEdit}
+            onConfirmEdit={handleConfirmEdit}
+          />
+        ))}
+
+        {!isLoading && !error && filteredItems.length === 0 && (
+          <div className="text-center py-8 text-slate-400 text-xs">
+            {searchQuery ? 'No matching files found.' : 'Empty directory.'}
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className={`p-3 border-t border-slate-200 bg-white text-[10px] text-slate-400 flex justify-between ${variant === 'inline' ? 'rounded-b-xl' : ''}`}>
+        <span>{items.length} items</span>
+        <span className="truncate max-w-[200px]" title={currentPath}>{currentPath}</span>
+      </div>
+    </>
+  );
+
+  // Inline variant - simple div wrapper
+  if (variant === 'inline') {
+    return (
+      <div
+        className={`bg-white rounded-xl border-2 overflow-hidden flex flex-col transition-colors ${
+          isDragging ? 'border-blue-400 bg-blue-50/30' : 'border-slate-200'
+        } ${className}`}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {browserContent}
+      </div>
+    );
+  }
+
+  // Sidebar variant - sliding panel with backdrop
   return (
     <>
       {/* Backdrop */}
@@ -264,177 +621,18 @@ export const FileBrowser: React.FC<Props> = ({
       )}
 
       {/* Sidebar Panel */}
-      <div className={`
-        fixed top-0 left-0 h-full w-72 bg-slate-50 border-r border-slate-200 shadow-xl z-40 transform transition-transform duration-300 ease-in-out flex flex-col
-        ${isOpen ? 'translate-x-0' : '-translate-x-full'}
-      `}>
-        {/* Hidden file input for upload */}
-        <input
-          type="file"
-          ref={fileInputRef}
-          className="hidden"
-          onChange={handleFileUpload}
-          multiple
-        />
-
-        {/* Header */}
-        <div className="p-4 border-b border-slate-200 bg-white flex justify-between items-center">
-          <h2 className="font-semibold text-slate-800 flex items-center gap-2 text-sm uppercase tracking-wider">
-            <FolderOpen className="w-4 h-4 text-slate-500" />
-            Explorer
-          </h2>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={handleCreate}
-              className="p-1.5 hover:bg-slate-100 rounded text-slate-600"
-              title="New Notebook"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-              className="p-1.5 hover:bg-slate-100 rounded text-slate-600 disabled:opacity-50"
-              title="Upload files"
-            >
-              <Upload className={`w-4 h-4 ${isUploading ? 'animate-pulse' : ''}`} />
-            </button>
-            <button
-              onClick={() => loadDirectory(currentPath)}
-              className="p-1.5 hover:bg-slate-100 rounded text-slate-600"
-              title="Refresh"
-            >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-            </button>
-            <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded lg:hidden">
-              <X className="w-4 h-4 text-slate-500" />
-            </button>
-          </div>
-        </div>
-
-        {/* Path Navigation */}
-        <div className="px-3 py-2 border-b border-slate-200 bg-white">
-          <div className="flex items-center gap-1 mb-2">
-            <button
-              onClick={handleGoHome}
-              className="p-1 hover:bg-slate-100 rounded text-slate-500"
-              title="Go to root"
-            >
-              <Home className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={handleGoUp}
-              disabled={!parentPath}
-              className="p-1 hover:bg-slate-100 rounded text-slate-500 disabled:opacity-30"
-              title="Go up"
-            >
-              <ArrowUp className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Breadcrumbs */}
-          <div className="flex items-center gap-1 text-xs text-slate-600 overflow-x-auto scrollbar-hide">
-            {pathParts.map((part, idx) => {
-              const fullPath = idx === 0 && part === '/'
-                ? '/'
-                : '/' + pathParts.slice(part === '/' ? 1 : 0, idx + 1).filter(p => p !== '/').join('/');
-
-              return (
-                <React.Fragment key={idx}>
-                  {idx > 0 && <ChevronRight className="w-3 h-3 text-slate-400 flex-shrink-0" />}
-                  <button
-                    onClick={() => handleNavigate(fullPath)}
-                    className="hover:text-blue-600 hover:underline truncate max-w-[80px] flex-shrink-0"
-                    title={fullPath}
-                  >
-                    {part === '/' ? 'Root' : part}
-                  </button>
-                </React.Fragment>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Toolbar & Search */}
-        <div className="p-3 border-b border-slate-200 bg-white space-y-2">
-          <div className="relative">
-            <Search className="w-3 h-3 absolute left-2.5 top-2.5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search files..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-8 pr-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
-
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-slate-400 uppercase">Files</span>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setSortBy(sortBy === 'name' ? 'modified' : 'name')}
-                className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${sortBy === 'modified' ? 'bg-purple-100 text-purple-700' : 'hover:bg-slate-100 text-slate-500'}`}
-                title={sortBy === 'modified' ? 'Sorted by modified time' : 'Sorted by name'}
-              >
-                {sortBy === 'modified' ? <Clock className="w-3 h-3" /> : <ArrowDownAZ className="w-3 h-3" />}
-              </button>
-              <button
-                onClick={() => setShowNotebooksOnly(!showNotebooksOnly)}
-                className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${showNotebooksOnly ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500'}`}
-                title="Filter Notebooks"
-              >
-                <Filter className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* File List */}
-        <div className="flex-1 overflow-y-auto p-2">
-          {error && (
-            <div className="text-center py-4 text-red-500 text-xs">
-              {error}
-            </div>
-          )}
-
-          {/* Only show loading screen on initial load (no items yet) */}
-          {isLoading && items.length === 0 && (
-            <div className="text-center py-8 text-slate-400 text-xs">
-              Loading...
-            </div>
-          )}
-
-          {/* Show files even during background refresh */}
-          {!error && filteredItems.map(item => (
-            <FileListItem
-              key={item.id}
-              item={item}
-              isCurrentFile={item.path === currentFileId}
-              onNavigate={handleNavigate}
-              onSelect={(path) => {
-                onSelect(path);
-                if (window.innerWidth < 1024) onClose();
-              }}
-              onOpenNewTab={handleOpenNewTab}
-              onDuplicate={handleDuplicateItem}
-              onDownload={handleDownloadItem}
-              onDelete={handleDeleteItem}
-              compact
-            />
-          ))}
-
-          {!isLoading && !error && filteredItems.length === 0 && (
-            <div className="text-center py-8 text-slate-400 text-xs">
-              {searchQuery ? 'No matching files found.' : 'Empty directory.'}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="p-3 border-t border-slate-200 bg-white text-[10px] text-slate-400 flex justify-between">
-          <span>{items.length} items</span>
-          <span className="truncate max-w-[150px]" title={currentPath}>{currentPath}</span>
-        </div>
+      <div
+        className={`
+          fixed top-0 left-0 h-full w-80 sm:w-96 border-r shadow-xl z-40 transform transition-all duration-300 ease-in-out flex flex-col
+          ${isOpen ? 'translate-x-0' : '-translate-x-full'}
+          ${isDragging ? 'bg-blue-50/50 border-blue-400 border-2' : 'bg-slate-50 border-slate-200'}
+          ${className}
+        `}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {browserContent}
       </div>
     </>
   );

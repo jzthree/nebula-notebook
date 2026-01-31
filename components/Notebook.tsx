@@ -24,6 +24,7 @@ import {
   AgentPermissionStatus
 } from '../services/fileService';
 import { FileBrowser } from './FileBrowser';
+import { addRecentNotebook } from './Dashboard';
 import { AIChatSidebar } from './AIChatSidebar';
 import { TerminalPanel } from './TerminalPanel';
 import { HistoryPanel } from './HistoryPanel';
@@ -1581,6 +1582,10 @@ export const Notebook: React.FC = () => {
     // Set UI state immediately - don't block on history loading
     setCurrentFileId(id);
     saveActiveFileId(id);
+
+    // Track in recently opened notebooks
+    const fileName = id.split('/').pop()?.replace('.ipynb', '') || id;
+    addRecentNotebook(id, fileName);
     setActiveCellId(content.length > 0 ? content[0].id : null);
     setIsLoadingFile(false);
 
