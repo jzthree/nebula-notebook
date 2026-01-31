@@ -285,7 +285,7 @@ export const Dashboard: React.FC = () => {
       <header className="bg-slate-50/90 backdrop-blur border-b border-slate-200 px-4 py-3 sticky top-0 z-20">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/* Nebula logo - five bars design */}
+            {/* Nebula logo - standard avatar style */}
             <svg className="w-9 h-9" viewBox="0 0 32 32">
               <defs>
                 <linearGradient id="nebula-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -295,8 +295,8 @@ export const Dashboard: React.FC = () => {
                 </linearGradient>
               </defs>
               <rect width="32" height="32" rx="6" fill="url(#nebula-logo-grad)" />
-              {/* Five notebook lines */}
-              <path d="M7 7h18 M7 12h14 M7 17h16 M7 22h12 M7 27h15" stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.9" />
+              <path d="M8 10h16 M8 16h12 M8 22h14" stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.9" />
+              <circle cx="24" cy="22" r="3" fill="#fbbf24" />
             </svg>
             <div>
               <h1 className="text-lg font-bold text-slate-800">Nebula Notebook</h1>
