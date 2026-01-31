@@ -163,7 +163,8 @@ export function setupTerminalWebSocket(server: HttpServer): WebSocketServer {
     if (!wsConnections.has(terminalId)) {
       wsConnections.set(terminalId, new Set());
     }
-    wsConnections.get(terminalId)!.add(ws);
+    const connections = wsConnections.get(terminalId)!;
+    connections.add(ws);
 
     // Send buffered output for reconnection
     const buffer = ptyManager.getOutputBuffer(terminalId);
@@ -172,20 +173,26 @@ export function setupTerminalWebSocket(server: HttpServer): WebSocketServer {
       ws.send(JSON.stringify(replayMsg));
     }
 
-    // Set up data listener
-    const sendOutput = (data: string) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        const msg: ServerMessage = { type: 'output', data };
-        ws.send(JSON.stringify(msg));
+    // Collaborative mode: broadcast output to ALL connected clients
+    const broadcastOutput = (data: string) => {
+      const msg: ServerMessage = { type: 'output', data };
+      const msgStr = JSON.stringify(msg);
+      for (const conn of connections) {
+        if (conn.readyState === WebSocket.OPEN) {
+          conn.send(msgStr);
+        }
       }
     };
-    ptyManager.setOnData(terminalId, sendOutput);
+    ptyManager.setOnData(terminalId, broadcastOutput);
 
-    // Set up exit listener
+    // Set up exit listener - broadcast to all connections
     ptyManager.setOnExit(terminalId, (code: number) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        const msg: ServerMessage = { type: 'exit', code };
-        ws.send(JSON.stringify(msg));
+      const msg: ServerMessage = { type: 'exit', code };
+      const msgStr = JSON.stringify(msg);
+      for (const conn of connections) {
+        if (conn.readyState === WebSocket.OPEN) {
+          conn.send(msgStr);
+        }
       }
     });
 

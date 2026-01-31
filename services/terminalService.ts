@@ -161,4 +161,6 @@ export type TerminalServerMessage =
   | { type: 'output'; data: string }
   | { type: 'replay'; data: string }
   | { type: 'exit'; code: number }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'inactive' }  // Another tab took over this terminal
+  | { type: 'active' };   // This tab is now the active one

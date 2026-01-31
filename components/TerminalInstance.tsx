@@ -16,12 +16,14 @@ interface TerminalInstanceProps {
   terminalId: string;
   isActive: boolean;
   onExit?: (code: number) => void;
+  onInactive?: () => void;  // Called when another tab takes over
 }
 
 export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
   terminalId,
   isActive,
   onExit,
+  onInactive,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -124,6 +126,15 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
 
           case 'error':
             terminal.write(`\r\n\x1b[31m[Error: ${message.message}]\x1b[0m\r\n`);
+            break;
+
+          case 'inactive':
+            terminal.write('\r\n\x1b[33m[Another tab is now controlling this terminal]\x1b[0m\r\n');
+            onInactive?.();
+            break;
+
+          case 'active':
+            // This tab is now active, nothing special to do
             break;
         }
       } catch (error) {
