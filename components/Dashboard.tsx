@@ -7,7 +7,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   FolderOpen,
-  FileText,
   Terminal,
   Play,
   ChevronRight,
@@ -15,7 +14,6 @@ import {
   Home,
   RefreshCw,
   Folder,
-  FileCode,
   Book,
   Search,
   ArrowUp,
@@ -24,7 +22,6 @@ import {
   Filter,
   Cpu,
   Activity,
-  ExternalLink,
   Zap,
   Upload,
 } from 'lucide-react';
@@ -34,8 +31,12 @@ import {
   FileItem,
   createNotebook,
   uploadFile,
+  duplicateFile,
+  downloadFile,
+  deleteFile,
 } from '../services/fileService';
 import { listTerminals, TerminalInfo } from '../services/terminalService';
+import { FileListItem } from './FileListItem';
 
 // Kernel session from API
 interface KernelSession {
@@ -78,28 +79,6 @@ async function getKernelSessions(): Promise<KernelSession[]> {
     // Ignore errors
   }
   return [];
-}
-
-// Format relative time
-function formatRelativeTime(timestamp: number): string {
-  const now = Date.now();
-  const diff = now - timestamp * 1000;
-
-  if (diff < 60000) return 'just now';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
-  return new Date(timestamp * 1000).toLocaleDateString();
-}
-
-// Get file icon matching FileBrowser style
-function getFileIcon(item: FileItem) {
-  if (item.isDirectory) return <Folder className="w-4 h-4 text-blue-500" />;
-  if (item.extension === '.ipynb') return <Book className="w-4 h-4 text-orange-500" />;
-  if (item.extension === '.py') return <FileCode className="w-4 h-4 text-blue-500" />;
-  if (item.extension === '.csv') return <FileText className="w-4 h-4 text-green-500" />;
-  if (item.extension === '.json') return <FileCode className="w-4 h-4 text-yellow-500" />;
-  return <FileText className="w-4 h-4 text-slate-400" />;
 }
 
 // Get filename from path
@@ -226,6 +205,36 @@ export const Dashboard: React.FC = () => {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+    }
+  };
+
+  // Handle file duplicate
+  const handleDuplicate = async (item: FileItem) => {
+    try {
+      await duplicateFile(item.path);
+      loadDirectory(currentPath);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to duplicate file');
+    }
+  };
+
+  // Handle file download
+  const handleDownload = async (item: FileItem) => {
+    try {
+      await downloadFile(item.path, item.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to download file');
+    }
+  };
+
+  // Handle file delete
+  const handleDelete = async (item: FileItem) => {
+    if (!confirm(`Delete "${item.name}"?`)) return;
+    try {
+      await deleteFile(item.path);
+      loadDirectory(currentPath);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete file');
     }
   };
 
@@ -470,43 +479,16 @@ export const Dashboard: React.FC = () => {
                   )}
 
                   {filteredItems.map((item) => (
-                    <div
+                    <FileListItem
                       key={item.path}
-                      onClick={() => item.isDirectory ? handleNavigate(item.path) : item.extension === '.ipynb' && handleOpenNotebook(item.path)}
-                      className={`
-                        group relative flex items-center px-4 py-3 cursor-pointer transition-all
-                        ${item.extension === '.ipynb' ? 'hover:bg-orange-50' : 'hover:bg-slate-50'}
-                        ${!item.isDirectory && item.extension !== '.ipynb' ? 'opacity-60' : ''}
-                      `}
-                    >
-                      <div className="flex items-center gap-3 flex-1 min-w-0">
-                        {getFileIcon(item)}
-                        <div className="flex flex-col min-w-0 flex-1">
-                          <span className={`text-sm truncate ${item.extension === '.ipynb' ? 'text-slate-800 group-hover:text-orange-600' : 'text-slate-700'}`}>
-                            {item.name}
-                          </span>
-                          {!item.isDirectory && (
-                            <span className="text-xs text-slate-400">
-                              {formatRelativeTime(item.modified)} · {item.size}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Hover actions for notebooks */}
-                      {item.extension === '.ipynb' && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleOpenNotebookNewTab(item.path);
-                          }}
-                          className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-orange-100 rounded text-orange-500 transition-opacity"
-                          title="Open in new tab"
-                        >
-                          <ExternalLink className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
+                      item={item}
+                      onNavigate={handleNavigate}
+                      onSelect={handleOpenNotebook}
+                      onOpenNewTab={handleOpenNotebookNewTab}
+                      onDuplicate={handleDuplicate}
+                      onDownload={handleDownload}
+                      onDelete={handleDelete}
+                    />
                   ))}
 
                   {filteredItems.length === 0 && (

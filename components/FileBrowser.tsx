@@ -1,28 +1,21 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { NotebookMetadata } from '../types';
 import {
-  File,
   Plus,
-  Trash2,
-  Copy,
   X,
   FolderOpen,
   Filter,
-  FileText,
-  FileCode,
-  Book,
   Search,
   ChevronRight,
   Home,
   Folder,
   ArrowUp,
   RefreshCw,
-  ExternalLink,
   ArrowDownAZ,
   Clock,
-  Download,
   Upload
 } from 'lucide-react';
+import { FileListItem } from './FileListItem';
 import {
   listDirectory,
   getDirectoryMtime,
@@ -161,57 +154,6 @@ export const FileBrowser: React.FC<Props> = ({
     }
   };
 
-  const handleDelete = async (e: React.MouseEvent, item: FileItem) => {
-    e.stopPropagation();
-    const confirmed = await confirm({
-      title: 'Delete File',
-      message: `Are you sure you want to delete "${item.name}"?`,
-      confirmLabel: 'Delete',
-      variant: 'danger',
-    });
-    if (confirmed) {
-      try {
-        await deleteFile(item.path);
-        loadDirectory(currentPath);
-        onRefresh();
-      } catch (err: any) {
-        toast(err.message || 'Failed to delete file', 'error');
-      }
-    }
-  };
-
-  const handleDuplicate = async (e: React.MouseEvent, item: FileItem) => {
-    e.stopPropagation();
-    try {
-      await duplicateFile(item.path);
-      loadDirectory(currentPath);
-      onRefresh();
-      toast(`Duplicated ${item.name}`, 'success');
-    } catch (err: any) {
-      toast(err.message || 'Failed to duplicate file', 'error');
-    }
-  };
-
-  const handleItemClick = (item: FileItem) => {
-    if (item.isDirectory) {
-      handleNavigate(item.path);
-    } else if (item.extension === '.ipynb') {
-      onSelect(item.path);
-      if (window.innerWidth < 1024) onClose();
-    } else {
-      toast(`Preview for ${item.extension} files is not implemented yet.`, 'info');
-    }
-  };
-
-  const handleDownload = async (e: React.MouseEvent, item: FileItem) => {
-    e.stopPropagation();
-    try {
-      await downloadFile(item.path, item.name);
-      toast(`Downloaded ${item.name}`, 'success');
-    } catch (err: any) {
-      toast(err.message || 'Failed to download file', 'error');
-    }
-  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -236,13 +178,48 @@ export const FileBrowser: React.FC<Props> = ({
     }
   };
 
-  const getFileIcon = (item: FileItem) => {
-    if (item.isDirectory) return <Folder className="w-4 h-4 text-blue-500" />;
-    if (item.extension === '.ipynb') return <Book className="w-4 h-4 text-orange-500" />;
-    if (item.extension === '.py') return <FileCode className="w-4 h-4 text-blue-500" />;
-    if (item.extension === '.csv') return <FileText className="w-4 h-4 text-green-500" />;
-    if (item.extension === '.json') return <FileCode className="w-4 h-4 text-yellow-500" />;
-    return <File className="w-4 h-4 text-slate-400" />;
+  // Wrapper handlers for FileListItem (no event parameter)
+  const handleDuplicateItem = async (item: FileItem) => {
+    try {
+      await duplicateFile(item.path);
+      loadDirectory(currentPath);
+      onRefresh();
+      toast(`Duplicated ${item.name}`, 'success');
+    } catch (err: any) {
+      toast(err.message || 'Failed to duplicate file', 'error');
+    }
+  };
+
+  const handleDownloadItem = async (item: FileItem) => {
+    try {
+      await downloadFile(item.path, item.name);
+      toast(`Downloaded ${item.name}`, 'success');
+    } catch (err: any) {
+      toast(err.message || 'Failed to download file', 'error');
+    }
+  };
+
+  const handleDeleteItem = async (item: FileItem) => {
+    const confirmed = await confirm({
+      title: 'Delete File',
+      message: `Are you sure you want to delete "${item.name}"?`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
+    if (confirmed) {
+      try {
+        await deleteFile(item.path);
+        loadDirectory(currentPath);
+        onRefresh();
+      } catch (err: any) {
+        toast(err.message || 'Failed to delete file', 'error');
+      }
+    }
+  };
+
+  const handleOpenNewTab = (path: string) => {
+    const baseUrl = window.location.pathname;
+    window.open(`${baseUrl}?file=${path}`, '_blank');
   };
 
   const filteredItems = useMemo(() => {
@@ -429,81 +406,21 @@ export const FileBrowser: React.FC<Props> = ({
 
           {/* Show files even during background refresh */}
           {!error && filteredItems.map(item => (
-            <div
+            <FileListItem
               key={item.id}
-              onClick={() => handleItemClick(item)}
-              className={`
-                group relative flex items-center px-3 py-2 rounded-md cursor-pointer transition-all mb-1
-                ${item.path === currentFileId
-                  ? 'bg-blue-100/50 text-blue-900 font-medium'
-                  : 'text-slate-600 hover:bg-slate-200/50'}
-              `}
-            >
-              {/* File icon and name - takes full width */}
-              <div className="flex items-center gap-2 overflow-hidden flex-1 min-w-0">
-                {getFileIcon(item)}
-
-                <div className="flex flex-col min-w-0 flex-1">
-                  <span className="text-xs truncate" title={item.name}>
-                    {item.name}
-                  </span>
-                  {!item.isDirectory && (
-                    <span className="text-[9px] text-slate-400 flex gap-2">
-                      {new Date(item.modified * 1000).toLocaleDateString()}
-                      <span>•</span>
-                      {item.size}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Hover Actions - absolutely positioned overlay */}
-              {!item.isDirectory && (
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto">
-                  <div className="flex bg-white shadow-sm rounded border border-slate-200">
-                    {item.extension === '.ipynb' && (
-                      <>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const baseUrl = window.location.pathname;
-                            window.open(`${baseUrl}?file=${item.path}`, '_blank');
-                          }}
-                          className="p-1 text-slate-400 hover:text-green-600 hover:bg-green-50"
-                          title="Open in new tab"
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                        </button>
-                        <div className="w-[1px] bg-slate-200"></div>
-                      </>
-                    )}
-                    <button
-                      onClick={(e) => handleDuplicate(e, item)}
-                      className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50"
-                      title="Duplicate"
-                    >
-                      <Copy className="w-3 h-3" />
-                    </button>
-                    <div className="w-[1px] bg-slate-200"></div>
-                    <button
-                      onClick={(e) => handleDownload(e, item)}
-                      className="p-1 text-slate-400 hover:text-purple-600 hover:bg-purple-50"
-                      title="Download"
-                    >
-                      <Download className="w-3 h-3" />
-                    </button>
-                    <div className="w-[1px] bg-slate-200"></div>
-                    <button
-                      onClick={(e) => handleDelete(e, item)}
-                      className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+              item={item}
+              isCurrentFile={item.path === currentFileId}
+              onNavigate={handleNavigate}
+              onSelect={(path) => {
+                onSelect(path);
+                if (window.innerWidth < 1024) onClose();
+              }}
+              onOpenNewTab={handleOpenNewTab}
+              onDuplicate={handleDuplicateItem}
+              onDownload={handleDownloadItem}
+              onDelete={handleDeleteItem}
+              compact
+            />
           ))}
 
           {!isLoading && !error && filteredItems.length === 0 && (
