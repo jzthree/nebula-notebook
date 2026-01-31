@@ -368,7 +368,7 @@ const CellComponent: React.FC<Props> = ({
           </span>
           {showCellIds && (
             <span
-              className="text-[10px] font-mono text-slate-300 truncate max-w-[180px]"
+              className="text-[10px] font-mono text-slate-400 truncate max-w-[180px]"
               title={cell.id}
             >
               {cell.id}
