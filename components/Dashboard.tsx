@@ -571,15 +571,20 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* Tip */}
+            {/* Tips */}
             <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
               <div className="flex items-start gap-3">
-                <Lightbulb className="w-5 h-5 text-amber-500 mt-0.5" />
-                <div className="text-sm text-slate-700">
-                  <p className="font-medium">Pro Tip</p>
-                  <p className="mt-1 text-slate-500 text-xs">
-                    Bookmark notebook URLs for quick access. Use <code className="bg-slate-200 px-1 rounded">?terminal=name</code> for persistent named terminals.
-                  </p>
+                <Lightbulb className="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" />
+                <div className="text-xs text-slate-600 space-y-2">
+                  <p className="font-medium text-slate-700">Tips for Jupyter Users</p>
+                  <ul className="space-y-1.5">
+                    <li><code className="bg-slate-200 px-1 rounded">E</code> / <code className="bg-slate-200 px-1 rounded">D</code> keys queue/dequeue cells for batch execution</li>
+                    <li><code className="bg-slate-200 px-1 rounded">Ctrl+`</code> toggles the integrated terminal</li>
+                    <li><code className="bg-slate-200 px-1 rounded">?terminal=name</code> in URL for persistent terminals</li>
+                    <li>Click notebook name to rename inline</li>
+                    <li>History panel shows full edit timeline with restore</li>
+                    <li>AI chat sidebar has full notebook context</li>
+                  </ul>
                 </div>
               </div>
             </div>
