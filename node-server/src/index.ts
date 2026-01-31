@@ -20,7 +20,7 @@ import * as fs from 'fs';
 // Import routes
 import kernelRoutes, { setupKernelWebSocket, kernelService } from './routes/kernel';
 import llmRoutes, { llmService } from './routes/llm';
-import fsRoutes from './routes/fs';
+import fsRoutes, { fsService } from './routes/fs';
 import notebookRoutes from './routes/notebook';
 import pythonRoutes from './routes/python';
 import authRoutes from './routes/auth';
@@ -74,12 +74,14 @@ function createApp(): Express {
 
   // Health check endpoints
   app.get('/api/health', (_req: Request, res: Response) => {
+    // Use configured root directory (from .nebula-config.json or fallback to cwd)
+    const rootDir = fsService.normalizePath('~');
     res.json({
       status: 'ok',
       version: '1.0.0',
       ready: kernelService.isReady,
       llm_providers: Object.keys(llmService.getAvailableProviders()),
-      cwd: process.cwd(),
+      cwd: rootDir,
     });
   });
 

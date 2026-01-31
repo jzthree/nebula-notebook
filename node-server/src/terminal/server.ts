@@ -6,12 +6,18 @@ import { Express, Request, Response } from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as HttpServer } from 'http';
 import { ptyManager } from './pty-manager';
+import { fsService } from '../routes/fs';
 import {
   CreateTerminalRequest,
   ResizeTerminalRequest,
   ClientMessage,
   ServerMessage,
 } from './types';
+
+// Get configured root directory for terminals
+function getDefaultCwd(): string {
+  return fsService.normalizePath('~');
+}
 
 // Track WebSocket connections by terminal ID
 const wsConnections = new Map<string, Set<WebSocket>>();
@@ -33,9 +39,11 @@ export function setupTerminalRoutes(app: Express): void {
   // Create a new terminal
   app.post('/api/terminals', (req: Request, res: Response) => {
     const options: CreateTerminalRequest = req.body || {};
+    // Use configured root directory as default cwd
+    const finalOptions = { cwd: getDefaultCwd(), ...options };
 
     try {
-      const terminal = ptyManager.create(options);
+      const terminal = ptyManager.create(finalOptions);
       console.log(`[Terminal] Created terminal ${terminal.id} (PID: ${terminal.pid})`);
       res.status(201).json(terminal);
     } catch (error) {
@@ -51,9 +59,11 @@ export function setupTerminalRoutes(app: Express): void {
   app.post('/api/terminals/named/:name', (req: Request, res: Response) => {
     const { name } = req.params;
     const options: CreateTerminalRequest = req.body || {};
+    // Use configured root directory as default cwd
+    const finalOptions = { cwd: getDefaultCwd(), ...options };
 
     try {
-      const terminal = ptyManager.getOrCreate(name, options);
+      const terminal = ptyManager.getOrCreate(name, finalOptions);
       console.log(`[Terminal] Get/create named terminal '${name}' -> ${terminal.id}`);
       res.json(terminal);
     } catch (error) {
