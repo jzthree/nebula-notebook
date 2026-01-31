@@ -285,7 +285,7 @@ export const Dashboard: React.FC = () => {
       <header className="bg-slate-50/90 backdrop-blur border-b border-slate-200 px-4 py-3 sticky top-0 z-20">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/* Nebula logo - avatar-based but subtly distinctive */}
+            {/* Nebula logo - five bars design */}
             <svg className="w-9 h-9" viewBox="0 0 32 32">
               <defs>
                 <linearGradient id="nebula-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -293,20 +293,10 @@ export const Dashboard: React.FC = () => {
                   <stop offset="50%" style={{ stopColor: '#6366f1' }} />
                   <stop offset="100%" style={{ stopColor: '#3b82f6' }} />
                 </linearGradient>
-                <filter id="nebula-glow" x="-20%" y="-20%" width="140%" height="140%">
-                  <feGaussianBlur stdDeviation="1" result="blur" />
-                  <feMerge>
-                    <feMergeNode in="blur" />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
               </defs>
               <rect width="32" height="32" rx="6" fill="url(#nebula-logo-grad)" />
-              {/* Notebook lines */}
-              <path d="M8 10h16 M8 16h12 M8 22h14" stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.9" />
-              {/* Multiple star accents - makes it special */}
-              <circle cx="24" cy="22" r="3" fill="#fbbf24" filter="url(#nebula-glow)" />
-              <circle cx="26" cy="8" r="1.5" fill="#f472b6" opacity="0.9" />
+              {/* Five notebook lines */}
+              <path d="M7 7h18 M7 12h14 M7 17h16 M7 22h12 M7 27h15" stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.9" />
             </svg>
             <div>
               <h1 className="text-lg font-bold text-slate-800">Nebula Notebook</h1>
