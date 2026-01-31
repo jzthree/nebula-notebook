@@ -21,8 +21,9 @@ import {
   ArrowDownAZ,
   Filter,
   Cpu,
-  Lightbulb,
+  Activity,
   Upload,
+  Lightbulb,
 } from 'lucide-react';
 import {
   listDirectory,
@@ -285,18 +286,18 @@ export const Dashboard: React.FC = () => {
       <header className="bg-slate-50/90 backdrop-blur border-b border-slate-200 px-4 py-3 sticky top-0 z-20">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/* Nebula logo - matches favicon design */}
+            {/* Nebula logo - gradient with notebook lines */}
             <svg className="w-9 h-9" viewBox="0 0 32 32">
               <defs>
-                <linearGradient id="nebula-logo" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" style={{stopColor:'#8b5cf6'}}/>
-                  <stop offset="50%" style={{stopColor:'#6366f1'}}/>
-                  <stop offset="100%" style={{stopColor:'#3b82f6'}}/>
+                <linearGradient id="nebula-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" style={{ stopColor: '#8b5cf6' }} />
+                  <stop offset="50%" style={{ stopColor: '#6366f1' }} />
+                  <stop offset="100%" style={{ stopColor: '#3b82f6' }} />
                 </linearGradient>
               </defs>
-              <rect width="32" height="32" rx="6" fill="url(#nebula-logo)"/>
-              <path d="M8 10h16M8 16h12M8 22h14" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-              <circle cx="24" cy="22" r="3" fill="#fbbf24"/>
+              <rect width="32" height="32" rx="6" fill="url(#nebula-logo-grad)" />
+              <path d="M8 10h16 M8 16h12 M8 22h14" stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.9" />
+              <circle cx="24" cy="22" r="3" fill="#fbbf24" />
             </svg>
             <div>
               <h1 className="text-lg font-bold text-slate-800">Nebula Notebook</h1>
@@ -306,14 +307,14 @@ export const Dashboard: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               onClick={() => handleOpenTerminal('default')}
-              className="flex items-center gap-2 px-3 py-2 text-slate-600 hover:bg-slate-200 rounded-lg text-sm font-medium transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium transition-colors"
             >
               <Terminal className="w-4 h-4" />
               <span className="hidden sm:inline">Terminal</span>
             </button>
             <button
               onClick={handleNewNotebook}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">New Notebook</span>
@@ -332,13 +333,13 @@ export const Dashboard: React.FC = () => {
                 <button
                   key={session.id}
                   onClick={() => handleOpenNotebookNewTab(session.file_path!)}
-                  className="flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors group"
+                  className="flex items-center gap-2 px-3 py-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition-colors group"
                 >
                   <span className={`w-2 h-2 rounded-full ${
                     session.status === 'busy' ? 'bg-amber-500 animate-pulse' : 'bg-green-500'
                   }`} />
                   <Book className="w-4 h-4 text-orange-500" />
-                  <span className="text-sm text-slate-700 group-hover:text-slate-900 max-w-[150px] truncate">
+                  <span className="text-sm text-slate-700 max-w-[150px] truncate">
                     {getFilename(session.file_path!).replace('.ipynb', '')}
                   </span>
                   {session.memory_mb && (
@@ -539,6 +540,39 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
 
+            {/* Running Kernels */}
+            {kernelSessions.length > 0 && (
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-green-500" />
+                  <h3 className="text-sm font-medium text-slate-700">Running Kernels</h3>
+                </div>
+                <div className="divide-y divide-slate-100 max-h-[200px] overflow-y-auto">
+                  {kernelSessions.map((session) => (
+                    <button
+                      key={session.id}
+                      onClick={() => session.file_path && handleOpenNotebookNewTab(session.file_path)}
+                      disabled={!session.file_path}
+                      className="w-full px-4 py-3 flex items-center gap-3 hover:bg-slate-50 text-left disabled:opacity-50 disabled:cursor-default"
+                    >
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                        session.status === 'busy' ? 'bg-amber-500 animate-pulse' : 'bg-green-500'
+                      }`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-slate-700 truncate">
+                          {session.file_path ? getFilename(session.file_path).replace('.ipynb', '') : session.kernel_name}
+                        </div>
+                        <div className="text-xs text-slate-400 flex gap-2">
+                          <span>{session.kernel_name}</span>
+                          {session.memory_mb && <span>· {Math.round(session.memory_mb)}MB</span>}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Terminals */}
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
@@ -583,7 +617,7 @@ export const Dashboard: React.FC = () => {
                 <Lightbulb className="w-5 h-5 text-amber-500 mt-0.5" />
                 <div className="text-sm text-slate-700">
                   <p className="font-medium">Pro Tip</p>
-                  <p className="mt-1 text-slate-600 text-xs">
+                  <p className="mt-1 text-slate-500 text-xs">
                     Bookmark notebook URLs for quick access. Use <code className="bg-slate-200 px-1 rounded">?terminal=name</code> for persistent named terminals.
                   </p>
                 </div>

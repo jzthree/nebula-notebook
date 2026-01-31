@@ -99,7 +99,7 @@ export const FileListItem: React.FC<FileListItemProps> = ({
         {getFileIcon(item)}
         <div className="flex flex-col min-w-0 flex-1">
           <span
-            className={`text-xs truncate ${isNotebook ? 'group-hover:text-blue-600' : ''}`}
+            className="text-xs truncate"
             title={item.name}
           >
             {item.name}
