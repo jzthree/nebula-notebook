@@ -527,7 +527,6 @@ export const Dashboard: React.FC = () => {
                       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
                         session.status === 'busy' ? 'bg-amber-500 animate-pulse' : 'bg-green-500'
                       }`} />
-                      <Book className="w-4 h-4 text-orange-500 flex-shrink-0" />
                       <div className="flex-1 min-w-0">
                         <div className="text-sm text-slate-700 truncate">
                           {getFilename(session.file_path!).replace('.ipynb', '')}
