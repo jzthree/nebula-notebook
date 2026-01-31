@@ -21,7 +21,6 @@ import {
   ArrowDownAZ,
   Filter,
   Cpu,
-  Activity,
   Lightbulb,
   Upload,
 } from 'lucide-react';
@@ -539,39 +538,6 @@ export const Dashboard: React.FC = () => {
                 </div>
               </div>
             </div>
-
-            {/* Running Kernels */}
-            {kernelSessions.length > 0 && (
-              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
-                  <Activity className="w-4 h-4 text-green-500" />
-                  <h3 className="text-sm font-medium text-slate-700">Running Kernels</h3>
-                </div>
-                <div className="divide-y divide-slate-100 max-h-[200px] overflow-y-auto">
-                  {kernelSessions.map((session) => (
-                    <button
-                      key={session.id}
-                      onClick={() => session.file_path && handleOpenNotebookNewTab(session.file_path)}
-                      disabled={!session.file_path}
-                      className="w-full px-4 py-3 flex items-center gap-3 hover:bg-slate-50 text-left disabled:opacity-50 disabled:cursor-default"
-                    >
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                        session.status === 'busy' ? 'bg-amber-500 animate-pulse' : 'bg-green-500'
-                      }`} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-slate-700 truncate">
-                          {session.file_path ? getFilename(session.file_path).replace('.ipynb', '') : session.kernel_name}
-                        </div>
-                        <div className="text-xs text-slate-400 flex gap-2">
-                          <span>{session.kernel_name}</span>
-                          {session.memory_mb && <span>· {Math.round(session.memory_mb)}MB</span>}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {/* Terminals */}
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
