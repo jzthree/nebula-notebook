@@ -789,8 +789,8 @@ describe('HeadlessOperationHandler', () => {
     });
   });
 
-  describe('Undo/Redo (UI-only operations)', () => {
-    it('should return error for undo operation', async () => {
+  describe('Undo/Redo operations', () => {
+    it('should return error for undo when nothing to undo', async () => {
       const notebookPath = createTestNotebook('undo.ipynb', []);
 
       const result = await handler.applyOperation({
@@ -799,10 +799,10 @@ describe('HeadlessOperationHandler', () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('requires the notebook to be open in the browser');
+      expect(result.error).toContain('Nothing to undo');
     });
 
-    it('should return error for redo operation', async () => {
+    it('should return error for redo when nothing to redo', async () => {
       const notebookPath = createTestNotebook('redo.ipynb', []);
 
       const result = await handler.applyOperation({
@@ -811,7 +811,67 @@ describe('HeadlessOperationHandler', () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('requires the notebook to be open in the browser');
+      expect(result.error).toContain('Nothing to redo');
+    });
+
+    it('should undo an insert operation', async () => {
+      const notebookPath = createTestNotebook('undo-insert.ipynb', []);
+
+      // Insert a cell
+      await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 0,
+        cell: { id: 'new-cell', type: 'code', content: 'print("test")' },
+      });
+
+      // Verify cell was inserted
+      let readResult = await handler.readNotebook(notebookPath);
+      expect((readResult.data as any).cells).toHaveLength(1);
+
+      // Undo the insert
+      const undoResult = await handler.applyOperation({
+        type: 'undo',
+        notebookPath,
+      });
+
+      expect(undoResult.success).toBe(true);
+      expect(undoResult.operationType).toBe('insertCell');
+
+      // Verify cell was removed
+      readResult = await handler.readNotebook(notebookPath);
+      expect((readResult.data as any).cells).toHaveLength(0);
+    });
+
+    it('should redo an undone operation', async () => {
+      const notebookPath = createTestNotebook('redo-test.ipynb', []);
+
+      // Insert a cell
+      await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 0,
+        cell: { id: 'new-cell', type: 'code', content: 'print("test")' },
+      });
+
+      // Undo the insert
+      await handler.applyOperation({
+        type: 'undo',
+        notebookPath,
+      });
+
+      // Redo the insert
+      const redoResult = await handler.applyOperation({
+        type: 'redo',
+        notebookPath,
+      });
+
+      expect(redoResult.success).toBe(true);
+      expect(redoResult.operationType).toBe('insertCell');
+
+      // Verify cell was re-inserted
+      const readResult = await handler.readNotebook(notebookPath);
+      expect((readResult.data as any).cells).toHaveLength(1);
     });
   });
 });

@@ -11,7 +11,7 @@ Integrate the undo/redo system into the headless backend to achieve feature pari
 | 1 | Patch-in-memory optimization | ✅ Complete |
 | 2 | Extract core library | ✅ Complete |
 | 3 | React hook wrapper | ✅ Complete |
-| 4 | Headless backend integration | 🔲 Not started |
+| 4 | Headless backend integration | ✅ Complete |
 | 5 | MCP operation parity | 🔲 Not started |
 | 6 | Testing & verification | 🔲 Not started |
 
@@ -239,9 +239,15 @@ export function useUndoRedo(initialCells: Cell[]) {
 
 ---
 
-### Phase 4: Headless Backend Integration
+### Phase 4: Headless Backend Integration ✅ COMPLETE
 
 **New file:** `node-server/src/notebook/undoRedoManager.ts`
+
+**Status:** Implemented. Created `HeadlessUndoRedoManager` that:
+- Manages undo/redo state per notebook
+- Persists history to ~/.nebula/history/
+- Records operations from headless handler
+- Supports undo/redo operations via MCP
 
 Wraps `UndoRedoManager` for headless use:
 

@@ -13,6 +13,7 @@ import { FilesystemService } from '../fs/fs-service';
 import { NebulaCell, CellOutput } from '../fs/types';
 import { validateMetadataValue } from './cell-metadata';
 import { KernelService } from '../kernel/kernel-service';
+import { getUndoRedoManager, HeadlessUndoRedoManager, UndoableOperation } from './undoRedoManager';
 
 // Helper to create a CellOutput (API-compatible format matching Python)
 function createCellOutput(type: CellOutput['type'], content: string): CellOutput {
@@ -69,6 +70,7 @@ export class HeadlessOperationHandler {
   private fsService: FilesystemService;
   private kernelService: KernelService | null;
   private operationRouter: OperationRouterInterface | null;
+  private undoRedoManager: HeadlessUndoRedoManager;
   private cache: Map<string, NotebookCache> = new Map();
   private writeLocks: Map<string, Promise<void>> = new Map();
 
@@ -80,6 +82,7 @@ export class HeadlessOperationHandler {
     this.fsService = fsService;
     this.operationRouter = operationRouter || null;
     this.kernelService = kernelService || null;
+    this.undoRedoManager = getUndoRedoManager();
   }
 
   /**
@@ -278,9 +281,14 @@ export class HeadlessOperationHandler {
           break;
         }
         case 'undo':
-          return { success: false, error: 'Undo requires the notebook to be open in the browser. Undo state is maintained in the UI.' };
+          result = await this.handleUndo(notebookPath);
+          break;
         case 'redo':
-          return { success: false, error: 'Redo requires the notebook to be open in the browser. Redo state is maintained in the UI.' };
+          result = await this.handleRedo(notebookPath);
+          break;
+        case 'getUndoRedoState':
+          result = await this.getUndoRedoState(notebookPath);
+          break;
         default:
           return { success: false, error: `Unknown operation type: ${opType}` };
       }
@@ -470,6 +478,14 @@ export class HeadlessOperationHandler {
 
     this.saveCells(notebookPath, cells);
 
+    // Record operation for undo/redo
+    this.recordUndoableOperation(notebookPath, {
+      type: 'insertCell',
+      index: actualIndex,
+      cell: newCell,
+      source: 'mcp'
+    });
+
     return {
       success: true,
       cellId,
@@ -499,8 +515,19 @@ export class HeadlessOperationHandler {
       return { success: false, error: 'Cell not found' };
     }
 
+    // Save the cell for undo before deleting
+    const deletedCell = { ...cells[targetIndex] };
+
     cells.splice(targetIndex, 1);
     this.saveCells(notebookPath, cells);
+
+    // Record operation for undo/redo
+    this.recordUndoableOperation(notebookPath, {
+      type: 'deleteCell',
+      index: targetIndex,
+      cell: deletedCell,
+      source: 'mcp'
+    });
 
     return {
       success: true,
@@ -521,8 +548,22 @@ export class HeadlessOperationHandler {
       return { success: false, error: `Cell with ID "${cellId}" not found` };
     }
 
+    // Save old content for undo
+    const oldContent = cells[targetIndex].content;
+
     cells[targetIndex].content = content;
     this.saveCells(notebookPath, cells);
+
+    // Record operation for undo/redo (only if content changed)
+    if (oldContent !== content) {
+      this.recordUndoableOperation(notebookPath, {
+        type: 'updateContent',
+        cellId,
+        oldContent,
+        newContent: content,
+        source: 'mcp'
+      });
+    }
 
     return {
       success: true,
@@ -589,6 +630,18 @@ export class HeadlessOperationHandler {
 
     this.saveCells(notebookPath, cells);
 
+    // Record operation for undo/redo
+    const metadataChanges: Record<string, { old: unknown; new: unknown }> = {};
+    for (const [k, v] of Object.entries(changes)) {
+      metadataChanges[k] = { old: oldValues[k], new: v };
+    }
+    this.recordUndoableOperation(notebookPath, {
+      type: 'updateMetadata',
+      cellId: cell.id,
+      changes: metadataChanges,
+      source: 'mcp'
+    });
+
     return {
       success: true,
       cellId: cell.id,
@@ -646,6 +699,14 @@ export class HeadlessOperationHandler {
     const [cell] = cells.splice(fromIndex, 1);
     cells.splice(toIndex, 0, cell);
     this.saveCells(notebookPath, cells);
+
+    // Record operation for undo/redo
+    this.recordUndoableOperation(notebookPath, {
+      type: 'moveCell',
+      fromIndex,
+      toIndex,
+      source: 'mcp'
+    });
 
     return {
       success: true,
@@ -1349,5 +1410,71 @@ export class HeadlessOperationHandler {
       const errMsg = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Execution failed: ${errMsg}` };
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Undo/Redo Operations
+  // -------------------------------------------------------------------------
+
+  /**
+   * Handle undo operation.
+   */
+  private async handleUndo(notebookPath: string): Promise<OperationResult> {
+    const cells = this.getCells(notebookPath);
+    const { cells: newCells, result } = this.undoRedoManager.undo(notebookPath, cells);
+
+    if (result.success) {
+      this.saveCells(notebookPath, newCells);
+    }
+
+    return {
+      success: result.success,
+      affectedCellIds: result.affectedCellIds,
+      operationType: result.operationType,
+      error: result.error,
+      canUndo: this.undoRedoManager.canUndo(notebookPath, newCells),
+      canRedo: this.undoRedoManager.canRedo(notebookPath, newCells),
+    };
+  }
+
+  /**
+   * Handle redo operation.
+   */
+  private async handleRedo(notebookPath: string): Promise<OperationResult> {
+    const cells = this.getCells(notebookPath);
+    const { cells: newCells, result } = this.undoRedoManager.redo(notebookPath, cells);
+
+    if (result.success) {
+      this.saveCells(notebookPath, newCells);
+    }
+
+    return {
+      success: result.success,
+      affectedCellIds: result.affectedCellIds,
+      operationType: result.operationType,
+      error: result.error,
+      canUndo: this.undoRedoManager.canUndo(notebookPath, newCells),
+      canRedo: this.undoRedoManager.canRedo(notebookPath, newCells),
+    };
+  }
+
+  /**
+   * Get undo/redo state for a notebook.
+   */
+  private async getUndoRedoState(notebookPath: string): Promise<OperationResult> {
+    const cells = this.getCells(notebookPath);
+    return {
+      success: true,
+      canUndo: this.undoRedoManager.canUndo(notebookPath, cells),
+      canRedo: this.undoRedoManager.canRedo(notebookPath, cells),
+    };
+  }
+
+  /**
+   * Record an undoable operation (helper method for other operations).
+   */
+  private recordUndoableOperation(notebookPath: string, op: UndoableOperation): void {
+    const cells = this.getCells(notebookPath);
+    this.undoRedoManager.recordOperation(notebookPath, cells, op);
   }
 }
