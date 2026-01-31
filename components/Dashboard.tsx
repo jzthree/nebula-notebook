@@ -21,7 +21,22 @@ import {
   createNotebook,
 } from '../services/fileService';
 import { listTerminals, TerminalInfo } from '../services/terminalService';
-import { getSettings } from '../services/llmService';
+
+/**
+ * Fetch server's working directory from health endpoint
+ */
+async function getServerCwd(): Promise<string> {
+  try {
+    const response = await fetch('/api/health');
+    if (response.ok) {
+      const data = await response.json();
+      return data.cwd || '~';
+    }
+  } catch {
+    // Fall back to home
+  }
+  return '~';
+}
 
 // Format relative time
 function formatRelativeTime(timestamp: number): string {
@@ -79,11 +94,14 @@ export const Dashboard: React.FC = () => {
     }
   }, []);
 
-  // Initial load
+  // Initial load - use server's working directory
   useEffect(() => {
-    const settings = getSettings();
-    loadDirectory(settings.rootDirectory || '~');
-    loadTerminals();
+    const init = async () => {
+      const cwd = await getServerCwd();
+      loadDirectory(cwd);
+      loadTerminals();
+    };
+    init();
   }, [loadDirectory, loadTerminals]);
 
   // Navigate to a directory

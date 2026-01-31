@@ -79,6 +79,7 @@ function createApp(): Express {
       version: '1.0.0',
       ready: kernelService.isReady,
       llm_providers: Object.keys(llmService.getAvailableProviders()),
+      cwd: process.cwd(),
     });
   });
 

@@ -66,7 +66,7 @@ export class PtyManager {
   }): TerminalInfo {
     const id = options?.id ? this.normalizeTerminalName(options.id) : uuidv4();
     const shell = options?.shell || this.getDefaultShell();
-    const cwd = options?.cwd || process.env.HOME || process.cwd();
+    const cwd = options?.cwd || process.cwd();
     const cols = options?.cols || 80;
     const rows = options?.rows || 24;
 
