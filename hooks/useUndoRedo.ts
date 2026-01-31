@@ -15,12 +15,22 @@
  *
  * 2. **This hook (toolbar buttons)**: Coarse-grained notebook operations
  *    - Structural: insertCell, deleteCell, moveCell, changeType
- *    - Content: updateContent (batched at keyframe boundaries)
+ *    - Content: updateContentPatch (batched at keyframe boundaries, stored as patches)
  *    - Batch: compound operations as single undo step
  *
  * This separation is intentional - users get fine-grained text editing via
  * keyboard and structural notebook changes via toolbar, each at the appropriate
  * granularity level.
+ *
+ * ## Patch-in-Memory Architecture
+ *
+ * Content changes are stored as patches (diffs) immediately, not full content:
+ * - Memory scales with edit size, not content size
+ * - Consistent format: memory = disk = loaded (no conversion needed on save)
+ * - Better scalability for long editing sessions
+ *
+ * The `updateContent` type is kept for backwards compatibility with old history
+ * files, but new operations always use `updateContentPatch`.
  *
  * ## Keyframe Pattern
  *
@@ -41,79 +51,41 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { Cell, CellType } from '../types';
-import { createDiff, diffToPatch, applyPatch, reversePatch, hashText, Patch } from '../lib/diffUtils';
+import { createDiff, diffToPatch, hashText } from '../lib/diffUtils';
 
-// Base operation data shared by all operations
-interface BaseOperation {
-  timestamp: number; // Unix timestamp in milliseconds
-  operationId?: string; // Unique ID for pairing undo ops with original ops
-  isUndo?: boolean; // True if this is an undo-generated op (for history filtering)
-  undoesOperationId?: string; // ID of the operation being undone (for pairing)
-}
+// Re-export types from core library for backwards compatibility
+export type {
+  EditSource,
+  MetadataChanges,
+  UndoableOperation,
+  LogOperation,
+  SnapshotOperation,
+  TimestampedOperation,
+  Operation,
+  UndoRedoResult,
+  UnflushedState,
+  UserChangeSummary,
+} from '../lib/undoRedoCore';
 
-// Source of content edit (for tracking AI vs user edits)
-export type EditSource = 'user' | 'ai';
-
-/**
- * Generic metadata change - each key maps to old/new values
- * This is intentionally typed as unknown to be maximally extensible.
- * The operation system never needs to change when new cell properties are added.
- */
-export type MetadataChanges = Record<string, { old: unknown; new: unknown }>;
-
-// Undoable operations - can be reversed
-// All operations can have a source field to track if they came from user or AI
-export type UndoableOperation =
-  | { type: 'insertCell'; index: number; cell: Cell; source?: EditSource }
-  | { type: 'deleteCell'; index: number; cell: Cell; source?: EditSource }
-  | { type: 'moveCell'; fromIndex: number; toIndex: number; source?: EditSource }
-  | { type: 'updateContent'; cellId: string; oldContent: string; newContent: string; source?: EditSource }
-  | { type: 'updateContentPatch'; cellId: string; patch: Patch; oldHash: string; newHash: string; source?: EditSource }
-  | { type: 'updateMetadata'; cellId: string; changes: MetadataChanges; source?: EditSource }
-  | { type: 'batch'; operations: UndoableOperation[]; source?: EditSource };
-
-// Non-undoable operations - for tracking/logging only
-// Note: runCell does NOT include content - it can be reconstructed from edit history
-// by finding the most recent snapshot and replaying updateContent operations
-export type LogOperation =
-  | { type: 'runCell'; cellId: string; cellIndex: number }
-  | { type: 'runAllCells'; cellCount: number }
-  | { type: 'interruptKernel' }
-  | { type: 'restartKernel' }
-  | { type: 'executionComplete'; cellId: string; cellIndex: number; durationMs: number; success: boolean; output?: string };
-
-// Snapshot of notebook state at a point in time (for reconstruction)
-export interface SnapshotOperation {
-  type: 'snapshot';
-  cells: Cell[];
-}
-
-// Combined operation type with timestamp
-export type TimestampedOperation = BaseOperation & (UndoableOperation | LogOperation | SnapshotOperation);
-
-// Legacy Operation type for backwards compatibility with undo/redo logic
-export type Operation = UndoableOperation;
-
-// Result from undo/redo operations for visual feedback
-export interface UndoRedoResult {
-  affectedCellIds: string[];  // Cell IDs that were modified
-  operationType: string;       // Type of operation (for potential animation variants)
-}
-
-// Unflushed edit state for session persistence
-export interface UnflushedState {
-  cellId: string;
-  lastFlushedContent: string;
-}
-
-/** Summary of a user change for agent awareness */
-export interface UserChangeSummary {
-  type: string;
-  cellId?: string;
-  cellIndex?: number;
-  timestamp: number;
-  description: string;
-}
+// Import types and pure functions from core library
+import {
+  EditSource,
+  MetadataChanges,
+  UndoableOperation,
+  LogOperation,
+  TimestampedOperation,
+  Operation,
+  UndoRedoResult,
+  UnflushedState,
+  UserChangeSummary,
+  cloneCell,
+  stripCellOutputs,
+  applyOperation,
+  reverseOperation,
+  getAffectedCellIds,
+  convertToCompactFormat,
+  rebuildUndoStack,
+} from '../lib/undoRedoCore';
 
 interface UseUndoRedoResult {
   cells: Cell[];
@@ -166,140 +138,8 @@ interface UseUndoRedoResult {
   getUserChangesSince: (sinceTimestamp: number) => UserChangeSummary[];
 }
 
-function cloneCell(cell: Cell): Cell {
-  return {
-    ...cell,
-    outputs: cell.outputs.map(output => ({ ...output }))
-  };
-}
-
-// Apply an operation to cells (forward)
-function applyOperation(cells: Cell[], op: Operation): Cell[] {
-  switch (op.type) {
-    case 'insertCell': {
-      const newCells = [...cells];
-      // Create new object to ensure React memo comparisons detect the change
-      // (important for undo - the stored cell object might be the same reference)
-      newCells.splice(op.index, 0, cloneCell(op.cell));
-      return newCells;
-    }
-    case 'deleteCell': {
-      return cells.filter((_, i) => i !== op.index);
-    }
-    case 'moveCell': {
-      const newCells = [...cells];
-      const [moved] = newCells.splice(op.fromIndex, 1);
-      newCells.splice(op.toIndex, 0, moved);
-      return newCells;
-    }
-    case 'updateContent': {
-      return cells.map(c =>
-        c.id === op.cellId ? { ...c, content: op.newContent } : c
-      );
-    }
-    case 'updateContentPatch': {
-      return cells.map(c => {
-        if (c.id !== op.cellId) return c;
-        const { result, success } = applyPatch(c.content, op.patch);
-        if (!success) {
-          console.warn(`Failed to apply patch to cell ${c.id}, keeping original content`);
-          return c;
-        }
-        return { ...c, content: result };
-      });
-    }
-    case 'updateMetadata': {
-      // Generic metadata update - applies any key/value changes
-      return cells.map(c => {
-        if (c.id !== op.cellId) return c;
-        const updated = { ...c };
-        for (const [key, change] of Object.entries(op.changes)) {
-          (updated as Record<string, unknown>)[key] = change.new;
-        }
-        return updated as Cell;
-      });
-    }
-    case 'batch': {
-      return op.operations.reduce((acc, subOp) => applyOperation(acc, subOp), cells);
-    }
-    default:
-      return cells;
-  }
-}
-
-// Reverse an operation (for undo)
-function reverseOperation(op: Operation): Operation {
-  switch (op.type) {
-    case 'insertCell':
-      return { type: 'deleteCell', index: op.index, cell: op.cell };
-    case 'deleteCell':
-      return { type: 'insertCell', index: op.index, cell: op.cell };
-    case 'moveCell':
-      return { type: 'moveCell', fromIndex: op.toIndex, toIndex: op.fromIndex };
-    case 'updateContent':
-      return {
-        type: 'updateContent',
-        cellId: op.cellId,
-        oldContent: op.newContent,
-        newContent: op.oldContent
-      };
-    case 'updateContentPatch':
-      return {
-        type: 'updateContentPatch',
-        cellId: op.cellId,
-        patch: reversePatch(op.patch),
-        oldHash: op.newHash,
-        newHash: op.oldHash
-      };
-    case 'updateMetadata': {
-      // Generic reversal - swap old/new for each change
-      const reversed: MetadataChanges = {};
-      for (const [key, change] of Object.entries(op.changes)) {
-        reversed[key] = { old: change.new, new: change.old };
-      }
-      return { type: 'updateMetadata', cellId: op.cellId, changes: reversed };
-    }
-    case 'batch':
-      // Reverse batch operations in reverse order
-      return {
-        type: 'batch',
-        operations: op.operations.map(reverseOperation).reverse()
-      };
-    default:
-      return op;
-  }
-}
-
-// Extract affected cell IDs from an operation
-// For moveCell, we need the cells array to look up the cell ID by index
-function getAffectedCellIds(op: Operation, cells?: Cell[]): string[] {
-  switch (op.type) {
-    case 'insertCell':
-    case 'deleteCell':
-      return [op.cell.id];
-    case 'moveCell':
-      // Look up cell ID from the destination index (where it ends up after the op)
-      if (cells && op.toIndex >= 0 && op.toIndex < cells.length) {
-        return [cells[op.toIndex].id];
-      }
-      return [];
-    case 'updateContent':
-    case 'updateContentPatch':
-    case 'updateMetadata':
-      return [op.cellId];
-    case 'batch':
-      // Collect all unique cell IDs from batch operations
-      const ids = new Set<string>();
-      for (const subOp of op.operations) {
-        for (const id of getAffectedCellIds(subOp, cells)) {
-          ids.add(id);
-        }
-      }
-      return Array.from(ids);
-    default:
-      return [];
-  }
-}
+// Note: cloneCell, applyOperation, reverseOperation, getAffectedCellIds
+// are now imported from lib/undoRedoCore.ts
 
 export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Current state
@@ -409,6 +249,7 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
 
   // Update cell content - tracks old content for undo
   // source: 'user' (default) or 'ai' for AI-generated edits
+  // Uses patches for memory efficiency - stores only the diff, not full content
   const updateContent = useCallback((cellId: string, newContent: string, source: EditSource = 'user') => {
     setCellsInternal(prev => {
       const cell = prev.find(c => c.id === cellId);
@@ -428,11 +269,16 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
           setCanRedo(false);
         }
 
+        // Compute patch immediately for memory efficiency
+        const diff = createDiff(oldContent, newContent);
+        const patch = diffToPatch(oldContent, diff);
+
         const op: Operation = {
-          type: 'updateContent',
+          type: 'updateContentPatch',
           cellId,
-          oldContent,
-          newContent,
+          patch,
+          oldHash: hashText(oldContent),
+          newHash: hashText(newContent),
           source
         };
 
@@ -548,40 +394,55 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
 
   // Flush pending content for a single cell - O(1)
   // Call this before keyframe operations (undo, insert, delete, move, run, save)
+  // Uses patches for memory efficiency - stores only the diff, not full content
   const flushCell = useCallback((cellId: string, currentContent: string) => {
-    const lastContent = lastContentRef.current.get(cellId);
+    const oldContent = lastContentRef.current.get(cellId);
     // Only record if content actually changed
-    if (lastContent !== undefined && lastContent !== currentContent) {
-      // Keyframe: first edit after undo (redo stack about to become empty)
-      // Convert redo stack to history before clearing
-      if (redoStackRef.current.length > 0) {
-        convertRedoStackToHistory(redoStackRef.current);
-        redoStackRef.current.length = 0; // O(1) clear
-        setCanRedo(false);
-      }
+    if (oldContent === undefined || oldContent === currentContent) return;
 
-      const op: Operation = {
-        type: 'updateContent',
-        cellId,
-        oldContent: lastContent,
-        newContent: currentContent,
-        source: 'user'
-      };
-      // Update tracking
-      lastContentRef.current.set(cellId, currentContent);
-      // Add to history first to get operationId
-      const operationId = addToFullHistory(op);
-      // Store operationId on the op for later linking
-      const opWithId = { ...op, operationId } as Operation;
-      undoStackRef.current.push(opWithId); // O(1) push
-      setCanUndo(true);
+    // Keyframe: first edit after undo (redo stack about to become empty)
+    // Convert redo stack to history before clearing
+    if (redoStackRef.current.length > 0) {
+      convertRedoStackToHistory(redoStackRef.current);
+      redoStackRef.current.length = 0; // O(1) clear
+      setCanRedo(false);
     }
+
+    // Compute patch immediately for memory efficiency
+    const diff = createDiff(oldContent, currentContent);
+    const patch = diffToPatch(oldContent, diff);
+
+    const op: Operation = {
+      type: 'updateContentPatch',
+      cellId,
+      patch,
+      oldHash: hashText(oldContent),
+      newHash: hashText(currentContent),
+      source: 'user'
+    };
+    // Update tracking
+    lastContentRef.current.set(cellId, currentContent);
+    // Add to history first to get operationId
+    const operationId = addToFullHistory(op);
+    // Store operationId on the op for later linking
+    const opWithId = { ...op, operationId } as Operation;
+    undoStackRef.current.push(opWithId); // O(1) push
+    setCanUndo(true);
   }, [addToFullHistory, convertRedoStackToHistory]);
 
   // Helper to update lastContentRef after undoing an operation
+  // For updateContentPatch, we need to reconstruct the old content by reverse-applying to current
   const updateContentTrackingAfterUndo = useCallback((op: Operation) => {
     if (op.type === 'updateContent') {
+      // Legacy: full content stored (backwards compatibility)
       lastContentRef.current.set(op.cellId, op.oldContent);
+    } else if (op.type === 'updateContentPatch') {
+      // After undo, the cell content is what it was before the patch
+      // We need to get the current content from cells and apply reverse patch
+      const cell = cellsRef.current.find(c => c.id === op.cellId);
+      if (cell) {
+        lastContentRef.current.set(op.cellId, cell.content);
+      }
     } else if (op.type === 'insertCell') {
       // Undoing an insert means the cell is removed
       lastContentRef.current.delete(op.cell.id);
@@ -599,7 +460,15 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   // Helper to update lastContentRef after applying an operation
   const updateContentTrackingAfterOp = useCallback((op: Operation) => {
     if (op.type === 'updateContent') {
+      // Legacy: full content stored (backwards compatibility)
       lastContentRef.current.set(op.cellId, op.newContent);
+    } else if (op.type === 'updateContentPatch') {
+      // After redo, the cell content is the result of applying the patch
+      // We need to get the current content from cells after the operation was applied
+      const cell = cellsRef.current.find(c => c.id === op.cellId);
+      if (cell) {
+        lastContentRef.current.set(op.cellId, cell.content);
+      }
     } else if (op.type === 'insertCell') {
       // When redoing an insert, initialize content tracking for the cell
       lastContentRef.current.set(op.cell.id, op.cell.content);
@@ -749,70 +618,12 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     // No-op - operations are tracked automatically
   }, []);
 
-  // Strip outputs from cell for compact storage (outputs can be huge - images, dataframes)
-  const stripCellOutputs = useCallback((cell: Cell): Cell => ({
-    ...cell,
-    outputs: [],
-    isExecuting: false
-  }), []);
-
-  // Convert updateContent to updateContentPatch for compact storage
-  const convertToCompactFormat = useCallback((op: TimestampedOperation): TimestampedOperation => {
-    if (op.type === 'snapshot') {
-      // Strip outputs from snapshot cells to reduce storage size
-      return {
-        ...op,
-        cells: op.cells.map(stripCellOutputs)
-      };
-    }
-    if (op.type === 'updateContent') {
-      // Convert to patch format for smaller storage
-      const diff = createDiff(op.oldContent, op.newContent);
-      const patch = diffToPatch(op.oldContent, diff);
-      return {
-        type: 'updateContentPatch',
-        cellId: op.cellId,
-        patch,
-        oldHash: hashText(op.oldContent),
-        newHash: hashText(op.newContent),
-        timestamp: op.timestamp,
-        ...(op.source && { source: op.source }), // Preserve AI annotation
-        // Preserve undo/redo tracking metadata
-        ...(op.operationId && { operationId: op.operationId }),
-        ...(op.isUndo && { isUndo: op.isUndo }),
-        ...(op.undoesOperationId && { undoesOperationId: op.undoesOperationId }),
-      };
-    }
-    if (op.type === 'insertCell') {
-      // Strip outputs from inserted cell
-      return {
-        ...op,
-        cell: stripCellOutputs(op.cell)
-      };
-    }
-    if (op.type === 'deleteCell') {
-      // Strip outputs from deleted cell
-      return {
-        ...op,
-        cell: stripCellOutputs(op.cell)
-      };
-    }
-    if (op.type === 'batch') {
-      // Recursively convert batch operations
-      return {
-        ...op,
-        operations: op.operations.map(subOp =>
-          convertToCompactFormat({ ...subOp, timestamp: op.timestamp }) as UndoableOperation
-        )
-      };
-    }
-    return op;
-  }, [stripCellOutputs]);
+  // Note: stripCellOutputs and convertToCompactFormat are now imported from lib/undoRedoCore.ts
 
   // Get full history for persistence (converts to compact patch format)
   const getFullHistory = useCallback((): TimestampedOperation[] => {
     return fullHistoryRef.current.map(convertToCompactFormat);
-  }, [convertToCompactFormat]);
+  }, []);
 
   // Load history from persistence (e.g., when loading a notebook)
   // Rebuilds undoStack from loaded operations so undo works
@@ -831,30 +642,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       }
     }
 
-    // Build set of operation IDs that have been undone
-    const undoneIds = new Set<string>();
-    for (const op of fullHistoryRef.current) {
-      if ((op as any).isUndo && (op as any).undoesOperationId) {
-        undoneIds.add((op as any).undoesOperationId);
-      }
-    }
-
-    // Rebuild undoStack from the loaded history
-    // Filter out: undo ops (isUndo=true) and their canceled counterparts (undoneIds)
-    const undoableOps: Operation[] = [];
-    for (const op of fullHistoryRef.current) {
-      // Skip undo ops themselves
-      if ((op as any).isUndo) continue;
-      // Skip operations that were undone
-      if ((op as any).operationId && undoneIds.has((op as any).operationId)) continue;
-
-      if (op.type === 'insertCell' || op.type === 'deleteCell' ||
-          op.type === 'moveCell' || op.type === 'updateContent' ||
-          op.type === 'updateContentPatch' || op.type === 'updateMetadata' || op.type === 'batch') {
-        const { timestamp, operationId, isUndo, undoesOperationId, ...operation } = op as any;
-        undoableOps.push(operation as Operation);
-      }
-    }
+    // Rebuild undoStack using the imported function from core library
+    const undoableOps = rebuildUndoStack(fullHistoryRef.current);
     undoStackRef.current = undoableOps;
     redoStackRef.current = [];
     setCanUndo(undoableOps.length > 0);
