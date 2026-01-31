@@ -285,27 +285,28 @@ export const Dashboard: React.FC = () => {
       <header className="bg-slate-50/90 backdrop-blur border-b border-slate-200 px-4 py-3 sticky top-0 z-20">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/* Nebula logo - distinctive cosmic design */}
+            {/* Nebula logo - avatar-based but subtly distinctive */}
             <svg className="w-9 h-9" viewBox="0 0 32 32">
               <defs>
                 <linearGradient id="nebula-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" style={{ stopColor: '#7c3aed' }} />
-                  <stop offset="50%" style={{ stopColor: '#4f46e5' }} />
-                  <stop offset="100%" style={{ stopColor: '#0ea5e9' }} />
+                  <stop offset="0%" style={{ stopColor: '#8b5cf6' }} />
+                  <stop offset="50%" style={{ stopColor: '#6366f1' }} />
+                  <stop offset="100%" style={{ stopColor: '#3b82f6' }} />
                 </linearGradient>
-                <radialGradient id="nebula-glow" cx="75%" cy="25%" r="50%">
-                  <stop offset="0%" style={{ stopColor: '#fff', stopOpacity: 0.3 }} />
-                  <stop offset="100%" style={{ stopColor: '#fff', stopOpacity: 0 }} />
-                </radialGradient>
+                <filter id="nebula-glow" x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="1" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
               </defs>
-              <rect width="32" height="32" rx="8" fill="url(#nebula-logo-grad)" />
-              <rect width="32" height="32" rx="8" fill="url(#nebula-glow)" />
-              {/* Stylized N shape */}
-              <path d="M9 24V8l7 10.5L16 8h0l7 16" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.95" />
-              {/* Star accents */}
-              <circle cx="26" cy="6" r="2" fill="#fbbf24" />
-              <circle cx="6" cy="26" r="1.5" fill="#f472b6" />
-              <circle cx="27" cy="24" r="1" fill="#22d3ee" />
+              <rect width="32" height="32" rx="6" fill="url(#nebula-logo-grad)" />
+              {/* Notebook lines */}
+              <path d="M8 10h16 M8 16h12 M8 22h14" stroke="white" strokeWidth="2.5" strokeLinecap="round" opacity="0.9" />
+              {/* Multiple star accents - makes it special */}
+              <circle cx="24" cy="22" r="3" fill="#fbbf24" filter="url(#nebula-glow)" />
+              <circle cx="26" cy="8" r="1.5" fill="#f472b6" opacity="0.9" />
             </svg>
             <div>
               <h1 className="text-lg font-bold text-slate-800">Nebula Notebook</h1>
