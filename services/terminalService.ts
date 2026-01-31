@@ -121,6 +121,27 @@ export async function resizeTerminal(id: string, cols: number, rows: number): Pr
 }
 
 /**
+ * Get or create a named terminal (persistent terminals accessible by URL)
+ */
+export async function getOrCreateNamedTerminal(
+  name: string,
+  options?: CreateTerminalOptions
+): Promise<TerminalInfo> {
+  const response = await fetch(`${TERMINAL_API_PREFIX}/terminals/named/${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options || {}),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.message || 'Failed to get/create named terminal');
+  }
+
+  return response.json();
+}
+
+/**
  * Connect to a terminal via WebSocket
  */
 export function connectTerminal(id: string): WebSocket {

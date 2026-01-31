@@ -126,6 +126,15 @@ Servers without the correct secret will be rejected during registration.
 - Client servers need access to the same filesystem paths as the main server (for notebook files)
 - Each server runs its own Jupyter kernels locally
 
+## Tips
+
+**Persistent Terminals**: Access standalone terminals via URL:
+```
+http://localhost:3000/?terminal=dev
+http://localhost:3000/?terminal=logs
+```
+Terminals persist as long as the server runs. Bookmark different terminals for quick access.
+
 ## Tech Stack
 
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, CodeMirror

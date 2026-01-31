@@ -47,6 +47,24 @@ export function setupTerminalRoutes(app: Express): void {
     }
   });
 
+  // Get or create a named terminal (for persistent terminals via URL)
+  app.post('/api/terminals/named/:name', (req: Request, res: Response) => {
+    const { name } = req.params;
+    const options: CreateTerminalRequest = req.body || {};
+
+    try {
+      const terminal = ptyManager.getOrCreate(name, options);
+      console.log(`[Terminal] Get/create named terminal '${name}' -> ${terminal.id}`);
+      res.json(terminal);
+    } catch (error) {
+      console.error('[Terminal] Failed to get/create named terminal:', error);
+      res.status(500).json({
+        error: 'Failed to get/create terminal',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
   // Get terminal info
   app.get('/api/terminals/:id', (req: Request, res: Response) => {
     const terminal = ptyManager.getTerminalInfo(req.params.id);

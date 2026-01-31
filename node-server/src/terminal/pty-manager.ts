@@ -38,15 +38,33 @@ export class PtyManager {
   }
 
   /**
+   * Normalize a terminal name to a valid ID
+   * - Lowercase
+   * - Only alphanumeric, hyphens, underscores
+   * - Max 32 chars
+   * - Falls back to 'default' if empty/invalid
+   */
+  normalizeTerminalName(name: string): string {
+    const normalized = name
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 32);
+    return normalized || 'default';
+  }
+
+  /**
    * Create a new terminal session
    */
   create(options?: {
+    id?: string;  // Optional custom ID (will be normalized if provided)
     cwd?: string;
     shell?: string;
     cols?: number;
     rows?: number;
   }): TerminalInfo {
-    const id = uuidv4();
+    const id = options?.id ? this.normalizeTerminalName(options.id) : uuidv4();
     const shell = options?.shell || this.getDefaultShell();
     const cwd = options?.cwd || process.env.HOME || process.cwd();
     const cols = options?.cols || 80;
@@ -172,6 +190,27 @@ export class PtyManager {
     session.rows = rows;
     session.lastActivity = Date.now();
     return true;
+  }
+
+  /**
+   * Get or create a terminal by name
+   * If a terminal with the normalized name exists, return it
+   * Otherwise create a new one with that name
+   */
+  getOrCreate(name: string, options?: {
+    cwd?: string;
+    shell?: string;
+    cols?: number;
+    rows?: number;
+  }): TerminalInfo {
+    const normalizedId = this.normalizeTerminalName(name);
+    const existing = this.sessions.get(normalizedId);
+
+    if (existing) {
+      return this.getInfo(existing);
+    }
+
+    return this.create({ ...options, id: normalizedId });
   }
 
   /**
