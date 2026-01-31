@@ -286,7 +286,7 @@ export const Dashboard: React.FC = () => {
       <header className="bg-slate-50/90 backdrop-blur border-b border-slate-200 px-4 py-3 sticky top-0 z-20">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center shadow-sm">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shadow-sm">
               <Zap className="w-5 h-5 text-white" />
             </div>
             <div>
@@ -304,7 +304,7 @@ export const Dashboard: React.FC = () => {
             </button>
             <button
               onClick={handleNewNotebook}
-              className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">New Notebook</span>
@@ -323,13 +323,13 @@ export const Dashboard: React.FC = () => {
                 <button
                   key={session.id}
                   onClick={() => handleOpenNotebookNewTab(session.file_path!)}
-                  className="flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-orange-50 border border-slate-200 hover:border-orange-200 rounded-lg transition-colors group"
+                  className="flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 rounded-lg transition-colors group"
                 >
                   <span className={`w-2 h-2 rounded-full ${
                     session.status === 'busy' ? 'bg-amber-500 animate-pulse' : 'bg-green-500'
                   }`} />
                   <Book className="w-4 h-4 text-orange-500" />
-                  <span className="text-sm text-slate-700 group-hover:text-orange-600 max-w-[150px] truncate">
+                  <span className="text-sm text-slate-700 group-hover:text-blue-600 max-w-[150px] truncate">
                     {getFilename(session.file_path!).replace('.ipynb', '')}
                   </span>
                   {session.memory_mb && (
@@ -450,7 +450,7 @@ export const Dashboard: React.FC = () => {
                 <button
                   onClick={() => setShowNotebooksOnly(!showNotebooksOnly)}
                   className={`p-2 rounded-lg flex items-center gap-1 text-xs font-medium transition-colors ${
-                    showNotebooksOnly ? 'bg-orange-100 text-orange-700' : 'hover:bg-slate-100 text-slate-500'
+                    showNotebooksOnly ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500'
                   }`}
                   title="Show notebooks only"
                 >
@@ -602,13 +602,13 @@ export const Dashboard: React.FC = () => {
             </div>
 
             {/* Tip */}
-            <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl border border-orange-100 p-4">
+            <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-xl border border-blue-100 p-4">
               <div className="flex items-start gap-3">
-                <Zap className="w-5 h-5 text-orange-500 mt-0.5" />
-                <div className="text-sm text-orange-800">
+                <Zap className="w-5 h-5 text-blue-500 mt-0.5" />
+                <div className="text-sm text-slate-700">
                   <p className="font-medium">Pro Tip</p>
-                  <p className="mt-1 text-orange-700 text-xs">
-                    Bookmark notebook URLs for quick access. Use <code className="bg-orange-100 px-1 rounded">?terminal=name</code> for persistent named terminals.
+                  <p className="mt-1 text-slate-600 text-xs">
+                    Bookmark notebook URLs for quick access. Use <code className="bg-blue-100 px-1 rounded">?terminal=name</code> for persistent named terminals.
                   </p>
                 </div>
               </div>

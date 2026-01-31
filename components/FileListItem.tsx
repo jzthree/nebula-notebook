@@ -84,15 +84,13 @@ export const FileListItem: React.FC<FileListItemProps> = ({
       onClick={isClickable ? handleClick : undefined}
       className={`
         group relative flex items-center px-3 py-2 rounded-md transition-all
-        ${compact ? 'py-2' : 'py-3 px-4'}
+        ${compact ? 'mb-1' : ''}
         ${isClickable ? 'cursor-pointer' : 'cursor-default'}
         ${isCurrentFile
           ? 'bg-blue-100/50 text-blue-900 font-medium'
-          : isNotebook
-            ? 'hover:bg-orange-50 text-slate-700'
-            : item.isDirectory
-              ? 'hover:bg-slate-100 text-slate-700'
-              : 'text-slate-500 opacity-60'
+          : isClickable
+            ? 'text-slate-600 hover:bg-slate-200/50'
+            : 'text-slate-500 opacity-60'
         }
       `}
     >
@@ -101,7 +99,7 @@ export const FileListItem: React.FC<FileListItemProps> = ({
         {getFileIcon(item)}
         <div className="flex flex-col min-w-0 flex-1">
           <span
-            className={`text-xs truncate ${isNotebook ? 'group-hover:text-orange-600' : ''}`}
+            className={`text-xs truncate ${isNotebook ? 'group-hover:text-blue-600' : ''}`}
             title={item.name}
           >
             {item.name}
