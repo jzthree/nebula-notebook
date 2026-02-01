@@ -56,14 +56,14 @@ const toastStyles: Record<ToastType, string> = {
 const ToastItem: React.FC<{ toast: Toast; onDismiss: (id: string) => void }> = ({ toast, onDismiss }) => {
   return (
     <div
-      className={`flex items-start gap-3 px-4 py-3 rounded-lg border shadow-lg animate-in slide-in-from-right-5 ${toastStyles[toast.type]}`}
+      className={`flex items-start gap-3 px-4 py-3 rounded-lg border shadow-lg animate-in slide-in-from-right-5 max-w-sm ${toastStyles[toast.type]}`}
       role="alert"
     >
-      {toastIcons[toast.type]}
-      <p className="flex-1 text-sm font-medium">{toast.message}</p>
+      <div className="flex-shrink-0">{toastIcons[toast.type]}</div>
+      <p className="flex-1 text-sm font-medium break-words min-w-0">{toast.message}</p>
       <button
         onClick={() => onDismiss(toast.id)}
-        className="p-0.5 hover:bg-black/5 rounded transition-colors"
+        className="p-0.5 hover:bg-black/5 rounded transition-colors flex-shrink-0"
       >
         <X className="w-4 h-4" />
       </button>
@@ -99,7 +99,7 @@ const ConfirmDialog: React.FC<{
           <h3 className="text-lg font-semibold text-slate-900 mb-2">
             {state.title}
           </h3>
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-slate-600 break-words">
             {state.message}
           </p>
         </div>
