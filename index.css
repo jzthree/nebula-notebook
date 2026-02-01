@@ -1,8 +1,14 @@
 /* Custom styles for Nebula Notebook */
 /* Tailwind is loaded via CDN in index.html */
 
+/* Global UI scale (1 = 100%) */
+:root {
+  --ui-scale: 0.9;
+}
+
 /* Ensure smooth scrolling */
 html {
+  font-size: calc(16px * var(--ui-scale));
   scroll-behavior: smooth;
 }
 
