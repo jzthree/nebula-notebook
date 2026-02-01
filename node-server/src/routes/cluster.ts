@@ -26,16 +26,17 @@ router.get('/servers', (_req: Request, res: Response) => {
 /**
  * POST /api/servers/register
  * Register a peer server with this server
+ * Body can include { resources } for initial resource info
  */
 router.post('/servers/register', (req: Request, res: Response) => {
-  const { host, port, name, secret } = req.body;
+  const { host, port, name, secret, resources } = req.body;
 
   if (!host || !port) {
     res.status(400).json({ error: 'host and port are required' });
     return;
   }
 
-  const result = serverRegistry.register({ host, port, name, secret });
+  const result = serverRegistry.register({ host, port, name, secret, resources });
 
   if (!result.success) {
     res.status(403).json({ error: result.error });

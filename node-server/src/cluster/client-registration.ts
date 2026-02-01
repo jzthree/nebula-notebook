@@ -67,6 +67,10 @@ class ClientRegistration {
     if (!this.config) return;
 
     try {
+      // Get resources to send with registration
+      const resourceService = getResourceService();
+      const resources = resourceService.getResources();
+
       const response = await fetch(`${this.config.mainServerUrl}/api/servers/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -75,6 +79,7 @@ class ClientRegistration {
           port: this.config.localPort,
           name: this.config.serverName,
           secret: this.config.secret,
+          resources, // Include resources in registration
         }),
       });
 
@@ -89,8 +94,11 @@ class ClientRegistration {
 
       console.log(`[ClientRegistration] Successfully registered as ${this.serverId}`);
 
-      // Start heartbeat
+      // Start heartbeat interval
       this.startHeartbeat();
+
+      // Send immediate heartbeat to ensure resources are available right away
+      this.sendHeartbeat();
 
     } catch (error) {
       console.error(`[ClientRegistration] Registration failed:`, error);

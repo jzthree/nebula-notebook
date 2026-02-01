@@ -26,6 +26,7 @@ export interface RegisterRequest {
   port: number;
   name?: string;
   secret?: string;
+  resources?: ServerResources;
 }
 
 const HEARTBEAT_TIMEOUT_MS = 90_000; // 90 seconds (3 missed heartbeats at 30s interval)
@@ -96,6 +97,9 @@ class ServerRegistry {
       existing.lastHeartbeat = now;
       existing.status = 'online';
       existing.name = request.name || existing.name;
+      if (request.resources) {
+        existing.resources = request.resources;
+      }
       console.log(`[ServerRegistry] Updated registration for ${serverId}`);
       return { success: true, serverId };
     }
@@ -110,6 +114,7 @@ class ServerRegistry {
       registeredAt: now,
       lastHeartbeat: now,
       status: 'online',
+      resources: request.resources,
     };
 
     this.servers.set(serverId, server);
