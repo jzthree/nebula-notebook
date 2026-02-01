@@ -228,20 +228,20 @@ function parseRocmSmi(stdout: string): GPUInfo | null {
 /**
  * Parse rocm-smi --showproductname output to get GPU names
  * Updates devices array in place
+ * Format: GPU[0]          : Card Series:          AMD Instinct MI300X
  */
 function parseRocmSmiNames(stdout: string, devices: GPUDevice[]): void {
   try {
     const lines = stdout.trim().split('\n');
     for (const line of lines) {
-      // Format: GPU[0] : Card series: Instinct MI210
-      // Or: GPU[0] : Card model: 0x0c34
-      const match = line.match(/GPU\[(\d+)\]\s*:\s*Card (?:series|model):\s*(.+)/i);
+      // Match "GPU[X] : Card Series: <name>" with flexible whitespace
+      const match = line.match(/GPU\[(\d+)\]\s*:\s*Card\s+Series\s*:\s*(.+)/i);
       if (match) {
         const index = parseInt(match[1], 10);
         const name = match[2].trim();
-        // Find device and update name if it's not a hex code
+        // Find device and update name
         const device = devices.find(d => d.index === index);
-        if (device && name && !name.startsWith('0x')) {
+        if (device && name) {
           device.name = name;
         }
       }
@@ -250,6 +250,9 @@ function parseRocmSmiNames(stdout: string, devices: GPUDevice[]): void {
     // Silent - names are optional
   }
 }
+
+// Cache for AMD GPU names (they don't change)
+let amdGpuNamesCache: Map<number, string> | null = null;
 
 /**
  * Collect GPU info - tries nvidia-smi first, then rocm-smi
@@ -267,18 +270,31 @@ async function collectGPUs(): Promise<{ gpus: GPUInfo | null; error?: ServerReso
     // Output exists but couldn't parse - continue to try rocm-smi
   }
 
-  // Try AMD ROCm - get memory info and product names
-  const [rocmMemResult, rocmNameResult] = await Promise.all([
-    execWithTimeout('rocm-smi --showmeminfo vram'),
-    execWithTimeout('rocm-smi --showproductname'),
-  ]);
+  // Try AMD ROCm - get memory info
+  const rocmMemResult = await execWithTimeout('rocm-smi --showmeminfo vram');
 
   if (rocmMemResult?.stdout) {
     const gpus = parseRocmSmi(rocmMemResult.stdout);
     if (gpus) {
-      // Try to get actual GPU names
-      if (rocmNameResult?.stdout) {
-        parseRocmSmiNames(rocmNameResult.stdout, gpus.devices);
+      // Get GPU names from cache or fetch once
+      if (!amdGpuNamesCache) {
+        const rocmNameResult = await execWithTimeout('rocm-smi --showproductname');
+        if (rocmNameResult?.stdout) {
+          amdGpuNamesCache = new Map();
+          parseRocmSmiNames(rocmNameResult.stdout, gpus.devices);
+          // Cache the names
+          for (const device of gpus.devices) {
+            amdGpuNamesCache.set(device.index, device.name);
+          }
+        }
+      } else {
+        // Use cached names
+        for (const device of gpus.devices) {
+          const cachedName = amdGpuNamesCache.get(device.index);
+          if (cachedName) {
+            device.name = cachedName;
+          }
+        }
       }
       return { gpus };
     }
