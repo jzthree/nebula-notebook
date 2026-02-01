@@ -97,6 +97,8 @@ export const FileBrowser: React.FC<Props> = ({
   const [currentPath, setCurrentPath] = useState<string>(() => initialPath || '~');
   const [rootPath, setRootPath] = useState<string>('~');
   const [pathInput, setPathInput] = useState<string>(initialPath || '~');
+  const [showPathInput, setShowPathInput] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   const [loadedPath, setLoadedPath] = useState<string | null>(null); // Track which path items belong to
   const [loadedMtime, setLoadedMtime] = useState<number | null>(null); // Track directory mtime
   const [items, setItems] = useState<FileItem[]>([]);
@@ -169,10 +171,10 @@ export const FileBrowser: React.FC<Props> = ({
   // Load directory on first open or when path changes
   useEffect(() => {
     if (!isOpen) return;
-    if (loadedPath === currentPath && !error) return; // Already loaded this path
+    if (loadedPath === currentPath) return; // Already loaded this path
 
     loadDirectory(currentPath);
-  }, [isOpen, currentPath, loadedPath, error]);
+  }, [isOpen, currentPath, loadedPath]);
 
   // Poll mtime every 5 seconds - only refresh if directory changed
   useEffect(() => {
@@ -210,33 +212,39 @@ export const FileBrowser: React.FC<Props> = ({
       setLoadedMtime(listing.mtime); // Store mtime for change detection
     } catch (err: any) {
       setError(err.message || 'Failed to load directory');
-      setItems([]);
-      setParentPath(computeParentPath(path));
-      setLoadedPath(null); // Clear on error so we retry
-      setLoadedMtime(null);
+      if (path === currentPath) {
+        setItems([]);
+        setParentPath(computeParentPath(path));
+        setLoadedMtime(null);
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleNavigate = (path: string) => {
+    // If there's an error, force reload even if same path
+    if (error) {
+      setError(null);
+      setLoadedPath(null);
+    }
     setCurrentPath(path);
   };
 
   const handleGoUp = () => {
     if (parentPath) {
-      setCurrentPath(parentPath);
+      handleNavigate(parentPath);
     }
   };
 
   const handleGoHome = () => {
-    setCurrentPath(rootPath || '~');
+    handleNavigate(rootPath || '~');
   };
 
   const handlePathSubmit = () => {
     const nextPath = pathInput.trim();
     if (nextPath) {
-      setCurrentPath(nextPath);
+      loadDirectory(nextPath);
     }
   };
 
@@ -528,87 +536,99 @@ export const FileBrowser: React.FC<Props> = ({
 
       {/* Path Navigation - combined row */}
       <div className="px-3 py-2 border-b border-slate-200 bg-white">
-        <div className="flex items-center gap-1 text-xs text-slate-600 overflow-x-auto scrollbar-hide">
-          <button
-            onClick={handleGoHome}
-            className="p-1 hover:bg-slate-100 rounded text-slate-500 flex-shrink-0"
-            title="Go to root"
-          >
-            <Home className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={handleGoUp}
-            disabled={!parentPath}
-            className="p-1 hover:bg-slate-100 rounded text-slate-500 disabled:opacity-30 flex-shrink-0"
-            title="Go up"
-          >
-            <ArrowUp className="w-3.5 h-3.5" />
-          </button>
-          <div className="w-[1px] h-4 bg-slate-200 mx-1 flex-shrink-0" />
-          {pathParts.map((part, idx) => {
-            const fullPath = idx === 0 && part === '/'
-              ? '/'
-              : '/' + pathParts.slice(part === '/' ? 1 : 0, idx + 1).filter(p => p !== '/').join('/');
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1 text-xs text-slate-600 overflow-x-auto scrollbar-hide min-w-0">
+            <button
+              onClick={handleGoHome}
+              className="p-1 hover:bg-slate-100 rounded text-slate-500 flex-shrink-0"
+              title="Go to root"
+            >
+              <Home className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={handleGoUp}
+              disabled={!parentPath}
+              className="p-1 hover:bg-slate-100 rounded text-slate-500 disabled:opacity-30 flex-shrink-0"
+              title="Go up"
+            >
+              <ArrowUp className="w-3.5 h-3.5" />
+            </button>
+            <div className="w-[1px] h-4 bg-slate-200 mx-1 flex-shrink-0" />
+            {pathParts.map((part, idx) => {
+              const fullPath = idx === 0 && part === '/'
+                ? '/'
+                : '/' + pathParts.slice(part === '/' ? 1 : 0, idx + 1).filter(p => p !== '/').join('/');
 
-            return (
-              <React.Fragment key={idx}>
-                {idx > 0 && <ChevronRight className="w-3 h-3 text-slate-400 flex-shrink-0" />}
-                <button
-                  onClick={() => handleNavigate(fullPath)}
-                  className="hover:text-blue-600 hover:underline truncate max-w-[100px] flex-shrink-0"
-                  title={fullPath}
-                >
-                  {part === '/' ? 'Root' : part}
-                </button>
-              </React.Fragment>
-            );
-          })}
-        </div>
-        <div className="mt-2 flex items-center gap-2">
-          <input
-            type="text"
-            value={pathInput}
-            onChange={(e) => setPathInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                handlePathSubmit();
-              }
-            }}
-            placeholder="Type a path…"
-            className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-          />
+              return (
+                <React.Fragment key={idx}>
+                  {idx > 0 && <ChevronRight className="w-3 h-3 text-slate-400 flex-shrink-0" />}
+                  <button
+                    onClick={() => handleNavigate(fullPath)}
+                    className="hover:text-blue-600 hover:underline truncate max-w-[100px] flex-shrink-0"
+                    title={fullPath}
+                  >
+                    {part === '/' ? 'Root' : part}
+                  </button>
+                </React.Fragment>
+              );
+            })}
+          </div>
           <button
-            onClick={handlePathSubmit}
-            className="px-2 py-1 text-[10px] text-slate-600 border border-slate-200 rounded hover:bg-slate-100"
+            onClick={() => setShowPathInput((prev) => !prev)}
+            className={`px-2 py-1 text-[10px] border rounded flex items-center gap-1 flex-shrink-0 ${
+              showPathInput ? 'bg-blue-50 text-blue-700 border-blue-200' : 'text-slate-600 border-slate-200 hover:bg-slate-100'
+            }`}
+            title="Toggle path entry"
           >
-            Go
-          </button>
-          <button
-            onClick={handleSetRoot}
-            className="px-2 py-1 text-[10px] text-slate-600 border border-slate-200 rounded hover:bg-slate-100"
-            title="Set current path as server root"
-          >
-            Set Root
+            <Folder className="w-3 h-3" />
+            Path
           </button>
         </div>
+        {showPathInput && (
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              type="text"
+              value={pathInput}
+              onChange={(e) => setPathInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handlePathSubmit();
+                }
+              }}
+              placeholder="Type a path…"
+              className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            <button
+              onClick={handlePathSubmit}
+              className="px-2 py-1 text-[10px] text-slate-600 border border-slate-200 rounded hover:bg-slate-100"
+            >
+              Go
+            </button>
+            <button
+              onClick={handleSetRoot}
+              className="px-2 py-1 text-[10px] text-slate-600 border border-slate-200 rounded hover:bg-slate-100"
+              title="Set current path as server root"
+            >
+              Set Root
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Toolbar & Search */}
       <div className="p-3 border-b border-slate-200 bg-white space-y-2">
-        <div className="relative">
-          <Search className="w-3 h-3 absolute left-2.5 top-2.5 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search files..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-8 pr-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-          />
-        </div>
-
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-bold text-slate-400 uppercase">Files</span>
           <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowSearch((prev) => !prev)}
+              className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${
+                showSearch ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500'
+              }`}
+              title="Toggle search"
+            >
+              <Search className="w-3 h-3" />
+            </button>
             <button
               onClick={() => setSortBy(sortBy === 'name' ? 'modified' : 'name')}
               className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${sortBy === 'modified' ? 'bg-purple-100 text-purple-700' : 'hover:bg-slate-100 text-slate-500'}`}
@@ -625,12 +645,24 @@ export const FileBrowser: React.FC<Props> = ({
             </button>
           </div>
         </div>
+        {showSearch && (
+          <div className="relative">
+            <Search className="w-3 h-3 absolute left-2.5 top-2.5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search files..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-8 pr-2 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+        )}
       </div>
 
       {/* File List */}
       <div
         className="flex-1 overflow-y-auto p-2 relative"
-        style={variant === 'inline' ? { maxHeight } : undefined}
+        style={variant === 'inline' ? { maxHeight, minHeight: maxHeight } : undefined}
       >
         {/* Drag overlay */}
         {isDragging && (
