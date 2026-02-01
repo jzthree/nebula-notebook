@@ -366,7 +366,7 @@ export const Dashboard: React.FC = () => {
                   <Plus className="w-4 h-4" />
                 </button>
               </div>
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-slate-100 max-h-[12.5rem] overflow-y-auto">
                 {terminals.length === 0 ? (
                   <div className="px-4 py-4 text-center text-xs text-slate-400">
                     No active terminals
