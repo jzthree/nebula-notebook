@@ -226,6 +226,32 @@ function parseRocmSmi(stdout: string): GPUInfo | null {
 }
 
 /**
+ * Parse rocm-smi --showproductname output to get GPU names
+ * Updates devices array in place
+ */
+function parseRocmSmiNames(stdout: string, devices: GPUDevice[]): void {
+  try {
+    const lines = stdout.trim().split('\n');
+    for (const line of lines) {
+      // Format: GPU[0] : Card series: Instinct MI210
+      // Or: GPU[0] : Card model: 0x0c34
+      const match = line.match(/GPU\[(\d+)\]\s*:\s*Card (?:series|model):\s*(.+)/i);
+      if (match) {
+        const index = parseInt(match[1], 10);
+        const name = match[2].trim();
+        // Find device and update name if it's not a hex code
+        const device = devices.find(d => d.index === index);
+        if (device && name && !name.startsWith('0x')) {
+          device.name = name;
+        }
+      }
+    }
+  } catch {
+    // Silent - names are optional
+  }
+}
+
+/**
  * Collect GPU info - tries nvidia-smi first, then rocm-smi
  * Returns null if no GPU or collection fails
  * Only reports errors for actual problems (timeouts), not for missing tools
@@ -241,12 +267,21 @@ async function collectGPUs(): Promise<{ gpus: GPUInfo | null; error?: ServerReso
     // Output exists but couldn't parse - continue to try rocm-smi
   }
 
-  // Try AMD ROCm
-  const rocmResult = await execWithTimeout('rocm-smi --showmeminfo vram');
+  // Try AMD ROCm - get memory info and product names
+  const [rocmMemResult, rocmNameResult] = await Promise.all([
+    execWithTimeout('rocm-smi --showmeminfo vram'),
+    execWithTimeout('rocm-smi --showproductname'),
+  ]);
 
-  if (rocmResult?.stdout) {
-    const gpus = parseRocmSmi(rocmResult.stdout);
-    if (gpus) return { gpus };
+  if (rocmMemResult?.stdout) {
+    const gpus = parseRocmSmi(rocmMemResult.stdout);
+    if (gpus) {
+      // Try to get actual GPU names
+      if (rocmNameResult?.stdout) {
+        parseRocmSmiNames(rocmNameResult.stdout, gpus.devices);
+      }
+      return { gpus };
+    }
     // Output exists but couldn't parse - no error, just no GPUs found
   }
 

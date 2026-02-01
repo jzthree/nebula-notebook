@@ -153,8 +153,8 @@ const ServerResourceRow: React.FC<{ server: ClusterServer }> = ({ server }) => {
             style={{ width: `${Math.min(ramPercent, 100)}%` }}
           />
         </div>
-        <span className="text-xs text-slate-500 tabular-nums w-[100px] text-right">
-          {resourceService.formatMemory(resources.ram.used)} / {resourceService.formatMemory(resources.ram.total)}
+        <span className="text-xs text-slate-500 tabular-nums flex-shrink-0">
+          {Math.round(resources.ram.used)}/{Math.round(resources.ram.total)} GB
         </span>
       </div>
 
@@ -172,15 +172,20 @@ const GPUSummary: React.FC<{ gpus: GPUInfo; expanded: boolean }> = ({ gpus, expa
     ? (gpus.totalUsed / gpus.totalMemory) * 100
     : 0;
 
-  // Get short name from first GPU
-  const shortName = gpus.devices[0]?.name
-    .replace(/NVIDIA |AMD |GeForce |Radeon /gi, '')
-    .replace(/RTX |GTX /gi, '')
-    .split('-')[0]
-    .trim() || 'GPU';
+  // Get short name from first GPU, handle "AMD GPU X" default names
+  const firstName = gpus.devices[0]?.name || '';
+  const isDefaultName = firstName.match(/^(AMD |NVIDIA )?GPU \d+$/i);
+  const shortName = isDefaultName
+    ? (gpus.vendor === 'amd' ? 'AMD' : 'GPU')
+    : firstName
+        .replace(/NVIDIA |AMD |GeForce |Radeon /gi, '')
+        .replace(/RTX |GTX /gi, '')
+        .split('-')[0]
+        .split(' ')[0]
+        .trim() || 'GPU';
 
   if (!expanded) {
-    // Collapsed view - show summary
+    // Collapsed view - show summary with total memory
     return (
       <div className="flex items-center gap-2">
         <GpuIcon className="w-3 h-3 text-slate-400 flex-shrink-0" />
@@ -190,8 +195,8 @@ const GPUSummary: React.FC<{ gpus: GPUInfo; expanded: boolean }> = ({ gpus, expa
             style={{ width: `${Math.min(percent, 100)}%` }}
           />
         </div>
-        <span className="text-xs text-slate-500 tabular-nums w-[100px] text-right">
-          {gpus.devices.length}x {shortName}
+        <span className="text-xs text-slate-500 tabular-nums flex-shrink-0">
+          {gpus.devices.length}x {shortName} {Math.round(gpus.totalUsed)}/{Math.round(gpus.totalMemory)} GB
         </span>
       </div>
     );
@@ -204,10 +209,6 @@ const GPUSummary: React.FC<{ gpus: GPUInfo; expanded: boolean }> = ({ gpus, expa
         const gpuPercent = gpu.memoryTotal > 0
           ? (gpu.memoryUsed / gpu.memoryTotal) * 100
           : 0;
-        const gpuName = gpu.name
-          .replace(/NVIDIA |AMD |GeForce |Radeon /gi, '')
-          .replace(/RTX |GTX /gi, '')
-          .trim();
 
         return (
           <div key={gpu.index} className="flex items-center gap-2">
@@ -218,8 +219,8 @@ const GPUSummary: React.FC<{ gpus: GPUInfo; expanded: boolean }> = ({ gpus, expa
                 style={{ width: `${Math.min(gpuPercent, 100)}%` }}
               />
             </div>
-            <span className="text-xs text-slate-500 tabular-nums w-[100px] text-right" title={gpu.name}>
-              {resourceService.formatMemory(gpu.memoryUsed)} / {resourceService.formatMemory(gpu.memoryTotal)}
+            <span className="text-xs text-slate-500 tabular-nums flex-shrink-0" title={gpu.name}>
+              {Math.round(gpu.memoryUsed)}/{Math.round(gpu.memoryTotal)} GB
             </span>
           </div>
         );

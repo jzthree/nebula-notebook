@@ -153,9 +153,8 @@ const GPUIndicator: React.FC<{ gpu: GPUDevice; vendor: 'nvidia' | 'amd' }> = ({ 
       <span className="text-slate-600 font-medium tabular-nums">
         {resourceService.formatMemory(gpu.memoryUsed)} / {resourceService.formatMemory(gpu.memoryTotal)}
       </span>
-      {/* Show GPU index if multiple GPUs */}
       <span className="text-slate-400">
-        GPU{gpu.index > 0 ? ` ${gpu.index}` : ''}
+        GPU {gpu.index}
       </span>
     </div>
   );
