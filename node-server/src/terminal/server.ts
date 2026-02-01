@@ -6,7 +6,7 @@ import { Express, Request, Response } from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as HttpServer } from 'http';
 import { ptyManager } from './pty-manager';
-import { fsService } from '../routes/fs';
+import { fsService } from '../fs/fs-service';
 import {
   CreateTerminalRequest,
   ResizeTerminalRequest,

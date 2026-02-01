@@ -9,6 +9,7 @@ import {
   DEFAULT_MODELS,
   IndentationPreference
 } from '../services/llmService';
+import { getRootDirectory, setRootDirectory } from '../services/fileService';
 import { useNotification } from './NotificationSystem';
 
 interface Props {
@@ -25,6 +26,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
   const [isSaving, setIsSaving] = useState(false);
   const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [serverRoot, setServerRoot] = useState<string | null>(null);
   const { toast } = useNotification();
 
   const persistSettings = useCallback((next: Partial<NebulaSettings>) => {
@@ -55,6 +57,15 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
     if (isOpen) {
       setSettings(getSettings());
       loadProviders();
+      getRootDirectory()
+        .then((root) => {
+          setServerRoot(root);
+          setSettings(prev => ({ ...prev, rootDirectory: root }));
+          saveSettings({ rootDirectory: root });
+        })
+        .catch(() => {
+          // Ignore root fetch errors
+        });
     }
   }, [isOpen]);
 
@@ -73,9 +84,28 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setIsSaving(true);
-    saveSettings(settings);
+    let resolvedRoot = serverRoot;
+    if (settings.rootDirectory && settings.rootDirectory !== serverRoot) {
+      try {
+        const updated = await setRootDirectory(settings.rootDirectory);
+        resolvedRoot = updated;
+        setServerRoot(updated);
+        setSettings(prev => ({ ...prev, rootDirectory: updated }));
+        saveSettings({ rootDirectory: updated });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to update root directory';
+        toast(message, 'error');
+        setIsSaving(false);
+        return;
+      }
+    }
+    const finalSettings = {
+      ...settings,
+      rootDirectory: resolvedRoot || settings.rootDirectory
+    };
+    saveSettings(finalSettings);
     setTimeout(() => {
       setIsSaving(false);
       onRefresh();
@@ -196,7 +226,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                   <p className="mt-1 text-xs text-slate-500">
-                    The default directory for the file browser. Use ~ for home directory.
+                    Sets the server root directory (used by file browser and terminals). Use ~ for home directory.
                   </p>
                 </div>
 
@@ -446,29 +476,13 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                     <Palette className="w-4 h-4" />
                     Notebook Icons
                   </label>
-                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                    <div className="flex-1">
-                      <p className="text-sm text-slate-700">AI-Generated Icons</p>
-                      <p className="text-xs text-slate-500">
-                        Use AI to generate unique icons for each notebook (uses API credits)
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setSettings({ ...settings, useAIAvatars: !settings.useAIAvatars })}
-                      className={`relative w-11 h-6 rounded-full transition-colors ${
-                        settings.useAIAvatars ? 'bg-blue-600' : 'bg-slate-300'
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                          settings.useAIAvatars ? 'translate-x-5' : 'translate-x-0'
-                        }`}
-                      />
-                    </button>
+                  <div className="p-3 bg-slate-50 rounded-lg">
+                    <p className="text-sm text-slate-700">Deterministic Avatars</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Each notebook gets a unique, colorful icon generated from its name.
+                      Icons are consistent across sessions with no API calls required.
+                    </p>
                   </div>
-                  <p className="mt-1 text-xs text-slate-500">
-                    When disabled, colorful auto-generated icons based on notebook name are used (no API calls).
-                  </p>
                 </div>
               </>
             )}

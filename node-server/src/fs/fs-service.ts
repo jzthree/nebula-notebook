@@ -26,19 +26,42 @@ import {
 } from './types';
 import { getDefaultKernelName } from '../kernel/default-kernel';
 
+const NEBULA_DIR = path.join(os.homedir(), '.nebula');
+const USER_CONFIG_PATH = path.join(NEBULA_DIR, 'config.json');
+const PROJECT_CONFIG_PATH = path.join(__dirname, '..', '..', '..', '.nebula-config.json');
+
 /**
- * Load root directory from .nebula-config.json if it exists
+ * Load root directory from config files if they exist.
+ * Priority: env -> user config -> project config.
  */
 function loadNebulaConfig(): string | null {
+  const envRoot = process.env.NEBULA_WORKDIR || process.env.NEBULA_ROOT;
+  if (envRoot) {
+    return envRoot;
+  }
+
   try {
-    const configPath = path.join(__dirname, '..', '..', '..', '.nebula-config.json');
-    if (fs.existsSync(configPath)) {
-      const config: NebulaConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      return config.rootDirectory || null;
+    if (fs.existsSync(USER_CONFIG_PATH)) {
+      const config: NebulaConfig = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, 'utf-8'));
+      if (config.rootDirectory) {
+        return config.rootDirectory;
+      }
     }
   } catch {
-    // Ignore errors
+    // Ignore user config errors
   }
+
+  try {
+    if (fs.existsSync(PROJECT_CONFIG_PATH)) {
+      const config: NebulaConfig = JSON.parse(fs.readFileSync(PROJECT_CONFIG_PATH, 'utf-8'));
+      if (config.rootDirectory) {
+        return config.rootDirectory;
+      }
+    }
+  } catch {
+    // Ignore project config errors
+  }
+
   return null;
 }
 
@@ -62,7 +85,53 @@ export class FilesystemService {
 
   constructor(defaultRoot?: string) {
     // Priority: explicit arg > config file > home directory
-    this.defaultRoot = defaultRoot || loadNebulaConfig() || os.homedir();
+    const configuredRoot = defaultRoot || loadNebulaConfig() || os.homedir();
+    this.defaultRoot = this.expandRootDirectory(configuredRoot);
+  }
+
+  /**
+   * Get the server root directory.
+   */
+  getRootDirectory(): string {
+    return this.defaultRoot;
+  }
+
+  /**
+   * Set the server root directory and persist it.
+   */
+  setRootDirectory(rootDirectory: string, options?: { persist?: boolean }): string {
+    const resolved = this.expandRootDirectory(rootDirectory);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`Root directory not found: ${resolved}`);
+    }
+    if (!fs.statSync(resolved).isDirectory()) {
+      throw new Error(`Root directory is not a folder: ${resolved}`);
+    }
+
+    this.defaultRoot = resolved;
+    if (options?.persist !== false) {
+      this.saveRootDirectory(resolved);
+    }
+    return this.defaultRoot;
+  }
+
+  private expandRootDirectory(rootDirectory: string): string {
+    const trimmed = rootDirectory.trim();
+    if (trimmed === '' || trimmed === '~') {
+      return os.homedir();
+    }
+    if (trimmed.startsWith('~/')) {
+      return path.join(os.homedir(), trimmed.slice(2));
+    }
+    return path.resolve(trimmed);
+  }
+
+  private saveRootDirectory(rootDirectory: string): void {
+    if (!fs.existsSync(NEBULA_DIR)) {
+      fs.mkdirSync(NEBULA_DIR, { recursive: true, mode: 0o700 });
+    }
+    const config: NebulaConfig = { rootDirectory };
+    fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
   }
 
   /**

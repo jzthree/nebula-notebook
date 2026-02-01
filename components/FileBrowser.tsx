@@ -27,10 +27,12 @@ import {
   downloadFile,
   uploadFile,
   renameFile,
+  getRootDirectory,
+  setRootDirectory,
   FileItem,
   DirectoryListing
 } from '../services/fileService';
-import { getSettings, saveSettings } from '../services/llmService';
+import { saveSettings } from '../services/llmService';
 import { useNotification } from './NotificationSystem';
 import { DIRECTORY_POLL_INTERVAL_MS } from '../config';
 
@@ -43,7 +45,7 @@ interface Props {
   onClose?: () => void;
   /** 'sidebar' for sliding panel (Notebook), 'inline' for embedded (Dashboard) */
   variant?: 'sidebar' | 'inline';
-  /** Initial directory path (defaults to settings.rootDirectory or '~') */
+  /** Initial directory path (defaults to server root) */
   initialPath?: string;
   /** Max height for inline variant (e.g., '60vh') */
   maxHeight?: string;
@@ -64,11 +66,37 @@ export const FileBrowser: React.FC<Props> = ({
   className = '',
 }) => {
   const { toast, confirm } = useNotification();
-  const [currentPath, setCurrentPath] = useState<string>(() => {
-    if (initialPath) return initialPath;
-    const settings = getSettings();
-    return settings.rootDirectory || '~';
-  });
+  const computeParentPath = (path: string): string | null => {
+    const trimmed = path.trim();
+    if (!trimmed || trimmed === '~' || trimmed === '/') {
+      return null;
+    }
+
+    const withoutTrailing = trimmed.endsWith('/') && trimmed.length > 1
+      ? trimmed.replace(/\/+$/, '')
+      : trimmed;
+
+    if (withoutTrailing === '~') {
+      return null;
+    }
+
+    if (withoutTrailing.startsWith('~/')) {
+      const lastSlash = withoutTrailing.lastIndexOf('/');
+      if (lastSlash <= 1) {
+        return '~';
+      }
+      return withoutTrailing.slice(0, lastSlash);
+    }
+
+    const lastSlash = withoutTrailing.lastIndexOf('/');
+    if (lastSlash <= 0) {
+      return '/';
+    }
+    return withoutTrailing.slice(0, lastSlash);
+  };
+  const [currentPath, setCurrentPath] = useState<string>(() => initialPath || '~');
+  const [rootPath, setRootPath] = useState<string>('~');
+  const [pathInput, setPathInput] = useState<string>(initialPath || '~');
   const [loadedPath, setLoadedPath] = useState<string | null>(null); // Track which path items belong to
   const [loadedMtime, setLoadedMtime] = useState<number | null>(null); // Track directory mtime
   const [items, setItems] = useState<FileItem[]>([]);
@@ -112,6 +140,31 @@ export const FileBrowser: React.FC<Props> = ({
       setCurrentPath(initialPath);
     }
   }, [initialPath]);
+
+  // Keep path input in sync with current path
+  useEffect(() => {
+    setPathInput(currentPath);
+  }, [currentPath]);
+
+  // Load server root on mount
+  useEffect(() => {
+    let isMounted = true;
+    getRootDirectory()
+      .then((root) => {
+        if (!isMounted) return;
+        setRootPath(root);
+        saveSettings({ rootDirectory: root });
+        if (!initialPath) {
+          setCurrentPath(root);
+        }
+      })
+      .catch(() => {
+        // Ignore root fetch errors; fall back to ~
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Load directory on first open or when path changes
   useEffect(() => {
@@ -158,6 +211,7 @@ export const FileBrowser: React.FC<Props> = ({
     } catch (err: any) {
       setError(err.message || 'Failed to load directory');
       setItems([]);
+      setParentPath(computeParentPath(path));
       setLoadedPath(null); // Clear on error so we retry
       setLoadedMtime(null);
     } finally {
@@ -176,8 +230,27 @@ export const FileBrowser: React.FC<Props> = ({
   };
 
   const handleGoHome = () => {
-    const settings = getSettings();
-    setCurrentPath(settings.rootDirectory || '~');
+    setCurrentPath(rootPath || '~');
+  };
+
+  const handlePathSubmit = () => {
+    const nextPath = pathInput.trim();
+    if (nextPath) {
+      setCurrentPath(nextPath);
+    }
+  };
+
+  const handleSetRoot = async () => {
+    const nextRoot = pathInput.trim() || currentPath;
+    try {
+      const updated = await setRootDirectory(nextRoot);
+      setRootPath(updated);
+      saveSettings({ rootDirectory: updated });
+      setCurrentPath(updated);
+      toast(`Root set to ${updated}`, 'success');
+    } catch (err: any) {
+      toast(err.message || 'Failed to set root directory', 'error');
+    }
   };
 
   const handleCreate = async () => {
@@ -490,6 +563,33 @@ export const FileBrowser: React.FC<Props> = ({
               </React.Fragment>
             );
           })}
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <input
+            type="text"
+            value={pathInput}
+            onChange={(e) => setPathInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                handlePathSubmit();
+              }
+            }}
+            placeholder="Type a path…"
+            className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+          <button
+            onClick={handlePathSubmit}
+            className="px-2 py-1 text-[10px] text-slate-600 border border-slate-200 rounded hover:bg-slate-100"
+          >
+            Go
+          </button>
+          <button
+            onClick={handleSetRoot}
+            className="px-2 py-1 text-[10px] text-slate-600 border border-slate-200 rounded hover:bg-slate-100"
+            title="Set current path as server root"
+          >
+            Set Root
+          </button>
         </div>
       </div>
 

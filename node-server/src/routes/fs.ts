@@ -3,13 +3,12 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { FilesystemService } from '../fs/fs-service';
+import { fsService } from '../fs/fs-service';
 import multer from 'multer';
 import * as path from 'path';
 import * as os from 'os';
 
 const router = Router();
-const fsService = new FilesystemService();
 
 // Configure multer for file uploads
 const upload = multer({
@@ -41,6 +40,32 @@ router.get('/fs/list', (req: Request, res: Response) => {
     } else {
       res.status(500).json({ detail: 'Unknown error' });
     }
+  }
+});
+
+/**
+ * Get current server root directory
+ */
+router.get('/fs/root', (_req: Request, res: Response) => {
+  res.json({ root: fsService.getRootDirectory() });
+});
+
+/**
+ * Set server root directory
+ */
+router.post('/fs/root', (req: Request, res: Response) => {
+  const { root } = req.body || {};
+  if (!root || typeof root !== 'string') {
+    res.status(400).json({ detail: 'root is required' });
+    return;
+  }
+
+  try {
+    const updated = fsService.setRootDirectory(root);
+    res.json({ root: updated });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to set root';
+    res.status(400).json({ detail: message });
   }
 });
 

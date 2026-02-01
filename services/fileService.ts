@@ -2,7 +2,6 @@
  * File Service - Real filesystem operations via backend API
  */
 import { Cell, NotebookMetadata } from '../types';
-import { getSettings, saveSettings } from './llmService';
 import { TimestampedOperation } from '../hooks/useUndoRedo';
 
 const API_BASE = '/api';
@@ -46,6 +45,10 @@ export interface SaveResult {
   mtime: number;
 }
 
+export interface RootDirectoryResponse {
+  root: string;
+}
+
 // Storage keys for local state
 const STORAGE_ACTIVE_PATH = 'nebula-active-path';
 
@@ -61,6 +64,38 @@ export const listDirectory = async (path: string = '~'): Promise<DirectoryListin
   }
 
   return response.json();
+};
+
+/**
+ * Get server root directory
+ */
+export const getRootDirectory = async (): Promise<string> => {
+  const response = await fetch(`${API_BASE}/fs/root`);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to get root directory');
+  }
+  const data = await response.json() as RootDirectoryResponse;
+  return data.root;
+};
+
+/**
+ * Set server root directory
+ */
+export const setRootDirectory = async (root: string): Promise<string> => {
+  const response = await fetch(`${API_BASE}/fs/root`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ root })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to set root directory');
+  }
+
+  const data = await response.json() as RootDirectoryResponse;
+  return data.root;
 };
 
 /**
@@ -317,9 +352,8 @@ export const saveNotebookCells = async (
  * Now returns notebooks from current directory
  */
 export const getFiles = async (): Promise<NotebookMetadata[]> => {
-  const settings = getSettings();
   try {
-    const listing = await listDirectory(settings.rootDirectory);
+    const listing = await listDirectory('~');
     return listing.items
       .filter(item => item.extension === '.ipynb')
       .map(item => ({
@@ -395,9 +429,7 @@ export const saveFileContent = async (id: string, cells: Cell[]): Promise<boolea
  * Create a new notebook
  */
 export const createNotebook = async (name: string, initialCells: Cell[], directory?: string): Promise<NotebookMetadata> => {
-  const settings = getSettings();
-  const dir = directory || settings.rootDirectory;
-  const path = `${dir}/${name}.ipynb`.replace('~', '');
+  const dir = directory || '~';
 
   // Expand ~ if present
   const fullPath = dir.startsWith('~') ? `${dir}/${name}.ipynb` : `${dir}/${name}.ipynb`;

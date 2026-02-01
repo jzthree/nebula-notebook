@@ -171,7 +171,6 @@ interface NebulaSettings {
   llmProvider: 'google' | 'openai' | 'anthropic';
   llmModel: string;
   lastKernel: string;
-  useAIAvatars?: boolean;
   notifyOnLongRun?: boolean;
   notifyThresholdSeconds?: number;
   notifySoundEnabled?: boolean;

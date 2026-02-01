@@ -17,6 +17,16 @@ On first start, a QR code will appear in the terminal. Scan it with an authentic
 
 Open http://localhost:3000 and enter your 6-digit code.
 
+## Root Directory
+
+Set the server root directory (default is your home directory):
+
+```bash
+npm run start --workdir /path/to/projects
+```
+
+This root is used for the file browser and terminals. You can also change it from the file browser UI and it will be remembered by the server.
+
 ## Features
 
 **Core**

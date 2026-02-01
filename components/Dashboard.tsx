@@ -44,7 +44,7 @@ const TIPS = [
   { text: <>Enable <strong>Show Cell IDs</strong> in settings to see cell identifiers</> },
   { text: <>Enable <strong>Notify on Long Run</strong> to get browser notifications when cells finish</> },
   { text: <>Enable <strong>Sound Notifications</strong> to hear when jobs complete</> },
-  { text: <>Enable <strong>AI Avatars</strong> for unique notebook icons</> },
+  { text: <>Each notebook gets a unique <strong>colorful icon</strong> generated from its name</> },
   { text: <>Press <code className="bg-slate-200 px-1 rounded">Esc</code> to enter cell mode, then <code className="bg-slate-200 px-1 rounded">Ctrl/Cmd+Shift+↑/↓</code> to move cells</> },
   { text: <>Press <code className="bg-slate-200 px-1 rounded">Esc</code> to enter cell mode, then <code className="bg-slate-200 px-1 rounded">Delete</code> or <code className="bg-slate-200 px-1 rounded">Backspace</code> to delete cells</> },
 ];
@@ -137,7 +137,6 @@ export const Dashboard: React.FC = () => {
 
   // Dummy refresh counter (to pass to FileBrowser)
   const [refreshCounter, setRefreshCounter] = useState(0);
-
 
   // Load sessions (terminals + kernels)
   const loadSessions = useCallback(async () => {
@@ -254,7 +253,7 @@ export const Dashboard: React.FC = () => {
       </header>
 
       <div className="max-w-6xl mx-auto px-4 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start lg:items-stretch">
           {/* File Browser - Takes 3 columns, using shared FileBrowser component */}
           <div className="lg:col-span-3">
             <FileBrowser
@@ -264,12 +263,12 @@ export const Dashboard: React.FC = () => {
               onRefresh={() => setRefreshCounter(c => c + 1)}
               variant="inline"
               initialPath={serverCwd}
-              maxHeight="60vh"
+              maxHeight="55vh"
             />
           </div>
 
-          {/* Sidebar */}
-          <div className="space-y-6">
+          {/* Sidebar - fills vertical space */}
+          <div className="flex flex-col gap-4">
             {/* Quick Stats */}
             <div className="bg-white rounded-xl border border-slate-200 p-4">
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Overview</h3>
@@ -291,8 +290,6 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* System Resources */}
-            <ResourcePanel />
 
             {/* Recently Opened */}
             {recentNotebooks.length > 0 && (
@@ -317,14 +314,18 @@ export const Dashboard: React.FC = () => {
             )}
 
             {/* Active Notebooks */}
-            {activeNotebooks.length > 0 && (
-              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
-                  <Book className="w-4 h-4 text-orange-500" />
-                  <h3 className="text-sm font-medium text-slate-700">Active Notebooks</h3>
-                </div>
-                <div className="divide-y divide-slate-100 max-h-[200px] overflow-y-auto">
-                  {activeNotebooks.map((session) => (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+                <Book className="w-4 h-4 text-orange-500" />
+                <h3 className="text-sm font-medium text-slate-700">Active Notebooks</h3>
+              </div>
+              <div className="divide-y divide-slate-100 max-h-[200px] overflow-y-auto">
+                {activeNotebooks.length === 0 ? (
+                  <div className="px-4 py-4 text-center text-xs text-slate-400">
+                    No active notebooks
+                  </div>
+                ) : (
+                  activeNotebooks.map((session) => (
                     <button
                       key={session.id}
                       onClick={() => handleOpenNotebookNewTab(session.file_path!)}
@@ -343,10 +344,10 @@ export const Dashboard: React.FC = () => {
                         </div>
                       </div>
                     </button>
-                  ))}
-                </div>
+                  ))
+                )}
               </div>
-            )}
+            </div>
 
             {/* Terminals */}
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -365,7 +366,7 @@ export const Dashboard: React.FC = () => {
               </div>
               <div className="divide-y divide-slate-100">
                 {terminals.length === 0 ? (
-                  <div className="px-4 py-6 text-center text-sm text-slate-400">
+                  <div className="px-4 py-4 text-center text-xs text-slate-400">
                     No active terminals
                   </div>
                 ) : (
@@ -386,8 +387,8 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* Tips Carousel */}
-            <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
+            {/* Tips Carousel - pushed to bottom */}
+            <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 mt-auto">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
                   <Lightbulb className="w-4 h-4 text-amber-500" />
@@ -419,7 +420,13 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* System Resources - Full width at bottom for cluster expansion */}
+        <div className="mt-6">
+          <ResourcePanel />
+        </div>
       </div>
+
     </div>
   );
 };

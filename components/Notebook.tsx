@@ -85,6 +85,14 @@ function getFilenameFromPath(filePath: string): string {
   return parts[parts.length - 1] || 'Untitled';
 }
 
+function getDirectoryFromPath(filePath: string | null): string | undefined {
+  if (!filePath) return undefined;
+  const idx = filePath.lastIndexOf('/');
+  if (idx === -1) return undefined;
+  if (idx === 0) return '/';
+  return filePath.slice(0, idx);
+}
+
 // Get initial file ID synchronously to avoid "Untitled" flash
 function getInitialFileId(): string | null {
   // Check URL parameter first
@@ -1237,13 +1245,8 @@ export const Notebook: React.FC = () => {
       window.history.replaceState({}, '', `${baseUrl}?file=${currentFileId}`);
 
       // Update favicon with notebook-specific avatar
-      const settings = getSettings();
-      getNotebookAvatar(currentFileId, {
-        useAI: settings.useAIAvatars ?? false,
-        // AI generation function would go here if implemented
-      }).then(avatarUrl => {
-        updateFavicon(avatarUrl);
-      });
+      const avatarUrl = getNotebookAvatar(currentFileId);
+      updateFavicon(avatarUrl);
     } else {
       document.title = 'Nebula Notebook';
       window.history.replaceState({}, '', window.location.pathname);
@@ -2601,6 +2604,8 @@ export const Notebook: React.FC = () => {
     }
   };
 
+  const fileBrowserInitialPath = getDirectoryFromPath(currentFileId);
+
   return (
     <div className="flex min-h-screen bg-slate-50 relative overflow-hidden">
 
@@ -2612,6 +2617,7 @@ export const Notebook: React.FC = () => {
         onRefresh={refreshFileList}
         isOpen={isFileBrowserOpen}
         onClose={() => setIsFileBrowserOpen(false)}
+        initialPath={fileBrowserInitialPath}
       />
 
       {/* Main Content */}

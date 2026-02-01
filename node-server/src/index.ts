@@ -20,7 +20,7 @@ import * as fs from 'fs';
 // Import routes
 import kernelRoutes, { setupKernelWebSocket, kernelService } from './routes/kernel';
 import llmRoutes, { llmService } from './routes/llm';
-import fsRoutes, { fsService } from './routes/fs';
+import fsRoutes from './routes/fs';
 import notebookRoutes from './routes/notebook';
 import pythonRoutes from './routes/python';
 import authRoutes from './routes/auth';
@@ -33,6 +33,7 @@ import { clientRegistration } from './cluster/client-registration';
 
 // Import auth
 import { authService, authMiddleware, authWebSocketMiddleware } from './auth';
+import { fsService } from './fs/fs-service';
 
 // Import terminal routes (existing)
 import { setupTerminalRoutes, setupTerminalWebSocket, cleanupTerminals } from './terminal/server';
@@ -51,6 +52,19 @@ const AUTH_DISABLED =
   process.env.npm_config_noauth === '1' ||
   process.env.npm_config_no_auth === 'true' ||
   process.env.npm_config_no_auth === '1';
+const getArgValue = (name: string): string | null => {
+  const idx = process.argv.findIndex(arg => arg === name);
+  if (idx !== -1 && process.argv[idx + 1]) {
+    return process.argv[idx + 1];
+  }
+  const prefix = `${name}=`;
+  const found = process.argv.find(arg => arg.startsWith(prefix));
+  if (found) {
+    return found.slice(prefix.length);
+  }
+  return null;
+};
+const WORKDIR = getArgValue('--workdir') || process.env.NEBULA_WORKDIR || process.env.npm_config_workdir;
 const PRESERVE_KERNELS =
   process.argv.includes('--preserve-kernels') ||
   process.argv.includes('--preserve-kernel') ||
@@ -216,6 +230,15 @@ async function main(): Promise<void> {
     authService.disableAuth();
     console.log('[Auth] Disabled (--noauth)');
   }
+  if (WORKDIR) {
+    try {
+      const updated = fsService.setRootDirectory(WORKDIR);
+      console.log(`[Server] Root directory set to ${updated}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[Server] Failed to set root directory: ${message}`);
+    }
+  }
   if (PRESERVE_KERNELS) {
     console.log('[Kernel] Preserve kernels enabled');
   }
@@ -312,6 +335,7 @@ async function main(): Promise<void> {
     console.log(`[Server] Kernel WebSocket: ws://localhost:${PORT}/api/kernels/{session_id}/ws`);
     console.log(`[Server] Notebook WebSocket: ws://localhost:${PORT}/api/notebook/{path}/ws`);
     console.log(`[Server] Terminal WebSocket: ws://localhost:${PORT}/ws?id={terminal_id}`);
+    console.log(`[Server] Root directory: ${fsService.getRootDirectory()} (change with --workdir)`);
 
     // Initialize client registration (if NEBULA_MAIN_SERVER is set)
     clientRegistration.initFromEnv(Number(PORT));
