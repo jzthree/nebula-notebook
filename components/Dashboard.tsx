@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { listTerminals, TerminalInfo } from '../services/terminalService';
 import { FileBrowser } from './FileBrowser';
+import { ResourcePanel } from './ResourcePanel';
 
 // Kernel session from API
 interface KernelSession {
@@ -136,6 +137,7 @@ export const Dashboard: React.FC = () => {
 
   // Dummy refresh counter (to pass to FileBrowser)
   const [refreshCounter, setRefreshCounter] = useState(0);
+
 
   // Load sessions (terminals + kernels)
   const loadSessions = useCallback(async () => {
@@ -288,6 +290,9 @@ export const Dashboard: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {/* System Resources */}
+            <ResourcePanel />
 
             {/* Recently Opened */}
             {recentNotebooks.length > 0 && (

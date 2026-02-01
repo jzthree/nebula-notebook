@@ -6,6 +6,8 @@
  * cross-server kernel access.
  */
 
+import type { ServerResources } from '../resources/resource-service';
+
 export interface PeerServer {
   id: string;           // Unique server ID (usually hostname:port)
   host: string;         // Hostname or IP
@@ -16,6 +18,7 @@ export interface PeerServer {
   lastHeartbeat: number; // Last heartbeat timestamp
   status: 'online' | 'offline' | 'unknown';
   kernelspecs?: string[]; // Available kernels (cached)
+  resources?: ServerResources; // System resources (RAM, GPU)
 }
 
 export interface RegisterRequest {
@@ -129,13 +132,16 @@ class ServerRegistry {
   /**
    * Record heartbeat from a peer server
    */
-  heartbeat(serverId: string): boolean {
+  heartbeat(serverId: string, resources?: ServerResources): boolean {
     const server = this.servers.get(serverId);
     if (!server) {
       return false;
     }
     server.lastHeartbeat = Date.now();
     server.status = 'online';
+    if (resources) {
+      server.resources = resources;
+    }
     return true;
   }
 
@@ -200,7 +206,7 @@ class ServerRegistry {
   /**
    * Get cluster info for API response
    */
-  getClusterInfo(): {
+  getClusterInfo(localResources?: ServerResources): {
     localServerId: string;
     peerCount: number;
     onlineCount: number;
@@ -210,6 +216,7 @@ class ServerRegistry {
       url: string;
       status: string;
       isLocal: boolean;
+      resources?: ServerResources;
     }>;
   } {
     const servers = this.getAllServers().map(s => ({
@@ -218,6 +225,7 @@ class ServerRegistry {
       url: s.url,
       status: s.status,
       isLocal: false,
+      resources: s.resources,
     }));
 
     // Add local server at the beginning
@@ -227,6 +235,7 @@ class ServerRegistry {
       url: '', // Local doesn't need URL
       status: 'online',
       isLocal: true,
+      resources: localResources,
     });
 
     return {

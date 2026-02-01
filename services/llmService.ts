@@ -445,6 +445,7 @@ export interface NebulaSettings {
   indentation?: IndentationPreference; // Indentation style: 'auto' (detect), '2', '4', '8', or 'tab'
   showLineNumbers?: boolean; // Show line numbers in code cells
   showCellIds?: boolean; // Show cell IDs in the cell header
+  showResourceMonitor?: boolean; // Show RAM/GPU usage in notebook status bar (disabled by default for typing perf)
   // API Keys (stored in localStorage - use with caution on shared machines)
   apiKeys?: {
     google?: string;    // Gemini API key

@@ -8,6 +8,38 @@
 import { API_BASE } from './kernelService';
 import { authService } from './authService';
 
+// Resource types (matching backend)
+export interface RAMInfo {
+  total: number;   // GB
+  used: number;    // GB
+  percent: number; // %
+}
+
+export interface GPUDevice {
+  index: number;
+  name: string;
+  memoryUsed: number;   // GB
+  memoryTotal: number;  // GB
+  utilization?: number; // %
+  temperature?: number; // Celsius
+}
+
+export interface GPUInfo {
+  vendor: 'nvidia' | 'amd';
+  devices: GPUDevice[];
+  totalUsed: number;    // GB
+  totalMemory: number;  // GB
+}
+
+export interface ServerResources {
+  hostname: string;
+  ram: RAMInfo;
+  gpus: GPUInfo | null;
+  gpuError?: 'timeout' | 'not_found' | 'parse_error' | 'command_failed';
+  collectedAt: number;
+  isStale?: boolean;
+}
+
 export interface ClusterServer {
   id: string;
   name: string;
@@ -16,10 +48,13 @@ export interface ClusterServer {
   isLocal: boolean;
   registeredAt?: number;
   lastHeartbeat?: number;
+  resources?: ServerResources;
 }
 
 export interface ClusterInfo {
   localServerId: string;
+  peerCount: number;
+  onlineCount: number;
   servers: ClusterServer[];
 }
 

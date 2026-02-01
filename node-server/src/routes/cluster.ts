@@ -6,15 +6,20 @@
 
 import { Router, Request, Response } from 'express';
 import { serverRegistry } from '../cluster/server-registry';
+import { getResourceService } from '../resources/resource-service';
 
 const router = Router();
+const resourceService = getResourceService();
 
 /**
  * GET /api/servers
  * List all servers in the cluster (local + registered peers)
+ * Includes resource info for all servers
  */
 router.get('/servers', (_req: Request, res: Response) => {
-  const clusterInfo = serverRegistry.getClusterInfo();
+  // Get local resources (cached, never blocks)
+  const localResources = resourceService.getResources();
+  const clusterInfo = serverRegistry.getClusterInfo(localResources);
   res.json(clusterInfo);
 });
 
@@ -71,11 +76,13 @@ router.delete('/servers/:serverId', (req: Request, res: Response) => {
 /**
  * POST /api/servers/:serverId/heartbeat
  * Record heartbeat from a peer server
+ * Body can include { resources } for system resource info
  */
 router.post('/servers/:serverId/heartbeat', (req: Request, res: Response) => {
   const { serverId } = req.params;
+  const { resources } = req.body;
 
-  const success = serverRegistry.heartbeat(serverId);
+  const success = serverRegistry.heartbeat(serverId, resources);
 
   if (!success) {
     res.status(404).json({ error: 'Server not found' });

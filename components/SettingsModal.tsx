@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Folder, Bot, Check, Palette, Bell, Volume2, AlignLeft, Hash, Key, Eye, EyeOff, AlertTriangle, Settings, Sparkles } from 'lucide-react';
+import { X, Folder, Bot, Check, Palette, Bell, Volume2, AlignLeft, Hash, Key, Eye, EyeOff, AlertTriangle, Settings, Sparkles, Cpu } from 'lucide-react';
 import {
   getSettings,
   saveSettings,
@@ -272,6 +272,34 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                       <span
                         className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
                           settings.showCellIds ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Resource Monitor */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                    <Cpu className="w-4 h-4" />
+                    Resource Monitor
+                  </label>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                    <div className="flex-1">
+                      <p className="text-sm text-slate-700">Show Resource Monitor</p>
+                      <p className="text-xs text-slate-500">
+                        Display RAM/GPU usage in notebook status bar
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setSettings({ ...settings, showResourceMonitor: !settings.showResourceMonitor })}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        settings.showResourceMonitor ? 'bg-blue-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          settings.showResourceMonitor ? 'translate-x-5' : 'translate-x-0'
                         }`}
                       />
                     </button>

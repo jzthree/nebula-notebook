@@ -6,6 +6,7 @@
  */
 
 import { serverRegistry } from './server-registry';
+import { getResourceService } from '../resources/resource-service';
 import * as os from 'os';
 
 interface RegistrationConfig {
@@ -122,9 +123,17 @@ class ClientRegistration {
     if (!this.config || !this.serverId) return;
 
     try {
+      // Get resources (cached, never blocks)
+      const resourceService = getResourceService();
+      const resources = resourceService.getResources();
+
       const response = await fetch(
         `${this.config.mainServerUrl}/api/servers/${encodeURIComponent(this.serverId)}/heartbeat`,
-        { method: 'POST' }
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resources }),
+        }
       );
 
       if (!response.ok) {

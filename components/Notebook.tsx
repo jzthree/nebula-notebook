@@ -36,6 +36,7 @@ import { SettingsModal } from './SettingsModal';
 import { KernelManager } from './KernelManager';
 import { NotebookSearch } from './NotebookSearch';
 import { NotebookBreadcrumb } from './NotebookBreadcrumb';
+import { ResourceStatusBar } from './ResourceStatusBar';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
 import { useNotification } from './NotificationSystem';
 import { useConflictResolution } from '../hooks/useConflictResolution';
@@ -290,6 +291,7 @@ export const Notebook: React.FC = () => {
   const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
   const [showLineNumbers, setShowLineNumbers] = useState<boolean>(() => getSettings().showLineNumbers ?? false);
   const [showCellIds, setShowCellIds] = useState<boolean>(() => getSettings().showCellIds ?? false);
+  const [showResourceMonitor, setShowResourceMonitor] = useState<boolean>(() => getSettings().showResourceMonitor ?? false);
 
   // Conflict resolution hook
   // Note: When loading remote version during conflict, we initialize fresh history
@@ -1500,6 +1502,7 @@ export const Notebook: React.FC = () => {
     const settings = getSettings();
     setShowLineNumbers(settings.showLineNumbers ?? false);
     setShowCellIds(settings.showCellIds ?? false);
+    setShowResourceMonitor(settings.showResourceMonitor ?? false);
   }, []);
 
   // Get current notebook filename (without extension)
@@ -3346,6 +3349,13 @@ export const Notebook: React.FC = () => {
                 <MemoryStick className="w-3 h-3" />
                 {(memoryUsage.used / 1024 / 1024).toFixed(0)} MB
               </span>
+            )}
+
+            {/* System resources (RAM, GPU) - opt-in to avoid any render overhead */}
+            {showResourceMonitor && (
+              <div className="border-l border-slate-200 pl-3">
+                <ResourceStatusBar />
+              </div>
             )}
           </div>
         </div>

@@ -25,6 +25,7 @@ import notebookRoutes from './routes/notebook';
 import pythonRoutes from './routes/python';
 import authRoutes from './routes/auth';
 import clusterRoutes from './routes/cluster';
+import resourceRoutes from './routes/resources';
 
 // Import cluster
 import { serverRegistry } from './cluster/server-registry';
@@ -117,6 +118,7 @@ function createApp(): Express {
   app.use('/api', notebookRoutes);
   app.use('/api', pythonRoutes);
   app.use('/api', clusterRoutes);
+  app.use('/api/resources', resourceRoutes);
 
   // Terminal routes
   setupTerminalRoutes(app);
