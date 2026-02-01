@@ -80,6 +80,20 @@ Nebula uses TOTP-based two-factor authentication:
 
 Config stored in `~/.nebula/auth.json`. Multiple servers sharing the same home directory share the same 2FA.
 
+### Disable 2FA (local/dev)
+
+Run the server with auth disabled:
+
+```bash
+npm run start --noauth
+```
+
+You can also use an env var if preferred:
+
+```bash
+NO_AUTH=true npm run start
+```
+
 ## Multi-Server Cluster
 
 Run kernels on multiple machines while accessing them from a single UI. Useful for:

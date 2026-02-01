@@ -55,6 +55,18 @@ class AuthService {
   private config: AuthConfig | null = null;
   private initialized = false;
   private failedAttempts: number[] = []; // timestamps of failed attempts
+  private disabled = false;
+
+  /**
+   * Disable authentication (for local/dev usage only)
+   */
+  disableAuth(): void {
+    this.disabled = true;
+  }
+
+  isAuthDisabled(): boolean {
+    return this.disabled;
+  }
 
   /**
    * Initialize the auth service
@@ -63,6 +75,10 @@ class AuthService {
   async initialize(): Promise<boolean> {
     if (this.initialized) {
       return !this.config?.setupComplete;
+    }
+    if (this.disabled) {
+      this.initialized = true;
+      return false;
     }
 
     // Ensure .nebula directory exists
@@ -151,6 +167,9 @@ class AuthService {
    * Check if 2FA setup is complete
    */
   isSetupComplete(): boolean {
+    if (this.disabled) {
+      return true;
+    }
     return this.config?.setupComplete ?? false;
   }
 
@@ -243,6 +262,9 @@ class AuthService {
    * Get auth status for a request
    */
   getAuthStatus(token?: string): AuthStatus {
+    if (this.disabled) {
+      return { configured: true, authenticated: true };
+    }
     const configured = this.config?.setupComplete ?? false;
     const authenticated = token ? this.validateToken(token) !== null : false;
 

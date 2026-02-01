@@ -65,6 +65,10 @@ function isPublicRoute(pathname: string): boolean {
  * Express middleware for authentication
  */
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+  if (authService.isAuthDisabled()) {
+    next();
+    return;
+  }
   const pathname = req.path;
 
   // Allow public routes
@@ -111,6 +115,9 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
  * Returns true if the connection is authenticated
  */
 export function authWebSocketMiddleware(request: IncomingMessage): boolean {
+  if (authService.isAuthDisabled()) {
+    return true;
+  }
   const url = request.url || '';
   const pathname = parseUrl(url).pathname || '';
 

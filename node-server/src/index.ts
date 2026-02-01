@@ -41,6 +41,15 @@ import { setupNotebookWebSocket } from './notebook/notebook-websocket';
 
 const PORT = process.env.PORT || process.env.NODE_SERVER_PORT || 3000;
 const DEV_MODE = process.env.DEV_MODE === 'true' || process.argv.includes('--dev');
+const AUTH_DISABLED =
+  process.argv.includes('--noauth') ||
+  process.argv.includes('--no-auth') ||
+  process.env.NO_AUTH === 'true' ||
+  process.env.NEBULA_NO_AUTH === 'true' ||
+  process.env.npm_config_noauth === 'true' ||
+  process.env.npm_config_noauth === '1' ||
+  process.env.npm_config_no_auth === 'true' ||
+  process.env.npm_config_no_auth === '1';
 
 /**
  * Create and configure Express app
@@ -188,6 +197,11 @@ function setupStaticServing(app: Express): void {
  */
 async function main(): Promise<void> {
   console.log('[Server] Starting Nebula Node Server...');
+
+  if (AUTH_DISABLED) {
+    authService.disableAuth();
+    console.log('[Auth] Disabled (--noauth)');
+  }
 
   // Initialize authentication
   const setupNeeded = await authService.initialize();
