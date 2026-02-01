@@ -1,14 +1,14 @@
 /**
  * ResourcePanel
  *
- * Dashboard panel showing system resources for all cluster servers.
+ * Compact dashboard panel showing system resources for all cluster servers.
  * Displays RAM and GPU usage with visual indicators.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Cpu, HardDrive, AlertCircle, Thermometer } from 'lucide-react';
+import { Cpu, HardDrive, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import { getClusterInfo } from '../services/clusterService';
-import type { ClusterServer, GPUDevice } from '../services/clusterService';
+import type { ClusterServer, GPUInfo } from '../services/clusterService';
 import * as resourceService from '../services/resourceService';
 
 const POLL_INTERVAL_MS = 30_000; // 30 seconds
@@ -67,7 +67,7 @@ export const ResourcePanel: React.FC<Props> = ({ className = '' }) => {
       <div className={`bg-white rounded-xl border border-slate-200 p-4 ${className}`}>
         <div className="flex items-center gap-2 text-slate-400 text-sm">
           <HardDrive className="w-4 h-4 animate-pulse" />
-          <span>Loading resources...</span>
+          <span>Loading...</span>
         </div>
       </div>
     );
@@ -78,7 +78,7 @@ export const ResourcePanel: React.FC<Props> = ({ className = '' }) => {
       <div className={`bg-white rounded-xl border border-slate-200 p-4 ${className}`}>
         <div className="flex items-center gap-2 text-amber-600 text-sm">
           <AlertCircle className="w-4 h-4" />
-          <span>Failed to load resources</span>
+          <span>Failed to load</span>
         </div>
       </div>
     );
@@ -86,14 +86,14 @@ export const ResourcePanel: React.FC<Props> = ({ className = '' }) => {
 
   return (
     <div className={`bg-white rounded-xl border border-slate-200 overflow-hidden ${className}`}>
-      {/* Header - matches other panels */}
+      {/* Header */}
       <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
         <HardDrive className="w-4 h-4 text-slate-500" />
         <h3 className="text-sm font-medium text-slate-700">Resources</h3>
       </div>
 
-      {/* Content */}
-      <div className="divide-y divide-slate-100">
+      {/* Content - scrollable if many servers */}
+      <div className="max-h-[280px] overflow-y-auto divide-y divide-slate-100">
         {servers.map((server) => (
           <ServerResourceRow key={server.id} server={server} />
         ))}
@@ -104,19 +104,18 @@ export const ResourcePanel: React.FC<Props> = ({ className = '' }) => {
 
 // Compact server resource row
 const ServerResourceRow: React.FC<{ server: ClusterServer }> = ({ server }) => {
+  const [expanded, setExpanded] = useState(false);
   const resources = server.resources;
   const isOnline = server.status === 'online';
 
-  // Server display name - use hostname from resources if available
+  // Server display name
   const displayName = resources?.hostname || server.name || server.id;
 
   if (!resources) {
     return (
-      <div className="px-4 py-3">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-slate-700">{displayName}</span>
-          <span className="text-xs text-slate-400">No data</span>
-        </div>
+      <div className="px-4 py-2.5 flex items-center justify-between text-sm">
+        <span className="text-slate-700">{displayName}</span>
+        <span className="text-xs text-slate-400">No data</span>
       </div>
     );
   }
@@ -125,73 +124,106 @@ const ServerResourceRow: React.FC<{ server: ClusterServer }> = ({ server }) => {
     ? (resources.ram.used / resources.ram.total) * 100
     : 0;
 
-  return (
-    <div className={`px-4 py-3 ${!isOnline ? 'opacity-50' : ''}`}>
-      {/* Server name + RAM on same line for single server */}
-      <div className="space-y-2">
-        {/* RAM bar */}
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-1.5 text-slate-500">
-              <Cpu className="w-3.5 h-3.5" />
-              <span>{displayName}</span>
-            </div>
-            <span className="text-slate-600 tabular-nums">
-              {resourceService.formatMemory(resources.ram.used)} / {resourceService.formatMemory(resources.ram.total)}
-            </span>
-          </div>
-          <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-blue-500 transition-all duration-300"
-              style={{ width: `${Math.min(ramPercent, 100)}%` }}
-            />
-          </div>
-        </div>
+  const hasGpus = resources.gpus && resources.gpus.devices.length > 0;
+  const gpuCount = resources.gpus?.devices.length || 0;
 
-        {/* GPUs */}
-        {resources.gpus && resources.gpus.devices.map((gpu) => (
-          <GPURow key={gpu.index} gpu={gpu} />
-        ))}
+  return (
+    <div className={`px-4 py-2.5 ${!isOnline ? 'opacity-50' : ''}`}>
+      {/* Server name row */}
+      <div className="flex items-center gap-2 text-xs text-slate-500 mb-1.5">
+        {hasGpus && gpuCount > 1 ? (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="flex items-center gap-1 hover:text-slate-700"
+          >
+            {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            <span className="font-medium text-slate-700">{displayName}</span>
+          </button>
+        ) : (
+          <span className="font-medium text-slate-700">{displayName}</span>
+        )}
       </div>
+
+      {/* RAM row */}
+      <div className="flex items-center gap-2 mb-1">
+        <Cpu className="w-3 h-3 text-slate-400 flex-shrink-0" />
+        <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-blue-500 transition-all duration-300"
+            style={{ width: `${Math.min(ramPercent, 100)}%` }}
+          />
+        </div>
+        <span className="text-xs text-slate-500 tabular-nums w-[100px] text-right">
+          {resourceService.formatMemory(resources.ram.used)} / {resourceService.formatMemory(resources.ram.total)}
+        </span>
+      </div>
+
+      {/* GPU summary or details */}
+      {hasGpus && (
+        <GPUSummary gpus={resources.gpus!} expanded={expanded || gpuCount === 1} />
+      )}
     </div>
   );
 };
 
-// Compact GPU row
-const GPURow: React.FC<{ gpu: GPUDevice }> = ({ gpu }) => {
-  const percent = gpu.memoryTotal > 0 ? (gpu.memoryUsed / gpu.memoryTotal) * 100 : 0;
+// GPU summary - compact view with optional expansion
+const GPUSummary: React.FC<{ gpus: GPUInfo; expanded: boolean }> = ({ gpus, expanded }) => {
+  const percent = gpus.totalMemory > 0
+    ? (gpus.totalUsed / gpus.totalMemory) * 100
+    : 0;
 
-  // Short GPU name
-  const shortName = gpu.name
+  // Get short name from first GPU
+  const shortName = gpus.devices[0]?.name
     .replace(/NVIDIA |AMD |GeForce |Radeon /gi, '')
     .replace(/RTX |GTX /gi, '')
-    .trim();
+    .split('-')[0]
+    .trim() || 'GPU';
 
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between text-xs">
-        <div className="flex items-center gap-1.5 text-slate-500">
-          <GpuIcon className="w-3.5 h-3.5" />
-          <span className="truncate max-w-[100px]" title={gpu.name}>
-            {shortName}
-          </span>
-          {gpu.temperature !== undefined && (
-            <span className="flex items-center gap-0.5 text-slate-400">
-              <Thermometer className="w-3 h-3" />
-              {gpu.temperature}°
-            </span>
-          )}
+  if (!expanded) {
+    // Collapsed view - show summary
+    return (
+      <div className="flex items-center gap-2">
+        <GpuIcon className="w-3 h-3 text-slate-400 flex-shrink-0" />
+        <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-emerald-500 transition-all duration-300"
+            style={{ width: `${Math.min(percent, 100)}%` }}
+          />
         </div>
-        <span className="text-slate-600 tabular-nums">
-          {resourceService.formatMemory(gpu.memoryUsed)} / {resourceService.formatMemory(gpu.memoryTotal)}
+        <span className="text-xs text-slate-500 tabular-nums w-[100px] text-right">
+          {gpus.devices.length}x {shortName}
         </span>
       </div>
-      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-        <div
-          className="h-full bg-emerald-500 transition-all duration-300"
-          style={{ width: `${Math.min(percent, 100)}%` }}
-        />
-      </div>
+    );
+  }
+
+  // Expanded view - show each GPU
+  return (
+    <div className="space-y-1">
+      {gpus.devices.map((gpu) => {
+        const gpuPercent = gpu.memoryTotal > 0
+          ? (gpu.memoryUsed / gpu.memoryTotal) * 100
+          : 0;
+        const gpuName = gpu.name
+          .replace(/NVIDIA |AMD |GeForce |Radeon /gi, '')
+          .replace(/RTX |GTX /gi, '')
+          .trim();
+
+        return (
+          <div key={gpu.index} className="flex items-center gap-2">
+            <GpuIcon className="w-3 h-3 text-slate-400 flex-shrink-0" />
+            <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-all duration-300"
+                style={{ width: `${Math.min(gpuPercent, 100)}%` }}
+              />
+            </div>
+            <span className="text-xs text-slate-500 tabular-nums w-[100px] text-right" title={gpu.name}>
+              {resourceService.formatMemory(gpu.memoryUsed)} / {resourceService.formatMemory(gpu.memoryTotal)}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 };
