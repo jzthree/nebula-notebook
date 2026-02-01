@@ -94,6 +94,21 @@ You can also use an env var if preferred:
 NO_AUTH=true npm run start
 ```
 
+### Preserve + Reattach Kernels (dev)
+
+To keep kernels running across dev server restarts and reattach on startup:
+
+```bash
+NEBULA_PRESERVE_KERNELS=true NEBULA_REATTACH_KERNELS=true npm run start
+```
+
+CLI flags are also supported when running the node server directly:
+
+```bash
+cd node-server
+npm run dev -- --preserve-kernels --reattach-kernels
+```
+
 ## Multi-Server Cluster
 
 Run kernels on multiple machines while accessing them from a single UI. Useful for:

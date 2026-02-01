@@ -51,6 +51,18 @@ const AUTH_DISABLED =
   process.env.npm_config_noauth === '1' ||
   process.env.npm_config_no_auth === 'true' ||
   process.env.npm_config_no_auth === '1';
+const PRESERVE_KERNELS =
+  process.argv.includes('--preserve-kernels') ||
+  process.argv.includes('--preserve-kernel') ||
+  process.env.NEBULA_PRESERVE_KERNELS === 'true' ||
+  process.env.npm_config_preserve_kernels === 'true' ||
+  process.env.npm_config_preserve_kernels === '1';
+const REATTACH_KERNELS =
+  process.argv.includes('--reattach-kernels') ||
+  process.argv.includes('--reattach-kernel') ||
+  process.env.NEBULA_REATTACH_KERNELS === 'true' ||
+  process.env.npm_config_reattach_kernels === 'true' ||
+  process.env.npm_config_reattach_kernels === '1';
 
 /**
  * Create and configure Express app
@@ -204,6 +216,12 @@ async function main(): Promise<void> {
     authService.disableAuth();
     console.log('[Auth] Disabled (--noauth)');
   }
+  if (PRESERVE_KERNELS) {
+    console.log('[Kernel] Preserve kernels enabled');
+  }
+  if (REATTACH_KERNELS) {
+    console.log('[Kernel] Reattach kernels on startup enabled');
+  }
 
   // Initialize authentication
   const setupNeeded = await authService.initialize();
@@ -237,6 +255,18 @@ async function main(): Promise<void> {
   // Setup static file serving
   setupStaticServing(app);
 
+  if (REATTACH_KERNELS) {
+    try {
+      const result = await kernelService.reattachOrphanedSessions();
+      if (result.attempted > 0) {
+        console.log(`[Kernel] Reattach summary: ${result.reattached} reattached, ${result.failed} failed, ${result.skipped} skipped`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[Kernel] Reattach failed: ${message}`);
+    }
+  }
+
   // Graceful shutdown
   const shutdown = async () => {
     console.log('\n[Server] Shutting down...');
@@ -246,7 +276,7 @@ async function main(): Promise<void> {
 
     // Cleanup kernel sessions
     try {
-      await kernelService.cleanup();
+      await kernelService.shutdown({ preserveKernels: PRESERVE_KERNELS });
     } catch (err) {
       console.error('[Server] Error during kernel cleanup:', err);
     }

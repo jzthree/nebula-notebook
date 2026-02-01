@@ -55,10 +55,48 @@ export class KernelService {
   private executionQueues: Map<string, Promise<unknown>> = new Map();
   private executionQueueSizes: Map<string, number> = new Map();
   private shellRequestQueues: Map<string, Promise<unknown>> = new Map();
+  private reattachInProgress = false;
 
   constructor(config?: KernelServiceConfig, sessionStore?: SessionStore) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.sessionStore = sessionStore || new SessionStore();
+  }
+
+  /**
+   * Check if a PID is still alive.
+   */
+  private isPidAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Load a Jupyter connection file.
+   */
+  private loadConnectionFile(connFile: string): ConnectionConfig | null {
+    try {
+      if (!connFile || !fs.existsSync(connFile)) {
+        return null;
+      }
+      const raw = JSON.parse(fs.readFileSync(connFile, 'utf-8')) as Record<string, unknown>;
+      return {
+        ip: raw.ip as string,
+        transport: raw.transport as string,
+        signatureScheme: raw.signature_scheme as string,
+        key: raw.key as string,
+        shellPort: raw.shell_port as number,
+        stdinPort: raw.stdin_port as number,
+        controlPort: raw.control_port as number,
+        iopubPort: raw.iopub_port as number,
+        hbPort: raw.hb_port as number,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -78,6 +116,100 @@ export class KernelService {
     this.kernelSpecsCache = discoverKernelSpecs();
     this.ready = true;
     console.log(`Kernel service initialized. Found ${this.kernelSpecsCache.length} kernels.`);
+  }
+
+  /**
+   * Attempt to reattach to orphaned kernel sessions from a previous server run.
+   */
+  async reattachOrphanedSessions(): Promise<{ attempted: number; reattached: number; failed: number; skipped: number }> {
+    if (this.reattachInProgress) {
+      return { attempted: 0, reattached: 0, failed: 0, skipped: 0 };
+    }
+    this.reattachInProgress = true;
+    try {
+      await this.initialize();
+
+      // Mark any previously active sessions as orphaned
+      this.sessionStore.markAllOrphaned();
+      const orphanedSessions = this.sessionStore.getOrphanedSessions();
+
+      if (orphanedSessions.length === 0) {
+        return { attempted: 0, reattached: 0, failed: 0, skipped: 0 };
+      }
+
+      let reattached = 0;
+      let failed = 0;
+      let skipped = 0;
+
+      for (const session of orphanedSessions) {
+        const sessionId = session.sessionId;
+        if (!session.connectionFile) {
+          skipped++;
+          continue;
+        }
+
+        if (session.kernelPid && !this.isPidAlive(session.kernelPid)) {
+          this.sessionStore.updateStatus(sessionId, 'terminated');
+          skipped++;
+          continue;
+        }
+
+        const connectionConfig = this.loadConnectionFile(session.connectionFile);
+        if (!connectionConfig) {
+          skipped++;
+          continue;
+        }
+
+        const normalizedFilePath = session.filePath ? this.normalizePath(session.filePath) : null;
+        const now = Date.now() / 1000;
+        const kernelSession: KernelSession = {
+          id: sessionId,
+          kernelName: session.kernelName,
+          filePath: normalizedFilePath,
+          status: 'starting',
+          executionCount: 0,
+          pid: session.kernelPid ?? null,
+          connectionFile: session.connectionFile,
+          connectionConfig,
+          createdAt: session.createdAt,
+          lastActivity: now,
+        };
+
+        this.sessions.set(sessionId, kernelSession);
+        if (normalizedFilePath) {
+          this.fileToSession.set(normalizedFilePath, sessionId);
+        }
+
+        try {
+          await this.waitForReady(sessionId);
+          kernelSession.status = 'idle';
+          this.sessionStore.saveSession({
+            sessionId,
+            kernelName: session.kernelName,
+            filePath: normalizedFilePath,
+            kernelPid: session.kernelPid ?? null,
+            status: 'active',
+            createdAt: session.createdAt,
+            lastHeartbeat: now,
+            connectionFile: session.connectionFile,
+          });
+          reattached++;
+        } catch {
+          failed++;
+          kernelSession.status = 'dead';
+          this.cleanupInMemorySession(sessionId);
+        }
+      }
+
+      return {
+        attempted: orphanedSessions.length,
+        reattached,
+        failed,
+        skipped,
+      };
+    } finally {
+      this.reattachInProgress = false;
+    }
   }
 
   /**
@@ -775,6 +907,16 @@ export class KernelService {
         // Ignore kill errors
       }
       this.kernelProcesses.delete(sessionId);
+    } else if (session.pid) {
+      try {
+        process.kill(session.pid, 'SIGTERM');
+        await this.sleep(1000);
+        if (this.isPidAlive(session.pid)) {
+          process.kill(session.pid, 'SIGKILL');
+        }
+      } catch {
+        // Ignore kill errors
+      }
     }
 
     // Cleanup resources
@@ -810,6 +952,33 @@ export class KernelService {
       this.sessionStore.deleteSession(sessionId);
     }
 
+    this.executionQueues.delete(sessionId);
+    this.executionQueueSizes.delete(sessionId);
+    this.shellRequestQueues.delete(sessionId);
+  }
+
+  /**
+   * Cleanup only in-memory tracking for a session (keeps connection file and session store).
+   */
+  private cleanupInMemorySession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.filePath) {
+      this.fileToSession.delete(session.filePath);
+    }
+
+    const sockets = this.zmqSockets.get(sessionId);
+    if (sockets) {
+      try {
+        sockets.shell.close();
+        sockets.iopub.close();
+      } catch {
+        // Ignore close errors
+      }
+      this.zmqSockets.delete(sessionId);
+    }
+
+    this.sessions.delete(sessionId);
+    this.kernelProcesses.delete(sessionId);
     this.executionQueues.delete(sessionId);
     this.executionQueueSizes.delete(sessionId);
     this.shellRequestQueues.delete(sessionId);
@@ -1017,6 +1186,23 @@ export class KernelService {
       await this.stopKernel(sessionId);
     }
     this.sessionStore.close();
+  }
+
+  /**
+   * Shutdown kernel service.
+   * If preserveKernels is true, keep kernel processes running and close the session store.
+   */
+  async shutdown(options?: { preserveKernels?: boolean }): Promise<void> {
+    if (options?.preserveKernels) {
+      try {
+        this.sessionStore.markAllOrphaned();
+      } catch {
+        // Ignore errors marking orphaned
+      }
+      this.sessionStore.close();
+      return;
+    }
+    await this.cleanup();
   }
 
   /**

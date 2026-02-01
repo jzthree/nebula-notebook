@@ -13,7 +13,7 @@ import { FilesystemService } from '../fs/fs-service';
 import { NebulaCell, CellOutput } from '../fs/types';
 import { validateMetadataValue } from './cell-metadata';
 import { KernelService } from '../kernel/kernel-service';
-import { getUndoRedoManager, HeadlessUndoRedoManager, UndoableOperation } from './undoRedoManager';
+import { getUndoRedoManager, HeadlessUndoRedoManager, UndoableOperation, ChangeSummary } from './undoRedoManager';
 
 // Helper to create a CellOutput (API-compatible format matching Python)
 function createCellOutput(type: CellOutput['type'], content: string): CellOutput {
@@ -1468,7 +1468,7 @@ export class HeadlessOperationHandler {
    * Get changes since a timestamp (public method for operation router).
    * Used by startAgentSession to inform agent what changed between sessions.
    */
-  getChangesSince(notebookPath: string, sinceTimestamp: number): { type: string; cellId?: string; cellIndex?: number; timestamp: number; description: string }[] {
+  getChangesSince(notebookPath: string, sinceTimestamp: number): ChangeSummary[] {
     const cells = this.getCells(notebookPath);
     return this.undoRedoManager.getChangesSince(notebookPath, cells, sinceTimestamp);
   }
