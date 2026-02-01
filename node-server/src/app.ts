@@ -10,7 +10,12 @@ export function createApp(): Express {
 
   // Shared middleware
   app.use(cors());
-  app.use(express.json());
+  const bodyLimit =
+    process.env.NEBULA_BODY_LIMIT ||
+    process.env.NEBULA_MAX_BODY_SIZE ||
+    '200mb';
+  app.use(express.json({ limit: bodyLimit }));
+  app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 
   // Health check endpoint
   app.get('/api/health', (_req: Request, res: Response) => {

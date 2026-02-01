@@ -43,6 +43,10 @@ import { setupNotebookWebSocket } from './notebook/notebook-websocket';
 
 const PORT = process.env.PORT || process.env.NODE_SERVER_PORT || 3000;
 const DEV_MODE = process.env.DEV_MODE === 'true' || process.argv.includes('--dev');
+const BODY_LIMIT =
+  process.env.NEBULA_BODY_LIMIT ||
+  process.env.NEBULA_MAX_BODY_SIZE ||
+  '200mb';
 const AUTH_DISABLED =
   process.argv.includes('--noauth') ||
   process.argv.includes('--no-auth') ||
@@ -105,8 +109,8 @@ function createApp(): Express {
   }));
 
   // JSON body parser with larger limit for notebook data
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+  app.use(express.json({ limit: BODY_LIMIT }));
+  app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
 
   // Health check endpoints
   app.get('/api/health', (_req: Request, res: Response) => {
