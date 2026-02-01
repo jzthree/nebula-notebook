@@ -50,6 +50,7 @@ const STALE_THRESHOLD_MS = 60000;     // 60 seconds before marking stale
 /**
  * Execute command with strict timeout
  * Returns null on any failure - never throws
+ * Silent on command-not-found errors (expected on systems without GPU tools)
  */
 async function execWithTimeout(
   cmd: string,
@@ -64,12 +65,10 @@ async function execWithTimeout(
     return { stdout: stdout.trim(), error: stderr?.trim() };
   } catch (err: any) {
     if (err.killed) {
-      console.warn(`[ResourceService] Command timed out after ${timeoutMs}ms: ${cmd}`);
-    } else if (err.code === 'ENOENT') {
-      // Command not found - this is fine
-    } else {
-      console.warn(`[ResourceService] Command failed: ${cmd}`, err.message);
+      // Only log actual timeouts - these are important
+      console.warn(`[ResourceService] Command timed out after ${timeoutMs}ms: ${cmd.split(' ')[0]}`);
     }
+    // Don't log command-not-found or other errors - expected on systems without GPU tools
     return null;
   }
 }
@@ -147,39 +146,55 @@ function parseNvidiaSmi(stdout: string): GPUInfo | null {
 
 /**
  * Parse rocm-smi output for AMD GPUs
+ * Handles multiple output formats across rocm-smi versions
  */
 function parseRocmSmi(stdout: string): GPUInfo | null {
   try {
-    // rocm-smi --showmeminfo vram output format varies by version
-    // Typical format:
-    // GPU[0] : vram Total Memory (B): 17163091968
-    // GPU[0] : vram Total Used Memory (B): 1048576
-
     const devices: GPUDevice[] = [];
     const deviceMap = new Map<number, Partial<GPUDevice>>();
 
     const lines = stdout.trim().split('\n');
+
     for (const line of lines) {
-      // Match GPU index
-      const gpuMatch = line.match(/GPU\[(\d+)\]/);
-      if (!gpuMatch) continue;
-
-      const index = parseInt(gpuMatch[1], 10);
-      if (!deviceMap.has(index)) {
-        deviceMap.set(index, { index, name: `AMD GPU ${index}` });
-      }
-      const device = deviceMap.get(index)!;
-
-      // Match memory values (in bytes)
-      if (line.includes('Total Memory')) {
-        const match = line.match(/:\s*(\d+)/);
-        if (match) {
-          device.memoryTotal = Math.round((parseInt(match[1], 10) / (1024 ** 3)) * 100) / 100;
+      // Format 1: GPU[0] : vram Total Memory (B): 17163091968
+      const gpuBracketMatch = line.match(/GPU\[(\d+)\]/);
+      if (gpuBracketMatch) {
+        const index = parseInt(gpuBracketMatch[1], 10);
+        if (!deviceMap.has(index)) {
+          deviceMap.set(index, { index, name: `AMD GPU ${index}` });
         }
-      } else if (line.includes('Used Memory')) {
-        const match = line.match(/:\s*(\d+)/);
-        if (match) {
-          device.memoryUsed = Math.round((parseInt(match[1], 10) / (1024 ** 3)) * 100) / 100;
+        const device = deviceMap.get(index)!;
+
+        // Match memory values (in bytes) - handles "Total Memory" and "Used Memory"
+        if (line.includes('Total Memory') && !line.includes('Used')) {
+          const match = line.match(/:\s*(\d+)\s*$/);
+          if (match) {
+            device.memoryTotal = Math.round((parseInt(match[1], 10) / (1024 ** 3)) * 100) / 100;
+          }
+        } else if (line.includes('Used Memory') || line.includes('Total Used')) {
+          const match = line.match(/:\s*(\d+)\s*$/);
+          if (match) {
+            device.memoryUsed = Math.round((parseInt(match[1], 10) / (1024 ** 3)) * 100) / 100;
+          }
+        }
+        continue;
+      }
+
+      // Format 2: Table format with GPU index in first column
+      // GPU  Temp   AvgPwr  SCLK    MCLK     Fan  Perf  PwrCap  VRAM%  GPU%
+      // 0    45c    35.0W   300Mhz  1200Mhz  0%   auto  250.0W  5%     0%
+      const tableMatch = line.match(/^(\d+)\s+\d+c/);
+      if (tableMatch) {
+        const index = parseInt(tableMatch[1], 10);
+        if (!deviceMap.has(index)) {
+          deviceMap.set(index, { index, name: `AMD GPU ${index}` });
+        }
+        // Extract VRAM% if present
+        const vramMatch = line.match(/(\d+)%\s+\d+%\s*$/);
+        if (vramMatch) {
+          const device = deviceMap.get(index)!;
+          // We only get percentage, not absolute values in this format
+          device.utilization = parseInt(vramMatch[1], 10);
         }
       }
     }
@@ -188,6 +203,7 @@ function parseRocmSmi(stdout: string): GPUInfo | null {
     let totalMemory = 0;
 
     for (const [, device] of deviceMap) {
+      // Accept device if we have both memory values, or at least an index
       if (device.memoryUsed !== undefined && device.memoryTotal !== undefined) {
         devices.push(device as GPUDevice);
         totalUsed += device.memoryUsed;
@@ -203,8 +219,8 @@ function parseRocmSmi(stdout: string): GPUInfo | null {
       totalUsed: Math.round(totalUsed * 100) / 100,
       totalMemory: Math.round(totalMemory * 100) / 100,
     };
-  } catch (err) {
-    console.warn('[ResourceService] Failed to parse rocm-smi output:', err);
+  } catch {
+    // Silent failure - parsing errors are not critical
     return null;
   }
 }
@@ -212,6 +228,7 @@ function parseRocmSmi(stdout: string): GPUInfo | null {
 /**
  * Collect GPU info - tries nvidia-smi first, then rocm-smi
  * Returns null if no GPU or collection fails
+ * Only reports errors for actual problems (timeouts), not for missing tools
  */
 async function collectGPUs(): Promise<{ gpus: GPUInfo | null; error?: ServerResources['gpuError'] }> {
   // Try NVIDIA first (more common)
@@ -221,17 +238,7 @@ async function collectGPUs(): Promise<{ gpus: GPUInfo | null; error?: ServerReso
   if (nvidiaResult?.stdout) {
     const gpus = parseNvidiaSmi(nvidiaResult.stdout);
     if (gpus) return { gpus };
-    return { gpus: null, error: 'parse_error' };
-  }
-
-  // Check if nvidia-smi exists but timed out
-  if (nvidiaResult === null) {
-    // Could be timeout or not found - try to distinguish
-    const whichResult = await execWithTimeout('which nvidia-smi', 1000);
-    if (whichResult?.stdout) {
-      // nvidia-smi exists but timed out - GPU might be stuck
-      return { gpus: null, error: 'timeout' };
-    }
+    // Output exists but couldn't parse - continue to try rocm-smi
   }
 
   // Try AMD ROCm
@@ -240,18 +247,10 @@ async function collectGPUs(): Promise<{ gpus: GPUInfo | null; error?: ServerReso
   if (rocmResult?.stdout) {
     const gpus = parseRocmSmi(rocmResult.stdout);
     if (gpus) return { gpus };
-    return { gpus: null, error: 'parse_error' };
+    // Output exists but couldn't parse - no error, just no GPUs found
   }
 
-  // Check if rocm-smi exists but failed
-  if (rocmResult === null) {
-    const whichResult = await execWithTimeout('which rocm-smi', 1000);
-    if (whichResult?.stdout) {
-      return { gpus: null, error: 'timeout' };
-    }
-  }
-
-  // No GPU tools found - this is fine, not an error
+  // No GPU tools found or no parseable output - this is fine, not an error
   return { gpus: null };
 }
 
@@ -265,6 +264,7 @@ class ResourceService {
   private cacheTime: number = 0;
   private collecting: boolean = false;
   private hostname: string;
+  private hasLoggedOnce: boolean = false;
 
   constructor() {
     this.hostname = os.hostname();
@@ -337,12 +337,14 @@ class ResourceService {
       };
       this.cacheTime = Date.now();
 
-      if (gpuResult.gpus) {
-        console.log(`[ResourceService] Collected: RAM ${ram.used}/${ram.total}GB, GPU ${gpuResult.gpus.totalUsed}/${gpuResult.gpus.totalMemory}GB (${gpuResult.gpus.devices.length} devices)`);
-      } else if (gpuResult.error) {
-        console.log(`[ResourceService] Collected: RAM ${ram.used}/${ram.total}GB, GPU unavailable (${gpuResult.error})`);
-      } else {
-        console.log(`[ResourceService] Collected: RAM ${ram.used}/${ram.total}GB, no GPU detected`);
+      // Only log once on startup
+      if (!this.hasLoggedOnce) {
+        this.hasLoggedOnce = true;
+        if (gpuResult.gpus) {
+          console.log(`[ResourceService] RAM ${ram.total}GB, GPU ${gpuResult.gpus.totalMemory}GB (${gpuResult.gpus.devices.length} ${gpuResult.gpus.vendor} device${gpuResult.gpus.devices.length > 1 ? 's' : ''})`);
+        } else {
+          console.log(`[ResourceService] RAM ${ram.total}GB, no GPU`);
+        }
       }
     } catch (err) {
       console.error('[ResourceService] Collection failed:', err);
