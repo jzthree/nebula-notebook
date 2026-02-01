@@ -82,7 +82,7 @@ export class HeadlessOperationHandler {
     this.fsService = fsService;
     this.operationRouter = operationRouter || null;
     this.kernelService = kernelService || null;
-    this.undoRedoManager = getUndoRedoManager();
+    this.undoRedoManager = getUndoRedoManager(this.fsService);
   }
 
   /**
@@ -133,7 +133,8 @@ export class HeadlessOperationHandler {
     while (notebook.dirty) {
       const cells = JSON.parse(JSON.stringify(notebook.cells));
       notebook.dirty = false;
-      this.fsService.saveNotebookCells(notebookPath, cells);
+      const history = this.undoRedoManager.getHistory(notebookPath, cells);
+      await this.fsService.saveNotebookBundle(notebookPath, cells, undefined, history);
     }
   }
 
@@ -285,9 +286,6 @@ export class HeadlessOperationHandler {
           break;
         case 'redo':
           result = await this.handleRedo(notebookPath);
-          break;
-        case 'getUndoRedoState':
-          result = await this.getUndoRedoState(notebookPath);
           break;
         default:
           return { success: false, error: `Unknown operation type: ${opType}` };
@@ -1459,22 +1457,19 @@ export class HeadlessOperationHandler {
   }
 
   /**
-   * Get undo/redo state for a notebook.
-   */
-  private async getUndoRedoState(notebookPath: string): Promise<OperationResult> {
-    const cells = this.getCells(notebookPath);
-    return {
-      success: true,
-      canUndo: this.undoRedoManager.canUndo(notebookPath, cells),
-      canRedo: this.undoRedoManager.canRedo(notebookPath, cells),
-    };
-  }
-
-  /**
    * Record an undoable operation (helper method for other operations).
    */
   private recordUndoableOperation(notebookPath: string, op: UndoableOperation): void {
     const cells = this.getCells(notebookPath);
     this.undoRedoManager.recordOperation(notebookPath, cells, op);
+  }
+
+  /**
+   * Get changes since a timestamp (public method for operation router).
+   * Used by startAgentSession to inform agent what changed between sessions.
+   */
+  getChangesSince(notebookPath: string, sinceTimestamp: number): { type: string; cellId?: string; cellIndex?: number; timestamp: number; description: string }[] {
+    const cells = this.getCells(notebookPath);
+    return this.undoRedoManager.getChangesSince(notebookPath, cells, sinceTimestamp);
   }
 }

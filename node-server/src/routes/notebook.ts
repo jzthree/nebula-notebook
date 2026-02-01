@@ -49,14 +49,14 @@ router.get('/cell/metadata-schema', (_req: Request, res: Response) => {
 /**
  * Get notebook cells in internal format
  */
-router.get('/notebook/cells', (req: Request, res: Response) => {
+router.get('/notebook/cells', async (req: Request, res: Response) => {
   try {
     const filePath = req.query.path as string;
     if (!filePath) {
       res.status(400).json({ detail: 'path query parameter is required' });
       return;
     }
-    const result = fsService.getNotebookCells(filePath);
+    const result = await fsService.getNotebookCellsWithKernel(filePath);
     res.json({
       path: filePath,
       cells: result.cells,
@@ -76,7 +76,7 @@ router.get('/notebook/cells', (req: Request, res: Response) => {
 /**
  * Save notebook cells
  */
-router.post('/notebook/save', (req: Request, res: Response) => {
+router.post('/notebook/save', async (req: Request, res: Response) => {
   try {
     const { path: filePath, cells, kernel_name, history } = req.body;
     if (!filePath) {
@@ -88,12 +88,12 @@ router.post('/notebook/save', (req: Request, res: Response) => {
       return;
     }
 
-    const result = fsService.saveNotebookCells(filePath, cells as NebulaCell[], kernel_name);
-
-    // Save history if provided
-    if (history) {
-      fsService.saveHistory(filePath, history);
-    }
+    const result = await fsService.saveNotebookBundle(
+      filePath,
+      cells as NebulaCell[],
+      kernel_name,
+      history
+    );
 
     res.json({ status: 'ok', path: filePath, mtime: result.mtime });
   } catch (err) {
@@ -123,14 +123,14 @@ router.get('/notebook/history', (req: Request, res: Response) => {
 /**
  * Save operation history for a notebook
  */
-router.post('/notebook/history', (req: Request, res: Response) => {
+router.post('/notebook/history', async (req: Request, res: Response) => {
   try {
     const { notebook_path, history } = req.body;
     if (!notebook_path) {
       res.status(400).json({ detail: 'notebook_path is required' });
       return;
     }
-    fsService.saveHistory(notebook_path, history || []);
+    await fsService.saveHistory(notebook_path, history || []);
     res.json({ status: 'ok', notebook_path });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -159,14 +159,14 @@ router.get('/notebook/session', (req: Request, res: Response) => {
 /**
  * Save session state for a notebook
  */
-router.post('/notebook/session', (req: Request, res: Response) => {
+router.post('/notebook/session', async (req: Request, res: Response) => {
   try {
     const { notebook_path, session } = req.body;
     if (!notebook_path) {
       res.status(400).json({ detail: 'notebook_path is required' });
       return;
     }
-    fsService.saveSession(notebook_path, session || {});
+    await fsService.saveSession(notebook_path, session || {});
     res.json({ status: 'ok', notebook_path });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

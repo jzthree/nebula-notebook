@@ -80,6 +80,7 @@ export interface NebulaCell {
 export interface NotebookCellsResponse {
   cells: NebulaCell[];
   kernelspec: string;
+  kernelspecSource?: 'metadata' | 'default' | 'env-default';
   mtime: number;
 }
 

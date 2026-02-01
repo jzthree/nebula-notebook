@@ -8,11 +8,9 @@
  * The core logic is intentionally similar to maintain feature parity.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
-import { NebulaCell, CellOutput } from '../fs/types';
+import { NebulaCell } from '../fs/types';
+import { FilesystemService } from '../fs/fs-service';
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -64,6 +62,16 @@ export interface UndoRedoResult {
   affectedCellIds: string[];
   operationType: string;
   error?: string;
+}
+
+/** Summary of a change for agent awareness */
+export interface ChangeSummary {
+  type: string;
+  cellId?: string;
+  cellIndex?: number;
+  timestamp: number;
+  description: string;
+  source?: EditSource;
 }
 
 // ============================================================================
@@ -203,24 +211,10 @@ interface NotebookUndoState {
  */
 export class HeadlessUndoRedoManager {
   private states: Map<string, NotebookUndoState> = new Map();
-  private historyDir: string;
+  private fsService: FilesystemService;
 
-  constructor() {
-    // Store history files in ~/.nebula/history/
-    this.historyDir = path.join(os.homedir(), '.nebula', 'history');
-    this.ensureHistoryDir();
-  }
-
-  private ensureHistoryDir(): void {
-    if (!fs.existsSync(this.historyDir)) {
-      fs.mkdirSync(this.historyDir, { recursive: true });
-    }
-  }
-
-  private getHistoryPath(notebookPath: string): string {
-    // Create a safe filename from the notebook path
-    const safeFilename = notebookPath.replace(/[^a-zA-Z0-9]/g, '_') + '.history.json';
-    return path.join(this.historyDir, safeFilename);
+  constructor(fsService: FilesystemService) {
+    this.fsService = fsService;
   }
 
   /**
@@ -229,16 +223,12 @@ export class HeadlessUndoRedoManager {
   getState(notebookPath: string, cells: NebulaCell[]): NotebookUndoState {
     if (!this.states.has(notebookPath)) {
       // Try to load existing history
-      const historyPath = this.getHistoryPath(notebookPath);
       let loadedHistory: TimestampedOperation[] = [];
 
-      if (fs.existsSync(historyPath)) {
-        try {
-          const historyData = fs.readFileSync(historyPath, 'utf-8');
-          loadedHistory = JSON.parse(historyData);
-        } catch (err) {
-          console.warn(`[UndoRedoManager] Failed to load history for ${notebookPath}:`, err);
-        }
+      try {
+        loadedHistory = this.fsService.loadHistory(notebookPath) as TimestampedOperation[];
+      } catch (err) {
+        console.warn(`[UndoRedoManager] Failed to load history for ${notebookPath}:`, err);
       }
 
       // Initialize state
@@ -291,23 +281,6 @@ export class HeadlessUndoRedoManager {
   }
 
   /**
-   * Save history to disk.
-   */
-  async persistHistory(notebookPath: string): Promise<void> {
-    const state = this.states.get(notebookPath);
-    if (!state) return;
-
-    const historyPath = this.getHistoryPath(notebookPath);
-    const historyData = JSON.stringify(state.fullHistory, null, 2);
-
-    try {
-      await fs.promises.writeFile(historyPath, historyData, 'utf-8');
-    } catch (err) {
-      console.error(`[UndoRedoManager] Failed to save history for ${notebookPath}:`, err);
-    }
-  }
-
-  /**
    * Record an operation (called by headless handler after executing an operation).
    */
   recordOperation(
@@ -356,8 +329,6 @@ export class HeadlessUndoRedoManager {
       state.lastContent.delete(op.cell.id);
     }
 
-    // Schedule persist (don't await)
-    this.persistHistory(notebookPath);
   }
 
   /**
@@ -384,9 +355,6 @@ export class HeadlessUndoRedoManager {
 
     // Update content tracking
     this.updateContentTrackingAfterUndo(state, op, newCells);
-
-    // Persist history
-    this.persistHistory(notebookPath);
 
     return {
       cells: newCells,
@@ -421,9 +389,6 @@ export class HeadlessUndoRedoManager {
 
     // Update content tracking
     this.updateContentTrackingAfterRedo(state, op, newCells);
-
-    // Persist history
-    this.persistHistory(notebookPath);
 
     return {
       cells: newCells,
@@ -493,14 +458,86 @@ export class HeadlessUndoRedoManager {
   clearState(notebookPath: string): void {
     this.states.delete(notebookPath);
   }
+
+  /**
+   * Get changes since a timestamp (for agent awareness).
+   * Returns human-readable summaries of operations made between agent sessions.
+   * Returns all edits (no source filtering).
+   */
+  getChangesSince(notebookPath: string, cells: NebulaCell[], sinceTimestamp: number): ChangeSummary[] {
+    const state = this.getState(notebookPath, cells);
+    const summaries: ChangeSummary[] = [];
+
+    for (const op of state.fullHistory) {
+      if (op.timestamp <= sinceTimestamp) continue;
+      if ((op as any).isUndo) continue;
+      // Skip execution and snapshot operations
+      if (op.type === 'runCell' || op.type === 'executionComplete' || op.type === 'snapshot') continue;
+
+      let description = '';
+      let cellId: string | undefined;
+      let cellIndex: number | undefined;
+
+      switch (op.type) {
+        case 'insertCell':
+          cellId = op.cell.id;
+          cellIndex = op.index;
+          description = `Inserted ${op.cell.type} cell at #${op.index + 1}`;
+          break;
+        case 'deleteCell':
+          cellId = op.cell.id;
+          cellIndex = op.index;
+          description = `Deleted cell #${op.index + 1}`;
+          break;
+        case 'moveCell':
+          if (op.toIndex >= 0 && op.toIndex < cells.length) {
+            cellId = cells[op.toIndex].id;
+          }
+          description = `Moved cell from #${op.fromIndex + 1} to #${op.toIndex + 1}`;
+          break;
+        case 'updateContent':
+          cellId = op.cellId;
+          cellIndex = cells.findIndex(c => c.id === op.cellId);
+          if (cellIndex === -1) cellIndex = undefined;
+          const preview = op.newContent.slice(0, 50).replace(/\n/g, ' ');
+          description = `Edited cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}: "${preview}${preview.length >= 50 ? '...' : ''}"`;
+          break;
+        case 'updateMetadata':
+          cellId = op.cellId;
+          cellIndex = cells.findIndex(c => c.id === op.cellId);
+          if (cellIndex === -1) cellIndex = undefined;
+          const changes = Object.keys(op.changes).join(', ');
+          description = `Changed ${changes} on cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}`;
+          break;
+        case 'batch':
+          description = `Batch operation (${op.operations.length} changes)`;
+          break;
+        default:
+          description = `Operation: ${(op as TimestampedOperation).type}`;
+      }
+
+      summaries.push({
+        type: (op as TimestampedOperation).type,
+        cellId,
+        cellIndex,
+        timestamp: (op as TimestampedOperation).timestamp,
+        description,
+        source: (op as any).source as EditSource | undefined,
+      });
+    }
+
+    return summaries;
+  }
 }
 
-// Singleton instance
-let manager: HeadlessUndoRedoManager | null = null;
+// Manager instances per FilesystemService to avoid cross-root leakage in tests/multi-root setups
+const managers = new WeakMap<FilesystemService, HeadlessUndoRedoManager>();
 
-export function getUndoRedoManager(): HeadlessUndoRedoManager {
+export function getUndoRedoManager(fsService: FilesystemService): HeadlessUndoRedoManager {
+  let manager = managers.get(fsService);
   if (!manager) {
-    manager = new HeadlessUndoRedoManager();
+    manager = new HeadlessUndoRedoManager(fsService);
+    managers.set(fsService, manager);
   }
   return manager;
 }

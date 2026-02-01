@@ -873,5 +873,120 @@ describe('HeadlessOperationHandler', () => {
       const readResult = await handler.readNotebook(notebookPath);
       expect((readResult.data as any).cells).toHaveLength(1);
     });
+
+    it('should undo and redo updateContent operations', async () => {
+      const notebookPath = createTestNotebook('undo-update-content.ipynb', [
+        { id: 'cell-1', content: 'print("a")' },
+      ]);
+
+      await handler.applyOperation({
+        type: 'updateContent',
+        notebookPath,
+        cellId: 'cell-1',
+        content: 'print("b")',
+      });
+
+      let readResult = await handler.readNotebook(notebookPath);
+      expect((readResult.data as any).cells[0].content).toBe('print("b")');
+
+      await handler.applyOperation({ type: 'undo', notebookPath });
+      readResult = await handler.readNotebook(notebookPath);
+      expect((readResult.data as any).cells[0].content).toBe('print("a")');
+
+      await handler.applyOperation({ type: 'redo', notebookPath });
+      readResult = await handler.readNotebook(notebookPath);
+      expect((readResult.data as any).cells[0].content).toBe('print("b")');
+    });
+
+    it('should persist history and allow undo after reloading handler', async () => {
+      const notebookPath = createTestNotebook('undo-after-reload.ipynb', []);
+
+      await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 0,
+        cell: { id: 'cell-1', type: 'code', content: 'x=1' },
+      });
+
+      await handler.flush(notebookPath);
+
+      const newFsService = new FilesystemService();
+      const newRouter = new OperationRouter();
+      const newHandler = new HeadlessOperationHandler(newFsService, newRouter);
+
+      const undoResult = await newHandler.applyOperation({ type: 'undo', notebookPath });
+      expect(undoResult.success).toBe(true);
+
+      const readResult = await newHandler.readNotebook(notebookPath);
+      expect((readResult.data as any).cells).toHaveLength(0);
+    });
+
+    it('should support multiple undo/redo sequence', async () => {
+      const notebookPath = createTestNotebook('multi-undo-redo.ipynb', [
+        { id: 'cell-1', content: 'a' },
+      ]);
+
+      await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 1,
+        cell: { id: 'cell-2', type: 'code', content: 'b' },
+      });
+
+      await handler.applyOperation({
+        type: 'updateContent',
+        notebookPath,
+        cellId: 'cell-1',
+        content: 'a2',
+      });
+
+      await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 2,
+        cell: { id: 'cell-3', type: 'code', content: 'c' },
+      });
+
+      await handler.applyOperation({ type: 'undo', notebookPath });
+      await handler.applyOperation({ type: 'undo', notebookPath });
+
+      let readResult = await handler.readNotebook(notebookPath);
+      const cells = (readResult.data as any).cells;
+      expect(cells).toHaveLength(2);
+      expect(cells[0].content).toBe('a');
+
+      await handler.applyOperation({ type: 'redo', notebookPath });
+      await handler.applyOperation({ type: 'redo', notebookPath });
+
+      readResult = await handler.readNotebook(notebookPath);
+      const redoneCells = (readResult.data as any).cells;
+      expect(redoneCells).toHaveLength(3);
+      expect(redoneCells[0].content).toBe('a2');
+    });
+  });
+
+  describe('Change tracking', () => {
+    it('should return changes since timestamp including MCP edits', async () => {
+      const notebookPath = createTestNotebook('changes-since.ipynb', []);
+      const start = Date.now();
+
+      await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 0,
+        cell: { id: 'cell-1', type: 'code', content: 'x=1' },
+      });
+
+      await handler.applyOperation({
+        type: 'updateContent',
+        notebookPath,
+        cellId: 'cell-1',
+        content: 'x=2',
+      });
+
+      const changes = handler.getChangesSince(notebookPath, start);
+      expect(changes.length).toBeGreaterThanOrEqual(2);
+      expect(changes.some(change => change.source === 'mcp')).toBe(true);
+    });
   });
 });

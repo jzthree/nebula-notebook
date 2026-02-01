@@ -5,6 +5,7 @@
 import { Router, Request, Response } from 'express';
 import { PythonDiscoveryService } from '../discovery/discovery-service';
 import { discoverKernelSpecs, invalidateKernelspecCache } from '../kernel/kernelspec';
+import { invalidateDefaultKernelName } from '../kernel/default-kernel';
 
 const router = Router();
 const discoveryService = new PythonDiscoveryService();
@@ -66,6 +67,7 @@ router.post('/python/install-kernel', async (req: Request, res: Response) => {
     const result = await discoveryService.installKernel(python_path, kernel_name);
     // Invalidate kernelspec cache so the new kernel is discovered
     invalidateKernelspecCache();
+    invalidateDefaultKernelName();
     res.json(result);
   } catch (err) {
     if (err instanceof Error) {

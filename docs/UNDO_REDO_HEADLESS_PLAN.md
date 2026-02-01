@@ -12,7 +12,7 @@ Integrate the undo/redo system into the headless backend to achieve feature pari
 | 2 | Extract core library | ✅ Complete |
 | 3 | React hook wrapper | ✅ Complete |
 | 4 | Headless backend integration | ✅ Complete |
-| 5 | MCP operation parity | 🔲 Not started |
+| 5 | MCP operation parity | ✅ Complete |
 | 6 | Testing & verification | 🔲 Not started |
 
 ## Current State
@@ -20,9 +20,9 @@ Integrate the undo/redo system into the headless backend to achieve feature pari
 | Component | UI | Headless |
 |-----------|:--:|:--------:|
 | Operation execution | ✅ | ✅ |
-| Undo/redo stacks | ✅ | ❌ |
-| History persistence | ✅ | ❌ |
-| State reconstruction | ✅ | ❌ |
+| Undo/redo stacks | ✅ | ✅ |
+| History persistence | ✅ | ✅ |
+| State reconstruction | ✅ | ✅ |
 | Agent session locking | N/A | ✅ |
 
 ## Design Decisions
@@ -320,19 +320,115 @@ async redo(operation): Promise<OperationResult> {
 
 ---
 
-### Phase 5: MCP Operation Parity
+### Phase 5: MCP Operation Parity ✅ COMPLETE
 
-**Add to operation router:** `node-server/src/notebook/operation-router.ts`
+**Files Modified:**
+- `node-server/src/notebook/headless-handler.ts`
+- `node-server/src/notebook/operation-router.ts`
+- `node-server/src/notebook/undoRedoManager.ts`
 
-New operations exposed to MCP:
-- `undo` - Undo last operation
-- `redo` - Redo last undone operation
-- `getHistory` - Get operation history (for agent awareness)
-- `getHistorySince` - Get operations since timestamp
+**Status:** Implemented with simplified API design.
 
-**Update MCP server** (when finalized):
-- Expose undo/redo as tools
-- Include history in notebook context
+#### Design Decision: Simplified API
+
+Since agent sessions use locking, changes from other users/agents can only happen BETWEEN sessions. Therefore:
+- ~~`getHistory`, `getHistorySince`, `getUndoRedoState`~~ - Removed (overkill)
+- `startAgentSession` now accepts optional `lastSessionTimestamp` and returns changes
+
+This provides agent awareness at exactly the right time - when starting a new session.
+
+#### MCP Operations
+
+##### `startAgentSession` (enhanced)
+Start agent session with optional user change detection.
+
+**Request:**
+```json
+{
+  "type": "startAgentSession",
+  "notebookPath": "/path/to/notebook.ipynb",
+  "agentId": "my-agent-id",
+  "clientName": "claude-code",
+  "lastSessionTimestamp": 1706000000000  // Optional: timestamp of previous session end
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "lock": { "agentId": "...", "expiresAt": ... },
+  "changesSince": [  // Only if lastSessionTimestamp provided
+    {
+      "type": "insertCell",
+      "cellId": "cell-1",
+      "cellIndex": 0,
+      "timestamp": 1706000001000,
+      "description": "Inserted code cell at #1"
+    },
+    {
+      "type": "updateContent",
+      "cellId": "cell-2",
+      "cellIndex": 1,
+      "timestamp": 1706000002000,
+      "description": "Edited cell #2: \"print('hello')...\""
+    }
+  ]
+}
+```
+
+##### `undo`
+Undo the last undoable operation.
+
+**Request:**
+```json
+{
+  "type": "undo",
+  "notebookPath": "/path/to/notebook.ipynb",
+  "agentId": "agent-session-id"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "affectedCellIds": ["cell-1"],
+  "operationType": "insertCell",
+  "canUndo": true,
+  "canRedo": true
+}
+```
+
+##### `redo`
+Redo the last undone operation.
+
+**Request:**
+```json
+{
+  "type": "redo",
+  "notebookPath": "/path/to/notebook.ipynb",
+  "agentId": "agent-session-id"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "affectedCellIds": ["cell-1"],
+  "operationType": "insertCell",
+  "canUndo": true,
+  "canRedo": false
+}
+```
+
+#### Usage Notes
+
+- All operations are called via `POST /api/notebook/operation` with the operation object in the request body
+- `undo` and `redo` require an active agent session (call `startAgentSession` first)
+- User changes are reported in `startAgentSession` response when `lastSessionTimestamp` is provided
+- History is automatically persisted to `~/.nebula/history/` after each operation
 
 ---
 

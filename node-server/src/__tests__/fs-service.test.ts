@@ -389,8 +389,10 @@ describe('FilesystemService', () => {
       expect(() => service.duplicateFile('/nonexistent')).toThrow();
     });
 
-    it('should throw on directory', () => {
-      expect(() => service.duplicateFile(testDir)).toThrow();
+    it('should duplicate directories recursively', () => {
+      const result = service.duplicateFile(testDir);
+      expect(result.isDirectory).toBe(true);
+      expect(fs.existsSync(result.path)).toBe(true);
     });
   });
 
@@ -547,15 +549,15 @@ describe('FilesystemService', () => {
       } catch {}
     });
 
-    it('should save history to .nebula directory', () => {
-      service.saveHistory(getNotebookPath(), historyData);
+    it('should save history to .nebula directory', async () => {
+      await service.saveHistory(getNotebookPath(), historyData);
       const nebulaDir = path.join(testDir, '.nebula');
       expect(fs.existsSync(nebulaDir)).toBe(true);
       expect(fs.existsSync(path.join(nebulaDir, 'history-test.history.json'))).toBe(true);
     });
 
-    it('should load saved history', () => {
-      service.saveHistory(getNotebookPath(), historyData);
+    it('should load saved history', async () => {
+      await service.saveHistory(getNotebookPath(), historyData);
       const loaded = service.loadHistory(getNotebookPath());
       expect(loaded).toEqual(historyData);
     });
@@ -565,9 +567,9 @@ describe('FilesystemService', () => {
       expect(loaded).toEqual([]);
     });
 
-    it('should check if history exists', () => {
+    it('should check if history exists', async () => {
       expect(service.hasHistory(getNotebookPath())).toBe(false);
-      service.saveHistory(getNotebookPath(), historyData);
+      await service.saveHistory(getNotebookPath(), historyData);
       expect(service.hasHistory(getNotebookPath())).toBe(true);
     });
   });
@@ -589,8 +591,8 @@ describe('FilesystemService', () => {
       } catch {}
     });
 
-    it('should save and load session', () => {
-      service.saveSession(getNotebookPath(), sessionData);
+    it('should save and load session', async () => {
+      await service.saveSession(getNotebookPath(), sessionData);
       const loaded = service.loadSession(getNotebookPath());
       expect(loaded).toEqual(sessionData);
     });
@@ -687,10 +689,10 @@ describe('FilesystemService', () => {
     const historyData = [{ type: 'test' }];
     const sessionData = { kernel: 'test' };
 
-    beforeEach(() => {
+    beforeEach(async () => {
       fs.writeFileSync(getNotebookPath(), JSON.stringify({ cells: [], metadata: {}, nbformat: 4, nbformat_minor: 5 }));
-      service.saveHistory(getNotebookPath(), historyData);
-      service.saveSession(getNotebookPath(), sessionData);
+      await service.saveHistory(getNotebookPath(), historyData);
+      await service.saveSession(getNotebookPath(), sessionData);
     });
 
     afterEach(() => {

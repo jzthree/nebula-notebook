@@ -7,6 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import {
   FileInfo,
   FileInfoResponse,
@@ -23,6 +24,7 @@ import {
   JupyterOutput,
   NebulaConfig,
 } from './types';
+import { getDefaultKernelName } from '../kernel/default-kernel';
 
 /**
  * Load root directory from .nebula-config.json if it exists
@@ -40,7 +42,22 @@ function loadNebulaConfig(): string | null {
   return null;
 }
 
+interface CommitJournal {
+  version: 1;
+  txId: string;
+  notebookPath: string;
+  status: 'begin' | 'commit';
+  startedAt: number;
+  committedAt?: number;
+  files: {
+    notebook: string;
+    history?: string;
+    session?: string;
+  };
+}
+
 export class FilesystemService {
+  private writeLocks: Map<string, Promise<void>> = new Map();
   private defaultRoot: string;
 
   constructor(defaultRoot?: string) {
@@ -63,6 +80,69 @@ export class FilesystemService {
       return path.resolve(os.homedir(), '..', filePath.slice(1));
     }
     return path.resolve(filePath);
+  }
+
+  /**
+   * Serialize write operations per notebook to avoid interleaving writes.
+   */
+  private async withWriteLock<T>(notebookPath: string, fn: () => Promise<T>): Promise<T> {
+    const key = this.normalizePath(notebookPath);
+    const previous = this.writeLocks.get(key) || Promise.resolve();
+    let release: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const next = previous.then(() => current);
+    this.writeLocks.set(key, next);
+
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release!();
+      if (this.writeLocks.get(key) === next) {
+        this.writeLocks.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Atomically write a file (write temp, fsync, rename, fsync dir).
+   * Prevents partial/corrupt files on interruption.
+   */
+  private atomicWriteFileSync(targetPath: string, data: string): void {
+    const dir = path.dirname(targetPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    const tmpName = `.${path.basename(targetPath)}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
+    const tmpPath = path.join(dir, tmpName);
+    const fd = fs.openSync(tmpPath, 'w', 0o600);
+    try {
+      fs.writeFileSync(fd, data, 'utf-8');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    fs.renameSync(tmpPath, targetPath);
+
+    // Best-effort directory fsync
+    try {
+      const dirFd = fs.openSync(dir, 'r');
+      try {
+        fs.fsyncSync(dirFd);
+      } finally {
+        fs.closeSync(dirFd);
+      }
+    } catch {
+      // Ignore fsync errors on directory handles
+    }
+  }
+
+  private writeJsonAtomicSync(targetPath: string, payload: unknown): void {
+    this.atomicWriteFileSync(targetPath, JSON.stringify(payload, null, 2));
   }
 
   /**
@@ -322,7 +402,7 @@ export class FilesystemService {
           nbformat: 4,
           nbformat_minor: 5,
         };
-        fs.writeFileSync(normalizedPath, JSON.stringify(notebook, null, 2), 'utf-8');
+        this.writeJsonAtomicSync(normalizedPath, notebook);
       } else {
         // Create empty file
         fs.writeFileSync(normalizedPath, '', 'utf-8');
@@ -337,24 +417,50 @@ export class FilesystemService {
    * Get the history file path for a notebook
    */
   private getHistoryPath(notebookPath: string): string {
-    const normalizedPath = this.normalizePath(notebookPath);
-    const parentDir = path.dirname(normalizedPath);
-    const notebookName = path.basename(normalizedPath);
-    const nameWithoutExt = path.basename(notebookName, path.extname(notebookName));
-
-    return path.join(parentDir, '.nebula', `${nameWithoutExt}.history.json`);
+    const { nebulaDir, nameWithoutExt } = this.getNebulaPaths(notebookPath);
+    return path.join(nebulaDir, `${nameWithoutExt}.history.json`);
   }
 
   /**
    * Get the session state file path for a notebook
    */
   private getSessionPath(notebookPath: string): string {
+    const { nebulaDir, nameWithoutExt } = this.getNebulaPaths(notebookPath);
+    return path.join(nebulaDir, `${nameWithoutExt}.session.json`);
+  }
+
+  /**
+   * Get the journal file path for a notebook (used for crash-safe commits)
+   */
+  private getJournalPath(notebookPath: string): string {
+    const { nebulaDir, nameWithoutExt } = this.getNebulaPaths(notebookPath);
+    return path.join(nebulaDir, `${nameWithoutExt}.commit.json`);
+  }
+
+  private readJournal(notebookPath: string): CommitJournal | null {
+    const journalPath = this.getJournalPath(notebookPath);
+    if (!fs.existsSync(journalPath)) return null;
+    try {
+      return JSON.parse(fs.readFileSync(journalPath, 'utf-8')) as CommitJournal;
+    } catch {
+      return null;
+    }
+  }
+
+  private hasPendingCommit(notebookPath: string): boolean {
+    const journal = this.readJournal(notebookPath);
+    if (!journal) return false;
+    return journal.status === 'begin';
+  }
+
+  private getNebulaPaths(notebookPath: string): { nebulaDir: string; nameWithoutExt: string } {
     const normalizedPath = this.normalizePath(notebookPath);
     const parentDir = path.dirname(normalizedPath);
     const notebookName = path.basename(normalizedPath);
     const nameWithoutExt = path.basename(notebookName, path.extname(notebookName));
+    const nebulaDir = path.join(parentDir, '.nebula');
 
-    return path.join(parentDir, '.nebula', `${nameWithoutExt}.session.json`);
+    return { nebulaDir, nameWithoutExt };
   }
 
   /**
@@ -363,12 +469,16 @@ export class FilesystemService {
   private deleteNotebookMetadata(notebookPath: string): void {
     const historyPath = this.getHistoryPath(notebookPath);
     const sessionPath = this.getSessionPath(notebookPath);
+    const journalPath = this.getJournalPath(notebookPath);
 
     if (fs.existsSync(historyPath)) {
       fs.unlinkSync(historyPath);
     }
     if (fs.existsSync(sessionPath)) {
       fs.unlinkSync(sessionPath);
+    }
+    if (fs.existsSync(journalPath)) {
+      fs.unlinkSync(journalPath);
     }
   }
 
@@ -404,6 +514,7 @@ export class FilesystemService {
   private renameNotebookMetadata(oldPath: string, newPath: string): void {
     const oldHistory = this.getHistoryPath(oldPath);
     const oldSession = this.getSessionPath(oldPath);
+    const oldJournal = this.getJournalPath(oldPath);
     const newHistory = this.getHistoryPath(newPath);
     const newSession = this.getSessionPath(newPath);
 
@@ -418,6 +529,10 @@ export class FilesystemService {
     }
     if (fs.existsSync(oldSession)) {
       fs.renameSync(oldSession, newSession);
+    }
+    if (fs.existsSync(oldJournal)) {
+      // Journal files are ephemeral; remove any stale commit record on rename
+      fs.unlinkSync(oldJournal);
     }
   }
 
@@ -484,6 +599,9 @@ export class FilesystemService {
       if (entry.isDirectory()) {
         this.copyDirectoryRecursive(srcPath, destPath);
       } else {
+        if (entry.name.endsWith('.commit.json')) {
+          continue;
+        }
         fs.copyFileSync(srcPath, destPath);
         // For notebooks, also duplicate history and session files
         if (entry.name.toLowerCase().endsWith('.ipynb')) {
@@ -704,7 +822,8 @@ export class FilesystemService {
 
     const notebook: JupyterNotebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8'));
 
-    const kernelspec = notebook.metadata?.kernelspec?.name || 'python3';
+    const metadataKernel = notebook.metadata?.kernelspec?.name;
+    const kernelspec = metadataKernel || 'python3';
 
     const cells: NebulaCell[] = notebook.cells.map((nbCell, i) => {
       let cellType: 'code' | 'markdown' = nbCell.cell_type === 'markdown' ? 'markdown' : 'code';
@@ -749,8 +868,34 @@ export class FilesystemService {
     return {
       cells,
       kernelspec,
+      kernelspecSource: metadataKernel ? 'metadata' : 'default',
       mtime: stat.mtimeMs / 1000,
     };
+  }
+
+  /**
+   * Read a notebook and convert to internal cell format, resolving default kernel if needed
+   */
+  async getNotebookCellsWithKernel(notebookPath: string): Promise<NotebookCellsResponse> {
+    const result = this.getNotebookCells(notebookPath);
+    if (result.kernelspecSource === 'metadata') {
+      return result;
+    }
+
+    try {
+      const defaultKernel = await getDefaultKernelName();
+      if (defaultKernel) {
+        return {
+          ...result,
+          kernelspec: defaultKernel,
+          kernelspecSource: 'env-default',
+        };
+      }
+    } catch (err) {
+      console.warn('[FilesystemService] Failed to resolve default kernel:', err);
+    }
+
+    return result;
   }
 
   /**
@@ -845,13 +990,81 @@ export class FilesystemService {
       fs.mkdirSync(parentDir, { recursive: true });
     }
 
-    fs.writeFileSync(normalizedPath, JSON.stringify(notebook, null, 2), 'utf-8');
+    this.writeJsonAtomicSync(normalizedPath, notebook);
 
     const stat = fs.statSync(normalizedPath);
     return {
       success: true,
       mtime: stat.mtimeMs / 1000,
     };
+  }
+
+  /**
+   * Save notebook cells and history in a single crash-safe commit.
+   * Uses a small journal + atomic writes to avoid partial files.
+   */
+  async saveNotebookBundle(
+    notebookPath: string,
+    cells: NebulaCell[],
+    kernelName?: string,
+    history?: unknown[],
+    session?: Record<string, unknown>,
+    notebookMetadata?: Record<string, unknown>
+  ): Promise<SaveNotebookResult> {
+    return await this.withWriteLock(notebookPath, async () => {
+      const normalizedPath = this.normalizePath(notebookPath);
+      const historyPath = history ? this.getHistoryPath(notebookPath) : undefined;
+      const sessionPath = session ? this.getSessionPath(notebookPath) : undefined;
+      const journalPath = this.getJournalPath(notebookPath);
+      const txId = crypto.randomUUID();
+
+      const journal: CommitJournal = {
+        version: 1,
+        txId,
+        notebookPath: normalizedPath,
+        status: 'begin',
+        startedAt: Date.now(),
+        files: {
+          notebook: normalizedPath,
+          ...(historyPath ? { history: historyPath } : {}),
+          ...(sessionPath ? { session: sessionPath } : {}),
+        },
+      };
+
+      // Ensure .nebula directory exists for journal/history/session
+      const { nebulaDir } = this.getNebulaPaths(notebookPath);
+      if (!fs.existsSync(nebulaDir)) {
+        fs.mkdirSync(nebulaDir, { recursive: true });
+      }
+
+      this.writeJsonAtomicSync(journalPath, journal);
+
+      if (historyPath) {
+        this.writeJsonAtomicSync(historyPath, history || []);
+      }
+
+      if (sessionPath) {
+        this.writeJsonAtomicSync(sessionPath, session || {});
+      }
+
+      const result = this.saveNotebookCells(notebookPath, cells, kernelName, notebookMetadata);
+
+      const committedJournal: CommitJournal = {
+        ...journal,
+        status: 'commit',
+        committedAt: Date.now(),
+      };
+
+      this.writeJsonAtomicSync(journalPath, committedJournal);
+
+      try {
+        fs.unlinkSync(journalPath);
+      } catch {
+        // Ignore cleanup errors; journal can be inspected if needed
+      }
+
+      return result;
+    });
   }
 
   /**
@@ -895,7 +1108,7 @@ export class FilesystemService {
       }
 
       notebook.metadata = existingMetadata;
-      fs.writeFileSync(normalizedPath, JSON.stringify(notebook, null, 2), 'utf-8');
+      this.writeJsonAtomicSync(normalizedPath, notebook);
 
       return { success: true };
     } catch (e) {
@@ -931,7 +1144,7 @@ export class FilesystemService {
   /**
    * Save operation history for a notebook
    */
-  saveHistory(notebookPath: string, history: unknown[]): boolean {
+  async saveHistory(notebookPath: string, history: unknown[]): Promise<boolean> {
     const historyPath = this.getHistoryPath(notebookPath);
 
     // Create .nebula directory if needed
@@ -940,7 +1153,9 @@ export class FilesystemService {
       fs.mkdirSync(nebulaDir, { recursive: true });
     }
 
-    fs.writeFileSync(historyPath, JSON.stringify(history, null, 2), 'utf-8');
+    await this.withWriteLock(notebookPath, async () => {
+      this.writeJsonAtomicSync(historyPath, history);
+    });
     return true;
   }
 
@@ -949,6 +1164,11 @@ export class FilesystemService {
    */
   loadHistory(notebookPath: string): unknown[] {
     const historyPath = this.getHistoryPath(notebookPath);
+
+    if (this.hasPendingCommit(notebookPath)) {
+      console.warn(`[FilesystemService] Pending commit detected for ${notebookPath}; skipping history load.`);
+      return [];
+    }
 
     if (!fs.existsSync(historyPath)) {
       return [];
@@ -964,7 +1184,7 @@ export class FilesystemService {
   /**
    * Save session state for a notebook
    */
-  saveSession(notebookPath: string, session: Record<string, unknown>): boolean {
+  async saveSession(notebookPath: string, session: Record<string, unknown>): Promise<boolean> {
     const sessionPath = this.getSessionPath(notebookPath);
 
     // Create .nebula directory if needed
@@ -973,7 +1193,9 @@ export class FilesystemService {
       fs.mkdirSync(nebulaDir, { recursive: true });
     }
 
-    fs.writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf-8');
+    await this.withWriteLock(notebookPath, async () => {
+      this.writeJsonAtomicSync(sessionPath, session);
+    });
     return true;
   }
 
@@ -982,6 +1204,11 @@ export class FilesystemService {
    */
   loadSession(notebookPath: string): Record<string, unknown> {
     const sessionPath = this.getSessionPath(notebookPath);
+
+    if (this.hasPendingCommit(notebookPath)) {
+      console.warn(`[FilesystemService] Pending commit detected for ${notebookPath}; skipping session load.`);
+      return {};
+    }
 
     if (!fs.existsSync(sessionPath)) {
       return {};
