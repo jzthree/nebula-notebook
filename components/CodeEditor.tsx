@@ -53,12 +53,12 @@ interface Props {
 // Light theme that matches our existing style
 const lightTheme = EditorView.theme({
   '&': {
-    fontSize: '14px',
+    fontSize: '0.875rem',
     backgroundColor: 'transparent',
   },
   '.cm-content': {
     fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
-    padding: '8px 12px',
+    padding: '0.5rem 0.75rem',
     minHeight: '1.5rem', // Single line minimum
   },
   '.cm-line': {
@@ -72,8 +72,8 @@ const lightTheme = EditorView.theme({
     color: '#94a3b8', // slate-400
   },
   '.cm-lineNumbers .cm-gutterElement': {
-    padding: '0 8px 0 4px',
-    minWidth: '32px',
+    padding: '0 0.5rem 0 0.25rem',
+    minWidth: '2rem',
   },
   '.cm-focused': {
     outline: 'none',
@@ -109,27 +109,27 @@ const lightTheme = EditorView.theme({
   // Search match highlighting
   '.cm-searchMatch': {
     backgroundColor: '#fef08a', // yellow-200
-    borderRadius: '2px',
+    borderRadius: '0.125rem',
   },
   // Current search match (highlighted differently)
   '.cm-searchMatch-current': {
     backgroundColor: '#fb923c', // orange-400
-    borderRadius: '2px',
+    borderRadius: '0.125rem',
     color: 'white',
   },
   // Autocomplete tooltip styling
   '.cm-tooltip.cm-tooltip-autocomplete': {
     backgroundColor: 'white',
     border: '1px solid #e2e8f0',
-    borderRadius: '6px',
+    borderRadius: '0.375rem',
     boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
   },
   '.cm-tooltip.cm-tooltip-autocomplete > ul': {
     fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
-    fontSize: '13px',
+    fontSize: '0.8125rem',
   },
   '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
-    padding: '4px 8px',
+    padding: '0.25rem 0.5rem',
   },
   '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
     backgroundColor: '#dbeafe',
@@ -137,14 +137,14 @@ const lightTheme = EditorView.theme({
   },
   '.cm-completionIcon': {
     width: '1em',
-    marginRight: '4px',
+    marginRight: '0.25rem',
   },
   '.cm-completionLabel': {
     color: '#1e293b',
   },
   '.cm-completionDetail': {
     color: '#64748b',
-    marginLeft: '8px',
+    marginLeft: '0.5rem',
     fontStyle: 'italic',
   },
 });

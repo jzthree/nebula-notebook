@@ -363,12 +363,12 @@ const CellComponent: React.FC<Props> = ({
       >
         {/* Left: Cell info, Run button, and action buttons */}
         <div className="flex items-center gap-0.5">
-          <span className="text-[10px] font-mono font-bold text-slate-400 min-w-[24px]">
+          <span className="text-[0.625rem] font-mono font-bold text-slate-400 min-w-[1.5rem]">
             #{index + 1}
           </span>
           {showCellIds && (
             <span
-              className="text-[10px] font-mono text-slate-400 truncate max-w-[180px]"
+              className="text-[0.625rem] font-mono text-slate-400 truncate max-w-[11.25rem]"
               title={cell.id}
             >
               {cell.id}
@@ -376,17 +376,17 @@ const CellComponent: React.FC<Props> = ({
           )}
           {/* Execution feedback: [ ] = never run, [*] = executing/queued, [n] = executed n times */}
           {cell.isExecuting ? (
-            <span className="text-[10px] font-mono text-amber-600 animate-pulse" title="Executing...">
+            <span className="text-[0.625rem] font-mono text-amber-600 animate-pulse" title="Executing...">
               [*]
             </span>
           ) : queuePosition !== undefined && queuePosition >= 0 ? (
-            <span className="text-[10px] font-mono text-amber-600 animate-pulse" title={`Queued at position ${queuePosition + 1}`}>
+            <span className="text-[0.625rem] font-mono text-amber-600 animate-pulse" title={`Queued at position ${queuePosition + 1}`}>
               [*]
             </span>
           ) : cell.executionCount !== undefined ? (
-            <span className="text-[10px] font-mono text-green-600">[{cell.executionCount}]</span>
+            <span className="text-[0.625rem] font-mono text-green-600">[{cell.executionCount}]</span>
           ) : cell.type === 'code' ? (
-            <span className="text-[10px] font-mono text-slate-400" title="Not yet executed">
+            <span className="text-[0.625rem] font-mono text-slate-400" title="Not yet executed">
               [ ]
             </span>
           ) : null}
@@ -446,7 +446,7 @@ const CellComponent: React.FC<Props> = ({
             <button
               onClick={(e) => { e.stopPropagation(); handleAiFix(); }}
               disabled={isFixing}
-              className="flex items-center gap-1 text-[10px] px-2 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
+              className="flex items-center gap-1 text-[0.625rem] px-2 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
             >
               <Sparkles className="w-3 h-3" />
               {isFixing ? 'Fixing...' : 'Fix with AI'}
@@ -458,13 +458,13 @@ const CellComponent: React.FC<Props> = ({
         <div className="flex gap-0.5">
           <button
             onClick={(e) => { e.stopPropagation(); onChangeType(cell.id, 'code'); }}
-            className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${cell.type === 'code' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-400 hover:text-slate-600'}`}
+            className={`text-[0.625rem] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${cell.type === 'code' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-400 hover:text-slate-600'}`}
           >
             <CodeIcon className="w-3 h-3" /> Code
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onChangeType(cell.id, 'markdown'); }}
-            className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${cell.type === 'markdown' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-400 hover:text-slate-600'}`}
+            className={`text-[0.625rem] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${cell.type === 'markdown' ? 'bg-white shadow-sm text-slate-800 font-medium' : 'text-slate-400 hover:text-slate-600'}`}
           >
             <FileText className="w-3 h-3" /> Text
           </button>

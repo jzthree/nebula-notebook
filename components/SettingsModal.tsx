@@ -208,7 +208,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
           </div>
 
           {/* Content */}
-          <div className="px-6 py-4 space-y-5 min-h-[320px] max-h-[60vh] overflow-y-auto">
+          <div className="px-6 py-4 space-y-5 min-h-[20rem] max-h-[60vh] overflow-y-auto">
             {/* General Tab */}
             {activeTab === 'general' && (
               <>

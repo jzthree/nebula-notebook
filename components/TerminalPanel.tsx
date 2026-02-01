@@ -192,7 +192,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       {/* Resize Handle - transparent hit area, cursor indicates draggable */}
       <div
         data-testid="terminal-resize-handle"
-        className="h-1 cursor-ns-resize flex-shrink-0"
+        className="h-2 cursor-ns-resize flex-shrink-0 bg-slate-200/30 hover:bg-slate-300/50 transition-colors"
         onMouseDown={handleResizeStart}
       />
 

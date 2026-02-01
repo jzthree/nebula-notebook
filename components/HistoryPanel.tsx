@@ -482,7 +482,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
       {/* Resize Handle */}
       <div
         data-testid="history-resize-handle"
-        className="h-1 cursor-ns-resize flex-shrink-0"
+        className="h-2 cursor-ns-resize flex-shrink-0 bg-slate-200/30 hover:bg-slate-300/50 transition-colors"
         onMouseDown={handleResizeStart}
       />
 
@@ -515,7 +515,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
                   className="fixed inset-0 z-10"
                   onClick={() => setIsFilterOpen(false)}
                 />
-                <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded shadow-lg z-20 py-1 min-w-[100px]">
+                <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded shadow-lg z-20 py-1 min-w-[6.25rem]">
                   {FILTERS.map(f => (
                     <button
                       key={f.value}
@@ -604,7 +604,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
       </div>
 
       {/* Footer with stats */}
-      <div className="px-2 py-1 bg-slate-50 border-t border-slate-200 text-[10px] text-slate-400 flex items-center justify-between">
+      <div className="px-2 py-1 bg-slate-50 border-t border-slate-200 text-[0.625rem] text-slate-400 flex items-center justify-between">
         <span>
           {history.length} total operations
         </span>
@@ -654,7 +654,7 @@ const GroupSection: React.FC<GroupSectionProps> = ({
 
   const textClass = group.level === 0
     ? 'text-xs font-medium text-slate-600'
-    : 'text-[11px] font-medium text-slate-500';
+    : 'text-[0.6875rem] font-medium text-slate-500';
 
   return (
     <div className={indentClass}>
@@ -763,7 +763,7 @@ const GroupSection: React.FC<GroupSectionProps> = ({
 
                     {/* AI badge */}
                     {isAI && (
-                      <span className="flex items-center gap-0.5 px-1 py-0.5 bg-purple-100 text-purple-600 rounded text-[10px] font-medium">
+                      <span className="flex items-center gap-0.5 px-1 py-0.5 bg-purple-100 text-purple-600 rounded text-[0.625rem] font-medium">
                         <Sparkles className="w-2.5 h-2.5" />
                         AI
                       </span>
@@ -776,7 +776,7 @@ const GroupSection: React.FC<GroupSectionProps> = ({
 
                     {/* Timestamp */}
                     <span
-                      className="text-[10px] text-slate-400 flex-shrink-0"
+                      className="text-[0.625rem] text-slate-400 flex-shrink-0"
                       title={formatTime(op.timestamp)}
                     >
                       {formatRelativeTime(op.timestamp)}
@@ -804,8 +804,8 @@ const GroupSection: React.FC<GroupSectionProps> = ({
                             return (
                               <div key={subIndex} className="flex items-center gap-2 py-0.5">
                                 <SubIcon className={`w-3 h-3 ${subMeta.color}`} />
-                                <span className="text-[11px] text-slate-600">{subMeta.label}</span>
-                                <span className="text-[11px] text-slate-400">
+                                <span className="text-[0.6875rem] text-slate-600">{subMeta.label}</span>
+                                <span className="text-[0.6875rem] text-slate-400">
                                   {getOperationDescription(subOp as TimestampedOperation)}
                                 </span>
                               </div>
@@ -816,18 +816,18 @@ const GroupSection: React.FC<GroupSectionProps> = ({
 
                       {/* Content edit - show old/new */}
                       {op.type === 'updateContent' && (
-                        <div className="text-[11px] space-y-1 py-1">
+                        <div className="text-[0.6875rem] space-y-1 py-1">
                           <div className="text-slate-500">Cell: <span className="font-mono text-slate-600">{(op as any).cellId}</span></div>
                           <div className="grid grid-cols-2 gap-2">
                             <div>
                               <div className="text-red-500 font-medium mb-0.5">Before:</div>
-                              <pre className="bg-red-50 text-red-700 p-1.5 rounded text-[10px] overflow-x-auto max-h-24 overflow-y-auto whitespace-pre-wrap break-all">
+                              <pre className="bg-red-50 text-red-700 p-1.5 rounded text-[0.625rem] overflow-x-auto max-h-24 overflow-y-auto whitespace-pre-wrap break-all">
                                 {((op as any).oldContent || '').slice(0, 500)}{((op as any).oldContent || '').length > 500 ? '...' : ''}
                               </pre>
                             </div>
                             <div>
                               <div className="text-green-600 font-medium mb-0.5">After:</div>
-                              <pre className="bg-green-50 text-green-700 p-1.5 rounded text-[10px] overflow-x-auto max-h-24 overflow-y-auto whitespace-pre-wrap break-all">
+                              <pre className="bg-green-50 text-green-700 p-1.5 rounded text-[0.625rem] overflow-x-auto max-h-24 overflow-y-auto whitespace-pre-wrap break-all">
                                 {((op as any).newContent || '').slice(0, 500)}{((op as any).newContent || '').length > 500 ? '...' : ''}
                               </pre>
                             </div>
@@ -837,7 +837,7 @@ const GroupSection: React.FC<GroupSectionProps> = ({
 
                       {/* Patch-based content edit */}
                       {op.type === 'updateContentPatch' && (
-                        <div className="text-[11px] py-1">
+                        <div className="text-[0.6875rem] py-1">
                           <div className="text-slate-500">Cell: <span className="font-mono text-slate-600">{(op as any).cellId}</span></div>
                           <div className="text-slate-400 mt-1">
                             Hash: {(op as any).oldHash?.slice(0, 8)} → {(op as any).newHash?.slice(0, 8)}
@@ -847,7 +847,7 @@ const GroupSection: React.FC<GroupSectionProps> = ({
 
                       {/* Insert/Delete cell */}
                       {(op.type === 'insertCell' || op.type === 'deleteCell') && (
-                        <div className="text-[11px] space-y-1 py-1">
+                        <div className="text-[0.6875rem] space-y-1 py-1">
                           <div className="text-slate-500">
                             Position: <span className="text-slate-600">{(op as any).index + 1}</span>
                           </div>
@@ -857,7 +857,7 @@ const GroupSection: React.FC<GroupSectionProps> = ({
                           {(op as any).cell?.content && (
                             <div>
                               <div className="text-slate-500 mb-0.5">Content:</div>
-                              <pre className="bg-slate-50 text-slate-600 p-1.5 rounded text-[10px] overflow-x-auto max-h-20 overflow-y-auto whitespace-pre-wrap break-all">
+                              <pre className="bg-slate-50 text-slate-600 p-1.5 rounded text-[0.625rem] overflow-x-auto max-h-20 overflow-y-auto whitespace-pre-wrap break-all">
                                 {((op as any).cell.content || '').slice(0, 300)}{((op as any).cell.content || '').length > 300 ? '...' : ''}
                               </pre>
                             </div>
@@ -867,14 +867,14 @@ const GroupSection: React.FC<GroupSectionProps> = ({
 
                       {/* Move cell */}
                       {op.type === 'moveCell' && (
-                        <div className="text-[11px] py-1 text-slate-500">
+                        <div className="text-[0.6875rem] py-1 text-slate-500">
                           Moved from position <span className="text-slate-600">{(op as any).fromIndex + 1}</span> to <span className="text-slate-600">{(op as any).toIndex + 1}</span>
                         </div>
                       )}
 
                       {/* Metadata change */}
                       {op.type === 'updateMetadata' && (
-                        <div className="text-[11px] py-1">
+                        <div className="text-[0.6875rem] py-1">
                           <div className="text-slate-500">Cell: <span className="font-mono text-slate-600">{(op as any).cellId}</span></div>
                           {Object.entries((op as any).changes || {}).map(([key, change]: [string, any]) => (
                             <div key={key} className="text-slate-500 mt-0.5">
@@ -886,7 +886,7 @@ const GroupSection: React.FC<GroupSectionProps> = ({
 
                       {/* Run cell */}
                       {op.type === 'runCell' && (
-                        <div className="text-[11px] py-1 text-slate-500">
+                        <div className="text-[0.6875rem] py-1 text-slate-500">
                           Executed cell at position <span className="text-slate-600">{(op as any).cellIndex + 1}</span>
                           <div className="font-mono text-slate-400 mt-0.5">ID: {(op as any).cellId}</div>
                         </div>
@@ -894,7 +894,7 @@ const GroupSection: React.FC<GroupSectionProps> = ({
 
                       {/* Execution complete */}
                       {op.type === 'executionComplete' && (
-                        <div className="text-[11px] py-1">
+                        <div className="text-[0.6875rem] py-1">
                           <div className="text-slate-500">
                             Cell <span className="text-slate-600">{(op as any).cellIndex + 1}</span> •
                             Duration: <span className="text-slate-600">{(op as any).durationMs}ms</span> •
@@ -905,13 +905,13 @@ const GroupSection: React.FC<GroupSectionProps> = ({
 
                       {/* Snapshot */}
                       {op.type === 'snapshot' && (
-                        <div className="text-[11px] py-1 text-slate-500">
+                        <div className="text-[0.6875rem] py-1 text-slate-500">
                           Snapshot with <span className="text-slate-600">{(op as any).cells?.length || 0}</span> cells
                         </div>
                       )}
 
                       {/* Timestamp */}
-                      <div className="text-[10px] text-slate-400 mt-1 pt-1 border-t border-slate-100">
+                      <div className="text-[0.625rem] text-slate-400 mt-1 pt-1 border-t border-slate-100">
                         {formatTime(op.timestamp)}
                       </div>
                     </div>

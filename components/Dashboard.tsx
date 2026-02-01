@@ -254,8 +254,8 @@ export const Dashboard: React.FC = () => {
 
       <div className="max-w-6xl mx-auto px-4 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start lg:items-stretch">
-          {/* File Browser - Takes 3 columns, using shared FileBrowser component */}
-          <div className="lg:col-span-3">
+          {/* File Browser + Resources - Takes 3 columns */}
+          <div className="lg:col-span-3 space-y-4">
             <FileBrowser
               files={[]}
               currentFileId={null}
@@ -265,6 +265,8 @@ export const Dashboard: React.FC = () => {
               initialPath={serverCwd}
               maxHeight="55vh"
             />
+            {/* System Resources - aligned with file browser */}
+            <ResourcePanel />
           </div>
 
           {/* Sidebar - fills vertical space */}
@@ -298,7 +300,7 @@ export const Dashboard: React.FC = () => {
                   <History className="w-4 h-4 text-slate-500" />
                   <h3 className="text-sm font-medium text-slate-700">Recently Opened</h3>
                 </div>
-                <div className="divide-y divide-slate-100 max-h-[150px] overflow-y-auto">
+                <div className="divide-y divide-slate-100 max-h-[9.375rem] overflow-y-auto">
                   {recentNotebooks.map((notebook) => (
                     <button
                       key={notebook.path}
@@ -319,7 +321,7 @@ export const Dashboard: React.FC = () => {
                 <Book className="w-4 h-4 text-orange-500" />
                 <h3 className="text-sm font-medium text-slate-700">Active Notebooks</h3>
               </div>
-              <div className="divide-y divide-slate-100 max-h-[200px] overflow-y-auto">
+              <div className="divide-y divide-slate-100 max-h-[12.5rem] overflow-y-auto">
                 {activeNotebooks.length === 0 ? (
                   <div className="px-4 py-4 text-center text-xs text-slate-400">
                     No active notebooks
@@ -402,7 +404,7 @@ export const Dashboard: React.FC = () => {
                   >
                     <ChevronLeft className="w-4 h-4" />
                   </button>
-                  <span className="text-[10px] text-slate-400 w-8 text-center">
+                  <span className="text-[0.625rem] text-slate-400 w-8 text-center">
                     {tipIndex + 1}/{TIPS.length}
                   </span>
                   <button
@@ -419,11 +421,6 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-
-        {/* System Resources - Full width at bottom for cluster expansion */}
-        <div className="mt-6">
-          <ResourcePanel />
         </div>
       </div>
 

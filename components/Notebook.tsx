@@ -2621,7 +2621,7 @@ export const Notebook: React.FC = () => {
       />
 
       {/* Main Content */}
-      <div className={`flex-1 flex flex-col h-screen transition-all duration-300 ${isFileBrowserOpen ? 'lg:ml-72' : ''} ${isChatOpen ? 'lg:mr-80' : ''}`}>
+      <div className={`relative flex-1 flex flex-col h-screen transition-all duration-300 ${isFileBrowserOpen ? 'nebula-filebrowser-offset' : ''} ${isChatOpen ? 'lg:mr-80' : ''}`}>
 
         {/* Conflict Dialog */}
         {conflictDialog?.show && (
@@ -2671,7 +2671,7 @@ export const Notebook: React.FC = () => {
                    <Menu className="w-5 h-5" />
                  </button>
                  <div>
-                    <h1 className="text-lg font-bold text-slate-800 flex items-center gap-2 truncate max-w-[150px] sm:max-w-md">
+                    <h1 className="text-lg font-bold text-slate-800 flex items-center gap-2 truncate max-w-[9.375rem] sm:max-w-md">
                       {isRenamingNotebook ? (
                         <input
                           type="text"
@@ -2679,7 +2679,7 @@ export const Notebook: React.FC = () => {
                           onChange={(e) => setRenameValue(e.target.value)}
                           onBlur={finishRenameNotebook}
                           onKeyDown={handleRenameKeyDown}
-                          className="text-lg font-bold bg-white border-2 border-blue-400 rounded px-1 py-0 focus:outline-none focus:border-blue-500 max-w-[200px] leading-normal"
+                          className="text-lg font-bold bg-white border-2 border-blue-400 rounded px-1 py-0 focus:outline-none focus:border-blue-500 max-w-[12.5rem] leading-normal"
                           autoFocus
                         />
                       ) : isLoadingFile ? (
@@ -2722,7 +2722,7 @@ export const Notebook: React.FC = () => {
                           <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between">
                              <div>
                                <div className="text-xs font-semibold text-slate-900">Active Kernel</div>
-                               <div className="text-[10px] text-slate-500">
+                               <div className="text-[0.625rem] text-slate-500">
                                  {getKernelDisplayName()} ({kernelStatus})
                                  {clusterInfo && clusterInfo.servers.length > 1 && selectedServerId && (
                                    <span className="text-blue-500 ml-1">
@@ -2768,7 +2768,7 @@ export const Notebook: React.FC = () => {
                             {/* Server Selector (only show if cluster has multiple servers) */}
                             {clusterInfo && clusterInfo.servers.length > 1 && (
                               <>
-                                <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50 flex items-center gap-1">
+                                <div className="px-3 py-1.5 text-[0.625rem] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50 flex items-center gap-1">
                                   <Server className="w-3 h-3" />
                                   <span>Server</span>
                                 </div>
@@ -2785,15 +2785,15 @@ export const Notebook: React.FC = () => {
                                       server.status === 'online' ? 'bg-green-500' : 'bg-red-500'
                                     }`}></span>
                                     <span className="truncate flex-1">{server.name}</span>
-                                    {server.isLocal && <span className="text-[10px] text-slate-400">(local)</span>}
-                                    {server.status !== 'online' && <span className="text-[10px] text-red-400">offline</span>}
+                                    {server.isLocal && <span className="text-[0.625rem] text-slate-400">(local)</span>}
+                                    {server.status !== 'online' && <span className="text-[0.625rem] text-red-400">offline</span>}
                                   </button>
                                 ))}
                               </>
                             )}
 
                             {/* Registered Kernels */}
-                            <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50">
+                            <div className="px-3 py-1.5 text-[0.625rem] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50">
                               Jupyter Kernels
                             </div>
                             {availableKernels.map(kernel => (
@@ -2806,14 +2806,14 @@ export const Notebook: React.FC = () => {
                               >
                                 <span className="w-2 h-2 rounded-full flex-shrink-0 bg-green-500"></span>
                                 <span className="truncate flex-1">{kernel.display_name}</span>
-                                <span className="text-[10px] text-slate-400">{kernel.language}</span>
+                                <span className="text-[0.625rem] text-slate-400">{kernel.language}</span>
                               </button>
                             ))}
 
                             {/* Discovered Python Environments */}
                             {pythonEnvironments.length > 0 && (
                               <>
-                                <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50 mt-1 flex items-center justify-between">
+                                <div className="px-3 py-1.5 text-[0.625rem] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50 mt-1 flex items-center justify-between">
                                   <span>Python Environments ({pythonEnvironments.length})</span>
                                   {isDiscoveringPythons && <Loader2 className="w-3 h-3 animate-spin" />}
                                 </div>
@@ -2834,15 +2834,15 @@ export const Notebook: React.FC = () => {
                                       }`}></span>
                                       <div className="flex-1 min-w-0">
                                         <div className="truncate">{env.display_name}</div>
-                                        <div className="text-[10px] text-slate-400 truncate">{env.path}</div>
+                                        <div className="text-[0.625rem] text-slate-400 truncate">{env.path}</div>
                                       </div>
                                       {isRegistered ? (
-                                        <span className="text-[10px] text-green-600 flex-shrink-0">Registered</span>
+                                        <span className="text-[0.625rem] text-green-600 flex-shrink-0">Registered</span>
                                       ) : (
                                         <button
                                           onClick={(e) => { e.stopPropagation(); installKernelForPython(env.path); }}
                                           disabled={isInstallingKernel === env.path}
-                                          className={`flex items-center gap-1 px-2 py-1 text-[10px] rounded transition-colors flex-shrink-0 ${
+                                          className={`flex items-center gap-1 px-2 py-1 text-[0.625rem] rounded transition-colors flex-shrink-0 ${
                                             env.has_ipykernel
                                               ? 'bg-amber-50 text-amber-600 hover:bg-amber-100'
                                               : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
@@ -2885,7 +2885,7 @@ export const Notebook: React.FC = () => {
                         ];
                         return (
                           <span
-                            className="flex items-center gap-1 text-xs mr-2 px-1.5 py-0.5 rounded text-purple-800 bg-purple-200 border border-purple-300 cursor-help max-w-[240px]"
+                            className="flex items-center gap-1 text-xs mr-2 px-1.5 py-0.5 rounded text-purple-800 bg-purple-200 border border-purple-300 cursor-help max-w-[15rem]"
                             title={tooltipLines.join('\n')}
                           >
                             <Bot className="w-3 h-3 animate-pulse flex-shrink-0" />
@@ -2974,17 +2974,17 @@ export const Notebook: React.FC = () => {
                             {/* Execution Queue Dropdown - click to toggle */}
                             {isExecutionQueueOpen && executionQueue.length > 0 && (
                               <div 
-                                className="absolute top-full right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl z-50 min-w-[200px] py-1"
+                                className="absolute top-full right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl z-50 min-w-[12.5rem] py-1"
                                 onMouseLeave={() => setIsExecutionQueueOpen(false)}
                               >
                                 {/* Header */}
                                 <div className="px-3 py-2 border-b border-slate-100">
                                   <div className="text-xs font-semibold text-slate-900">Execution Queue</div>
-                                  <div className="text-[10px] text-slate-500">{executionQueue.length} cell{executionQueue.length > 1 ? 's' : ''} queued</div>
+                                  <div className="text-[0.625rem] text-slate-500">{executionQueue.length} cell{executionQueue.length > 1 ? 's' : ''} queued</div>
                                 </div>
                                 
                                 {/* Queue Items */}
-                                <div className="max-h-[300px] overflow-y-auto">
+                                <div className="max-h-[18.75rem] overflow-y-auto">
                                   {executionQueue.map((cellId, queueIndex) => {
                                     const cellIndex = cells.findIndex(c => c.id === cellId);
                                     const isExecuting = queueIndex === 0;
@@ -3230,7 +3230,7 @@ export const Notebook: React.FC = () => {
         )}
 
         {/* Virtuoso Scrollable Area */}
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 pt-2">
             {/* Force remount when file changes to recalculate cell heights */}
             <VirtualCellList
               key={currentFileId || 'empty'}

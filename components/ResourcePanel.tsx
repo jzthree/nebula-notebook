@@ -183,7 +183,7 @@ const ServerCompactView: React.FC<{ server: ClusterServer }> = ({ server }) => {
   return (
     <div className={`flex items-center gap-3 ${!isOnline ? 'opacity-50' : ''}`}>
       {/* Server name */}
-      <span className="text-xs font-medium text-slate-600 min-w-[60px]">{displayName}</span>
+      <span className="text-xs font-medium text-slate-600 min-w-[3.75rem]">{displayName}</span>
 
       {/* RAM mini bar */}
       <div className="flex items-center gap-1.5">
@@ -194,21 +194,21 @@ const ServerCompactView: React.FC<{ server: ClusterServer }> = ({ server }) => {
             style={{ width: `${Math.min(ramPercent, 100)}%` }}
           />
         </div>
-        <span className="text-[10px] text-slate-400 tabular-nums w-8">{Math.round(ramPercent)}%</span>
+        <span className="text-[0.625rem] text-slate-400 tabular-nums w-8">{Math.round(ramPercent)}%</span>
       </div>
 
       {/* GPU mini bar */}
       {hasGpus && (
         <div className="flex items-center gap-1.5">
           <GpuIcon className="w-3 h-3 text-slate-400" />
-          <span className="text-[10px] text-slate-500">{resources.gpus!.devices.length}x</span>
+          <span className="text-[0.625rem] text-slate-500">{resources.gpus!.devices.length}x</span>
           <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden">
             <div
               className="h-full bg-emerald-500 transition-all duration-300"
               style={{ width: `${Math.min(gpuPercent, 100)}%` }}
             />
           </div>
-          <span className="text-[10px] text-slate-400 tabular-nums w-8">{Math.round(gpuPercent)}%</span>
+          <span className="text-[0.625rem] text-slate-400 tabular-nums w-8">{Math.round(gpuPercent)}%</span>
         </div>
       )}
     </div>
@@ -223,7 +223,7 @@ const ServerExpandedView: React.FC<{ server: ClusterServer }> = ({ server }) => 
 
   if (!resources) {
     return (
-      <div className={`bg-slate-50 rounded-lg p-3 min-w-[200px] ${!isOnline ? 'opacity-50' : ''}`}>
+      <div className={`bg-slate-50 rounded-lg p-3 min-w-[12.5rem] ${!isOnline ? 'opacity-50' : ''}`}>
         <div className="text-xs font-medium text-slate-600 mb-2">{displayName}</div>
         <div className="text-xs text-slate-400">No data available</div>
       </div>
@@ -238,12 +238,12 @@ const ServerExpandedView: React.FC<{ server: ClusterServer }> = ({ server }) => 
   const gpuShortName = hasGpus ? getGpuShortName(resources.gpus!) : '';
 
   return (
-    <div className={`bg-slate-50 rounded-lg p-3 min-w-[280px] ${!isOnline ? 'opacity-50' : ''}`}>
+    <div className={`bg-slate-50 rounded-lg p-3 min-w-[17.5rem] ${!isOnline ? 'opacity-50' : ''}`}>
       {/* Server name and GPU type */}
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs font-medium text-slate-700">{displayName}</span>
         {hasGpus && (
-          <span className="text-[10px] text-slate-500 bg-slate-200 px-1.5 py-0.5 rounded">
+          <span className="text-[0.625rem] text-slate-500 bg-slate-200 px-1.5 py-0.5 rounded">
             {resources.gpus!.devices.length}x {gpuShortName}
           </span>
         )}
@@ -251,7 +251,7 @@ const ServerExpandedView: React.FC<{ server: ClusterServer }> = ({ server }) => 
 
       {/* RAM */}
       <div className="mb-3">
-        <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+        <div className="flex items-center justify-between text-[0.625rem] text-slate-500 mb-1">
           <div className="flex items-center gap-1">
             <RamIcon className="w-3 h-3" />
             <span>RAM</span>
@@ -286,7 +286,7 @@ const GpuBar: React.FC<{ gpu: GPUDevice }> = ({ gpu }) => {
 
   return (
     <div>
-      <div className="flex items-center justify-between text-[10px] text-slate-500 mb-0.5">
+      <div className="flex items-center justify-between text-[0.625rem] text-slate-500 mb-0.5">
         <div className="flex items-center gap-1">
           <GpuIcon className="w-3 h-3" />
           <span>GPU {gpu.index}</span>

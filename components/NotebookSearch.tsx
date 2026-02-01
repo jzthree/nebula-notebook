@@ -294,7 +294,7 @@ export const NotebookSearch: React.FC<Props> = ({
         />
 
         {query && (
-          <span className={`text-xs min-w-[60px] ${regexError ? 'text-red-500' : 'text-slate-500'}`}>
+          <span className={`text-xs min-w-[3.75rem] ${regexError ? 'text-red-500' : 'text-slate-500'}`}>
             {regexError
               ? 'Invalid regex'
               : matches.length > 0
@@ -394,7 +394,7 @@ export const NotebookSearch: React.FC<Props> = ({
             </button>
 
             {showReplaceAllMenu && (
-              <div className="absolute top-full left-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[160px] z-10">
+              <div className="absolute top-full left-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[10rem] z-10">
                 <button
                   onClick={handleReplaceAllInCell}
                   className="w-full px-3 py-1.5 text-xs text-left hover:bg-slate-100 flex items-center justify-between"

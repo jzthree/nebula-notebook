@@ -259,7 +259,7 @@ export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId,
                   isPatchFailed ? (
                     <div className="bg-amber-50 text-amber-800 p-2 text-xs border border-amber-200 rounded">
                       <strong>Patch Failed:</strong> Could not find the exact code block to replace in Cell #{suggestion.index! + 1}.
-                      <pre className="mt-1 text-[10px] bg-white p-1 overflow-x-auto">{rawCode}</pre>
+                      <pre className="mt-1 text-[0.625rem] bg-white p-1 overflow-x-auto">{rawCode}</pre>
                     </div>
                   ) : (
                     renderDiffView(cells[suggestion.index!].content, patchedContent!)
@@ -453,7 +453,7 @@ export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId,
               <Send className="w-4 h-4" />
             </button>
           </div>
-          <div className="text-[10px] text-center text-slate-400 mt-2">
+          <div className="text-[0.625rem] text-center text-slate-400 mt-2">
             Using {getProviderLabel(currentProvider)} • {currentModel}
           </div>
         </div>

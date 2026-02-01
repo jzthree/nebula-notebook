@@ -31,7 +31,7 @@ const ListContainer = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivEle
   <div
     {...props}
     ref={ref}
-    className="max-w-5xl mx-auto px-4 pt-4"
+    className="max-w-5xl mx-auto px-4"
   />
 ));
 

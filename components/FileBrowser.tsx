@@ -66,6 +66,7 @@ export const FileBrowser: React.FC<Props> = ({
   className = '',
 }) => {
   const { toast, confirm } = useNotification();
+  const defaultSidebarWidth = 320;
   const computeParentPath = (path: string): string | null => {
     const trimmed = path.trim();
     if (!trimmed || trimmed === '~' || trimmed === '/') {
@@ -99,6 +100,16 @@ export const FileBrowser: React.FC<Props> = ({
   const [pathInput, setPathInput] = useState<string>(initialPath || '~');
   const [showPathInput, setShowPathInput] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nebula-filebrowser-width');
+      const parsed = saved ? Number(saved) : NaN;
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultSidebarWidth;
+    } catch {
+      return defaultSidebarWidth;
+    }
+  });
+  const isResizingRef = useRef(false);
   const [loadedPath, setLoadedPath] = useState<string | null>(null); // Track which path items belong to
   const [loadedMtime, setLoadedMtime] = useState<number | null>(null); // Track directory mtime
   const [items, setItems] = useState<FileItem[]>([]);
@@ -167,6 +178,22 @@ export const FileBrowser: React.FC<Props> = ({
       isMounted = false;
     };
   }, []);
+
+  // Clamp sidebar width on window resize
+  useEffect(() => {
+    const handleResize = () => {
+      const minWidth = 240;
+      const maxWidth = Math.max(minWidth, Math.min(560, window.innerWidth - 80));
+      setSidebarWidth(prev => Math.min(Math.max(prev, minWidth), maxWidth));
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (variant !== 'sidebar') return;
+    document.documentElement.style.setProperty('--nebula-filebrowser-width', `${sidebarWidth}px`);
+  }, [sidebarWidth, variant]);
 
   // Load directory on first open or when path changes
   useEffect(() => {
@@ -258,6 +285,62 @@ export const FileBrowser: React.FC<Props> = ({
       toast(`Root set to ${updated}`, 'success');
     } catch (err: any) {
       toast(err.message || 'Failed to set root directory', 'error');
+    }
+  };
+
+  const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    isResizingRef.current = true;
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    const minWidth = 240;
+    const maxWidth = Math.max(minWidth, Math.min(560, window.innerWidth - 80));
+    let latestWidth = startWidth;
+    let rafId: number | null = null;
+
+    const onMove = (moveEvent: MouseEvent | PointerEvent) => {
+      if (!isResizingRef.current) return;
+      const delta = moveEvent.clientX - startX;
+      latestWidth = Math.min(Math.max(startWidth + delta, minWidth), maxWidth);
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        setSidebarWidth(latestWidth);
+      });
+    };
+
+    const onUp = () => {
+      if (!isResizingRef.current) return;
+      isResizingRef.current = false;
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try {
+        localStorage.setItem('nebula-filebrowser-width', String(latestWidth));
+      } catch {
+        // Ignore storage errors
+      }
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
+  const resetSidebarWidth = () => {
+    setSidebarWidth(defaultSidebarWidth);
+    try {
+      localStorage.setItem('nebula-filebrowser-width', String(defaultSidebarWidth));
+    } catch {
+      // Ignore storage errors
     }
   };
 
@@ -564,7 +647,7 @@ export const FileBrowser: React.FC<Props> = ({
                   {idx > 0 && <ChevronRight className="w-3 h-3 text-slate-400 flex-shrink-0" />}
                   <button
                     onClick={() => handleNavigate(fullPath)}
-                    className="hover:text-blue-600 hover:underline truncate max-w-[100px] flex-shrink-0"
+                    className="hover:text-blue-600 hover:underline truncate max-w-[6.25rem] flex-shrink-0"
                     title={fullPath}
                   >
                     {part === '/' ? 'Root' : part}
@@ -575,7 +658,7 @@ export const FileBrowser: React.FC<Props> = ({
           </div>
           <button
             onClick={() => setShowPathInput((prev) => !prev)}
-            className={`px-2 py-1 text-[10px] border rounded flex items-center gap-1 flex-shrink-0 ${
+            className={`px-2 py-1 text-[0.625rem] border rounded flex items-center gap-1 flex-shrink-0 ${
               showPathInput ? 'bg-blue-50 text-blue-700 border-blue-200' : 'text-slate-600 border-slate-200 hover:bg-slate-100'
             }`}
             title="Toggle path entry"
@@ -596,17 +679,17 @@ export const FileBrowser: React.FC<Props> = ({
                 }
               }}
               placeholder="Type a path…"
-              className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="flex-1 min-w-0 px-2 py-1 text-[0.6875rem] bg-slate-50 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
             <button
               onClick={handlePathSubmit}
-              className="px-2 py-1 text-[10px] text-slate-600 border border-slate-200 rounded hover:bg-slate-100"
+              className="px-2 py-1 text-[0.625rem] text-slate-600 border border-slate-200 rounded hover:bg-slate-100"
             >
               Go
             </button>
             <button
               onClick={handleSetRoot}
-              className="px-2 py-1 text-[10px] text-slate-600 border border-slate-200 rounded hover:bg-slate-100"
+              className="px-2 py-1 text-[0.625rem] text-slate-600 border border-slate-200 rounded hover:bg-slate-100"
               title="Set current path as server root"
             >
               Set Root
@@ -618,11 +701,11 @@ export const FileBrowser: React.FC<Props> = ({
       {/* Toolbar & Search */}
       <div className="p-3 border-b border-slate-200 bg-white space-y-2">
         <div className="flex items-center justify-between">
-          <span className="text-[10px] font-bold text-slate-400 uppercase">Files</span>
+          <span className="text-[0.625rem] font-bold text-slate-400 uppercase">Files</span>
           <div className="flex items-center gap-1">
             <button
               onClick={() => setShowSearch((prev) => !prev)}
-              className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${
+              className={`p-1 rounded flex items-center gap-1 text-[0.625rem] font-medium transition-colors ${
                 showSearch ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500'
               }`}
               title="Toggle search"
@@ -631,14 +714,14 @@ export const FileBrowser: React.FC<Props> = ({
             </button>
             <button
               onClick={() => setSortBy(sortBy === 'name' ? 'modified' : 'name')}
-              className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${sortBy === 'modified' ? 'bg-purple-100 text-purple-700' : 'hover:bg-slate-100 text-slate-500'}`}
+              className={`p-1 rounded flex items-center gap-1 text-[0.625rem] font-medium transition-colors ${sortBy === 'modified' ? 'bg-purple-100 text-purple-700' : 'hover:bg-slate-100 text-slate-500'}`}
               title={sortBy === 'modified' ? 'Sorted by modified time' : 'Sorted by name'}
             >
               {sortBy === 'modified' ? <Clock className="w-3 h-3" /> : <ArrowDownAZ className="w-3 h-3" />}
             </button>
             <button
               onClick={toggleNotebooksOnly}
-              className={`p-1 rounded flex items-center gap-1 text-[10px] font-medium transition-colors ${showNotebooksOnly ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500'}`}
+              className={`p-1 rounded flex items-center gap-1 text-[0.625rem] font-medium transition-colors ${showNotebooksOnly ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500'}`}
               title="Filter Notebooks"
             >
               <Filter className="w-3 h-3" />
@@ -718,9 +801,9 @@ export const FileBrowser: React.FC<Props> = ({
       </div>
 
       {/* Footer */}
-      <div className={`p-3 border-t border-slate-200 bg-white text-[10px] text-slate-400 flex justify-between ${variant === 'inline' ? 'rounded-b-xl' : ''}`}>
+      <div className={`p-3 border-t border-slate-200 bg-white text-[0.625rem] text-slate-400 flex justify-between ${variant === 'inline' ? 'rounded-b-xl' : ''}`}>
         <span>{items.length} items</span>
-        <span className="truncate max-w-[200px]" title={currentPath}>{currentPath}</span>
+        <span className="truncate max-w-[12.5rem]" title={currentPath}>{currentPath}</span>
       </div>
     </>
   );
@@ -755,15 +838,21 @@ export const FileBrowser: React.FC<Props> = ({
       {/* Sidebar Panel */}
       <div
         className={`
-          fixed top-0 left-0 h-full w-80 sm:w-96 border-r shadow-xl z-40 transform transition-all duration-300 ease-in-out flex flex-col
+          fixed top-0 left-0 h-full border-r shadow-xl z-40 transform transition-transform duration-300 ease-in-out flex flex-col
           ${isOpen ? 'translate-x-0' : '-translate-x-full'}
           ${isDragging ? 'bg-blue-50/50 border-blue-400 border-2' : 'bg-slate-50 border-slate-200'}
           ${className}
         `}
+        style={{ width: sidebarWidth }}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        <div
+          className="absolute inset-y-0 right-0 w-1.5 cursor-col-resize bg-slate-200/30 hover:bg-slate-300/50 z-50 transition-colors pointer-events-auto"
+          onPointerDown={startResize}
+          onDoubleClick={resetSidebarWidth}
+        />
         {browserContent}
       </div>
     </>

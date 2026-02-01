@@ -217,7 +217,7 @@ export const RestoreDialog: React.FC<RestoreDialogProps> = ({
                   <div className="text-xs text-slate-500 mt-1">
                     Transform current notebook to the target state. This is undoable - you can undo the restore itself.
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-2">
+                  <div className="text-[0.625rem] text-slate-400 mt-2">
                     Strategy: Generates reverse operations (history grows)
                   </div>
                 </div>
@@ -240,12 +240,12 @@ export const RestoreDialog: React.FC<RestoreDialogProps> = ({
                     Create a new notebook file from this point. Original file stays untouched.
                   </div>
                   {suggestedFilename && (
-                    <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-2">
+                    <div className="flex items-center gap-1 text-[0.625rem] text-slate-400 mt-2">
                       <FileText className="w-3 h-3" />
                       {suggestedFilename}
                     </div>
                   )}
-                  <div className="text-[10px] text-slate-400 mt-1">
+                  <div className="text-[0.625rem] text-slate-400 mt-1">
                     Strategy: History truncated at restore point (branch)
                   </div>
                 </div>

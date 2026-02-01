@@ -179,7 +179,7 @@ export const FileListItem: React.FC<FileListItemProps> = ({
             </span>
           )}
           {!item.isDirectory && !compact && !isEditing && (
-            <span className="text-[9px] text-slate-400 flex gap-2">
+            <span className="text-[0.5625rem] text-slate-400 flex gap-2">
               {formatRelativeTime(item.modified)}
               <span>•</span>
               {item.size}

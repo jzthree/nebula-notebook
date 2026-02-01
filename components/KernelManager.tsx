@@ -114,7 +114,7 @@ export const KernelManager: React.FC<Props> = ({ isOpen, onClose, currentSession
                       {session.file_path ? getFilenameFromPath(session.file_path) : 'Unnamed'}
                     </span>
                     {session.id === currentSessionId && (
-                      <span className="text-[10px] bg-purple-600 text-white px-1.5 py-0.5 rounded">
+                      <span className="text-[0.625rem] bg-purple-600 text-white px-1.5 py-0.5 rounded">
                         Current
                       </span>
                     )}
@@ -140,7 +140,7 @@ export const KernelManager: React.FC<Props> = ({ isOpen, onClose, currentSession
                     </span>
                   </div>
                   {session.file_path && (
-                    <div className="text-[10px] text-slate-400 mt-1 truncate" title={session.file_path}>
+                    <div className="text-[0.625rem] text-slate-400 mt-1 truncate" title={session.file_path}>
                       {session.file_path}
                     </div>
                   )}
