@@ -145,17 +145,20 @@ const ServerResourceRow: React.FC<{ server: ClusterServer }> = ({ server }) => {
       </div>
 
       {/* RAM row */}
-      <div className="flex items-center gap-2 mb-1">
-        <Cpu className="w-3 h-3 text-slate-400 flex-shrink-0" />
-        <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+      <div className="mb-1.5">
+        <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+          <div className="flex items-center gap-1.5">
+            <Cpu className="w-3 h-3 text-slate-400" />
+            <span>RAM</span>
+          </div>
+          <span className="tabular-nums">{Math.round(resources.ram.used)}/{Math.round(resources.ram.total)} GB</span>
+        </div>
+        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
           <div
             className="h-full bg-blue-500 transition-all duration-300"
             style={{ width: `${Math.min(ramPercent, 100)}%` }}
           />
         </div>
-        <span className="text-xs text-slate-500 tabular-nums flex-shrink-0">
-          {Math.round(resources.ram.used)}/{Math.round(resources.ram.total)} GB
-        </span>
       </div>
 
       {/* GPU summary or details */}
@@ -187,41 +190,47 @@ const GPUSummary: React.FC<{ gpus: GPUInfo; expanded: boolean }> = ({ gpus, expa
   if (!expanded) {
     // Collapsed view - show summary with total memory
     return (
-      <div className="flex items-center gap-2">
-        <GpuIcon className="w-3 h-3 text-slate-400 flex-shrink-0" />
-        <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+      <div>
+        <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+          <div className="flex items-center gap-1.5">
+            <GpuIcon className="w-3 h-3 text-slate-400" />
+            <span>{gpus.devices.length}x {shortName}</span>
+          </div>
+          <span className="tabular-nums">{Math.round(gpus.totalUsed)}/{Math.round(gpus.totalMemory)} GB</span>
+        </div>
+        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
           <div
             className="h-full bg-emerald-500 transition-all duration-300"
             style={{ width: `${Math.min(percent, 100)}%` }}
           />
         </div>
-        <span className="text-xs text-slate-500 tabular-nums flex-shrink-0">
-          {gpus.devices.length}x {shortName} {Math.round(gpus.totalUsed)}/{Math.round(gpus.totalMemory)} GB
-        </span>
       </div>
     );
   }
 
   // Expanded view - show each GPU
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       {gpus.devices.map((gpu) => {
         const gpuPercent = gpu.memoryTotal > 0
           ? (gpu.memoryUsed / gpu.memoryTotal) * 100
           : 0;
 
         return (
-          <div key={gpu.index} className="flex items-center gap-2">
-            <GpuIcon className="w-3 h-3 text-slate-400 flex-shrink-0" />
-            <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+          <div key={gpu.index}>
+            <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+              <div className="flex items-center gap-1.5">
+                <GpuIcon className="w-3 h-3 text-slate-400" />
+                <span>GPU {gpu.index}</span>
+              </div>
+              <span className="tabular-nums" title={gpu.name}>{Math.round(gpu.memoryUsed)}/{Math.round(gpu.memoryTotal)} GB</span>
+            </div>
+            <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
               <div
                 className="h-full bg-emerald-500 transition-all duration-300"
                 style={{ width: `${Math.min(gpuPercent, 100)}%` }}
               />
             </div>
-            <span className="text-xs text-slate-500 tabular-nums flex-shrink-0" title={gpu.name}>
-              {Math.round(gpu.memoryUsed)}/{Math.round(gpu.memoryTotal)} GB
-            </span>
           </div>
         );
       })}
