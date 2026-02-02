@@ -2754,9 +2754,9 @@ export const Notebook: React.FC = () => {
           </div>
         )}
 
-        <header className="flex-none bg-slate-50/90 backdrop-blur py-3 border-b border-slate-200 px-4 z-20">
-            <div className="max-w-5xl mx-auto w-full flex flex-col gap-2">
-               <div className="flex items-center gap-3">
+        <header className="flex-none bg-slate-50/90 backdrop-blur py-2 border-b border-slate-200 px-4 z-20">
+            <div className="max-w-5xl mx-auto w-full flex flex-col gap-1">
+               <div className="flex items-center gap-2">
                  <button
                     onClick={() => setIsFileBrowserOpen(!isFileBrowserOpen)}
                     className="p-2 hover:bg-white hover:shadow-sm rounded-md text-slate-600 transition-all"
@@ -2796,9 +2796,9 @@ export const Notebook: React.FC = () => {
                  </div>
                </div>
 
-               <div className="flex items-center justify-between gap-3 flex-wrap">
+               <div className="flex items-center justify-between gap-2 flex-wrap">
                  {/* Second row: Kernel Selector + Save Status */}
-                 <div className="flex items-center gap-3 flex-wrap">
+                 <div className="flex items-center gap-2 flex-wrap">
                       {/* Kernel Selector */}
                       <div className="relative">
                       <button
@@ -3198,7 +3198,7 @@ export const Notebook: React.FC = () => {
                       )}
                     </div>
 
-                  <div className="flex gap-2 items-center flex-wrap justify-end">
+                  <div className="flex gap-1.5 items-center flex-wrap justify-end">
                   {/* Undo / Redo Controls */}
                   <div className="flex items-center gap-1 mr-2 border-r border-slate-200 pr-2">
                     <button
