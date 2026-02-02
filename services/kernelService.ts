@@ -253,9 +253,24 @@ class KernelService {
         }
       };
 
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        this.handleMessage(sessionId, data);
+      ws.onmessage = async (event) => {
+        try {
+          let raw = event.data;
+          let text: string;
+          if (typeof raw === 'string') {
+            text = raw;
+          } else if (raw instanceof ArrayBuffer) {
+            text = new TextDecoder().decode(raw);
+          } else if (raw instanceof Blob) {
+            text = await raw.text();
+          } else {
+            text = String(raw);
+          }
+          const data = JSON.parse(text);
+          this.handleMessage(sessionId, data);
+        } catch (error) {
+          console.error('[Kernel WS] Failed to parse message:', error);
+        }
       };
     });
   }

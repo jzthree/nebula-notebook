@@ -38,7 +38,7 @@ class ClientRegistration {
     }
 
     const localHost = process.env.NEBULA_HOST || os.hostname();
-    const serverName = process.env.NEBULA_SERVER_NAME || localHost;
+    const serverName = process.env.NEBULA_SERVER_NAME || os.hostname();
     const secret = process.env.NEBULA_CLUSTER_SECRET;
 
     this.config = {
