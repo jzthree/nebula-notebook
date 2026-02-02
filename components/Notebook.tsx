@@ -2755,7 +2755,7 @@ export const Notebook: React.FC = () => {
         )}
 
         <header className="flex-none bg-slate-50/90 backdrop-blur py-3 border-b border-slate-200 px-4 z-20">
-            <div className="flex justify-between items-center max-w-5xl mx-auto w-full">
+            <div className="max-w-5xl mx-auto w-full flex flex-col gap-2">
                <div className="flex items-center gap-3">
                  <button
                     onClick={() => setIsFileBrowserOpen(!isFileBrowserOpen)}
@@ -2763,8 +2763,8 @@ export const Notebook: React.FC = () => {
                  >
                    <Menu className="w-5 h-5" />
                  </button>
-                 <div>
-                    <h1 className="text-lg font-bold text-slate-800 flex items-center gap-2 truncate max-w-[9.375rem] sm:max-w-md">
+                 <div className="flex-1 min-w-0">
+                    <h1 className="text-lg font-bold text-slate-800 flex items-center gap-2 min-w-0">
                       {isRenamingNotebook ? (
                         <input
                           type="text"
@@ -2772,7 +2772,7 @@ export const Notebook: React.FC = () => {
                           onChange={(e) => setRenameValue(e.target.value)}
                           onBlur={finishRenameNotebook}
                           onKeyDown={handleRenameKeyDown}
-                          className="text-lg font-bold bg-white border-2 border-blue-400 rounded px-1 py-0 focus:outline-none focus:border-blue-500 max-w-[12.5rem] leading-normal"
+                          className="text-lg font-bold bg-white border-2 border-blue-400 rounded px-1 py-0 focus:outline-none focus:border-blue-500 flex-1 min-w-0 leading-normal"
                           autoFocus
                         />
                       ) : isLoadingFile ? (
@@ -2783,7 +2783,7 @@ export const Notebook: React.FC = () => {
                       ) : (
                         <span
                           onClick={startRenameNotebook}
-                          className="cursor-pointer hover:bg-slate-100 px-1 rounded transition-colors"
+                          className="flex-1 min-w-0 truncate cursor-pointer hover:bg-slate-100 px-1 rounded transition-colors"
                           title="Click to rename"
                         >
                           {currentFilename || "Untitled"}
@@ -2793,9 +2793,12 @@ export const Notebook: React.FC = () => {
                         .ipynb
                       </span>
                     </h1>
+                 </div>
+               </div>
 
-                    {/* Second row: Kernel Selector + Save Status */}
-                    <div className="flex items-center gap-3">
+               <div className="flex items-center justify-between gap-3 flex-wrap">
+                 {/* Second row: Kernel Selector + Save Status */}
+                 <div className="flex items-center gap-3 flex-wrap">
                       {/* Kernel Selector */}
                       <div className="relative">
                       <button
@@ -3194,11 +3197,9 @@ export const Notebook: React.FC = () => {
                           </button>
                       )}
                     </div>
+                  </div>
 
-                 </div>
-               </div>
-
-               <div className="flex gap-2 items-center">
+                  <div className="flex gap-2 items-center flex-wrap justify-end">
                   {/* Undo / Redo Controls */}
                   <div className="flex items-center gap-1 mr-2 border-r border-slate-200 pr-2">
                     <button
@@ -3305,6 +3306,7 @@ export const Notebook: React.FC = () => {
                   </button>
 
                </div>
+            </div>
             </div>
         </header>
 
