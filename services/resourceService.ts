@@ -12,14 +12,19 @@ import type { ServerResources } from './clusterService';
 export type { ServerResources, RAMInfo, GPUInfo, GPUDevice } from './clusterService';
 
 /**
- * Get local server resources (cached, never blocks)
+ * Get server resources (cached, never blocks)
+ * @param serverId - Optional server ID. If not provided or 'local', returns local server resources.
  */
-export async function getResources(): Promise<ServerResources> {
+export async function getResources(serverId?: string | null): Promise<ServerResources> {
   const token = authService.getToken();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const response = await fetch(`${API_BASE}/resources`, { headers });
+  const url = serverId && serverId !== 'local'
+    ? `${API_BASE}/resources?server_id=${encodeURIComponent(serverId)}`
+    : `${API_BASE}/resources`;
+
+  const response = await fetch(url, { headers });
 
   if (!response.ok) {
     throw new Error(`Failed to get resources: ${response.statusText}`);

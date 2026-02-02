@@ -39,20 +39,20 @@ const GpuIcon: React.FC<{ className?: string }> = ({ className }) => (
 
 const POLL_INTERVAL_MS = 30_000; // 30 seconds
 
-export const ResourceStatusBar: React.FC<Props> = ({ className = '' }) => {
+export const ResourceStatusBar: React.FC<Props> = ({ serverId, className = '' }) => {
   const [resources, setResources] = useState<ServerResources | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const fetchResources = useCallback(async () => {
     try {
-      const data = await resourceService.getResources();
+      const data = await resourceService.getResources(serverId);
       setResources(data);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch resources');
     }
-  }, []);
+  }, [serverId]);
 
   useEffect(() => {
     fetchResources();

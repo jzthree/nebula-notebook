@@ -3500,7 +3500,7 @@ export const Notebook: React.FC = () => {
             {/* System resources (RAM, GPU) - opt-in to avoid any render overhead */}
             {showResourceMonitor && (
               <div className="border-l border-slate-200 pl-3">
-                <ResourceStatusBar />
+                <ResourceStatusBar serverId={selectedServerId} />
               </div>
             )}
           </div>
