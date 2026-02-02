@@ -564,12 +564,13 @@ export class KernelService {
         // If session is stuck in 'starting' for too long, treat as dead
         if (session.status === 'starting') {
           const startingDuration = Date.now() / 1000 - session.lastActivity;
-          if (startingDuration > 30) {
+          // Allow a longer grace period for slow environments before declaring it stuck
+          if (startingDuration > 120) {
             console.log(`[Kernel] Session ${existingSessionId} stuck in 'starting' for ${Math.round(startingDuration)}s, restarting`);
             await this.stopKernel(existingSessionId);
           } else {
             // Wait a bit and check if it becomes ready
-            for (let i = 0; i < 10; i++) {
+            for (let i = 0; i < 20; i++) {
               await this.sleep(500);
               const updated = this.sessions.get(existingSessionId);
               if (!updated || updated.status === 'dead') break;
@@ -580,11 +581,11 @@ export class KernelService {
                 break;
               }
             }
-            // Still starting after 5s, restart it
+            // Still starting after wait; keep it rather than restarting unless it exceeds grace
             const stillStarting = this.sessions.get(existingSessionId);
             if (stillStarting?.status === 'starting') {
-              console.log(`[Kernel] Session ${existingSessionId} still 'starting' after wait, restarting`);
-              await this.stopKernel(existingSessionId);
+              console.log(`[Kernel] Session ${existingSessionId} still starting after wait; keeping it alive`);
+              return existingSessionId;
             }
           }
         } else {
