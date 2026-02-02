@@ -2754,17 +2754,17 @@ export const Notebook: React.FC = () => {
           </div>
         )}
 
-        <header className="flex-none bg-slate-50/90 backdrop-blur py-2 border-b border-slate-200 px-4 z-20">
-            <div className="max-w-5xl mx-auto w-full flex flex-col gap-1">
-               <div className="flex items-center gap-2">
+        <header className="flex-none bg-slate-50/90 backdrop-blur py-3 border-b border-slate-200 px-4 z-20">
+            <div className="flex justify-between items-center max-w-5xl mx-auto w-full">
+               <div className="flex items-center gap-3">
                  <button
                     onClick={() => setIsFileBrowserOpen(!isFileBrowserOpen)}
                     className="p-2 hover:bg-white hover:shadow-sm rounded-md text-slate-600 transition-all"
                  >
                    <Menu className="w-5 h-5" />
                  </button>
-                 <div className="flex-1 min-w-0">
-                    <h1 className="text-lg font-bold text-slate-800 flex items-center gap-2 min-w-0">
+                 <div>
+                    <h1 className="text-lg font-bold text-slate-800 flex items-center gap-2 truncate max-w-[18rem] sm:max-w-2xl">
                       {isRenamingNotebook ? (
                         <input
                           type="text"
@@ -2772,7 +2772,8 @@ export const Notebook: React.FC = () => {
                           onChange={(e) => setRenameValue(e.target.value)}
                           onBlur={finishRenameNotebook}
                           onKeyDown={handleRenameKeyDown}
-                          className="text-lg font-bold bg-white border-2 border-blue-400 rounded px-1 py-0 focus:outline-none focus:border-blue-500 flex-1 min-w-0 leading-normal"
+                          className="text-lg font-bold bg-white border-2 border-blue-400 rounded px-1 py-0 focus:outline-none focus:border-blue-500 leading-normal"
+                          style={{ width: `${Math.min(Math.max(renameValue.length + 2, 12), 48)}ch`, maxWidth: '100%' }}
                           autoFocus
                         />
                       ) : isLoadingFile ? (
@@ -2783,7 +2784,7 @@ export const Notebook: React.FC = () => {
                       ) : (
                         <span
                           onClick={startRenameNotebook}
-                          className="flex-1 min-w-0 truncate cursor-pointer hover:bg-slate-100 px-1 rounded transition-colors"
+                          className="cursor-pointer hover:bg-slate-100 px-1 rounded transition-colors"
                           title="Click to rename"
                         >
                           {currentFilename || "Untitled"}
@@ -2793,12 +2794,9 @@ export const Notebook: React.FC = () => {
                         .ipynb
                       </span>
                     </h1>
-                 </div>
-               </div>
 
-               <div className="flex items-center justify-between gap-2 flex-wrap">
-                 {/* Second row: Kernel Selector + Save Status */}
-                 <div className="flex items-center gap-2 flex-wrap">
+                    {/* Second row: Kernel Selector + Save Status */}
+                    <div className="flex items-center gap-3">
                       {/* Kernel Selector */}
                       <div className="relative">
                       <button
@@ -3198,7 +3196,10 @@ export const Notebook: React.FC = () => {
                       )}
                     </div>
 
-                  <div className="flex gap-1.5 items-center flex-wrap justify-end">
+                 </div>
+               </div>
+
+               <div className="flex gap-2 items-center">
                   {/* Undo / Redo Controls */}
                   <div className="flex items-center gap-1 mr-2 border-r border-slate-200 pr-2">
                     <button
@@ -3305,7 +3306,6 @@ export const Notebook: React.FC = () => {
                   </button>
 
                </div>
-            </div>
             </div>
         </header>
 
