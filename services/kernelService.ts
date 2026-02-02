@@ -741,12 +741,16 @@ export interface DeadSession {
 /**
  * Get dead kernel sessions (orphaned/terminated) that can be cleaned up
  */
-export const getDeadKernelSessions = async (): Promise<DeadSession[]> => {
+export const getDeadKernelSessions = async (serverId?: string | null): Promise<DeadSession[]> => {
   const token = authService.getToken();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-
-  const response = await fetch(`${API_BASE}/kernels/dead`, { headers });
+  const params = new URLSearchParams();
+  if (serverId) {
+    params.set('server_id', serverId);
+  }
+  const url = params.toString() ? `${API_BASE}/kernels/dead?${params.toString()}` : `${API_BASE}/kernels/dead`;
+  const response = await fetch(url, { headers });
   if (!response.ok) {
     throw new Error(`Failed to get dead sessions: ${response.statusText}`);
   }
@@ -758,7 +762,7 @@ export const getDeadKernelSessions = async (): Promise<DeadSession[]> => {
  * Cleanup dead kernel sessions
  * @param sessionIds Optional list of specific session IDs to clean up. If not provided, cleans all.
  */
-export const cleanupDeadKernelSessions = async (sessionIds?: string[]): Promise<number> => {
+export const cleanupDeadKernelSessions = async (sessionIds?: string[], serverId?: string | null): Promise<number> => {
   const token = authService.getToken();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -766,7 +770,7 @@ export const cleanupDeadKernelSessions = async (sessionIds?: string[]): Promise<
   const response = await fetch(`${API_BASE}/kernels/dead/cleanup`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ session_ids: sessionIds }),
+    body: JSON.stringify({ session_ids: sessionIds, server_id: serverId || undefined }),
   });
   if (!response.ok) {
     throw new Error(`Failed to cleanup dead sessions: ${response.statusText}`);

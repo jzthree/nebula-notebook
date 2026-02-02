@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { listTerminals, TerminalInfo } from '../services/terminalService';
 import { getDeadKernelSessions, cleanupDeadKernelSessions, DeadSession } from '../services/kernelService';
+import { getClusterInfo } from '../services/clusterService';
 import { FileBrowser } from './FileBrowser';
 import { ResourcePanel } from './ResourcePanel';
 
@@ -140,13 +141,20 @@ export const Dashboard: React.FC = () => {
   const [recentNotebooks, setRecentNotebooks] = useState<RecentNotebook[]>([]);
 
   // Dead kernel sessions (orphaned/terminated)
-  const [deadSessions, setDeadSessions] = useState<DeadSession[]>([]);
+  const [deadSessionsByServer, setDeadSessionsByServer] = useState<Array<{
+    serverId: string;
+    serverName: string;
+    sessions: DeadSession[];
+  }>>([]);
   const [isCleaningUp, setIsCleaningUp] = useState(false);
   const [cleanupDismissed, setCleanupDismissed] = useState(false);
   const [cleanupNotice, setCleanupNotice] = useState<string | null>(null);
 
   // Dummy refresh counter (to pass to FileBrowser)
   const [refreshCounter, setRefreshCounter] = useState(0);
+
+  const totalDeadSessions = deadSessionsByServer.reduce((sum, entry) => sum + entry.sessions.length, 0);
+  const deadServersCount = deadSessionsByServer.length;
 
   // Load sessions (terminals + kernels)
   const loadSessions = useCallback(async () => {
@@ -161,9 +169,35 @@ export const Dashboard: React.FC = () => {
   // Check for dead sessions
   const checkDeadSessions = useCallback(async (): Promise<DeadSession[] | null> => {
     try {
-      const dead = await getDeadKernelSessions();
-      setDeadSessions(dead);
-      return dead;
+      const cluster = await getClusterInfo().catch(() => null);
+
+      if (!cluster || !cluster.servers || cluster.servers.length === 0) {
+        const dead = await getDeadKernelSessions();
+        if (dead.length > 0) {
+          setDeadSessionsByServer([
+            { serverId: 'local', serverName: 'Local', sessions: dead },
+          ]);
+        } else {
+          setDeadSessionsByServer([]);
+        }
+        return dead;
+      }
+
+      const entries = await Promise.all(cluster.servers.map(async (server) => {
+        try {
+          const sessions = await getDeadKernelSessions(server.id);
+          const displayName = server.isLocal && server.resources?.hostname
+            ? server.resources.hostname
+            : server.name;
+          return { serverId: server.id, serverName: displayName, sessions };
+        } catch {
+          return { serverId: server.id, serverName: server.name, sessions: [] };
+        }
+      }));
+
+      const nonEmpty = entries.filter(entry => entry.sessions.length > 0);
+      setDeadSessionsByServer(nonEmpty);
+      return nonEmpty.flatMap(entry => entry.sessions);
     } catch {
       // Ignore errors - older servers might not have this endpoint
       return null;
@@ -175,7 +209,9 @@ export const Dashboard: React.FC = () => {
     setIsCleaningUp(true);
     setCleanupNotice(null);
     try {
-      await cleanupDeadKernelSessions();
+      await Promise.all(
+        deadSessionsByServer.map(entry => cleanupDeadKernelSessions(undefined, entry.serverId))
+      );
       const remaining = await checkDeadSessions();
       if (remaining && remaining.length > 0) {
         setCleanupNotice(
@@ -187,7 +223,7 @@ export const Dashboard: React.FC = () => {
     } finally {
       setIsCleaningUp(false);
     }
-  }, [checkDeadSessions]);
+  }, [checkDeadSessions, deadSessionsByServer]);
 
   // Initial load
   useEffect(() => {
@@ -295,14 +331,15 @@ export const Dashboard: React.FC = () => {
       </header>
 
       {/* Dead Sessions Cleanup Banner */}
-      {deadSessions.length > 0 && !cleanupDismissed && (
+      {totalDeadSessions > 0 && !cleanupDismissed && (
         <div className="bg-amber-50 border-b border-amber-200">
           <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
             <div className="flex items-center gap-3 text-sm text-amber-800">
               <AlertTriangle className="w-4 h-4 flex-shrink-0" />
               <div className="flex flex-col gap-0.5">
                 <span>
-                  Found <strong>{deadSessions.length}</strong> orphaned kernel session{deadSessions.length !== 1 ? 's' : ''} from a previous server run
+                  Found <strong>{totalDeadSessions}</strong> orphaned kernel session{totalDeadSessions !== 1 ? 's' : ''} across{' '}
+                  <strong>{deadServersCount}</strong> server{deadServersCount !== 1 ? 's' : ''} from a previous run
                 </span>
                 {cleanupNotice && (
                   <span className="text-[0.6875rem] text-amber-700">{cleanupNotice}</span>

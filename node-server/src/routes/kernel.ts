@@ -19,6 +19,8 @@ import {
   getRemoteKernelStatus,
   getRemoteKernels,
   getRemoteKernelSessions,
+  getRemoteDeadKernelSessions,
+  cleanupRemoteDeadKernelSessions,
   createProxiedSessionId,
   createWebSocketProxy,
 } from '../cluster/kernel-proxy';
@@ -156,6 +158,18 @@ router.get('/kernels/sessions', async (_req: Request, res: Response) => {
  * These are sessions from previous server runs that failed to reattach
  */
 router.get('/kernels/dead', (_req: Request, res: Response) => {
+  const serverId = _req.query.server_id as string | undefined;
+  const localServerId = serverRegistry.getLocalServerId();
+  if (serverId && serverId !== localServerId && serverId !== 'local') {
+    getRemoteDeadKernelSessions(serverId)
+      .then(data => res.json(data))
+      .catch(err => {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        res.status(500).json({ detail: message });
+      });
+    return;
+  }
+
   const deadSessions = kernelService.getDeadSessions();
   const sessions = deadSessions.map(s => ({
     session_id: s.sessionId,
@@ -174,7 +188,15 @@ router.get('/kernels/dead', (_req: Request, res: Response) => {
  */
 router.post('/kernels/dead/cleanup', async (req: Request, res: Response) => {
   try {
-    const { session_ids } = req.body;
+    const { session_ids, server_id } = req.body;
+    const serverId = server_id as string | undefined;
+    const localServerId = serverRegistry.getLocalServerId();
+    if (serverId && serverId !== localServerId && serverId !== 'local') {
+      const result = await cleanupRemoteDeadKernelSessions(serverId, session_ids);
+      res.json(result);
+      return;
+    }
+
     const deleted = await kernelService.cleanupDeadSessions(session_ids);
     res.json({ deleted });
   } catch (err) {

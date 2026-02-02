@@ -265,6 +265,52 @@ export async function getRemoteKernelSessions(serverId: string): Promise<{ sessi
 }
 
 /**
+ * Get dead kernel sessions from a remote server
+ */
+export async function getRemoteDeadKernelSessions(serverId: string): Promise<{ sessions: any[] }> {
+  const server = serverRegistry.getServer(serverId);
+  if (!server) {
+    throw new Error(`Server not found: ${serverId}`);
+  }
+  if (server.status !== 'online') {
+    throw new Error(`Server is offline: ${serverId}`);
+  }
+
+  const response = await fetch(`${server.url}/api/kernels/dead`, {
+    headers: { ...getClusterHeaders() },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string };
+    throw new Error(error.detail || 'Failed to fetch dead kernel sessions');
+  }
+  return response.json() as Promise<{ sessions: any[] }>;
+}
+
+/**
+ * Cleanup dead kernel sessions on a remote server
+ */
+export async function cleanupRemoteDeadKernelSessions(serverId: string, sessionIds?: string[]): Promise<{ deleted: number }> {
+  const server = serverRegistry.getServer(serverId);
+  if (!server) {
+    throw new Error(`Server not found: ${serverId}`);
+  }
+  if (server.status !== 'online') {
+    throw new Error(`Server is offline: ${serverId}`);
+  }
+
+  const response = await fetch(`${server.url}/api/kernels/dead/cleanup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getClusterHeaders() },
+    body: JSON.stringify({ session_ids: sessionIds }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string };
+    throw new Error(error.detail || 'Failed to cleanup dead kernel sessions');
+  }
+  return response.json() as Promise<{ deleted: number }>;
+}
+
+/**
  * Create a WebSocket proxy to a remote kernel
  */
 export function createWebSocketProxy(
@@ -292,17 +338,27 @@ export function createWebSocketProxy(
   });
 
   // Forward messages from remote to client
-  remoteWs.on('message', (data) => {
-    if (clientWs.readyState === WebSocket.OPEN) {
-      clientWs.send(data);
+  remoteWs.on('message', (data, isBinary) => {
+    if (clientWs.readyState !== WebSocket.OPEN) {
+      return;
     }
+    if (isBinary) {
+      clientWs.send(data);
+      return;
+    }
+    clientWs.send(typeof data === 'string' ? data : data.toString());
   });
 
   // Forward messages from client to remote
-  clientWs.on('message', (data) => {
-    if (remoteWs.readyState === WebSocket.OPEN) {
-      remoteWs.send(data);
+  clientWs.on('message', (data, isBinary) => {
+    if (remoteWs.readyState !== WebSocket.OPEN) {
+      return;
     }
+    if (isBinary) {
+      remoteWs.send(data);
+      return;
+    }
+    remoteWs.send(typeof data === 'string' ? data : data.toString());
   });
 
   // Handle remote close
