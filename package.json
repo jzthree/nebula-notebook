@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently --kill-others --kill-signal SIGTERM --raw \"cd node-server && PORT=8000 npm run dev\" \"vite\"",
+    "dev": "concurrently --kill-others --kill-signal SIGTERM --raw \"cd node-server && PORT=${VITE_API_PORT:-8000} npm run dev\" \"VITE_API_PORT=${VITE_API_PORT:-8000} vite\"",
     "start": "npm run dev",
     "prod": "cd node-server && PORT=3000 npm run dev",
     "build": "vite build",

@@ -11,12 +11,12 @@ export default defineConfig(({ mode }) => {
         allowedHosts: true, // Allow all hosts (for internal cluster access)
         proxy: {
           '/api': {
-            target: 'http://localhost:8000',
+            target: `http://localhost:${env.VITE_API_PORT || '8000'}`,
             changeOrigin: true,
             ws: true,
           },
           '/ws': {
-            target: 'http://localhost:8000',
+            target: `http://localhost:${env.VITE_API_PORT || '8000'}`,
             changeOrigin: true,
             ws: true,
           },
