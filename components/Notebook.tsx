@@ -2915,19 +2915,36 @@ export const Notebook: React.FC = () => {
                             <div className="px-3 py-1.5 text-[0.625rem] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50">
                               Jupyter Kernels
                             </div>
-                            {availableKernels.map(kernel => (
-                              <button
-                                key={kernel.name}
-                                onClick={() => switchKernel(kernel.name)}
-                                className={`w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 ${
-                                  kernel.name === currentKernel ? 'bg-green-50 text-green-700' : 'text-slate-700'
-                                }`}
-                              >
-                                <span className="w-2 h-2 rounded-full flex-shrink-0 bg-green-500"></span>
-                                <span className="truncate flex-1">{kernel.display_name}</span>
-                                <span className="text-[0.625rem] text-slate-400">{kernel.language}</span>
-                              </button>
-                            ))}
+                            {availableKernels.map(kernel => {
+                              const matchedEnv = pythonEnvironments.find(env =>
+                                env.kernel_name === kernel.name ||
+                                (kernel.path && env.path && kernel.path.includes(env.path.replace('/bin/python', '')))
+                              );
+                              const envLabel = matchedEnv?.env_name || (matchedEnv && matchedEnv.display_name !== kernel.display_name ? matchedEnv.display_name : null);
+
+                              return (
+                                <button
+                                  key={kernel.name}
+                                  onClick={() => switchKernel(kernel.name)}
+                                  className={`w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 ${
+                                    kernel.name === currentKernel ? 'bg-green-50 text-green-700' : 'text-slate-700'
+                                  }`}
+                                >
+                                  <span className="w-2 h-2 rounded-full flex-shrink-0 bg-green-500"></span>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-baseline gap-1.5 min-w-0">
+                                      <span className="truncate">{kernel.display_name}</span>
+                                      {envLabel && (
+                                        <span className="text-[0.625rem] text-slate-400 truncate">
+                                          {envLabel}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <span className="text-[0.625rem] text-slate-400">{kernel.language}</span>
+                                </button>
+                              );
+                            })}
 
                             {/* Discovered Python Environments */}
                             {pythonEnvironments.length > 0 && (
