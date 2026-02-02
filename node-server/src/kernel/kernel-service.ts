@@ -281,6 +281,29 @@ export class KernelService {
   }
 
   /**
+   * Normalize notebook path for external callers (e.g., routes).
+   */
+  normalizeNotebookPath(filePath: string): string {
+    return this.normalizePath(filePath);
+  }
+
+  /**
+   * Save kernel preference for a notebook file.
+   */
+  saveNotebookKernelPreference(filePath: string, kernelName: string, serverId?: string | null): void {
+    const normalizedPath = this.normalizePath(filePath);
+    this.sessionStore.saveNotebookKernelPreference(normalizedPath, kernelName, serverId);
+  }
+
+  /**
+   * Get kernel preference for a notebook file.
+   */
+  getNotebookKernelPreference(filePath: string): { kernelName: string; serverId: string | null; updatedAt: number } | null {
+    const normalizedPath = this.normalizePath(filePath);
+    return this.sessionStore.getNotebookKernelPreference(normalizedPath);
+  }
+
+  /**
    * Generate a connection file for the kernel
    */
   private generateConnectionFile(sessionId: string): { config: ConnectionConfig; filePath: string } {

@@ -20,6 +20,7 @@ const { MockKernelService, MockPythonDiscoveryService, mockDiscoverKernelSpecs }
   class MockKernelService {
     isReady = true;
     initialize = mockFn(async () => undefined);
+    normalizeNotebookPath = mockFn((filePath: string) => filePath);
     getAvailableKernels = mockFn(() => [
       {
         name: 'python3',
@@ -52,6 +53,8 @@ const { MockKernelService, MockPythonDiscoveryService, mockDiscoverKernelSpecs }
     }));
     startKernel = mockFn(async () => 'session-new-123');
     getOrCreateKernel = mockFn(async () => 'session-file-123');
+    saveNotebookKernelPreference = mockFn(() => undefined);
+    getNotebookKernelPreference = mockFn(() => null);
     cleanup = mockFn(async () => undefined);
   }
 
@@ -277,6 +280,22 @@ describe('API Contract Tests - Snake Case Response Format', () => {
       expect(response.body).not.toHaveProperty('sessionId');
       expect(response.body).not.toHaveProperty('kernelName');
       expect(response.body).not.toHaveProperty('filePath');
+    });
+  });
+
+  describe('GET /api/kernels/preference response', () => {
+    it('should return response with snake_case field names', async () => {
+      const response = await request(app)
+        .get('/api/kernels/preference')
+        .query({ file_path: '/path/to/notebook.ipynb' });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('kernel_name');
+      expect(response.body).toHaveProperty('server_id');
+
+      // Verify camelCase does NOT exist
+      expect(response.body).not.toHaveProperty('kernelName');
+      expect(response.body).not.toHaveProperty('serverId');
     });
   });
 });

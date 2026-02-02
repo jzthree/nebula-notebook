@@ -7,6 +7,7 @@ import { act } from 'react';
 
 // Mock all the services before importing Notebook
 vi.mock('../../services/kernelService', () => ({
+  API_BASE: '/api',
   kernelService: {
     getAvailableKernels: vi.fn().mockResolvedValue([
       { name: 'python3', display_name: 'Python 3', language: 'python' }
@@ -17,6 +18,8 @@ vi.mock('../../services/kernelService', () => ({
     }),
     startKernel: vi.fn().mockResolvedValue('test-session-id'),
     getOrCreateKernelForFile: vi.fn().mockResolvedValue({ sessionId: 'test-session-id', createdAt: Date.now() / 1000 }),
+    getKernelPreference: vi.fn().mockResolvedValue(null),
+    getStatus: vi.fn().mockResolvedValue({ status: 'idle', execution_count: 0 }),
     stopKernel: vi.fn().mockResolvedValue(true),
     restartKernel: vi.fn().mockResolvedValue(true),
     interruptKernel: vi.fn().mockResolvedValue(true),
@@ -58,6 +61,7 @@ vi.mock('../../services/fileService', () => ({
   loadNotebookHistory: vi.fn().mockResolvedValue([]),
   saveNotebookHistory: vi.fn().mockResolvedValue(undefined),
   loadNotebookSession: vi.fn().mockResolvedValue({}),
+  getNotebookSettings: vi.fn().mockResolvedValue(null),
   saveNotebookSession: vi.fn().mockResolvedValue(true),
   getAgentPermissionStatus: vi.fn().mockResolvedValue({
     agent_created: false,

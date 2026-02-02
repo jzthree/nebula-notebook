@@ -39,6 +39,15 @@ export class SessionStore {
       )
     `);
 
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS notebook_kernel_prefs (
+        file_path TEXT PRIMARY KEY,
+        kernel_name TEXT NOT NULL,
+        server_id TEXT,
+        updated_at REAL NOT NULL
+      )
+    `);
+
     // Migration: add connection_config column if it doesn't exist
     try {
       this.db.exec('ALTER TABLE sessions ADD COLUMN connection_config TEXT');
@@ -69,6 +78,11 @@ export class SessionStore {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_sessions_file_path
       ON sessions(file_path) WHERE file_path IS NOT NULL
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_notebook_kernel_prefs_updated_at
+      ON notebook_kernel_prefs(updated_at)
     `);
   }
 
@@ -235,6 +249,42 @@ export class SessionStore {
     const stmt = this.db.prepare(`DELETE FROM sessions WHERE session_id IN (${placeholders})`);
     const result = stmt.run(...sessionIds);
     return result.changes;
+  }
+
+  /**
+   * Save kernel preference for a notebook file.
+   */
+  saveNotebookKernelPreference(filePath: string, kernelName: string, serverId?: string | null): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO notebook_kernel_prefs
+      (file_path, kernel_name, server_id, updated_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    stmt.run(filePath, kernelName, serverId ?? null, Date.now() / 1000);
+  }
+
+  /**
+   * Get kernel preference for a notebook file.
+   */
+  getNotebookKernelPreference(filePath: string): { kernelName: string; serverId: string | null; updatedAt: number } | null {
+    const stmt = this.db.prepare(
+      'SELECT kernel_name, server_id, updated_at FROM notebook_kernel_prefs WHERE file_path = ?'
+    );
+    const row = stmt.get(filePath) as { kernel_name: string; server_id: string | null; updated_at: number } | undefined;
+    if (!row) return null;
+    return {
+      kernelName: row.kernel_name,
+      serverId: row.server_id ?? null,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /**
+   * Delete kernel preference for a notebook file.
+   */
+  deleteNotebookKernelPreference(filePath: string): void {
+    const stmt = this.db.prepare('DELETE FROM notebook_kernel_prefs WHERE file_path = ?');
+    stmt.run(filePath);
   }
 
   /**

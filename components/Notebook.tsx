@@ -1670,13 +1670,40 @@ export const Notebook: React.FC = () => {
     if (meta) setCurrentFileMetadata(meta);
     // Note: No need to scroll to top - Virtuoso resets when key={currentFileId} changes
 
-    // Use kernel from notebook file if available, otherwise use current kernel preference
-    // Also verify the kernel exists in available kernels
-    let kernelToUse = notebookKernel || currentKernel;
-    const kernelExists = availableKernels.some(k => k.name === kernelToUse);
-    if (!kernelExists && availableKernels.length > 0) {
+    // Resolve kernel/server preference (server is the source of truth)
+    let preferredKernel = notebookKernel || currentKernel;
+    let preferredServerId = selectedServerId;
+    try {
+      const preference = await kernelService.getKernelPreference(id);
+      if (preference?.kernel_name) {
+        preferredKernel = preference.kernel_name;
+      }
+      if (preference?.server_id) {
+        preferredServerId = preference.server_id;
+      }
+    } catch (error) {
+      console.warn('Failed to load kernel preference:', error);
+    }
+
+    let kernelsForCheck = availableKernels;
+    if (preferredServerId && preferredServerId !== selectedServerId) {
+      setSelectedServerId(preferredServerId);
+      try {
+        kernelsForCheck = await kernelService.getAvailableKernels(preferredServerId);
+        setAvailableKernels(kernelsForCheck);
+        // Refresh environments in background for the selected server
+        loadPythonEnvironments(false, preferredServerId, false);
+      } catch (error) {
+        console.error('Failed to load kernels for preferred server:', error);
+      }
+    }
+
+    // Use preferred kernel and verify it exists
+    let kernelToUse = preferredKernel;
+    const kernelExists = kernelsForCheck.some(k => k.name === kernelToUse);
+    if (!kernelExists && kernelsForCheck.length > 0) {
       // Fall back to first available kernel if the specified one doesn't exist
-      kernelToUse = availableKernels[0].name;
+      kernelToUse = kernelsForCheck[0].name;
     }
 
     // Update current kernel state to reflect what we're actually using
@@ -1687,9 +1714,16 @@ export const Notebook: React.FC = () => {
     // Get or create kernel for this file (one notebook = one kernel)
     try {
       setKernelStatus('starting');
-      const { sessionId, createdAt } = await kernelService.getOrCreateKernelForFile(id, kernelToUse);
+      const { sessionId, createdAt, serverId: resolvedServerId } = await kernelService.getOrCreateKernelForFile(
+        id,
+        kernelToUse,
+        preferredServerId
+      );
       setKernelSessionId(sessionId);
       if (createdAt) setKernelCreatedAt(createdAt);
+      if (resolvedServerId && resolvedServerId !== selectedServerId) {
+        setSelectedServerId(resolvedServerId);
+      }
       setIsKernelReady(true);
       // Note: Don't set status to 'idle' here - the WebSocket will send the actual status
       // which could be 'busy' if a cell was executing when the page was refreshed
@@ -1967,9 +2001,16 @@ export const Notebook: React.FC = () => {
       // Use getOrCreateKernelForFile which handles kernel switching on the backend
       // (it will stop the old kernel if kernel type differs)
       if (currentFileId) {
-        const { sessionId: newSessionId, createdAt } = await kernelService.getOrCreateKernelForFile(currentFileId, kernelName, targetServerId);
+        const { sessionId: newSessionId, createdAt, serverId: resolvedServerId } = await kernelService.getOrCreateKernelForFile(
+          currentFileId,
+          kernelName,
+          targetServerId
+        );
         setKernelSessionId(newSessionId);
         if (createdAt) setKernelCreatedAt(createdAt);
+        if (resolvedServerId && resolvedServerId !== selectedServerId) {
+          setSelectedServerId(resolvedServerId);
+        }
       } else {
         // No file open, just start a standalone kernel
         if (kernelSessionId) {
@@ -2068,9 +2109,12 @@ export const Notebook: React.FC = () => {
           const kernelToUse = currentKernel || 'python3';
           let newSessionId: string;
           if (currentFileId) {
-            const result = await kernelService.getOrCreateKernelForFile(currentFileId, kernelToUse);
+            const result = await kernelService.getOrCreateKernelForFile(currentFileId, kernelToUse, selectedServerId);
             newSessionId = result.sessionId;
             if (result.createdAt) setKernelCreatedAt(result.createdAt);
+            if (result.serverId && result.serverId !== selectedServerId) {
+              setSelectedServerId(result.serverId);
+            }
           } else {
             newSessionId = await kernelService.startKernel(kernelToUse);
           }
@@ -3033,6 +3077,12 @@ export const Notebook: React.FC = () => {
 
                       {/* Save Status Indicator */}
                       <span className="flex items-center gap-1 text-xs">
+                        {currentFileId && !isAgentConnected && (
+                          <span className="flex items-center gap-1 text-amber-600 mr-2" title="Reconnecting to server...">
+                            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                            <span>Reconnecting</span>
+                          </span>
+                        )}
                         {!isOnline && (
                           <span className="flex items-center gap-1 text-orange-600 mr-2" title="No internet connection">
                             <CloudOff className="w-3 h-3" />

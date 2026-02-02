@@ -219,6 +219,9 @@ router.post('/kernels/start', async (req: Request, res: Response) => {
     if (server_id && server_id !== localServerId && server_id !== 'local') {
       // Start on remote server
       const result = await startRemoteKernel(server_id, kernel_name, file_path);
+      if (file_path) {
+        kernelService.saveNotebookKernelPreference(file_path, kernel_name, server_id);
+      }
       res.json({ session_id: result.sessionId, kernel_name, server_id });
       return;
     }
@@ -229,11 +232,36 @@ router.post('/kernels/start', async (req: Request, res: Response) => {
       cwd,
       filePath: file_path,
     });
+    if (file_path) {
+      kernelService.saveNotebookKernelPreference(file_path, kernel_name, localServerId);
+    }
     res.json({ session_id: sessionId, kernel_name, server_id: localServerId });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ detail: message });
   }
+});
+
+/**
+ * Get stored kernel preference for a notebook file.
+ */
+router.get('/kernels/preference', async (req: Request, res: Response) => {
+  const filePath = req.query.file_path as string;
+  if (!filePath) {
+    res.status(400).json({ detail: 'file_path query parameter is required' });
+    return;
+  }
+
+  const preference = kernelService.getNotebookKernelPreference(filePath);
+  if (!preference) {
+    res.json({ kernel_name: null, server_id: null });
+    return;
+  }
+  res.json({
+    kernel_name: preference.kernelName,
+    server_id: preference.serverId,
+    updated_at: preference.updatedAt,
+  });
 });
 
 /**
@@ -248,21 +276,37 @@ router.post('/kernels/for-file', async (req: Request, res: Response) => {
       return;
     }
 
+    const normalizedFilePath = kernelService.normalizeNotebookPath(file_path);
+    let effectiveKernelName = kernel_name;
+    let effectiveServerId = server_id as string | undefined;
+
+    if (!effectiveServerId) {
+      const preference = kernelService.getNotebookKernelPreference(normalizedFilePath);
+      if (preference?.kernelName) {
+        effectiveKernelName = preference.kernelName;
+      }
+      if (preference?.serverId) {
+        effectiveServerId = preference.serverId;
+      }
+    }
+
     // Check if we should start on a remote server
     const localServerId = serverRegistry.getLocalServerId();
-    if (server_id && server_id !== localServerId && server_id !== 'local') {
+    if (effectiveServerId && effectiveServerId !== localServerId && effectiveServerId !== 'local') {
       // Start on remote server
-      const result = await startRemoteKernel(server_id, kernel_name, file_path);
-      res.json({ session_id: result.sessionId, kernel_name, file_path, server_id });
+      const result = await startRemoteKernel(effectiveServerId, effectiveKernelName, file_path);
+      kernelService.saveNotebookKernelPreference(normalizedFilePath, effectiveKernelName, effectiveServerId);
+      res.json({ session_id: result.sessionId, kernel_name: effectiveKernelName, file_path, server_id: effectiveServerId });
       return;
     }
 
     // Start locally
-    const sessionId = await kernelService.getOrCreateKernel(file_path, kernel_name);
+    const sessionId = await kernelService.getOrCreateKernel(normalizedFilePath, effectiveKernelName);
     const sessionInfo = await kernelService.getSessionStatus(sessionId);
+    kernelService.saveNotebookKernelPreference(normalizedFilePath, effectiveKernelName, localServerId);
     res.json({
       session_id: sessionId,
-      kernel_name,
+      kernel_name: effectiveKernelName,
       file_path,
       server_id: localServerId,
       created_at: sessionInfo?.createdAt,

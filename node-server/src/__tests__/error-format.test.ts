@@ -65,6 +65,14 @@ describe('Error Format - FastAPI Parity', () => {
       expect(response.body).not.toHaveProperty('error');
     });
 
+    it('should use detail field for missing file_path in /api/kernels/preference', async () => {
+      const response = await request(app).get('/api/kernels/preference');
+
+      expect(response.status).toBe(400);
+      expect(response.body).toHaveProperty('detail');
+      expect(response.body).not.toHaveProperty('error');
+    });
+
     it('should use detail field for non-existent session', async () => {
       const response = await request(app).delete('/api/kernels/non-existent-session');
 

@@ -43,6 +43,12 @@ export interface PythonEnvironmentsResponse {
   };
 }
 
+export interface KernelPreference {
+  kernel_name: string | null;
+  server_id: string | null;
+  updated_at?: number;
+}
+
 // Completion result from kernel
 export interface CompletionResult {
   status: string;
@@ -67,6 +73,7 @@ interface SessionState {
   };
   filePath?: string; // Associated notebook file path
   kernelName?: string; // Kernel name for reconnection
+  serverId?: string | null; // Server ID for reconnection
 }
 
 // Reconnection callback type
@@ -128,18 +135,22 @@ class KernelService {
     });
 
     if (!response.ok) {
-      const error = await response.json();
+      const error = await response.json().catch(() => ({ detail: 'Failed to start kernel' }));
       throw new Error(error.detail || 'Failed to start kernel');
     }
 
     const data = await response.json();
     const sessionId = data.session_id;
+    const resolvedServerId = data.server_id ?? serverId ?? null;
 
     // Initialize session state
     this.sessions.set(sessionId, {
       sessionId,
       ws: null,
-      messageQueue: []
+      messageQueue: [],
+      filePath,
+      kernelName: kernelName,
+      serverId: resolvedServerId,
     });
 
     // Connect WebSocket
@@ -156,7 +167,11 @@ class KernelService {
    * @param serverId - Optional server ID for cluster support (null for local)
    * @returns Object with session ID and created_at timestamp
    */
-  async getOrCreateKernelForFile(filePath: string, kernelName: string = 'python3', serverId?: string | null): Promise<{ sessionId: string; createdAt?: number }> {
+  async getOrCreateKernelForFile(
+    filePath: string,
+    kernelName: string = 'python3',
+    serverId?: string | null
+  ): Promise<{ sessionId: string; createdAt?: number; serverId?: string | null }> {
     const body: { file_path: string; kernel_name: string; server_id?: string } = {
       file_path: filePath,
       kernel_name: kernelName
@@ -172,13 +187,14 @@ class KernelService {
     });
 
     if (!response.ok) {
-      const error = await response.json();
+      const error = await response.json().catch(() => ({ detail: 'Failed to get/create kernel' }));
       throw new Error(error.detail || 'Failed to get/create kernel');
     }
 
     const data = await response.json();
     const sessionId = data.session_id;
     const createdAt = data.created_at as number | undefined;
+    const resolvedServerId = data.server_id ?? serverId ?? null;
 
     // Initialize session state if not already connected
     if (!this.sessions.has(sessionId)) {
@@ -188,6 +204,7 @@ class KernelService {
         messageQueue: [],
         filePath,
         kernelName,
+        serverId: resolvedServerId,
       });
 
       // Connect WebSocket
@@ -197,6 +214,7 @@ class KernelService {
       const session = this.sessions.get(sessionId)!;
       session.filePath = filePath;
       session.kernelName = kernelName;
+      session.serverId = resolvedServerId;
 
       if (!this.isConnected(sessionId)) {
         // Reconnect if disconnected
@@ -204,7 +222,7 @@ class KernelService {
       }
     }
 
-    return { sessionId, createdAt };
+    return { sessionId, createdAt, serverId: resolvedServerId };
   }
 
   /**
@@ -478,7 +496,11 @@ class KernelService {
     if (!this.sessions.has(sessionId)) return null;
 
     const response = await fetch(`${API_BASE}/kernels/${encodeURIComponent(sessionId)}/status`);
-    if (!response.ok) return null;
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Failed to get kernel status' }));
+      throw new Error(error.detail || 'Failed to get kernel status');
+    }
 
     return response.json();
   }
@@ -545,7 +567,14 @@ class KernelService {
 
         try {
           // First check if session exists on server
-          const status = await this.getStatus(sessionId);
+          let status: KernelSession | null = null;
+          try {
+            status = await this.getStatus(sessionId);
+          } catch (statusError) {
+            // If status check fails (e.g. 500), don't recreate yet
+            console.error(`Failed to check session status for ${sessionId}:`, statusError);
+            continue;
+          }
 
           if (!status && session.filePath && session.kernelName) {
             // Session no longer exists on server, recreate it
@@ -557,7 +586,11 @@ class KernelService {
 
             // Create new session - this will call onReconnect with the new session
             try {
-              const newSessionId = await this.getOrCreateKernelForFile(session.filePath, session.kernelName);
+              const newSessionId = await this.getOrCreateKernelForFile(
+                session.filePath,
+                session.kernelName,
+                session.serverId
+              );
               console.log(`Recreated session as ${newSessionId}`);
 
               // Notify callbacks with new session ID
@@ -635,6 +668,22 @@ class KernelService {
       throw new Error('Failed to fetch Python environments');
     }
     return response.json();
+  }
+
+  /**
+   * Get stored kernel preference for a notebook file.
+   */
+  async getKernelPreference(filePath: string): Promise<KernelPreference | null> {
+    const params = new URLSearchParams({ file_path: filePath });
+    const response = await fetch(`${API_BASE}/kernels/preference?${params.toString()}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch kernel preference');
+    }
+    const data = await response.json();
+    if (!data.kernel_name && !data.server_id) {
+      return null;
+    }
+    return data as KernelPreference;
   }
 
   /**
