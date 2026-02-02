@@ -1951,8 +1951,10 @@ export const Notebook: React.FC = () => {
 
   // --- KERNEL OPERATIONS ---
 
-  const switchKernel = async (kernelName: string, serverId?: string | null) => {
-    setIsKernelMenuOpen(false);
+  const switchKernel = async (kernelName: string, serverId?: string | null, keepMenuOpen = false) => {
+    if (!keepMenuOpen) {
+      setIsKernelMenuOpen(false);
+    }
     setKernelStatus('starting');
     setIsKernelReady(false);
     setCurrentKernel(kernelName); // Update name immediately so UI shows new kernel with "starting" status
@@ -2010,27 +2012,23 @@ export const Notebook: React.FC = () => {
 
   /**
    * Switch to a different server for kernel execution
-   * This will stop the current kernel and start a new one on the target server
+   * This loads the available kernels for the new server but does NOT start a kernel.
+   * User must manually select a kernel from the menu.
    */
   const switchServer = async (serverId: string) => {
     if (serverId === selectedServerId) return; // No change
 
     setSelectedServerId(serverId);
 
-    let nextKernel = currentKernel;
     try {
       const kernels = await kernelService.getAvailableKernels(serverId);
       setAvailableKernels(kernels);
-      if (kernels.length > 0 && !kernels.some(k => k.name === currentKernel)) {
-        nextKernel = kernels[0].name;
-        setCurrentKernel(nextKernel);
-      }
       loadPythonEnvironments(false, serverId);
     } catch (error) {
       console.error('Failed to load kernels for server:', error);
     }
 
-    // Stop the current kernel if it exists
+    // Stop the current kernel if it exists (we're switching servers)
     if (kernelSessionId) {
       try {
         await kernelService.stopKernel(kernelSessionId);
@@ -2038,12 +2036,10 @@ export const Notebook: React.FC = () => {
         console.error('Failed to stop kernel:', e);
       }
       setKernelSessionId(null);
+      setKernelStatus('idle');
+      setIsKernelReady(false);
     }
-
-    // Start a new kernel on the selected server if a file is open
-    if (currentFileId) {
-      await switchKernel(nextKernel, serverId);
-    }
+    // Menu stays open so user can choose a kernel on the new server
   };
 
   const restartKernel = async () => {
