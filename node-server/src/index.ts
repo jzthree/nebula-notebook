@@ -16,6 +16,8 @@ import express, { Request, Response, NextFunction, Express } from 'express';
 import cors from 'cors';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
+import { randomUUID } from 'crypto';
 
 // Import routes
 import kernelRoutes, { setupKernelWebSocket, kernelService } from './routes/kernel';
@@ -29,6 +31,7 @@ import resourceRoutes from './routes/resources';
 
 // Import cluster
 import { serverRegistry } from './cluster/server-registry';
+import { getOrCreateClusterSecret } from './cluster/cluster-secret';
 import { clientRegistration } from './cluster/client-registration';
 
 // Import auth
@@ -47,15 +50,13 @@ const BODY_LIMIT =
   process.env.NEBULA_BODY_LIMIT ||
   process.env.NEBULA_MAX_BODY_SIZE ||
   '200mb';
-const AUTH_DISABLED =
-  process.argv.includes('--noauth') ||
-  process.argv.includes('--no-auth') ||
-  process.env.NO_AUTH === 'true' ||
-  process.env.NEBULA_NO_AUTH === 'true' ||
-  process.env.npm_config_noauth === 'true' ||
-  process.env.npm_config_noauth === '1' ||
-  process.env.npm_config_no_auth === 'true' ||
-  process.env.npm_config_no_auth === '1';
+const CLIENT_MODE =
+  process.argv.includes('--client') ||
+  process.argv.includes('--client-mode') ||
+  process.env.NEBULA_CLIENT === 'true' ||
+  process.env.NEBULA_CLIENT_MODE === 'true' ||
+  process.env.npm_config_client === 'true' ||
+  process.env.npm_config_client === '1';
 const getArgValue = (name: string): string | null => {
   const idx = process.argv.findIndex(arg => arg === name);
   if (idx !== -1 && process.argv[idx + 1]) {
@@ -81,6 +82,10 @@ const REATTACH_KERNELS =
   process.env.NEBULA_REATTACH_KERNELS === 'true' ||
   process.env.npm_config_reattach_kernels === 'true' ||
   process.env.npm_config_reattach_kernels === '1';
+
+// Log kernel preservation settings
+if (PRESERVE_KERNELS) console.log('[Server] Kernel preservation ENABLED');
+if (REATTACH_KERNELS) console.log('[Server] Kernel reattachment ENABLED');
 
 /**
  * Create and configure Express app
@@ -230,9 +235,45 @@ function setupStaticServing(app: Express): void {
 async function main(): Promise<void> {
   console.log('[Server] Starting Nebula Node Server...');
 
-  if (AUTH_DISABLED) {
+  const mainServerUrl = process.env.NEBULA_MAIN_SERVER;
+
+  if (CLIENT_MODE && !mainServerUrl) {
+    console.error('[Cluster] Client mode requested but NEBULA_MAIN_SERVER is not set.');
+    console.error('[Cluster] Set NEBULA_MAIN_SERVER or remove --client.');
+    process.exit(1);
+  }
+
+  process.env.NEBULA_CLIENT_MODE = CLIENT_MODE ? 'true' : 'false';
+
+  if (!process.env.NEBULA_CLUSTER_SECRET) {
+    const allowCreate = !CLIENT_MODE;
+    const secret = getOrCreateClusterSecret({ allowCreate });
+    if (secret) {
+      process.env.NEBULA_CLUSTER_SECRET = secret;
+      if (allowCreate) {
+        console.log('[Cluster] Generated cluster secret (stored at ~/.nebula/cluster.json)');
+      }
+    } else if (CLIENT_MODE) {
+      console.error('[Cluster] No NEBULA_CLUSTER_SECRET set and no ~/.nebula/cluster.json found.');
+      console.error('[Cluster] Set NEBULA_CLUSTER_SECRET or copy ~/.nebula/cluster.json from the main server.');
+      process.exit(1);
+    }
+  }
+
+  const authDisabled =
+    process.argv.includes('--noauth') ||
+    process.argv.includes('--no-auth') ||
+    process.env.NO_AUTH === 'true' ||
+    process.env.NEBULA_NO_AUTH === 'true' ||
+    process.env.npm_config_noauth === 'true' ||
+    process.env.npm_config_noauth === '1' ||
+    process.env.npm_config_no_auth === 'true' ||
+    process.env.npm_config_no_auth === '1' ||
+    CLIENT_MODE;
+
+  if (authDisabled) {
     authService.disableAuth();
-    console.log('[Auth] Disabled (--noauth)');
+    console.log(`[Auth] Disabled (${CLIENT_MODE ? 'client mode' : '--noauth'})`);
   }
   if (WORKDIR) {
     try {
@@ -259,10 +300,13 @@ async function main(): Promise<void> {
   }
 
   // Set local server ID from hostname
-  const os = await import('os');
   const localServerId = `${os.hostname()}:${PORT}`;
   serverRegistry.setLocalServerId(localServerId);
   console.log(`[Cluster] Local server ID: ${localServerId}`);
+  const serverInstanceId = randomUUID();
+  process.env.NEBULA_SERVER_ID = localServerId;
+  process.env.NEBULA_SERVER_INSTANCE_ID = serverInstanceId;
+  kernelService.setServerIdentity(localServerId, serverInstanceId);
 
   // Create Express app
   const app = createApp();
@@ -297,6 +341,7 @@ async function main(): Promise<void> {
   // Graceful shutdown
   const shutdown = async () => {
     console.log('\n[Server] Shutting down...');
+    console.log(`[Server] PRESERVE_KERNELS=${PRESERVE_KERNELS}`);
 
     // Cleanup terminals
     cleanupTerminals();
@@ -341,8 +386,10 @@ async function main(): Promise<void> {
     console.log(`[Server] Terminal WebSocket: ws://localhost:${PORT}/ws?id={terminal_id}`);
     console.log(`[Server] Root directory: ${fsService.getRootDirectory()} (change with --workdir)`);
 
-    // Initialize client registration (if NEBULA_MAIN_SERVER is set)
+  // Initialize client registration (explicit client mode only)
+  if (CLIENT_MODE) {
     clientRegistration.initFromEnv(Number(PORT));
+  }
   });
 }
 

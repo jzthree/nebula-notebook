@@ -19,6 +19,11 @@ interface ProxiedSession {
 
 const proxiedSessions: Map<string, ProxiedSession> = new Map();
 
+function getClusterHeaders(): Record<string, string> {
+  const secret = process.env.NEBULA_CLUSTER_SECRET;
+  return secret ? { 'X-Nebula-Cluster-Secret': secret } : {};
+}
+
 /**
  * Create a composite session ID that encodes the server
  */
@@ -81,7 +86,7 @@ export async function startRemoteKernel(
 
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getClusterHeaders() },
     body: JSON.stringify(body),
   });
 
@@ -123,6 +128,7 @@ export async function interruptRemoteKernel(sessionId: string): Promise<void> {
 
   const response = await fetch(`${server.url}/api/kernels/${remoteSessionId}/interrupt`, {
     method: 'POST',
+    headers: { ...getClusterHeaders() },
   });
 
   if (!response.ok) {
@@ -147,6 +153,7 @@ export async function restartRemoteKernel(sessionId: string): Promise<void> {
 
   const response = await fetch(`${server.url}/api/kernels/${remoteSessionId}/restart`, {
     method: 'POST',
+    headers: { ...getClusterHeaders() },
   });
 
   if (!response.ok) {
@@ -173,7 +180,9 @@ export async function getRemoteKernelStatus(sessionId: string): Promise<{
     throw new Error(`Server not found: ${serverId}`);
   }
 
-  const response = await fetch(`${server.url}/api/kernels/${remoteSessionId}/status`);
+  const response = await fetch(`${server.url}/api/kernels/${remoteSessionId}/status`, {
+    headers: { ...getClusterHeaders() },
+  });
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string };
@@ -199,6 +208,7 @@ export async function shutdownRemoteKernel(sessionId: string): Promise<void> {
 
   const response = await fetch(`${server.url}/api/kernels/${remoteSessionId}`, {
     method: 'DELETE',
+    headers: { ...getClusterHeaders() },
   });
 
   if (!response.ok) {
@@ -208,6 +218,50 @@ export async function shutdownRemoteKernel(sessionId: string): Promise<void> {
 
   // Clean up proxied session
   proxiedSessions.delete(sessionId);
+}
+
+/**
+ * Get available kernels from a remote server
+ */
+export async function getRemoteKernels(serverId: string): Promise<{ kernels: any[] }> {
+  const server = serverRegistry.getServer(serverId);
+  if (!server) {
+    throw new Error(`Server not found: ${serverId}`);
+  }
+  if (server.status !== 'online') {
+    throw new Error(`Server is offline: ${serverId}`);
+  }
+
+  const response = await fetch(`${server.url}/api/kernels`, {
+    headers: { ...getClusterHeaders() },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string };
+    throw new Error(error.detail || 'Failed to fetch kernels');
+  }
+  return response.json() as Promise<{ kernels: any[] }>;
+}
+
+/**
+ * Get active kernel sessions from a remote server
+ */
+export async function getRemoteKernelSessions(serverId: string): Promise<{ sessions: any[] }> {
+  const server = serverRegistry.getServer(serverId);
+  if (!server) {
+    throw new Error(`Server not found: ${serverId}`);
+  }
+  if (server.status !== 'online') {
+    throw new Error(`Server is offline: ${serverId}`);
+  }
+
+  const response = await fetch(`${server.url}/api/kernels/sessions`, {
+    headers: { ...getClusterHeaders() },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string };
+    throw new Error(error.detail || 'Failed to fetch kernel sessions');
+  }
+  return response.json() as Promise<{ sessions: any[] }>;
 }
 
 /**
@@ -233,7 +287,9 @@ export function createWebSocketProxy(
 
   console.log(`[KernelProxy] Creating WebSocket proxy to ${wsUrl}`);
 
-  const remoteWs = new WebSocket(wsUrl);
+  const remoteWs = new WebSocket(wsUrl, {
+    headers: getClusterHeaders(),
+  });
 
   // Forward messages from remote to client
   remoteWs.on('message', (data) => {

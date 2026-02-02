@@ -61,10 +61,14 @@ export interface PersistedSession {
   kernelName: string;
   filePath: string | null;
   kernelPid: number | null;
+  serverId?: string | null;
+  serverInstanceId?: string | null;
+  kernelStartTime?: string | null;
   status: 'active' | 'orphaned' | 'terminated';
   createdAt: number;
   lastHeartbeat: number;
   connectionFile: string | null;
+  connectionConfig: string | null; // JSON-serialized connection config
 }
 
 /**
@@ -121,6 +125,7 @@ export interface SessionInfo {
   executionCount: number;
   memoryMb: number | null;
   pid: number | null;
+  createdAt: number; // Unix timestamp in seconds
 }
 
 /**

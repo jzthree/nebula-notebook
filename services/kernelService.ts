@@ -86,8 +86,13 @@ class KernelService {
   /**
    * Get list of available kernels on the system
    */
-  async getAvailableKernels(): Promise<KernelSpec[]> {
-    const response = await fetch(`${API_BASE}/kernels`);
+  async getAvailableKernels(serverId?: string | null): Promise<KernelSpec[]> {
+    const params = new URLSearchParams();
+    if (serverId) {
+      params.set('server_id', serverId);
+    }
+    const url = params.toString() ? `${API_BASE}/kernels?${params.toString()}` : `${API_BASE}/kernels`;
+    const response = await fetch(url);
     if (!response.ok) {
       throw new Error('Failed to fetch kernels');
     }
@@ -148,9 +153,9 @@ class KernelService {
    * @param filePath - The notebook file path
    * @param kernelName - The kernel to start if creating new
    * @param serverId - Optional server ID for cluster support (null for local)
-   * @returns The session ID
+   * @returns Object with session ID and created_at timestamp
    */
-  async getOrCreateKernelForFile(filePath: string, kernelName: string = 'python3', serverId?: string | null): Promise<string> {
+  async getOrCreateKernelForFile(filePath: string, kernelName: string = 'python3', serverId?: string | null): Promise<{ sessionId: string; createdAt?: number }> {
     const body: { file_path: string; kernel_name: string; server_id?: string } = {
       file_path: filePath,
       kernel_name: kernelName
@@ -172,6 +177,7 @@ class KernelService {
 
     const data = await response.json();
     const sessionId = data.session_id;
+    const createdAt = data.created_at as number | undefined;
 
     // Initialize session state if not already connected
     if (!this.sessions.has(sessionId)) {
@@ -197,7 +203,7 @@ class KernelService {
       }
     }
 
-    return sessionId;
+    return { sessionId, createdAt };
   }
 
   /**
@@ -603,8 +609,12 @@ class KernelService {
   /**
    * Get all Python environments (kernelspecs + discovered)
    */
-  async getPythonEnvironments(refresh: boolean = false): Promise<PythonEnvironmentsResponse> {
-    const response = await fetch(`${API_BASE}/python/environments?refresh=${refresh}`);
+  async getPythonEnvironments(refresh: boolean = false, serverId?: string | null): Promise<PythonEnvironmentsResponse> {
+    const params = new URLSearchParams({ refresh: refresh ? 'true' : 'false' });
+    if (serverId) {
+      params.set('server_id', serverId);
+    }
+    const response = await fetch(`${API_BASE}/python/environments?${params.toString()}`);
     if (!response.ok) {
       throw new Error('Failed to fetch Python environments');
     }
@@ -614,13 +624,14 @@ class KernelService {
   /**
    * Install ipykernel and register a Python environment as a kernel
    */
-  async installKernel(pythonPath: string, kernelName?: string): Promise<{ kernel_name: string; message: string }> {
+  async installKernel(pythonPath: string, kernelName?: string, serverId?: string | null): Promise<{ kernel_name: string; message: string }> {
     const response = await fetch(`${API_BASE}/python/install-kernel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         python_path: pythonPath,
-        kernel_name: kernelName
+        kernel_name: kernelName,
+        server_id: serverId || undefined
       })
     });
 
@@ -635,8 +646,13 @@ class KernelService {
   /**
    * Force refresh Python environment discovery cache
    */
-  async refreshPythonEnvironments(): Promise<{ count: number }> {
-    const response = await fetch(`${API_BASE}/python/refresh`, {
+  async refreshPythonEnvironments(serverId?: string | null): Promise<{ count: number }> {
+    const params = new URLSearchParams();
+    if (serverId) {
+      params.set('server_id', serverId);
+    }
+    const url = params.toString() ? `${API_BASE}/python/refresh?${params.toString()}` : `${API_BASE}/python/refresh`;
+    const response = await fetch(url, {
       method: 'POST'
     });
 
@@ -650,8 +666,13 @@ class KernelService {
   /**
    * Get all active kernel sessions from server with memory usage
    */
-  async getAllSessions(): Promise<KernelSessionInfo[]> {
-    const response = await fetch(`${API_BASE}/kernels/sessions`);
+  async getAllSessions(serverId?: string | null): Promise<KernelSessionInfo[]> {
+    const params = new URLSearchParams();
+    if (serverId) {
+      params.set('server_id', serverId);
+    }
+    const url = params.toString() ? `${API_BASE}/kernels/sessions?${params.toString()}` : `${API_BASE}/kernels/sessions`;
+    const response = await fetch(url);
     if (!response.ok) {
       throw new Error('Failed to fetch kernel sessions');
     }
@@ -668,6 +689,7 @@ export interface KernelSessionInfo {
   execution_count: number;
   memory_mb: number | null;
   pid: number | null;
+  created_at: number; // Unix timestamp in seconds
 }
 
 // Export singleton instance
@@ -690,4 +712,50 @@ export const runPythonCode = async (
     throw new Error('No default kernel session. Call initializeKernel first.');
   }
   await kernelService.executeCode(defaultSessionId, code, onOutput);
+};
+
+// Dead session type - orphaned or terminated sessions from previous runs
+export interface DeadSession {
+  session_id: string;
+  kernel_name: string;
+  file_path: string | null;
+  status: 'orphaned' | 'terminated';
+  last_heartbeat: number;
+}
+
+/**
+ * Get dead kernel sessions (orphaned/terminated) that can be cleaned up
+ */
+export const getDeadKernelSessions = async (): Promise<DeadSession[]> => {
+  const token = authService.getToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const response = await fetch(`${API_BASE}/kernels/dead`, { headers });
+  if (!response.ok) {
+    throw new Error(`Failed to get dead sessions: ${response.statusText}`);
+  }
+  const data = await response.json();
+  return data.sessions || [];
+};
+
+/**
+ * Cleanup dead kernel sessions
+ * @param sessionIds Optional list of specific session IDs to clean up. If not provided, cleans all.
+ */
+export const cleanupDeadKernelSessions = async (sessionIds?: string[]): Promise<number> => {
+  const token = authService.getToken();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const response = await fetch(`${API_BASE}/kernels/dead/cleanup`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ session_ids: sessionIds }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to cleanup dead sessions: ${response.statusText}`);
+  }
+  const data = await response.json();
+  return data.deleted || 0;
 };

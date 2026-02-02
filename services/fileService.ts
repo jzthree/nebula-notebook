@@ -678,3 +678,64 @@ export const setAgentPermission = async (
     return null;
   }
 };
+
+// --- Notebook Settings API ---
+
+export type OutputLoggingMode = 'minimal' | 'full';
+
+export interface NotebookSettings {
+  notebook_path: string;
+  output_logging: OutputLoggingMode;
+}
+
+/**
+ * Get notebook settings (output logging mode, etc.)
+ */
+export const getNotebookSettings = async (
+  notebookPath: string
+): Promise<NotebookSettings | null> => {
+  try {
+    const response = await fetch(
+      `${API_BASE}/notebook/settings?path=${encodeURIComponent(notebookPath)}`
+    );
+
+    if (!response.ok) {
+      console.warn('Failed to get notebook settings:', await response.text());
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.warn('Failed to get notebook settings:', error);
+    return null;
+  }
+};
+
+/**
+ * Update notebook settings
+ */
+export const updateNotebookSettings = async (
+  notebookPath: string,
+  settings: { output_logging?: OutputLoggingMode }
+): Promise<NotebookSettings | null> => {
+  try {
+    const response = await fetch(`${API_BASE}/notebook/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: notebookPath,
+        ...settings
+      })
+    });
+
+    if (!response.ok) {
+      console.warn('Failed to update notebook settings:', await response.text());
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.warn('Failed to update notebook settings:', error);
+    return null;
+  }
+};

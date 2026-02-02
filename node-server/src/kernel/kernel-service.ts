@@ -22,6 +22,7 @@ import {
   StartKernelOptions,
   SessionInfo,
   KernelServiceConfig,
+  PersistedSession,
   ConnectionConfig,
   DEFAULT_CONFIG,
 } from './types';
@@ -56,10 +57,22 @@ export class KernelService {
   private executionQueueSizes: Map<string, number> = new Map();
   private shellRequestQueues: Map<string, Promise<unknown>> = new Map();
   private reattachInProgress = false;
+  private serverId: string;
+  private serverInstanceId: string;
+  private legacyCleanupWarned: Set<string> = new Set();
 
   constructor(config?: KernelServiceConfig, sessionStore?: SessionStore) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.sessionStore = sessionStore || new SessionStore();
+    this.serverId = process.env.NEBULA_SERVER_ID || 'local';
+    this.serverInstanceId = process.env.NEBULA_SERVER_INSTANCE_ID || uuidv4();
+  }
+
+  setServerIdentity(serverId: string, serverInstanceId?: string): void {
+    this.serverId = serverId;
+    if (serverInstanceId) {
+      this.serverInstanceId = serverInstanceId;
+    }
   }
 
   /**
@@ -129,9 +142,9 @@ export class KernelService {
     try {
       await this.initialize();
 
-      // Mark any previously active sessions as orphaned
-      this.sessionStore.markAllOrphaned();
-      const orphanedSessions = this.sessionStore.getOrphanedSessions();
+      // Mark any previously active sessions (for this server) as orphaned
+      this.sessionStore.markAllOrphaned(this.serverId, this.serverInstanceId);
+      const orphanedSessions = this.sessionStore.getOrphanedSessions(this.serverId);
 
       if (orphanedSessions.length === 0) {
         return { attempted: 0, reattached: 0, failed: 0, skipped: 0 };
@@ -143,19 +156,40 @@ export class KernelService {
 
       for (const session of orphanedSessions) {
         const sessionId = session.sessionId;
-        if (!session.connectionFile) {
-          skipped++;
-          continue;
+
+        // Check if kernel process is still alive and matches recorded start time (if available)
+        if (session.kernelPid) {
+          if (!this.isPidAlive(session.kernelPid)) {
+            this.sessionStore.updateStatus(sessionId, 'terminated');
+            skipped++;
+            continue;
+          }
+          if (session.kernelStartTime) {
+            const currentStartTime = await this.getProcessStartTime(session.kernelPid);
+            if (!currentStartTime || currentStartTime !== session.kernelStartTime) {
+              this.sessionStore.updateStatus(sessionId, 'terminated');
+              skipped++;
+              continue;
+            }
+          }
         }
 
-        if (session.kernelPid && !this.isPidAlive(session.kernelPid)) {
-          this.sessionStore.updateStatus(sessionId, 'terminated');
-          skipped++;
-          continue;
+        // Try to get connection config: from file first, then from DB
+        let connectionConfig: ConnectionConfig | null = null;
+        if (session.connectionFile) {
+          connectionConfig = this.loadConnectionFile(session.connectionFile);
         }
-
-        const connectionConfig = this.loadConnectionFile(session.connectionFile);
+        // Fall back to DB-stored config if file is missing (e.g., temp cleanup)
+        if (!connectionConfig && session.connectionConfig) {
+          try {
+            connectionConfig = JSON.parse(session.connectionConfig);
+          } catch {
+            // Invalid JSON in DB
+          }
+        }
         if (!connectionConfig) {
+          console.log(`[Kernel] Skipping session ${sessionId}: no connection config available`);
+          this.sessionStore.updateStatus(sessionId, 'terminated');
           skipped++;
           continue;
         }
@@ -181,23 +215,33 @@ export class KernelService {
         }
 
         try {
-          await this.waitForReady(sessionId);
+          // Use shorter timeout for reattach - kernel should already be running
+          await this.waitForReady(sessionId, 10);
           kernelSession.status = 'idle';
+          const kernelStartTime = session.kernelStartTime
+            ?? (session.kernelPid ? await this.getProcessStartTime(session.kernelPid) : null);
           this.sessionStore.saveSession({
             sessionId,
             kernelName: session.kernelName,
             filePath: normalizedFilePath,
             kernelPid: session.kernelPid ?? null,
+            serverId: this.serverId,
+            serverInstanceId: this.serverInstanceId,
+            kernelStartTime,
             status: 'active',
             createdAt: session.createdAt,
             lastHeartbeat: now,
             connectionFile: session.connectionFile,
+            connectionConfig: JSON.stringify(connectionConfig),
           });
           reattached++;
-        } catch {
+          console.log(`[Kernel] Reattached session ${sessionId} for ${normalizedFilePath || 'no file'}`);
+        } catch (err) {
           failed++;
           kernelSession.status = 'dead';
           this.cleanupInMemorySession(sessionId);
+          this.sessionStore.updateStatus(sessionId, 'terminated');
+          console.log(`[Kernel] Failed to reattach session ${sessionId}: ${err instanceof Error ? err.message : err}`);
         }
       }
 
@@ -357,16 +401,22 @@ export class KernelService {
     // Wait for kernel to be ready
     await this.waitForReady(sessionId);
 
-    // Save to persistence store
+    const kernelStartTime = proc.pid ? await this.getProcessStartTime(proc.pid) : null;
+
+    // Save to persistence store (include connection config for reattach if file is deleted)
     this.sessionStore.saveSession({
       sessionId,
       kernelName,
       filePath: normalizedFilePath,
       kernelPid: proc.pid || null,
+      serverId: this.serverId,
+      serverInstanceId: this.serverInstanceId,
+      kernelStartTime,
       status: 'active',
       createdAt: now,
       lastHeartbeat: now,
       connectionFile: connFile,
+      connectionConfig: JSON.stringify(session.connectionConfig),
     });
 
     session.status = 'idle';
@@ -375,8 +425,9 @@ export class KernelService {
 
   /**
    * Wait for kernel to be ready by connecting to ZeroMQ channels
+   * @param timeoutSeconds Optional override for startup timeout (default: use config)
    */
-  private async waitForReady(sessionId: string): Promise<void> {
+  private async waitForReady(sessionId: string, timeoutSeconds?: number): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session || !session.connectionConfig) {
       throw new Error('Session or connection config not found');
@@ -404,7 +455,8 @@ export class KernelService {
 
     // Send kernel_info_request to verify connectivity
     const startTime = Date.now();
-    const timeout = this.config.startupTimeoutSeconds * 1000;
+    const actualTimeout = timeoutSeconds ?? this.config.startupTimeoutSeconds;
+    const timeout = actualTimeout * 1000;
 
     while (Date.now() - startTime < timeout) {
       try {
@@ -416,7 +468,7 @@ export class KernelService {
       }
     }
 
-    throw new Error(`Kernel did not start within ${this.config.startupTimeoutSeconds} seconds`);
+    throw new Error(`Kernel did not start within ${actualTimeout} seconds`);
   }
 
   /**
@@ -509,12 +561,40 @@ export class KernelService {
     if (existingSessionId) {
       const session = this.sessions.get(existingSessionId);
       if (session && session.status !== 'dead') {
-        // Check if kernel type matches
-        if (session.kernelName === kernelName) {
-          return existingSessionId;
+        // If session is stuck in 'starting' for too long, treat as dead
+        if (session.status === 'starting') {
+          const startingDuration = Date.now() / 1000 - session.lastActivity;
+          if (startingDuration > 30) {
+            console.log(`[Kernel] Session ${existingSessionId} stuck in 'starting' for ${Math.round(startingDuration)}s, restarting`);
+            await this.stopKernel(existingSessionId);
+          } else {
+            // Wait a bit and check if it becomes ready
+            for (let i = 0; i < 10; i++) {
+              await this.sleep(500);
+              const updated = this.sessions.get(existingSessionId);
+              if (!updated || updated.status === 'dead') break;
+              if (updated.status === 'idle' || updated.status === 'busy') {
+                if (updated.kernelName === kernelName) {
+                  return existingSessionId;
+                }
+                break;
+              }
+            }
+            // Still starting after 5s, restart it
+            const stillStarting = this.sessions.get(existingSessionId);
+            if (stillStarting?.status === 'starting') {
+              console.log(`[Kernel] Session ${existingSessionId} still 'starting' after wait, restarting`);
+              await this.stopKernel(existingSessionId);
+            }
+          }
+        } else {
+          // Session is idle or busy
+          if (session.kernelName === kernelName) {
+            return existingSessionId;
+          }
+          // Kernel type changed, stop old and start new
+          await this.stopKernel(existingSessionId);
         }
-        // Kernel type changed, stop old and start new
-        await this.stopKernel(existingSessionId);
       }
     }
 
@@ -926,6 +1006,93 @@ export class KernelService {
   }
 
   /**
+   * Check command line for a PID (best-effort).
+   */
+  private async getPidCommand(pid: number): Promise<string | null> {
+    try {
+      if (process.platform === 'linux') {
+        const raw = fs.readFileSync(`/proc/${pid}/cmdline`);
+        const cmdline = raw.toString('utf8').replace(/\0/g, ' ').trim();
+        return cmdline || null;
+      }
+      const { stdout } = await execAsync(`ps -o command= -p ${pid}`, { timeout: 500 });
+      const cmd = stdout.trim();
+      return cmd.length > 0 ? cmd : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Get process start time (best-effort), used to prevent PID reuse mistakes.
+   */
+  private async getProcessStartTime(pid: number): Promise<string | null> {
+    try {
+      const { stdout } = await execAsync(`ps -o lstart= -p ${pid}`, { timeout: 500 });
+      const startTime = stdout.trim();
+      return startTime.length > 0 ? startTime : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Best-effort check to ensure the PID is a kernel process we started.
+   */
+  private async isExpectedKernelProcess(
+    pid: number,
+    connectionFile: string | null,
+    expectedStartTime?: string | null
+  ): Promise<boolean> {
+    if (expectedStartTime) {
+      const currentStartTime = await this.getProcessStartTime(pid);
+      if (currentStartTime && currentStartTime === expectedStartTime) {
+        return true;
+      }
+      return false;
+    }
+    const cmd = await this.getPidCommand(pid);
+    if (!cmd) return false;
+    if (connectionFile && cmd.includes(connectionFile)) {
+      return true;
+    }
+    // Fallback: ensure it's an ipykernel process before killing
+    return cmd.includes('ipykernel_launcher') || cmd.includes('ipykernel');
+  }
+
+  /**
+   * Attempt to terminate a PID gracefully, then force kill.
+   */
+  private async terminatePid(pid: number): Promise<boolean> {
+    if (!this.isPidAlive(pid)) return true;
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // Ignore kill errors
+    }
+    await this.sleep(500);
+    if (this.isPidAlive(pid)) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // Ignore kill errors
+      }
+    }
+    await this.sleep(200);
+    return !this.isPidAlive(pid);
+  }
+
+  private cleanupPersistedSessionArtifacts(session: PersistedSession): void {
+    if (session.connectionFile && fs.existsSync(session.connectionFile)) {
+      try {
+        fs.unlinkSync(session.connectionFile);
+      } catch {
+        // Ignore delete errors
+      }
+    }
+  }
+
+  /**
    * Cleanup kernel resources
    */
   private cleanupKernelResources(sessionId: string): void {
@@ -1105,16 +1272,22 @@ export class KernelService {
       // Wait for kernel to be ready
       await this.waitForReady(sessionId);
 
+      const kernelStartTime = newProc.pid ? await this.getProcessStartTime(newProc.pid) : null;
+
       // Update persistence store
       this.sessionStore.saveSession({
         sessionId,
         kernelName,
         filePath,
         kernelPid: newProc.pid || null,
+        serverId: this.serverId,
+        serverInstanceId: this.serverInstanceId,
+        kernelStartTime,
         status: 'active',
         createdAt: session.createdAt,
         lastHeartbeat: Date.now() / 1000,
         connectionFile: connFile,
+        connectionConfig: JSON.stringify(session.connectionConfig),
       });
 
       session.status = 'idle';
@@ -1145,6 +1318,7 @@ export class KernelService {
       executionCount: session.executionCount,
       pid: session.pid,
       memoryMb: session.pid ? (memoryMap.get(session.pid) ?? null) : null,
+      createdAt: session.createdAt,
     };
   }
 
@@ -1171,10 +1345,73 @@ export class KernelService {
         executionCount: session.executionCount,
         pid: session.pid,
         memoryMb: session.pid ? (memoryMap.get(session.pid) ?? null) : null,
+        createdAt: session.createdAt,
       });
     }
 
     return sessions;
+  }
+
+  /**
+   * Get dead sessions (orphaned or terminated) that can be cleaned up
+   */
+  getDeadSessions(): { sessionId: string; kernelName: string; filePath: string | null; status: string; lastHeartbeat: number }[] {
+    const deadSessions = this.sessionStore.getDeadSessions(this.serverId);
+    return deadSessions.map(s => ({
+      sessionId: s.sessionId,
+      kernelName: s.kernelName,
+      filePath: s.filePath,
+      status: s.status,
+      lastHeartbeat: s.lastHeartbeat,
+    }));
+  }
+
+  /**
+   * Cleanup dead sessions by deleting them from the database
+   */
+  async cleanupDeadSessions(sessionIds?: string[]): Promise<number> {
+    const deadSessions = this.sessionStore.getDeadSessions(this.serverId);
+    const targets = sessionIds && sessionIds.length > 0
+      ? deadSessions.filter(s => sessionIds.includes(s.sessionId))
+      : deadSessions;
+    const deletableIds: string[] = [];
+
+    for (const session of targets) {
+      let canDelete = true;
+      if (session.kernelPid && this.isPidAlive(session.kernelPid)) {
+        if (!session.kernelStartTime && !this.legacyCleanupWarned.has(session.sessionId)) {
+          console.warn(
+            `[Kernel] Deprecated cleanup fallback for session ${session.sessionId}: kernel_start_time missing. ` +
+              'This fallback will be removed after legacy sessions are cleaned up.'
+          );
+          this.legacyCleanupWarned.add(session.sessionId);
+        }
+        const expected = await this.isExpectedKernelProcess(
+          session.kernelPid,
+          session.connectionFile,
+          session.kernelStartTime
+        );
+        if (!expected) {
+          canDelete = false;
+        } else {
+          const killed = await this.terminatePid(session.kernelPid);
+          if (!killed) {
+            canDelete = false;
+          }
+        }
+      }
+
+      if (canDelete) {
+        this.cleanupPersistedSessionArtifacts(session);
+        deletableIds.push(session.sessionId);
+      }
+    }
+
+    if (deletableIds.length === 0) {
+      return 0;
+    }
+
+    return this.sessionStore.deleteSessions(deletableIds);
   }
 
   /**
@@ -1195,7 +1432,7 @@ export class KernelService {
   async shutdown(options?: { preserveKernels?: boolean }): Promise<void> {
     if (options?.preserveKernels) {
       try {
-        this.sessionStore.markAllOrphaned();
+        this.sessionStore.markAllOrphaned(this.serverId, this.serverInstanceId);
       } catch {
         // Ignore errors marking orphaned
       }

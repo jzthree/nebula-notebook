@@ -17,6 +17,9 @@ import {
   restartRemoteKernel,
   shutdownRemoteKernel,
   getRemoteKernelStatus,
+  getRemoteKernels,
+  getRemoteKernelSessions,
+  createProxiedSessionId,
   createWebSocketProxy,
 } from '../cluster/kernel-proxy';
 import { serverRegistry } from '../cluster/server-registry';
@@ -35,7 +38,20 @@ kernelService.initialize().catch(err => {
  * List available kernelspecs
  * Transforms to snake_case to match Python API format expected by frontend
  */
-router.get('/kernels', (_req: Request, res: Response) => {
+router.get('/kernels', async (_req: Request, res: Response) => {
+  const serverId = _req.query.server_id as string | undefined;
+  const localServerId = serverRegistry.getLocalServerId();
+  if (serverId && serverId !== localServerId && serverId !== 'local') {
+    try {
+      const data = await getRemoteKernels(serverId);
+      res.json(data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(500).json({ detail: message });
+    }
+    return;
+  }
+
   const kernels = kernelService.getAvailableKernels().map(k => ({
     name: k.name,
     display_name: k.displayName,
@@ -104,6 +120,23 @@ router.get('/kernels/debug', (_req: Request, res: Response) => {
  * Transforms to snake_case to match Python API format expected by frontend
  */
 router.get('/kernels/sessions', async (_req: Request, res: Response) => {
+  const serverId = _req.query.server_id as string | undefined;
+  const localServerId = serverRegistry.getLocalServerId();
+  if (serverId && serverId !== localServerId && serverId !== 'local') {
+    try {
+      const data = await getRemoteKernelSessions(serverId);
+      const sessions = (data.sessions || []).map((session: any) => ({
+        ...session,
+        id: createProxiedSessionId(serverId, session.id),
+      }));
+      res.json({ sessions });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(500).json({ detail: message });
+    }
+    return;
+  }
+
   const allSessions = await kernelService.getAllSessions();
   const sessions = allSessions.map(s => ({
     id: s.id,
@@ -113,8 +146,41 @@ router.get('/kernels/sessions', async (_req: Request, res: Response) => {
     execution_count: s.executionCount,
     memory_mb: s.memoryMb,
     pid: s.pid,
+    created_at: s.createdAt,
   }));
   res.json({ sessions });
+});
+
+/**
+ * Get dead (orphaned/terminated) kernel sessions that can be cleaned up
+ * These are sessions from previous server runs that failed to reattach
+ */
+router.get('/kernels/dead', (_req: Request, res: Response) => {
+  const deadSessions = kernelService.getDeadSessions();
+  const sessions = deadSessions.map(s => ({
+    session_id: s.sessionId,
+    kernel_name: s.kernelName,
+    file_path: s.filePath,
+    status: s.status,
+    last_heartbeat: s.lastHeartbeat,
+  }));
+  res.json({ sessions });
+});
+
+/**
+ * Cleanup dead kernel sessions
+ * If session_ids provided, only those are cleaned up
+ * Otherwise all dead sessions are cleaned up
+ */
+router.post('/kernels/dead/cleanup', async (req: Request, res: Response) => {
+  try {
+    const { session_ids } = req.body;
+    const deleted = await kernelService.cleanupDeadSessions(session_ids);
+    res.json({ deleted });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ detail: message });
+  }
 });
 
 /**
@@ -170,7 +236,14 @@ router.post('/kernels/for-file', async (req: Request, res: Response) => {
 
     // Start locally
     const sessionId = await kernelService.getOrCreateKernel(file_path, kernel_name);
-    res.json({ session_id: sessionId, kernel_name, file_path, server_id: localServerId });
+    const sessionInfo = await kernelService.getSessionStatus(sessionId);
+    res.json({
+      session_id: sessionId,
+      kernel_name,
+      file_path,
+      server_id: localServerId,
+      created_at: sessionInfo?.createdAt,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ detail: message });

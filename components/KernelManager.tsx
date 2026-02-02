@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Cpu, Trash2, RefreshCw, HardDrive } from 'lucide-react';
+import { X, Cpu, Trash2, RefreshCw, HardDrive, Clock } from 'lucide-react';
 import { kernelService, KernelSessionInfo } from '../services/kernelService';
 
 interface Props {
@@ -7,6 +7,7 @@ interface Props {
   onClose: () => void;
   currentSessionId: string | null;
   onKernelKilled?: (sessionId: string) => void;
+  serverId?: string | null;
 }
 
 function getFilenameFromPath(filePath: string): string {
@@ -14,7 +15,27 @@ function getFilenameFromPath(filePath: string): string {
   return parts[parts.length - 1] || 'Unknown';
 }
 
-export const KernelManager: React.FC<Props> = ({ isOpen, onClose, currentSessionId, onKernelKilled }) => {
+function formatUptime(createdAtSeconds: number): string {
+  const now = Date.now() / 1000;
+  const seconds = Math.floor(now - createdAtSeconds);
+
+  if (seconds < 60) return `${seconds}s`;
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    const remainingMinutes = minutes % 60;
+    return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
+}
+
+export const KernelManager: React.FC<Props> = ({ isOpen, onClose, currentSessionId, onKernelKilled, serverId }) => {
   const [sessions, setSessions] = useState<KernelSessionInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [killingId, setKillingId] = useState<string | null>(null);
@@ -22,7 +43,7 @@ export const KernelManager: React.FC<Props> = ({ isOpen, onClose, currentSession
   const loadSessions = async () => {
     setIsLoading(true);
     try {
-      const data = await kernelService.getAllSessions();
+      const data = await kernelService.getAllSessions(serverId);
       setSessions(data);
     } catch (error) {
       console.error('Failed to load sessions:', error);
@@ -35,7 +56,7 @@ export const KernelManager: React.FC<Props> = ({ isOpen, onClose, currentSession
     if (isOpen) {
       loadSessions();
     }
-  }, [isOpen]);
+  }, [isOpen, serverId]);
 
   const handleKillKernel = async (sessionId: string) => {
     setKillingId(sessionId);
@@ -133,6 +154,12 @@ export const KernelManager: React.FC<Props> = ({ isOpen, onClose, currentSession
                       <span className="flex items-center gap-1">
                         <HardDrive className="w-3 h-3" />
                         {session.memory_mb} MB
+                      </span>
+                    )}
+                    {session.created_at && (
+                      <span className="flex items-center gap-1" title={`Started: ${new Date(session.created_at * 1000).toLocaleString()}`}>
+                        <Clock className="w-3 h-3" />
+                        {formatUptime(session.created_at)}
                       </span>
                     )}
                     <span className="text-slate-400">

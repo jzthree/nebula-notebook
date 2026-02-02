@@ -70,10 +70,14 @@ class ClientRegistration {
       // Get resources to send with registration
       const resourceService = getResourceService();
       const resources = resourceService.getResources();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (this.config.secret) {
+        headers['X-Nebula-Cluster-Secret'] = this.config.secret;
+      }
 
       const response = await fetch(`${this.config.mainServerUrl}/api/servers/register`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           host: this.config.localHost,
           port: this.config.localPort,
@@ -134,12 +138,16 @@ class ClientRegistration {
       // Get resources (cached, never blocks)
       const resourceService = getResourceService();
       const resources = resourceService.getResources();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (this.config.secret) {
+        headers['X-Nebula-Cluster-Secret'] = this.config.secret;
+      }
 
       const response = await fetch(
         `${this.config.mainServerUrl}/api/servers/${encodeURIComponent(this.serverId)}/heartbeat`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ resources }),
         }
       );
@@ -174,11 +182,15 @@ class ClientRegistration {
     // Unregister from main server
     if (this.config && this.serverId && this.registered) {
       try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (this.config.secret) {
+          headers['X-Nebula-Cluster-Secret'] = this.config.secret;
+        }
         await fetch(
           `${this.config.mainServerUrl}/api/servers/${encodeURIComponent(this.serverId)}`,
           {
             method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify({ secret: this.config.secret }),
           }
         );

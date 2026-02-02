@@ -7,6 +7,7 @@
  */
 
 import type { ServerResources } from '../resources/resource-service';
+import { readClusterSecret } from './cluster-secret';
 
 export interface PeerServer {
   id: string;           // Unique server ID (usually hostname:port)
@@ -39,8 +40,8 @@ class ServerRegistry {
   private localServerId: string = 'local';
 
   constructor() {
-    // Load cluster secret from environment
-    this.clusterSecret = process.env.NEBULA_CLUSTER_SECRET || null;
+    // Load initial cluster secret from environment or disk
+    this.clusterSecret = process.env.NEBULA_CLUSTER_SECRET || readClusterSecret() || null;
 
     // Start cleanup interval
     this.startCleanupInterval();
@@ -63,12 +64,21 @@ class ServerRegistry {
   /**
    * Validate registration secret
    */
+  private getClusterSecret(): string | null {
+    const secret = process.env.NEBULA_CLUSTER_SECRET || readClusterSecret() || null;
+    if (secret && secret !== this.clusterSecret) {
+      this.clusterSecret = secret;
+    }
+    return this.clusterSecret;
+  }
+
   private validateSecret(providedSecret?: string): boolean {
+    const clusterSecret = this.getClusterSecret();
     // If no cluster secret configured, allow all registrations (dev mode)
-    if (!this.clusterSecret) {
+    if (!clusterSecret) {
       return true;
     }
-    return providedSecret === this.clusterSecret;
+    return providedSecret === clusterSecret;
   }
 
   /**

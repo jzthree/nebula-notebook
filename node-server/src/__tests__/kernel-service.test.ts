@@ -115,7 +115,8 @@ describe('SessionStore', () => {
         status: 'active',
         createdAt: Date.now() / 1000,
         lastHeartbeat: Date.now() / 1000,
-        connectionFile: '/tmp/kernel.json',
+        connectionFile: '/test/kernel.json',
+        connectionConfig: null,
       };
 
       store.saveSession(session);
@@ -144,6 +145,7 @@ describe('SessionStore', () => {
         createdAt: Date.now() / 1000,
         lastHeartbeat: Date.now() / 1000,
         connectionFile: null,
+        connectionConfig: null,
       };
 
       store.saveSession(session);
@@ -172,6 +174,7 @@ describe('SessionStore', () => {
         createdAt: now,
         lastHeartbeat: now,
         connectionFile: null,
+        connectionConfig: null,
       });
 
       store.saveSession({
@@ -183,6 +186,7 @@ describe('SessionStore', () => {
         createdAt: now,
         lastHeartbeat: now,
         connectionFile: null,
+        connectionConfig: null,
       });
 
       store.saveSession({
@@ -194,6 +198,7 @@ describe('SessionStore', () => {
         createdAt: now,
         lastHeartbeat: now,
         connectionFile: null,
+        connectionConfig: null,
       });
 
       const active = store.getActiveSessions();
@@ -215,6 +220,7 @@ describe('SessionStore', () => {
         createdAt: now,
         lastHeartbeat: now,
         connectionFile: null,
+        connectionConfig: null,
       });
 
       store.saveSession({
@@ -226,6 +232,7 @@ describe('SessionStore', () => {
         createdAt: now,
         lastHeartbeat: now,
         connectionFile: null,
+        connectionConfig: null,
       });
 
       const count = store.markAllOrphaned();
@@ -252,6 +259,7 @@ describe('SessionStore', () => {
         createdAt: now,
         lastHeartbeat: now,
         connectionFile: null,
+        connectionConfig: null,
       });
 
       // Wait a bit and update heartbeat
@@ -276,6 +284,7 @@ describe('SessionStore', () => {
         createdAt: now,
         lastHeartbeat: now,
         connectionFile: null,
+        connectionConfig: null,
       });
 
       expect(store.getSession('delete-me')).not.toBeNull();
@@ -299,6 +308,7 @@ describe('SessionStore', () => {
         createdAt: now,
         lastHeartbeat: now,
         connectionFile: null,
+        connectionConfig: null,
       });
 
       const session = store.getSessionByFile('/path/to/notebook.ipynb');
@@ -323,6 +333,7 @@ describe('SessionStore', () => {
         createdAt: now,
         lastHeartbeat: now,
         connectionFile: null,
+        connectionConfig: null,
       });
 
       const session = store.getSessionByFile('/orphaned/notebook.ipynb');
@@ -344,6 +355,7 @@ describe('SessionStore', () => {
         createdAt: oldTime,
         lastHeartbeat: oldTime,
         connectionFile: null,
+        connectionConfig: null,
       });
 
       store.saveSession({
@@ -355,6 +367,7 @@ describe('SessionStore', () => {
         createdAt: now,
         lastHeartbeat: now,
         connectionFile: null,
+        connectionConfig: null,
       });
 
       const deleted = store.cleanupOldSessions(24);
@@ -584,5 +597,330 @@ describe('KernelService', () => {
 
       sessionId = ''; // Clear so afterAll doesn't try to stop again
     }, 60000);
+  });
+
+  describe('reattachOrphanedSessions', () => {
+    it('should skip reattachment when no orphaned sessions exist', async () => {
+      await service.initialize();
+
+      const result = await service.reattachOrphanedSessions();
+
+      expect(result).toEqual({
+        attempted: 0,
+        reattached: 0,
+        failed: 0,
+        skipped: 0,
+      });
+    });
+
+    it('should skip sessions where kernel PID is no longer alive', async () => {
+      await service.initialize();
+      const now = Date.now() / 1000;
+
+      // Create an orphaned session with a non-existent PID
+      testSessionStore.saveSession({
+        sessionId: 'orphan-dead-pid',
+        kernelName: 'python3',
+        filePath: '/test/notebook.ipynb',
+        kernelPid: 999999, // Very unlikely to be a real PID
+        status: 'orphaned',
+        createdAt: now,
+        lastHeartbeat: now,
+        connectionFile: null,
+        connectionConfig: JSON.stringify({
+          ip: '127.0.0.1',
+          transport: 'tcp',
+          signatureScheme: 'hmac-sha256',
+          key: 'test-key',
+          shellPort: 12345,
+          stdinPort: 12346,
+          controlPort: 12347,
+          iopubPort: 12348,
+          hbPort: 12349,
+        }),
+      });
+
+      const result = await service.reattachOrphanedSessions();
+
+      expect(result.attempted).toBe(1);
+      expect(result.skipped).toBe(1);
+      expect(result.reattached).toBe(0);
+      expect(result.failed).toBe(0);
+
+      // Session should be marked as terminated
+      const session = testSessionStore.getSession('orphan-dead-pid');
+      expect(session?.status).toBe('terminated');
+    });
+
+    it('should skip sessions with no connection config available', async () => {
+      await service.initialize();
+      const now = Date.now() / 1000;
+
+      // Mock isPidAlive to return true for this test
+      const isPidAliveSpy = vi.spyOn(service as any, 'isPidAlive').mockReturnValue(true);
+
+      // Create an orphaned session with no connection info
+      testSessionStore.saveSession({
+        sessionId: 'orphan-no-config',
+        kernelName: 'python3',
+        filePath: '/test/notebook.ipynb',
+        kernelPid: 12345,
+        status: 'orphaned',
+        createdAt: now,
+        lastHeartbeat: now,
+        connectionFile: '/nonexistent/connection.json', // File doesn't exist
+        connectionConfig: null, // No DB fallback either
+      });
+
+      const result = await service.reattachOrphanedSessions();
+
+      expect(result.attempted).toBe(1);
+      expect(result.skipped).toBe(1);
+      expect(result.reattached).toBe(0);
+
+      isPidAliveSpy.mockRestore();
+    });
+
+    it('should use DB-stored connection config when file is missing', async () => {
+      await service.initialize();
+      const now = Date.now() / 1000;
+
+      // Mock isPidAlive to return true
+      const isPidAliveSpy = vi.spyOn(service as any, 'isPidAlive').mockReturnValue(true);
+      // Mock waitForReady to fail (kernel not responding)
+      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockRejectedValue(new Error('Timeout'));
+
+      const connectionConfig = {
+        ip: '127.0.0.1',
+        transport: 'tcp',
+        signatureScheme: 'hmac-sha256',
+        key: 'test-key',
+        shellPort: 12345,
+        stdinPort: 12346,
+        controlPort: 12347,
+        iopubPort: 12348,
+        hbPort: 12349,
+      };
+
+      // Create an orphaned session with connection config in DB but no file
+      testSessionStore.saveSession({
+        sessionId: 'orphan-db-config',
+        kernelName: 'python3',
+        filePath: '/test/notebook.ipynb',
+        kernelPid: 12345,
+        status: 'orphaned',
+        createdAt: now,
+        lastHeartbeat: now,
+        connectionFile: '/nonexistent/connection.json', // File doesn't exist
+        connectionConfig: JSON.stringify(connectionConfig), // DB fallback exists
+      });
+
+      const result = await service.reattachOrphanedSessions();
+
+      // Should attempt reattachment (not skip) because DB config exists
+      expect(result.attempted).toBe(1);
+      expect(result.skipped).toBe(0);
+      // Should fail because waitForReady times out
+      expect(result.failed).toBe(1);
+      expect(result.reattached).toBe(0);
+
+      isPidAliveSpy.mockRestore();
+      waitForReadySpy.mockRestore();
+    });
+
+    it('should successfully reattach when kernel responds', async () => {
+      await service.initialize();
+      const now = Date.now() / 1000;
+
+      // Mock isPidAlive to return true
+      const isPidAliveSpy = vi.spyOn(service as any, 'isPidAlive').mockReturnValue(true);
+      // Mock waitForReady to succeed
+      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockResolvedValue(undefined);
+
+      const connectionConfig = {
+        ip: '127.0.0.1',
+        transport: 'tcp',
+        signatureScheme: 'hmac-sha256',
+        key: 'test-key',
+        shellPort: 12345,
+        stdinPort: 12346,
+        controlPort: 12347,
+        iopubPort: 12348,
+        hbPort: 12349,
+      };
+
+      testSessionStore.saveSession({
+        sessionId: 'orphan-reattach-success',
+        kernelName: 'python3',
+        filePath: '/test/notebook.ipynb',
+        kernelPid: 12345,
+        status: 'orphaned',
+        createdAt: now,
+        lastHeartbeat: now,
+        connectionFile: null,
+        connectionConfig: JSON.stringify(connectionConfig),
+      });
+
+      const result = await service.reattachOrphanedSessions();
+
+      expect(result.attempted).toBe(1);
+      expect(result.reattached).toBe(1);
+      expect(result.failed).toBe(0);
+      expect(result.skipped).toBe(0);
+
+      // Session should be marked as active
+      const session = testSessionStore.getSession('orphan-reattach-success');
+      expect(session?.status).toBe('active');
+
+      // Session should be accessible via getSessionStatus
+      const status = await service.getSessionStatus('orphan-reattach-success');
+      expect(status).not.toBeNull();
+      expect(status?.status).toBe('idle');
+
+      isPidAliveSpy.mockRestore();
+      waitForReadySpy.mockRestore();
+    });
+
+    it('should mark session as dead when reattach fails', async () => {
+      await service.initialize();
+      const now = Date.now() / 1000;
+
+      // Mock isPidAlive to return true
+      const isPidAliveSpy = vi.spyOn(service as any, 'isPidAlive').mockReturnValue(true);
+      // Mock waitForReady to fail
+      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockRejectedValue(new Error('Connection refused'));
+
+      const connectionConfig = {
+        ip: '127.0.0.1',
+        transport: 'tcp',
+        signatureScheme: 'hmac-sha256',
+        key: 'test-key',
+        shellPort: 12345,
+        stdinPort: 12346,
+        controlPort: 12347,
+        iopubPort: 12348,
+        hbPort: 12349,
+      };
+
+      testSessionStore.saveSession({
+        sessionId: 'orphan-reattach-fail',
+        kernelName: 'python3',
+        filePath: '/test/notebook.ipynb',
+        kernelPid: 12345,
+        status: 'orphaned',
+        createdAt: now,
+        lastHeartbeat: now,
+        connectionFile: null,
+        connectionConfig: JSON.stringify(connectionConfig),
+      });
+
+      const result = await service.reattachOrphanedSessions();
+
+      expect(result.attempted).toBe(1);
+      expect(result.failed).toBe(1);
+      expect(result.reattached).toBe(0);
+
+      // Session should be cleaned up from in-memory state
+      const status = await service.getSessionStatus('orphan-reattach-fail');
+      expect(status).toBeNull();
+
+      isPidAliveSpy.mockRestore();
+      waitForReadySpy.mockRestore();
+    });
+
+    it('should prevent concurrent reattachment calls', async () => {
+      await service.initialize();
+      const now = Date.now() / 1000;
+
+      // Mock isPidAlive to return true
+      const isPidAliveSpy = vi.spyOn(service as any, 'isPidAlive').mockReturnValue(true);
+      // Mock waitForReady with a delay
+      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockImplementation(async () => {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      });
+
+      const connectionConfig = {
+        ip: '127.0.0.1',
+        transport: 'tcp',
+        signatureScheme: 'hmac-sha256',
+        key: 'test-key',
+        shellPort: 12345,
+        stdinPort: 12346,
+        controlPort: 12347,
+        iopubPort: 12348,
+        hbPort: 12349,
+      };
+
+      testSessionStore.saveSession({
+        sessionId: 'orphan-concurrent',
+        kernelName: 'python3',
+        filePath: '/test/notebook.ipynb',
+        kernelPid: 12345,
+        status: 'orphaned',
+        createdAt: now,
+        lastHeartbeat: now,
+        connectionFile: null,
+        connectionConfig: JSON.stringify(connectionConfig),
+      });
+
+      // Start two concurrent reattachment calls
+      const [result1, result2] = await Promise.all([
+        service.reattachOrphanedSessions(),
+        service.reattachOrphanedSessions(),
+      ]);
+
+      // One should succeed, one should be skipped due to concurrent protection
+      const totalAttempted = result1.attempted + result2.attempted;
+      expect(totalAttempted).toBe(1); // Only one actually attempted
+
+      isPidAliveSpy.mockRestore();
+      waitForReadySpy.mockRestore();
+    });
+
+    it('should restore file-to-session mapping on successful reattach', async () => {
+      await service.initialize();
+      const now = Date.now() / 1000;
+
+      // Mock isPidAlive to return true
+      const isPidAliveSpy = vi.spyOn(service as any, 'isPidAlive').mockReturnValue(true);
+      // Mock waitForReady to succeed
+      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockResolvedValue(undefined);
+
+      const connectionConfig = {
+        ip: '127.0.0.1',
+        transport: 'tcp',
+        signatureScheme: 'hmac-sha256',
+        key: 'test-key',
+        shellPort: 12345,
+        stdinPort: 12346,
+        controlPort: 12347,
+        iopubPort: 12348,
+        hbPort: 12349,
+      };
+
+      testSessionStore.saveSession({
+        sessionId: 'orphan-file-mapping',
+        kernelName: 'python3',
+        filePath: '/test/my-notebook.ipynb',
+        kernelPid: 12345,
+        status: 'orphaned',
+        createdAt: now,
+        lastHeartbeat: now,
+        connectionFile: null,
+        connectionConfig: JSON.stringify(connectionConfig),
+      });
+
+      await service.reattachOrphanedSessions();
+
+      // getOrCreateKernel should find the reattached session
+      // (we can't fully test this without mocking more, but we can check the mapping)
+      const sessions = await service.getAllSessions();
+      const reattachedSession = sessions.find(s => s.id === 'orphan-file-mapping');
+      expect(reattachedSession).toBeDefined();
+      expect(reattachedSession?.filePath).toBe('/test/my-notebook.ipynb');
+
+      isPidAliveSpy.mockRestore();
+      waitForReadySpy.mockRestore();
+    });
   });
 });

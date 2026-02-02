@@ -5,7 +5,7 @@ import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
 import { getClusterInfo, ClusterServer, ClusterInfo } from '../services/clusterService';
 import { getSettings, saveSettings, IndentationPreference } from '../services/llmService';
-import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server } from 'lucide-react';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server, Clock } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
 import {
   getFiles,
@@ -21,7 +21,10 @@ import {
   saveNotebookHistory,
   getAgentPermissionStatus,
   setAgentPermission,
-  AgentPermissionStatus
+  AgentPermissionStatus,
+  getNotebookSettings,
+  updateNotebookSettings,
+  OutputLoggingMode
 } from '../services/fileService';
 import { FileBrowser } from './FileBrowser';
 import { addRecentNotebook } from './Dashboard';
@@ -118,6 +121,27 @@ function formatElapsedTime(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`;
 }
 
+// Format kernel uptime from createdAt timestamp
+function formatKernelUptime(createdAtSeconds: number): string {
+  const now = Date.now() / 1000;
+  const seconds = Math.floor(now - createdAtSeconds);
+
+  if (seconds < 60) return `${seconds}s`;
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    const remainingMinutes = minutes % 60;
+    return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
+}
+
 export const Notebook: React.FC = () => {
   const { toast, confirm } = useNotification();
 
@@ -179,6 +203,7 @@ export const Notebook: React.FC = () => {
   const [currentKernel, setCurrentKernel] = useState<string>('python3');
   const [kernelSessionId, setKernelSessionId] = useState<string | null>(null);
   const [kernelStatus, setKernelStatus] = useState<'idle' | 'busy' | 'starting' | 'disconnected'>('disconnected');
+  const [kernelCreatedAt, setKernelCreatedAt] = useState<number | null>(null);
   const [isDiscoveringPythons, setIsDiscoveringPythons] = useState(false);
   const [isInstallingKernel, setIsInstallingKernel] = useState<string | null>(null);
 
@@ -188,6 +213,9 @@ export const Notebook: React.FC = () => {
 
   // Agent permission state
   const [agentPermissionStatus, setAgentPermissionStatus] = useState<AgentPermissionStatus | null>(null);
+
+  // Output logging mode for history - 'minimal' logs no output, 'full' logs complete output
+  const [outputLoggingMode, setOutputLoggingMode] = useState<OutputLoggingMode>('minimal');
 
   // Undo/Redo & State Management (operation-based)
   const {
@@ -1150,46 +1178,42 @@ export const Notebook: React.FC = () => {
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
-  const loadPythonEnvironments = useCallback(async (refresh: boolean = false) => {
+  const loadPythonEnvironments = useCallback(async (refresh: boolean = false, serverId?: string | null) => {
     try {
       setIsDiscoveringPythons(true);
-      const data = await kernelService.getPythonEnvironments(refresh);
+      const targetServerId = serverId ?? selectedServerId;
+      const data = await kernelService.getPythonEnvironments(refresh, targetServerId);
       setAvailableKernels(data.kernelspecs);
       setPythonEnvironments(data.environments);
+      if (data.kernelspecs.length > 0 && !data.kernelspecs.some(k => k.name === currentKernel)) {
+        setCurrentKernel(data.kernelspecs[0].name);
+      }
     } catch (error) {
       console.error('Failed to load Python environments:', error);
     } finally {
       setIsDiscoveringPythons(false);
     }
-  }, []);
-
-  // Install kernel for a Python environment
-  const installKernelForPython = useCallback(async (pythonPath: string) => {
-    try {
-      setIsInstallingKernel(pythonPath);
-      const result = await kernelService.installKernel(pythonPath);
-
-      // Refresh the environments list to show the new kernel
-      await loadPythonEnvironments(true);
-
-      // Optionally switch to the new kernel
-      if (result.kernel_name) {
-        await switchKernel(result.kernel_name);
-      }
-    } catch (error) {
-      console.error('Failed to install kernel:', error);
-      toast(`Failed to install kernel: ${error}`, 'error');
-    } finally {
-      setIsInstallingKernel(null);
-    }
-  }, [loadPythonEnvironments]);
+  }, [selectedServerId, currentKernel]);
 
   useEffect(() => {
     const initKernels = async () => {
       try {
+        // Load cluster info for multi-server support
+        let initialServerId: string | null = null;
+        try {
+          const cluster = await getClusterInfo();
+          setClusterInfo(cluster);
+          initialServerId = cluster.localServerId;
+          // Default to local server
+          setSelectedServerId(cluster.localServerId);
+        } catch (clusterError) {
+          console.error('Failed to load cluster info:', clusterError);
+          // Cluster feature is optional, continue without it
+        }
+
         // Just load available kernels on startup, don't start one yet
         // Kernel will be started when a file is loaded
-        const kernels = await kernelService.getAvailableKernels();
+        const kernels = await kernelService.getAvailableKernels(initialServerId);
         setAvailableKernels(kernels);
 
         // Get saved kernel preference
@@ -1199,18 +1223,7 @@ export const Notebook: React.FC = () => {
         setCurrentKernel(kernelExists ? preferredKernel : (kernels[0]?.name || 'python3'));
 
         // Load Python environments in background (uses cache)
-        loadPythonEnvironments(false);
-
-        // Load cluster info for multi-server support
-        try {
-          const cluster = await getClusterInfo();
-          setClusterInfo(cluster);
-          // Default to local server
-          setSelectedServerId(cluster.localServerId);
-        } catch (clusterError) {
-          console.error('Failed to load cluster info:', clusterError);
-          // Cluster feature is optional, continue without it
-        }
+        loadPythonEnvironments(false, initialServerId);
       } catch (error) {
         console.error('Failed to load kernels:', error);
       }
@@ -1595,13 +1608,14 @@ export const Notebook: React.FC = () => {
     setActiveCellId(content.length > 0 ? content[0].id : null);
     setIsLoadingFile(false);
 
-    // Load persisted history, session state, and agent permission
+    // Load persisted history, session state, agent permission, and notebook settings
     Promise.all([
       loadNotebookHistory(id),
       loadNotebookSession(id),
-      getAgentPermissionStatus(id)
+      getAgentPermissionStatus(id),
+      getNotebookSettings(id)
     ])
-      .then(([savedHistory, savedSession, permissionStatus]) => {
+      .then(([savedHistory, savedSession, permissionStatus, notebookSettings]) => {
         // Initialize history appropriately
         if (savedHistory.length > 0) {
           // Existing history file - restore it (includes snapshot and operations)
@@ -1614,6 +1628,10 @@ export const Notebook: React.FC = () => {
         // Set agent permission status
         if (permissionStatus) {
           setAgentPermissionStatus(permissionStatus);
+        }
+        // Set output logging mode from notebook settings
+        if (notebookSettings) {
+          setOutputLoggingMode(notebookSettings.output_logging);
         }
         // Restore unflushed edit state so undo can capture pending changes
         // Also navigate to the cell with unflushed edits so flushActiveCell works
@@ -1668,8 +1686,9 @@ export const Notebook: React.FC = () => {
     // Get or create kernel for this file (one notebook = one kernel)
     try {
       setKernelStatus('starting');
-      const sessionId = await kernelService.getOrCreateKernelForFile(id, kernelToUse);
+      const { sessionId, createdAt } = await kernelService.getOrCreateKernelForFile(id, kernelToUse);
       setKernelSessionId(sessionId);
+      if (createdAt) setKernelCreatedAt(createdAt);
       setIsKernelReady(true);
       // Note: Don't set status to 'idle' here - the WebSocket will send the actual status
       // which could be 'busy' if a cell was executing when the page was refreshed
@@ -1913,6 +1932,23 @@ export const Notebook: React.FC = () => {
     }
   }, [currentFileId, agentPermissionStatus, toast]);
 
+  const handleToggleOutputLogging = useCallback(async () => {
+    if (!currentFileId) return;
+
+    const newMode: OutputLoggingMode = outputLoggingMode === 'minimal' ? 'full' : 'minimal';
+    const result = await updateNotebookSettings(currentFileId, { output_logging: newMode });
+    if (result) {
+      setOutputLoggingMode(result.output_logging);
+      toast(
+        newMode === 'full' ? 'Full output logging enabled' : 'Minimal output logging enabled',
+        'info',
+        2000
+      );
+    } else {
+      toast('Failed to update output logging mode', 'error');
+    }
+  }, [currentFileId, outputLoggingMode, toast]);
+
   // --- KERNEL OPERATIONS ---
 
   const switchKernel = async (kernelName: string, serverId?: string | null) => {
@@ -1928,8 +1964,9 @@ export const Notebook: React.FC = () => {
       // Use getOrCreateKernelForFile which handles kernel switching on the backend
       // (it will stop the old kernel if kernel type differs)
       if (currentFileId) {
-        const newSessionId = await kernelService.getOrCreateKernelForFile(currentFileId, kernelName, targetServerId);
+        const { sessionId: newSessionId, createdAt } = await kernelService.getOrCreateKernelForFile(currentFileId, kernelName, targetServerId);
         setKernelSessionId(newSessionId);
+        if (createdAt) setKernelCreatedAt(createdAt);
       } else {
         // No file open, just start a standalone kernel
         if (kernelSessionId) {
@@ -1950,6 +1987,27 @@ export const Notebook: React.FC = () => {
     }
   };
 
+  // Install kernel for a Python environment
+  const installKernelForPython = useCallback(async (pythonPath: string) => {
+    try {
+      setIsInstallingKernel(pythonPath);
+      const result = await kernelService.installKernel(pythonPath, undefined, selectedServerId);
+
+      // Refresh the environments list to show the new kernel
+      await loadPythonEnvironments(true, selectedServerId);
+
+      // Optionally switch to the new kernel
+      if (result.kernel_name) {
+        await switchKernel(result.kernel_name);
+      }
+    } catch (error) {
+      console.error('Failed to install kernel:', error);
+      toast(`Failed to install kernel: ${error}`, 'error');
+    } finally {
+      setIsInstallingKernel(null);
+    }
+  }, [loadPythonEnvironments, selectedServerId, switchKernel, toast]);
+
   /**
    * Switch to a different server for kernel execution
    * This will stop the current kernel and start a new one on the target server
@@ -1959,18 +2017,32 @@ export const Notebook: React.FC = () => {
 
     setSelectedServerId(serverId);
 
-    // If we have an active kernel, switch it to the new server
+    let nextKernel = currentKernel;
+    try {
+      const kernels = await kernelService.getAvailableKernels(serverId);
+      setAvailableKernels(kernels);
+      if (kernels.length > 0 && !kernels.some(k => k.name === currentKernel)) {
+        nextKernel = kernels[0].name;
+        setCurrentKernel(nextKernel);
+      }
+      loadPythonEnvironments(false, serverId);
+    } catch (error) {
+      console.error('Failed to load kernels for server:', error);
+    }
+
+    // Stop the current kernel if it exists
     if (kernelSessionId) {
-      // Stop the current kernel
       try {
         await kernelService.stopKernel(kernelSessionId);
       } catch (e) {
         console.error('Failed to stop kernel:', e);
       }
       setKernelSessionId(null);
+    }
 
-      // Start new kernel on the selected server
-      await switchKernel(currentKernel, serverId);
+    // Start a new kernel on the selected server if a file is open
+    if (currentFileId) {
+      await switchKernel(nextKernel, serverId);
     }
   };
 
@@ -1998,9 +2070,14 @@ export const Notebook: React.FC = () => {
           setKernelSessionId(null);
           // Start a new kernel (use getOrCreateKernelForFile if file is open)
           const kernelToUse = currentKernel || 'python3';
-          const newSessionId = currentFileId
-            ? await kernelService.getOrCreateKernelForFile(currentFileId, kernelToUse)
-            : await kernelService.startKernel(kernelToUse);
+          let newSessionId: string;
+          if (currentFileId) {
+            const result = await kernelService.getOrCreateKernelForFile(currentFileId, kernelToUse);
+            newSessionId = result.sessionId;
+            if (result.createdAt) setKernelCreatedAt(result.createdAt);
+          } else {
+            newSessionId = await kernelService.startKernel(kernelToUse);
+          }
           setKernelSessionId(newSessionId);
           setKernelStatus('idle');
           setIsKernelReady(true);
@@ -2013,6 +2090,22 @@ export const Notebook: React.FC = () => {
         }
       }
       setKernelStatus('disconnected');
+    }
+  };
+
+  const shutdownKernel = async () => {
+    setIsKernelMenuOpen(false);
+    if (!kernelSessionId) return;
+
+    try {
+      await kernelService.stopKernel(kernelSessionId);
+    } catch (error) {
+      console.error('Failed to shutdown kernel:', error);
+    } finally {
+      setKernelSessionId(null);
+      setKernelStatus('disconnected');
+      setIsKernelReady(false);
+      setMemoryUsage(null);
     }
   };
 
@@ -2451,11 +2544,11 @@ export const Notebook: React.FC = () => {
 
         // Log execution completion for history
         const durationMs = Date.now() - cellStartTime;
-        // Truncate output to keep history file size reasonable
+        // Output logging depends on notebook-level setting:
+        // - 'minimal': no output logged (saves space)
+        // - 'full': complete output logged (for debugging/replay)
         const fullOutput = collectedOutputs.join('\n');
-        const truncatedOutput = fullOutput.length > 2000
-          ? fullOutput.slice(0, 2000) + '...[truncated]'
-          : fullOutput;
+        const loggedOutput = outputLoggingMode === 'full' ? fullOutput : undefined;
 
         logOperation({
           type: 'executionComplete',
@@ -2463,7 +2556,7 @@ export const Notebook: React.FC = () => {
           cellIndex,
           durationMs,
           success: !hasError,
-          output: truncatedOutput || undefined
+          output: loggedOutput
         });
 
         // Increment global counter and assign to cell
@@ -2721,18 +2814,32 @@ export const Notebook: React.FC = () => {
                         >
                           <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between">
                              <div>
-                               <div className="text-xs font-semibold text-slate-900">Active Kernel</div>
-                               <div className="text-[0.625rem] text-slate-500">
-                                 {getKernelDisplayName()} ({kernelStatus})
-                                 {clusterInfo && clusterInfo.servers.length > 1 && selectedServerId && (
-                                   <span className="text-blue-500 ml-1">
-                                     @ {clusterInfo.servers.find(s => s.id === selectedServerId)?.name || selectedServerId}
+                               <div className="text-xs font-semibold text-slate-900 flex items-center gap-1.5">
+                                 Active Kernel
+                                 {kernelCreatedAt && (
+                                   <span className="text-[0.625rem] font-normal text-slate-400 flex items-center gap-0.5" title="Kernel uptime">
+                                     <Clock className="w-2.5 h-2.5" />
+                                     {formatKernelUptime(kernelCreatedAt)}
                                    </span>
                                  )}
                                </div>
+                               <div className="text-[0.625rem] text-slate-500">
+                                 {getKernelDisplayName()} ({kernelStatus})
+                                 {clusterInfo && clusterInfo.servers.length > 1 && selectedServerId && (() => {
+                                   const server = clusterInfo.servers.find(s => s.id === selectedServerId);
+                                   const displayName = server?.isLocal && server?.resources?.hostname
+                                     ? server.resources.hostname
+                                     : server?.name || selectedServerId;
+                                   return (
+                                     <span className="text-blue-500 ml-1">
+                                       @ {displayName}
+                                     </span>
+                                   );
+                                 })()}
+                               </div>
                              </div>
                              <button
-                               onClick={(e) => { e.stopPropagation(); loadPythonEnvironments(true); }}
+                               onClick={(e) => { e.stopPropagation(); loadPythonEnvironments(true, selectedServerId); }}
                                disabled={isDiscoveringPythons}
                                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
                                title="Refresh Python environments"
@@ -2755,6 +2862,13 @@ export const Notebook: React.FC = () => {
                               className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                             >
                               <RotateCw className="w-3 h-3" /> Restart Kernel
+                            </button>
+                            <button
+                              onClick={shutdownKernel}
+                              disabled={!kernelSessionId}
+                              className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2 disabled:opacity-40 disabled:hover:bg-transparent"
+                            >
+                              <Power className="w-3 h-3" /> Shutdown Kernel
                             </button>
                             <button
                               onClick={() => { setIsKernelMenuOpen(false); setIsKernelManagerOpen(true); }}
@@ -2784,7 +2898,11 @@ export const Notebook: React.FC = () => {
                                     <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
                                       server.status === 'online' ? 'bg-green-500' : 'bg-red-500'
                                     }`}></span>
-                                    <span className="truncate flex-1">{server.name}</span>
+                                    <span className="truncate flex-1">
+                                      {server.isLocal && server.resources?.hostname
+                                        ? server.resources.hostname
+                                        : server.name}
+                                    </span>
                                     {server.isLocal && <span className="text-[0.625rem] text-slate-400">(local)</span>}
                                     {server.status !== 'online' && <span className="text-[0.625rem] text-red-400">offline</span>}
                                   </button>
@@ -3119,6 +3237,13 @@ export const Notebook: React.FC = () => {
                   >
                     <Keyboard className="w-4 h-4" />
                   </button>
+                  {/* Output Logging Mode Toggle - Hidden for now to prevent history bloat.
+                      The feature is fully implemented and can be enabled via:
+                      - API: POST /api/notebook/settings { path, output_logging: 'full' | 'minimal' }
+                      - Stored in notebook metadata.nebula.output_logging
+                      - 'minimal' (default): no output in history
+                      - 'full': complete output saved to history
+                  */}
                   {/* Agent Permission Toggle */}
                   <button
                     onClick={handleToggleAgentPermission}
@@ -3409,6 +3534,7 @@ export const Notebook: React.FC = () => {
         isOpen={isKernelManagerOpen}
         onClose={() => setIsKernelManagerOpen(false)}
         currentSessionId={kernelSessionId}
+        serverId={selectedServerId}
         onKernelKilled={(sessionId) => {
           // If the killed kernel was our current session, reset state
           if (sessionId === kernelSessionId) {

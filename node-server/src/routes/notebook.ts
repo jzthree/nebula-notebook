@@ -325,5 +325,73 @@ router.post('/notebook/operation', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Get notebook settings (nebula metadata)
+ */
+router.get('/notebook/settings', (req: Request, res: Response) => {
+  try {
+    const filePath = req.query.path as string;
+    if (!filePath) {
+      res.status(400).json({ detail: 'path query parameter is required' });
+      return;
+    }
+
+    const metadata = fsService.getNotebookMetadata(filePath);
+    const nebula = (metadata.nebula || {}) as Record<string, unknown>;
+
+    res.json({
+      notebook_path: filePath,
+      output_logging: nebula.output_logging || 'minimal',
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ detail: message });
+  }
+});
+
+/**
+ * Update notebook settings (nebula metadata)
+ */
+router.post('/notebook/settings', (req: Request, res: Response) => {
+  try {
+    const { path: filePath, output_logging } = req.body;
+    if (!filePath) {
+      res.status(400).json({ detail: 'path is required' });
+      return;
+    }
+
+    // Validate output_logging value
+    if (output_logging !== undefined && output_logging !== 'minimal' && output_logging !== 'full') {
+      res.status(400).json({ detail: 'output_logging must be "minimal" or "full"' });
+      return;
+    }
+
+    // Get existing metadata
+    const metadata = fsService.getNotebookMetadata(filePath);
+    const nebula = (metadata.nebula || {}) as Record<string, unknown>;
+
+    // Update settings
+    if (output_logging !== undefined) {
+      nebula.output_logging = output_logging;
+    }
+
+    // Save back
+    const updateResult = fsService.updateNotebookMetadata(filePath, { nebula });
+    if (!updateResult.success) {
+      res.status(500).json({ detail: updateResult.error || 'Failed to update notebook metadata' });
+      return;
+    }
+
+    res.json({
+      status: 'ok',
+      notebook_path: filePath,
+      output_logging: nebula.output_logging || 'minimal',
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ detail: message });
+  }
+});
+
 export { fsService, operationRouter, headlessHandler };
 export default router;

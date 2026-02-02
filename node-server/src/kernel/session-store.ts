@@ -28,12 +28,38 @@ export class SessionStore {
         kernel_name TEXT NOT NULL,
         file_path TEXT,
         kernel_pid INTEGER,
+        server_id TEXT,
+        server_instance_id TEXT,
+        kernel_start_time TEXT,
         status TEXT DEFAULT 'active',
         created_at REAL NOT NULL,
         last_heartbeat REAL NOT NULL,
-        connection_file TEXT
+        connection_file TEXT,
+        connection_config TEXT
       )
     `);
+
+    // Migration: add connection_config column if it doesn't exist
+    try {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN connection_config TEXT');
+    } catch {
+      // Column already exists
+    }
+    try {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN server_id TEXT');
+    } catch {
+      // Column already exists
+    }
+    try {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN server_instance_id TEXT');
+    } catch {
+      // Column already exists
+    }
+    try {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN kernel_start_time TEXT');
+    } catch {
+      // Column already exists
+    }
 
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_sessions_status
@@ -52,9 +78,11 @@ export class SessionStore {
   saveSession(session: PersistedSession): void {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-      (session_id, kernel_name, file_path, kernel_pid, status,
-       created_at, last_heartbeat, connection_file)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (session_id, kernel_name, file_path, kernel_pid,
+       server_id, server_instance_id, kernel_start_time,
+       status, created_at, last_heartbeat,
+       connection_file, connection_config)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -62,10 +90,14 @@ export class SessionStore {
       session.kernelName,
       session.filePath,
       session.kernelPid,
+      session.serverId ?? null,
+      session.serverInstanceId ?? null,
+      session.kernelStartTime ?? null,
       session.status,
       session.createdAt,
       session.lastHeartbeat,
-      session.connectionFile
+      session.connectionFile,
+      session.connectionConfig
     );
   }
 
@@ -94,7 +126,14 @@ export class SessionStore {
   /**
    * Get orphaned sessions (from previous server run)
    */
-  getOrphanedSessions(): PersistedSession[] {
+  getOrphanedSessions(serverId?: string): PersistedSession[] {
+    if (serverId) {
+      const stmt = this.db.prepare(
+        "SELECT * FROM sessions WHERE status = 'orphaned' AND (server_id = ? OR server_id IS NULL)"
+      );
+      const rows = stmt.all(serverId) as Record<string, unknown>[];
+      return rows.map(row => this.rowToSession(row));
+    }
     const stmt = this.db.prepare("SELECT * FROM sessions WHERE status = 'orphaned'");
     const rows = stmt.all() as Record<string, unknown>[];
     return rows.map(row => this.rowToSession(row));
@@ -131,10 +170,15 @@ export class SessionStore {
   /**
    * Mark all active sessions as orphaned (called on startup)
    */
-  markAllOrphaned(): number {
-    const stmt = this.db.prepare(
-      "UPDATE sessions SET status = 'orphaned' WHERE status = 'active'"
-    );
+  markAllOrphaned(serverId?: string, serverInstanceId?: string): number {
+    if (serverId && serverInstanceId) {
+      const stmt = this.db.prepare(
+        "UPDATE sessions SET status = 'orphaned' WHERE status = 'active' AND (server_id = ? OR server_id IS NULL) AND (server_instance_id IS NULL OR server_instance_id != ?)"
+      );
+      const result = stmt.run(serverId, serverInstanceId);
+      return result.changes;
+    }
+    const stmt = this.db.prepare("UPDATE sessions SET status = 'orphaned' WHERE status = 'active'");
     const result = stmt.run();
     return result.changes;
   }
@@ -167,6 +211,33 @@ export class SessionStore {
   }
 
   /**
+   * Get dead sessions (orphaned or terminated) - candidates for cleanup
+   */
+  getDeadSessions(serverId?: string): PersistedSession[] {
+    if (serverId) {
+      const stmt = this.db.prepare(
+        "SELECT * FROM sessions WHERE status IN ('orphaned', 'terminated') AND (server_id = ? OR server_id IS NULL)"
+      );
+      const rows = stmt.all(serverId) as Record<string, unknown>[];
+      return rows.map(row => this.rowToSession(row));
+    }
+    const stmt = this.db.prepare("SELECT * FROM sessions WHERE status IN ('orphaned', 'terminated')");
+    const rows = stmt.all() as Record<string, unknown>[];
+    return rows.map(row => this.rowToSession(row));
+  }
+
+  /**
+   * Delete specific sessions by ID
+   */
+  deleteSessions(sessionIds: string[]): number {
+    if (sessionIds.length === 0) return 0;
+    const placeholders = sessionIds.map(() => '?').join(',');
+    const stmt = this.db.prepare(`DELETE FROM sessions WHERE session_id IN (${placeholders})`);
+    const result = stmt.run(...sessionIds);
+    return result.changes;
+  }
+
+  /**
    * Close database connection
    */
   close(): void {
@@ -182,10 +253,14 @@ export class SessionStore {
       kernelName: row.kernel_name as string,
       filePath: row.file_path as string | null,
       kernelPid: row.kernel_pid as number | null,
+      serverId: row.server_id as string | null,
+      serverInstanceId: row.server_instance_id as string | null,
+      kernelStartTime: row.kernel_start_time as string | null,
       status: row.status as 'active' | 'orphaned' | 'terminated',
       createdAt: row.created_at as number,
       lastHeartbeat: row.last_heartbeat as number,
       connectionFile: row.connection_file as string | null,
+      connectionConfig: row.connection_config as string | null,
     };
   }
 }

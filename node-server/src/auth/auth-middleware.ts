@@ -11,6 +11,7 @@ import { Request, Response, NextFunction } from 'express';
 import { IncomingMessage } from 'http';
 import { parse as parseUrl } from 'url';
 import { authService } from './auth-service';
+import { readClusterSecret } from '../cluster/cluster-secret';
 
 // Routes that don't require authentication
 const PUBLIC_ROUTES = [
@@ -19,6 +20,20 @@ const PUBLIC_ROUTES = [
   '/api/auth/status',
   '/api/auth/verify',
 ];
+
+const CLUSTER_SECRET_HEADER = 'x-nebula-cluster-secret';
+
+function isClientMode(): boolean {
+  const explicit = process.env.NEBULA_CLIENT_MODE;
+  if (explicit !== undefined) {
+    return explicit === 'true';
+  }
+  return !!process.env.NEBULA_MAIN_SERVER;
+}
+
+function getClusterSecret(): string | null {
+  return process.env.NEBULA_CLUSTER_SECRET || readClusterSecret() || null;
+}
 
 /**
  * Extract auth token from request
@@ -44,6 +59,28 @@ function extractToken(req: Request | IncomingMessage): string | undefined {
   return undefined;
 }
 
+function extractClusterSecret(req: Request | IncomingMessage): string | undefined {
+  const headers = 'headers' in req ? req.headers : (req as IncomingMessage).headers;
+  const value = headers[CLUSTER_SECRET_HEADER] as string | string[] | undefined;
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
+function hasValidClusterSecret(req: Request | IncomingMessage): boolean {
+  const clusterSecret = getClusterSecret();
+  if (!clusterSecret) {
+    return false;
+  }
+  const provided = extractClusterSecret(req);
+  return Boolean(provided && provided === clusterSecret);
+}
+
+function isClusterRoute(pathname: string): boolean {
+  return pathname.startsWith('/api/servers') || pathname.startsWith('/servers');
+}
+
 /**
  * Check if a path is a public route
  */
@@ -65,11 +102,41 @@ function isPublicRoute(pathname: string): boolean {
  * Express middleware for authentication
  */
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const pathname = req.path;
+
+  if (isClientMode()) {
+    // Allow public routes regardless
+    if (isPublicRoute(pathname)) {
+      next();
+      return;
+    }
+    if (!getClusterSecret()) {
+      res.status(503).json({
+        error: 'cluster_secret_required',
+        message: 'Cluster secret required for client mode. Set NEBULA_CLUSTER_SECRET.',
+      });
+      return;
+    }
+    if (!hasValidClusterSecret(req)) {
+      res.status(403).json({
+        error: 'cluster_auth_required',
+        message: 'Cluster authentication required.',
+      });
+      return;
+    }
+    next();
+    return;
+  }
+
+  if (isClusterRoute(pathname) && hasValidClusterSecret(req)) {
+    next();
+    return;
+  }
+
   if (authService.isAuthDisabled()) {
     next();
     return;
   }
-  const pathname = req.path;
 
   // Allow public routes
   if (isPublicRoute(pathname)) {
@@ -115,6 +182,19 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
  * Returns true if the connection is authenticated
  */
 export function authWebSocketMiddleware(request: IncomingMessage): boolean {
+  if (isClientMode()) {
+    const clusterSecret = getClusterSecret();
+    if (!clusterSecret) {
+      console.log('[Auth] WebSocket rejected - cluster secret not configured');
+      return false;
+    }
+    const provided = extractClusterSecret(request);
+    if (provided !== clusterSecret) {
+      console.log('[Auth] WebSocket rejected - invalid cluster secret');
+      return false;
+    }
+    return true;
+  }
   if (authService.isAuthDisabled()) {
     return true;
   }

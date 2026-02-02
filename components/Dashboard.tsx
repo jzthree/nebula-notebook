@@ -15,8 +15,12 @@ import {
   Cpu,
   Lightbulb,
   History,
+  AlertTriangle,
+  Trash2,
+  X,
 } from 'lucide-react';
 import { listTerminals, TerminalInfo } from '../services/terminalService';
+import { getDeadKernelSessions, cleanupDeadKernelSessions, DeadSession } from '../services/kernelService';
 import { FileBrowser } from './FileBrowser';
 import { ResourcePanel } from './ResourcePanel';
 
@@ -135,6 +139,12 @@ export const Dashboard: React.FC = () => {
   // Recently opened notebooks
   const [recentNotebooks, setRecentNotebooks] = useState<RecentNotebook[]>([]);
 
+  // Dead kernel sessions (orphaned/terminated)
+  const [deadSessions, setDeadSessions] = useState<DeadSession[]>([]);
+  const [isCleaningUp, setIsCleaningUp] = useState(false);
+  const [cleanupDismissed, setCleanupDismissed] = useState(false);
+  const [cleanupNotice, setCleanupNotice] = useState<string | null>(null);
+
   // Dummy refresh counter (to pass to FileBrowser)
   const [refreshCounter, setRefreshCounter] = useState(0);
 
@@ -148,6 +158,37 @@ export const Dashboard: React.FC = () => {
     setKernelSessions(kernels);
   }, []);
 
+  // Check for dead sessions
+  const checkDeadSessions = useCallback(async (): Promise<DeadSession[] | null> => {
+    try {
+      const dead = await getDeadKernelSessions();
+      setDeadSessions(dead);
+      return dead;
+    } catch {
+      // Ignore errors - older servers might not have this endpoint
+      return null;
+    }
+  }, []);
+
+  // Cleanup dead sessions
+  const handleCleanupDeadSessions = useCallback(async () => {
+    setIsCleaningUp(true);
+    setCleanupNotice(null);
+    try {
+      await cleanupDeadKernelSessions();
+      const remaining = await checkDeadSessions();
+      if (remaining && remaining.length > 0) {
+        setCleanupNotice(
+          `${remaining.length} kernel${remaining.length === 1 ? '' : 's'} could not be terminated. You may need to stop them manually.`
+        );
+      }
+    } catch {
+      // Ignore errors
+    } finally {
+      setIsCleaningUp(false);
+    }
+  }, [checkDeadSessions]);
+
   // Initial load
   useEffect(() => {
     const init = async () => {
@@ -155,9 +196,10 @@ export const Dashboard: React.FC = () => {
       setServerCwd(cwd);
       loadSessions();
       setRecentNotebooks(getRecentNotebooks());
+      checkDeadSessions();
     };
     init();
-  }, [loadSessions]);
+  }, [loadSessions, checkDeadSessions]);
 
   // Poll sessions every 5 seconds
   useEffect(() => {
@@ -251,6 +293,42 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
       </header>
+
+      {/* Dead Sessions Cleanup Banner */}
+      {deadSessions.length > 0 && !cleanupDismissed && (
+        <div className="bg-amber-50 border-b border-amber-200">
+          <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 text-sm text-amber-800">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+              <div className="flex flex-col gap-0.5">
+                <span>
+                  Found <strong>{deadSessions.length}</strong> orphaned kernel session{deadSessions.length !== 1 ? 's' : ''} from a previous server run
+                </span>
+                {cleanupNotice && (
+                  <span className="text-[0.6875rem] text-amber-700">{cleanupNotice}</span>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCleanupDeadSessions}
+                disabled={isCleaningUp}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-medium transition-colors disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                {isCleaningUp ? 'Cleaning...' : 'Clean Up'}
+              </button>
+              <button
+                onClick={() => setCleanupDismissed(true)}
+                className="p-1.5 text-amber-600 hover:bg-amber-100 rounded transition-colors"
+                title="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="max-w-6xl mx-auto px-4 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start lg:items-stretch">

@@ -137,7 +137,7 @@ npm run start
 ```bash
 export NEBULA_MAIN_SERVER=http://main-server-hostname:3000
 export NEBULA_SERVER_NAME="GPU Server"  # optional display name
-npm run start
+npm run start -- --client
 ```
 
 The client will automatically register with the main server and appear in the kernel menu.
@@ -156,6 +156,8 @@ For production deployments, set a shared secret on all servers:
 ```bash
 export NEBULA_CLUSTER_SECRET="your-secret-key"
 ```
+
+If your clients share the same filesystem as the main server, you can also copy `~/.nebula/cluster.json` from the main server instead of setting the env var.
 
 Servers without the correct secret will be rejected during registration.
 
