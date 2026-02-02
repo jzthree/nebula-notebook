@@ -1249,6 +1249,12 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     }
   }, [applyOperation, filePath]);
 
+  // Keep latest handler without forcing reconnects on every render
+  const handleMessageRef = useRef(handleMessage);
+  useEffect(() => {
+    handleMessageRef.current = handleMessage;
+  }, [handleMessage]);
+
   /**
    * Connect to WebSocket
    */
@@ -1295,7 +1301,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        handleMessage(data);
+        handleMessageRef.current(data);
       } catch (e) {
         console.error('[OperationHandler] Failed to parse message:', e);
       }
@@ -1326,7 +1332,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
         }, 1000);
       }
     };
-  }, [filePath, handleMessage]);
+  }, [filePath]);
 
   /**
    * Disconnect from WebSocket
