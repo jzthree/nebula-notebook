@@ -135,6 +135,48 @@ export class PythonDiscoveryService {
   }
 
   /**
+   * Run a command asynchronously with timeout
+   */
+  private runCommand(command: string, args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      let finished = false;
+
+      const timer = timeoutMs > 0 ? setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        child.kill('SIGKILL');
+        reject(new Error(`Command timed out after ${timeoutMs}ms`));
+      }, timeoutMs) : null;
+
+      child.stdout?.on('data', (data) => {
+        stdout += data.toString();
+      });
+      child.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+      child.on('error', (err) => {
+        if (finished) return;
+        finished = true;
+        if (timer) clearTimeout(timer);
+        reject(err);
+      });
+      child.on('close', (code) => {
+        if (finished) return;
+        finished = true;
+        if (timer) clearTimeout(timer);
+        if (code === 0) {
+          resolve({ stdout, stderr });
+        } else {
+          reject(new Error(`Command failed with code ${code}: ${stderr || stdout}`));
+        }
+      });
+    });
+  }
+
+  /**
    * Generate display name for an environment
    */
   generateDisplayName(version: string, envType: PythonEnvType, envName: string | null): string {
@@ -283,35 +325,25 @@ export class PythonDiscoveryService {
    * Get Python version from executable
    */
   private async getPythonVersion(pythonPath: string): Promise<string | null> {
-    return new Promise((resolve) => {
-      try {
-        const result = execSync(`"${pythonPath}" --version`, {
-          timeout: this.versionCheckTimeoutMs,
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-        resolve(this.parseVersionString(result.trim()));
-      } catch (e) {
-        resolve(null);
-      }
-    });
+    try {
+      const { stdout, stderr } = await this.runCommand(pythonPath, ['--version'], this.versionCheckTimeoutMs);
+      const output = (stdout || stderr).trim();
+      return this.parseVersionString(output);
+    } catch {
+      return null;
+    }
   }
 
   /**
    * Check if ipykernel is installed
    */
   private async checkIpykernel(pythonPath: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      try {
-        execSync(`"${pythonPath}" -c "import ipykernel"`, {
-          timeout: this.ipykernelCheckTimeoutMs,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-        resolve(true);
-      } catch {
-        resolve(false);
-      }
-    });
+    try {
+      await this.runCommand(pythonPath, ['-c', 'import ipykernel'], this.ipykernelCheckTimeoutMs);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -340,13 +372,8 @@ export class PythonDiscoveryService {
       if (!fs.existsSync(condaPath)) continue;
 
       try {
-        const result = execSync(`"${condaPath}" env list --json`, {
-          timeout: this.condaListTimeoutMs,
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-
-        const data = JSON.parse(result);
+        const { stdout } = await this.runCommand(condaPath, ['env', 'list', '--json'], this.condaListTimeoutMs);
+        const data = JSON.parse(stdout);
         for (const envPath of data.envs || []) {
           const pythonPath = path.join(envPath, 'bin', 'python');
           if (fs.existsSync(pythonPath) && !seenPaths.has(pythonPath)) {
