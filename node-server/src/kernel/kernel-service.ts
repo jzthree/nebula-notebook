@@ -556,8 +556,21 @@ export class KernelService {
   async getOrCreateKernel(filePath: string, kernelName: string = 'python3'): Promise<string> {
     const normalizedPath = this.normalizePath(filePath);
 
-    // Check for existing session
-    const existingSessionId = this.fileToSession.get(normalizedPath);
+    // Check for existing session in fileToSession map
+    let existingSessionId = this.fileToSession.get(normalizedPath);
+
+    // Fallback: search all sessions for matching filePath (handles race after server restart)
+    if (!existingSessionId) {
+      for (const [sessionId, session] of this.sessions.entries()) {
+        if (session.filePath === normalizedPath && session.status !== 'dead') {
+          console.log(`[Kernel] Found orphaned session ${sessionId} for ${normalizedPath}, restoring fileToSession mapping`);
+          this.fileToSession.set(normalizedPath, sessionId);
+          existingSessionId = sessionId;
+          break;
+        }
+      }
+    }
+
     if (existingSessionId) {
       const session = this.sessions.get(existingSessionId);
       if (session && session.status !== 'dead') {
