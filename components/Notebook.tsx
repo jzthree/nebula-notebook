@@ -2916,9 +2916,10 @@ export const Notebook: React.FC = () => {
                               Jupyter Kernels
                             </div>
                             {availableKernels.map(kernel => {
+                              // Match kernel to environment using the actual Python path from kernel.json
                               const matchedEnv = pythonEnvironments.find(env =>
                                 env.kernel_name === kernel.name ||
-                                (kernel.path && env.path && kernel.path.includes(env.path.replace('/bin/python', '')))
+                                (kernel.python_path && env.path && kernel.python_path === env.path)
                               );
                               const envLabel = matchedEnv?.env_name || (matchedEnv && matchedEnv.display_name !== kernel.display_name ? matchedEnv.display_name : null);
 
@@ -2954,9 +2955,9 @@ export const Notebook: React.FC = () => {
                                   {isDiscoveringPythons && <Loader2 className="w-3 h-3 animate-spin" />}
                                 </div>
                                 {pythonEnvironments.map(env => {
-                                  // Check if this env is already a registered kernel
+                                  // Check if this env is already a registered kernel using the actual Python path
                                   const isRegistered = availableKernels.some(k =>
-                                    k.path?.includes(env.path.replace('/bin/python', '')) ||
+                                    (k.python_path && k.python_path === env.path) ||
                                     env.kernel_name === k.name
                                   );
 

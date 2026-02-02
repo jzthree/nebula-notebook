@@ -12,6 +12,7 @@ export interface KernelSpec {
   display_name: string;
   language: string;
   path: string;
+  python_path?: string | null; // The actual Python executable from kernel.json argv[0]
 }
 
 export interface KernelSession {

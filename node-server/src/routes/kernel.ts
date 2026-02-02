@@ -59,6 +59,7 @@ router.get('/kernels', async (_req: Request, res: Response) => {
     display_name: k.displayName,
     language: k.language,
     path: k.path,
+    python_path: k.argv?.[0] || null, // First element of argv is typically the Python executable
   }));
   res.json({ kernels });
 });
