@@ -51,6 +51,7 @@ router.get('/python/environments', async (req: Request, res: Response) => {
       display_name: k.displayName,
       language: k.language,
       path: k.path,
+      python_path: k.argv?.[0] || null, // First element of argv is typically the Python executable
     }));
     const kernelspecNames = new Set(kernelspecs.map(k => k.name));
 
