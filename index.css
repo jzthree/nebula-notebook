@@ -12,6 +12,13 @@ html {
   scroll-behavior: smooth;
 }
 
+.cm-editor,
+.cm-editor:focus,
+.cm-editor:focus-within,
+.cm-editor.cm-focused {
+  outline: none;
+}
+
 @media (min-width: 1024px) {
   .nebula-filebrowser-offset {
     margin-left: var(--nebula-filebrowser-width, 18rem);

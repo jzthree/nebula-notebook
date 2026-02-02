@@ -3197,7 +3197,6 @@ export const Notebook: React.FC = () => {
                           </button>
                       )}
                     </div>
-                  </div>
 
                   <div className="flex gap-2 items-center flex-wrap justify-end">
                   {/* Undo / Redo Controls */}
