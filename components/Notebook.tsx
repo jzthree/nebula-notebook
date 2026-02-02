@@ -1178,14 +1178,15 @@ export const Notebook: React.FC = () => {
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
-  const loadPythonEnvironments = useCallback(async (refresh: boolean = false, serverId?: string | null) => {
+  const loadPythonEnvironments = useCallback(async (refresh: boolean = false, serverId?: string | null, autoSelectKernel = true) => {
     try {
       setIsDiscoveringPythons(true);
       const targetServerId = serverId ?? selectedServerId;
       const data = await kernelService.getPythonEnvironments(refresh, targetServerId);
       setAvailableKernels(data.kernelspecs);
       setPythonEnvironments(data.environments);
-      if (data.kernelspecs.length > 0 && !data.kernelspecs.some(k => k.name === currentKernel)) {
+      // Only auto-select first kernel if requested (skip during server switch)
+      if (autoSelectKernel && data.kernelspecs.length > 0 && !data.kernelspecs.some(k => k.name === currentKernel)) {
         setCurrentKernel(data.kernelspecs[0].name);
       }
     } catch (error) {
@@ -2021,9 +2022,8 @@ export const Notebook: React.FC = () => {
     setSelectedServerId(serverId);
 
     try {
-      const kernels = await kernelService.getAvailableKernels(serverId);
-      setAvailableKernels(kernels);
-      loadPythonEnvironments(false, serverId);
+      // Load environments without auto-selecting a kernel - user must choose
+      loadPythonEnvironments(false, serverId, false);
     } catch (error) {
       console.error('Failed to load kernels for server:', error);
     }
