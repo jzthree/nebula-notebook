@@ -118,8 +118,10 @@ export interface UpdateMetadataOp {
 export interface MoveCellOp {
   type: 'moveCell';
   notebookPath: string;
-  fromIndex: number;
-  toIndex: number;
+  fromIndex?: number;
+  toIndex?: number;
+  cellId?: string;
+  afterCellId?: string;
 }
 
 export interface DuplicateCellOp {
@@ -269,6 +271,8 @@ export interface OperationResult {
   success: boolean;
   cellId?: string;
   cellIndex?: number;
+  fromIndex?: number;
+  toIndex?: number;
   idModified?: boolean;
   requestedId?: string;
   error?: string;
@@ -715,18 +719,50 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
         }
 
         case 'moveCell': {
-          const { fromIndex, toIndex } = operation;
+          const { fromIndex, toIndex, cellId, afterCellId } = operation;
+          let resolvedFrom = fromIndex;
+          let resolvedTo = toIndex;
 
-          if (fromIndex < 0 || fromIndex >= currentCells.length) {
-            return { success: false, error: `Source index ${fromIndex} out of range` };
+          if (cellId) {
+            resolvedFrom = currentCells.findIndex(c => c.id === cellId);
+            if (resolvedFrom === -1) {
+              return { success: false, error: `Cell with ID "${cellId}" not found` };
+            }
+          } else if (resolvedFrom === undefined) {
+            return { success: false, error: 'Must provide cellId or fromIndex' };
           }
-          if (toIndex < 0 || toIndex >= currentCells.length) {
-            return { success: false, error: `Target index ${toIndex} out of range` };
+
+          if (resolvedFrom < 0 || resolvedFrom >= currentCells.length) {
+            return { success: false, error: `Source index ${resolvedFrom} out of range` };
           }
 
-          moveCellRef.current(fromIndex, toIndex, 'ai');
+          if (afterCellId) {
+            const afterIndex = currentCells.findIndex(c => c.id === afterCellId);
+            if (afterIndex === -1) {
+              return { success: false, error: `Cell with ID "${afterCellId}" not found` };
+            }
+            resolvedTo = afterIndex + 1;
+            if (resolvedFrom < resolvedTo) {
+              resolvedTo -= 1;
+            }
+          } else if (resolvedTo === -1) {
+            resolvedTo = 0;
+          } else if (resolvedTo === undefined) {
+            return { success: false, error: 'Must provide afterCellId or toIndex' };
+          }
 
-          return { success: true };
+          if (resolvedTo < 0 || resolvedTo >= currentCells.length) {
+            return { success: false, error: `Target index ${resolvedTo} out of range` };
+          }
+
+          moveCellRef.current(resolvedFrom, resolvedTo, 'ai');
+
+          return {
+            success: true,
+            cellId: cellId ?? currentCells[resolvedFrom]?.id,
+            fromIndex: resolvedFrom,
+            toIndex: resolvedTo,
+          };
         }
 
         case 'duplicateCell': {

@@ -27,6 +27,8 @@ const editorTheme = EditorView.theme({
   },
   '.cm-line': {
     padding: '0',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
   },
   '.cm-scroller': {
     overflow: 'auto',
