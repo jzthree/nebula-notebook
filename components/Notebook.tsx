@@ -196,6 +196,15 @@ export const Notebook: React.FC = () => {
   const [pendingSave, setPendingSave] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
+  useEffect(() => {
+    if (!textEditorPath) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [textEditorPath]);
+
 
   // Kernel State
   const [isKernelMenuOpen, setIsKernelMenuOpen] = useState(false);
@@ -2930,7 +2939,7 @@ export const Notebook: React.FC = () => {
       <div className={`relative flex-1 flex flex-col h-screen transition-all duration-300 ${isFileBrowserOpen ? 'nebula-filebrowser-offset' : ''} ${isChatOpen ? 'lg:mr-80' : ''}`}>
 
         {textEditorPath && (
-          <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6 overflow-hidden">
             <div className="w-full h-full max-w-5xl max-h-[85vh] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
               <TextFileEditor filePath={textEditorPath} variant="modal" onClose={() => setTextEditorPath(null)} />
             </div>

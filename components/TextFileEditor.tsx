@@ -17,6 +17,9 @@ const editorTheme = EditorView.theme({
     fontSize: '0.875rem',
     backgroundColor: '#ffffff',
   },
+  '&.cm-editor': {
+    height: '100%',
+  },
   '.cm-content': {
     fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
     padding: '1rem',
@@ -24,6 +27,10 @@ const editorTheme = EditorView.theme({
   },
   '.cm-line': {
     padding: '0',
+  },
+  '.cm-scroller': {
+    overflow: 'auto',
+    height: '100%',
   },
   '.cm-gutters': {
     backgroundColor: '#f8fafc',
@@ -153,10 +160,11 @@ export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath, varian
           )}
         </div>
       </header>
-      <div className="flex-1">
+      <div className="flex-1 overflow-hidden">
         <CodeMirror
           value={content}
           height={variant === 'modal' ? '100%' : 'calc(100vh - 56px)'}
+          className="h-full"
           extensions={extensions}
           onChange={(value) => {
             setContent(value);
