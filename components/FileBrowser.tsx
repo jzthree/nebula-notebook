@@ -17,8 +17,6 @@ import {
   Upload
 } from 'lucide-react';
 import { FileListItem } from './FileListItem';
-import { readFile } from '../services/fileService';
-import { encodeHtmlParam, wrapHtmlDocument, MAX_HTML_PARAM_LENGTH } from '../utils/htmlPreview';
 import {
   listDirectory,
   getDirectoryMtime,
@@ -128,6 +126,12 @@ export const FileBrowser: React.FC<Props> = ({
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'modified'>('modified');
+  const isEditableTextFile = (filePath: string): boolean => {
+    const lower = filePath.toLowerCase();
+    return [
+      '.py', '.json', '.txt', '.md', '.yaml', '.yml', '.js', '.ts', '.tsx', '.css', '.csv', '.log', '.toml', '.ini'
+    ].some(ext => lower.endsWith(ext));
+  };
 
   // Persist notebook filter preference
   const toggleNotebooksOnly = () => {
@@ -519,34 +523,18 @@ export const FileBrowser: React.FC<Props> = ({
     // Keep for compatibility but actual rename happens in handleConfirmEdit
   };
 
-  const handleOpenNewTab = async (path: string) => {
+  const handleOpenNewTab = (path: string) => {
     const baseUrl = window.location.pathname;
     const lower = path.toLowerCase();
-    const isHtml = lower.endsWith('.html') || lower.endsWith('.htm');
-    if (!isHtml) {
-      window.open(`${baseUrl}?file=${path}`, '_blank');
+    if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+      window.open(`${baseUrl}?html=${encodeURIComponent(path)}`, '_blank', 'noopener,noreferrer');
       return;
     }
-
-    try {
-      const result = await readFile(path);
-      if (result.type !== 'text' || typeof result.content !== 'string') {
-        toast('HTML file is not readable as text', 'error');
-        return;
-      }
-      const encoded = encodeHtmlParam(result.content);
-      if (encoded.length <= MAX_HTML_PARAM_LENGTH) {
-        window.open(`${baseUrl}?html=${encoded}`, '_blank', 'noopener,noreferrer');
-        return;
-      }
-      const fullHtml = wrapHtmlDocument(result.content);
-      const blob = new Blob([fullHtml], { type: 'text/html' });
-      const blobUrl = URL.createObjectURL(blob);
-      window.open(blobUrl, '_blank', 'noopener,noreferrer');
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-    } catch (err: any) {
-      toast(err.message || 'Failed to open HTML file', 'error');
+    if (isEditableTextFile(path)) {
+      window.open(`${baseUrl}?text=${encodeURIComponent(path)}`, '_blank', 'noopener,noreferrer');
+      return;
     }
+    window.open(`${baseUrl}?file=${path}`, '_blank');
   };
 
   const handleSelectFile = (path: string) => {

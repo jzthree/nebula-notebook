@@ -87,7 +87,9 @@ export const FileListItem: React.FC<FileListItemProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
   const isNotebook = item.extension === '.ipynb';
   const isHtml = item.extension === '.html' || item.extension === '.htm';
-  const isOpenableInTab = isNotebook || isHtml;
+  const isTextFile = ['.py', '.json', '.txt', '.md', '.yaml', '.yml', '.js', '.ts', '.tsx', '.css', '.csv', '.log', '.toml', '.ini']
+    .includes(item.extension || '');
+  const isOpenableInTab = isNotebook || isHtml || isTextFile;
   const isClickable = (item.isDirectory || isNotebook) && !isEditing;
 
   // Focus input when entering edit mode

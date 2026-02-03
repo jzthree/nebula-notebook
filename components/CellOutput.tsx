@@ -50,12 +50,12 @@ const compactOutput = (text: string): string => {
 const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean }> = ({ output, wrapText }) => {
   const textClass = wrapText ? 'whitespace-pre-wrap break-words' : 'whitespace-pre overflow-x-auto';
   const openHtmlInNewTab = useCallback((html: string) => {
-    const encoded = encodeHtmlParam(html);
-    if (encoded.length <= MAX_HTML_PARAM_LENGTH) {
-      const url = `${window.location.origin}/?html=${encoded}`;
-      window.open(url, '_blank', 'noopener,noreferrer');
-      return;
-    }
+      const encoded = encodeHtmlParam(html);
+      if (encoded.length <= MAX_HTML_PARAM_LENGTH) {
+        const url = `${window.location.origin}/?htmlContent=${encoded}`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+        return;
+      }
     const fullHtml = wrapHtmlDocument(html);
     const blob = new Blob([fullHtml], { type: 'text/html' });
     const blobUrl = URL.createObjectURL(blob);
