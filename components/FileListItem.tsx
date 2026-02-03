@@ -25,6 +25,7 @@ interface FileListItemProps {
   onNavigate?: (path: string) => void;
   onSelect?: (path: string) => void;
   onOpenNewTab?: (path: string) => void;
+  onOpenTextFile?: (item: FileItem) => void;
   onRename?: (item: FileItem, newName: string) => void;
   onDuplicate?: (item: FileItem) => void;
   onDownload?: (item: FileItem) => void;
@@ -72,6 +73,7 @@ export const FileListItem: React.FC<FileListItemProps> = ({
   onNavigate,
   onSelect,
   onOpenNewTab,
+  onOpenTextFile,
   onRename,
   onDuplicate,
   onDownload,
@@ -90,7 +92,7 @@ export const FileListItem: React.FC<FileListItemProps> = ({
   const isTextFile = ['.py', '.json', '.txt', '.md', '.yaml', '.yml', '.js', '.ts', '.tsx', '.css', '.csv', '.log', '.toml', '.ini']
     .includes(item.extension || '');
   const isOpenableInTab = isNotebook || isHtml || isTextFile;
-  const isClickable = (item.isDirectory || isNotebook) && !isEditing;
+  const isClickable = (item.isDirectory || isNotebook || (isTextFile && onOpenTextFile)) && !isEditing;
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -113,6 +115,8 @@ export const FileListItem: React.FC<FileListItemProps> = ({
       onNavigate(item.path);
     } else if (isNotebook && onSelect) {
       onSelect(item.path);
+    } else if (isTextFile && onOpenTextFile) {
+      onOpenTextFile(item);
     }
   };
 

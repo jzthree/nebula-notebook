@@ -40,6 +40,7 @@ interface Props {
   files: NotebookMetadata[];
   currentFileId: string | null;
   onSelect: (id: string) => void;
+  onOpenTextFile?: (path: string) => void;
   onRefresh: () => void;
   isOpen?: boolean;
   onClose?: () => void;
@@ -57,6 +58,7 @@ export const FileBrowser: React.FC<Props> = ({
   files,
   currentFileId,
   onSelect,
+  onOpenTextFile,
   onRefresh,
   isOpen = true,
   onClose,
@@ -126,6 +128,7 @@ export const FileBrowser: React.FC<Props> = ({
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'modified'>('modified');
+  const maxTextEditorBytes = 2 * 1024 * 1024;
   const isEditableTextFile = (filePath: string): boolean => {
     const lower = filePath.toLowerCase();
     return [
@@ -531,10 +534,27 @@ export const FileBrowser: React.FC<Props> = ({
       return;
     }
     if (isEditableTextFile(path)) {
+      const item = items.find(entry => entry.path === path);
+      if (item && item.sizeBytes > maxTextEditorBytes) {
+        toast(`File is too large to open in editor (${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB).`, 'warning');
+        return;
+      }
       window.open(`${baseUrl}?text=${encodeURIComponent(path)}`, '_blank', 'noopener,noreferrer');
       return;
     }
     window.open(`${baseUrl}?file=${path}`, '_blank');
+  };
+
+  const handleOpenTextFile = (item: FileItem) => {
+    if (item.sizeBytes > maxTextEditorBytes) {
+      toast(`File is too large to open in editor (${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB).`, 'warning');
+      return;
+    }
+    if (onOpenTextFile) {
+      onOpenTextFile(item.path);
+    } else {
+      handleOpenNewTab(item.path);
+    }
   };
 
   const handleSelectFile = (path: string) => {
@@ -794,6 +814,7 @@ export const FileBrowser: React.FC<Props> = ({
             onNavigate={handleNavigate}
             onSelect={handleSelectFile}
             onOpenNewTab={handleOpenNewTab}
+            onOpenTextFile={handleOpenTextFile}
             onRename={handleRenameItem}
             onDuplicate={handleDuplicateItem}
             onDownload={handleDownloadItem}

@@ -8,6 +8,8 @@ import { readFile, writeFile } from '../services/fileService';
 
 interface TextFileEditorProps {
   filePath: string;
+  variant?: 'full' | 'modal';
+  onClose?: () => void;
 }
 
 const editorTheme = EditorView.theme({
@@ -40,7 +42,7 @@ const getLanguageExtension = (path: string) => {
   return [];
 };
 
-export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath }) => {
+export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath, variant = 'full', onClose }) => {
   const [content, setContent] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -105,7 +107,7 @@ export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath }) => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500 text-sm">
+      <div className={`${variant === 'modal' ? 'h-full' : 'min-h-screen'} bg-slate-50 flex items-center justify-center text-slate-500 text-sm`}>
         Loading file…
       </div>
     );
@@ -113,7 +115,7 @@ export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath }) => {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-slate-50 text-slate-900 flex items-center justify-center p-6">
+      <div className={`${variant === 'modal' ? 'h-full' : 'min-h-screen'} bg-slate-50 text-slate-900 flex items-center justify-center p-6`}>
         <div className="max-w-lg rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
           <h1 className="text-lg font-semibold mb-2">Unable to open file</h1>
           <p className="text-sm text-slate-600">{error}</p>
@@ -123,7 +125,7 @@ export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath }) => {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+    <div className={`${variant === 'modal' ? 'h-full' : 'min-h-screen'} flex flex-col bg-slate-50 text-slate-900`}>
       <header className="flex items-center justify-between gap-4 px-4 py-3 border-b border-slate-200 bg-white">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-slate-900 truncate">{filename}</div>
@@ -141,12 +143,20 @@ export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath }) => {
           >
             {isSaving ? 'Saving…' : 'Save'}
           </button>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="px-2 py-1.5 text-xs font-medium rounded border border-slate-200 text-slate-500 hover:bg-slate-100"
+            >
+              Close
+            </button>
+          )}
         </div>
       </header>
       <div className="flex-1">
         <CodeMirror
           value={content}
-          height="calc(100vh - 56px)"
+          height={variant === 'modal' ? '100%' : 'calc(100vh - 56px)'}
           extensions={extensions}
           onChange={(value) => {
             setContent(value);

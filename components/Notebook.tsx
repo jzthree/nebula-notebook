@@ -27,6 +27,7 @@ import {
   OutputLoggingMode
 } from '../services/fileService';
 import { FileBrowser } from './FileBrowser';
+import { TextFileEditor } from './TextFileEditor';
 import { addRecentNotebook } from './Dashboard';
 import { AIChatSidebar } from './AIChatSidebar';
 import { TerminalPanel } from './TerminalPanel';
@@ -151,6 +152,7 @@ export const Notebook: React.FC = () => {
   const [isLoadingFile, setIsLoadingFile] = useState(!!getInitialFileId());
   const [currentFileMetadata, setCurrentFileMetadata] = useState<NotebookMetadata | null>(null);
   const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false);
+  const [textEditorPath, setTextEditorPath] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -2917,6 +2919,7 @@ export const Notebook: React.FC = () => {
         files={files}
         currentFileId={currentFileId}
         onSelect={loadFile}
+        onOpenTextFile={(path) => setTextEditorPath(path)}
         onRefresh={refreshFileList}
         isOpen={isFileBrowserOpen}
         onClose={() => setIsFileBrowserOpen(false)}
@@ -2925,6 +2928,14 @@ export const Notebook: React.FC = () => {
 
       {/* Main Content */}
       <div className={`relative flex-1 flex flex-col h-screen transition-all duration-300 ${isFileBrowserOpen ? 'nebula-filebrowser-offset' : ''} ${isChatOpen ? 'lg:mr-80' : ''}`}>
+
+        {textEditorPath && (
+          <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6">
+            <div className="w-full h-full max-w-5xl max-h-[85vh] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+              <TextFileEditor filePath={textEditorPath} variant="modal" onClose={() => setTextEditorPath(null)} />
+            </div>
+          </div>
+        )}
 
         {/* Conflict Dialog */}
         {conflictDialog?.show && (
