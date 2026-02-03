@@ -259,7 +259,7 @@ export const Notebook: React.FC = () => {
     hasRedoToFlush,
     getUnflushedState,
     setUnflushedState,
-    getUserChangesSince,
+    getUpdatesSince,
   } = useUndoRedo([]);  // Start with empty cells
 
   const logKernelEvent = useCallback((
@@ -668,7 +668,7 @@ export const Notebook: React.FC = () => {
     redo: rawRedo,
     canUndo,
     canRedo,
-    getUserChangesSince,
+    getUpdatesSince,
     onAgentOperation: useCallback((operation, result) => {
       // Skip read-only operations
       if (operation.type === 'readCell' || operation.type === 'readCellOutput') return;

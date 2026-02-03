@@ -620,6 +620,21 @@ export const CodeEditor: React.FC<Props> = ({
     });
   }, [currentMatchStart, currentMatchEnd]);
 
+  // Scroll current search match into view (without changing selection)
+  useEffect(() => {
+    if (!isSearchOpen) return;
+    if (!editorRef.current?.view) return;
+    if (currentMatchStart === undefined || currentMatchEnd === undefined) return;
+
+    const view = editorRef.current.view;
+    const docLen = view.state.doc.length;
+    const pos = Math.max(0, Math.min(currentMatchStart, docLen));
+
+    view.dispatch({
+      effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+    });
+  }, [isSearchOpen, currentMatchStart, currentMatchEnd]);
+
   // ⚠️ PERFORMANCE CRITICAL: Extensions rebuild when dependencies change.
   // All callbacks (onKeyDown, onFocus, onBlur) MUST be stable - use refs in Cell.tsx
   // to avoid recreating them on every keystroke. If you see typing lag, check if

@@ -21,6 +21,15 @@ export interface UseAutosaveOptions {
   hasRedoHistory?: boolean; // Block autosave when redo history exists (user has undone)
 }
 
+interface CellSnapshot {
+  type: Cell['type'];
+  content: string;
+  scrolled?: boolean;
+  scrolledHeight?: number;
+  metadataRef?: Cell['_metadata'];
+  outputsRef?: Cell['outputs'];
+}
+
 export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHistory = false }: UseAutosaveOptions) {
   // UI status (derived from machine state)
   const [uiStatus, setUiStatus] = useState<AutosaveStatus>({
@@ -35,8 +44,12 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
   const checkTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const lastSavedContentRef = useRef<string>('');
   const cellsRef = useRef(cells);
+  const lastSavedSnapshotRef = useRef<Map<string, CellSnapshot>>(new Map());
+  const lastSavedOrderRef = useRef<string[]>([]);
+  const lastSavedSizeRef = useRef(0);
+  const dirtyCellsRef = useRef<Set<string>>(new Set());
+  const dirtyOrderRef = useRef(false);
 
   // Ref for executeEffect to avoid stale closure in dispatch
   const executeEffectRef = useRef<(effect: AutosaveEffect) => void>(() => {});
@@ -47,29 +60,88 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
   // Guard against concurrent saves - prevents race conditions with mtime updates
   const saveInProgressRef = useRef(false);
 
-  // Serialize cells for comparison (includes outputs to trigger save after execution)
-  // Also includes scrolled, scrolledHeight and _metadata to trigger save when metadata changes
-  const serializeCells = useCallback((cells: Cell[]) => {
-    return JSON.stringify(cells.map(c => ({
-      id: c.id,
-      type: c.type,
-      content: c.content,
-      scrolled: c.scrolled,
-      scrolledHeight: c.scrolledHeight,
-      _metadata: c._metadata,
-      outputs: c.outputs?.map(o => ({
-        id: o.id,
-        type: o.type,
-        content: o.content,
-      })),
-    })));
+  const buildSnapshot = useCallback((cell: Cell): CellSnapshot => ({
+    type: cell.type,
+    content: cell.content,
+    scrolled: cell.scrolled,
+    scrolledHeight: cell.scrolledHeight,
+    metadataRef: cell._metadata,
+    outputsRef: cell.outputs,
+  }), []);
+
+  const cellMatchesSnapshot = useCallback((cell: Cell, snapshot: CellSnapshot): boolean => (
+    cell.type === snapshot.type &&
+    cell.content === snapshot.content &&
+    cell.scrolled === snapshot.scrolled &&
+    cell.scrolledHeight === snapshot.scrolledHeight &&
+    cell._metadata === snapshot.metadataRef &&
+    cell.outputs === snapshot.outputsRef
+  ), []);
+
+  const estimateCellsSize = useCallback((cellsToMeasure: Cell[]): number => {
+    let size = 0;
+    for (const cell of cellsToMeasure) {
+      size += cell.content.length;
+      for (const output of cell.outputs) {
+        size += output.content.length;
+      }
+    }
+    // Approximate UTF-16 bytes without allocating large strings
+    return size * 2;
   }, []);
 
+  const refreshDirtyState = useCallback((currentCells: Cell[]): boolean => {
+    const nextDirty = new Set<string>();
+    const nextIds = new Set<string>();
+    const lastSavedSnapshot = lastSavedSnapshotRef.current;
+    const lastOrder = lastSavedOrderRef.current;
+    let orderChanged = currentCells.length !== lastOrder.length;
+
+    for (let i = 0; i < currentCells.length; i += 1) {
+      const cell = currentCells[i];
+      nextIds.add(cell.id);
+      if (!orderChanged && lastOrder[i] !== cell.id) {
+        orderChanged = true;
+      }
+
+      const snapshot = lastSavedSnapshot.get(cell.id);
+      if (!snapshot || !cellMatchesSnapshot(cell, snapshot)) {
+        nextDirty.add(cell.id);
+      }
+    }
+
+    if (lastSavedSnapshot.size !== currentCells.length) {
+      for (const id of lastSavedSnapshot.keys()) {
+        if (!nextIds.has(id)) {
+          nextDirty.add(id);
+          orderChanged = true;
+        }
+      }
+    }
+
+    dirtyCellsRef.current = nextDirty;
+    dirtyOrderRef.current = orderChanged;
+    return nextDirty.size > 0 || orderChanged;
+  }, [cellMatchesSnapshot]);
+
+  const updateSavedState = useCallback((savedCells: Cell[]) => {
+    const snapshot = new Map<string, CellSnapshot>();
+    for (const cell of savedCells) {
+      snapshot.set(cell.id, buildSnapshot(cell));
+    }
+    lastSavedSnapshotRef.current = snapshot;
+    lastSavedOrderRef.current = savedCells.map(cell => cell.id);
+    dirtyCellsRef.current = new Set();
+    dirtyOrderRef.current = false;
+    lastSavedSizeRef.current = estimateCellsSize(savedCells);
+  }, [buildSnapshot, estimateCellsSize]);
+
   // Check if there are unsaved changes
-  const hasUnsavedChanges = useCallback(() => {
-    const currentContent = serializeCells(cells);
-    return currentContent !== lastSavedContentRef.current;
-  }, [cells, serializeCells]);
+  const hasUnsavedChanges = useCallback(() => (
+    dirtyOrderRef.current ||
+    dirtyCellsRef.current.size > 0 ||
+    saveInProgressRef.current
+  ), []);
 
   // Cancel all pending operations
   const cancelPendingOperations = useCallback(() => {
@@ -118,8 +190,8 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
       return;
     }
 
-    const currentContent = serializeCells(cells);
-    if (currentContent === lastSavedContentRef.current) {
+    const hasChanges = dirtyOrderRef.current || dirtyCellsRef.current.size > 0;
+    if (!hasChanges) {
       dispatch({ type: 'SAVE_SUCCESS' }); // No actual changes
       return;
     }
@@ -132,8 +204,10 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
     saveInProgressRef.current = true;
     try {
       await onSave(fileId, cells);
-      lastSavedContentRef.current = currentContent;
-      setUiStatus({ status: 'saved', lastSaved: Date.now() });
+      updateSavedState(cells);
+      const savedAt = Date.now();
+      const hasDirtyChanges = refreshDirtyState(cellsRef.current);
+      setUiStatus({ status: hasDirtyChanges ? 'unsaved' : 'saved', lastSaved: savedAt });
       dispatch({ type: 'SAVE_SUCCESS' });
     } catch (error) {
       console.error('Autosave failed:', error);
@@ -144,20 +218,19 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
       saveInProgressRef.current = false;
       isManualSaveRef.current = false;
     }
-  }, [fileId, cells, enabled, onSave, serializeCells, dispatch]);
+  }, [fileId, cells, enabled, onSave, dispatch, updateSavedState, refreshDirtyState]);
 
   // Check for changes and report to state machine
   const checkForChanges = useCallback(() => {
-    const currentContent = serializeCells(cells);
-    const hasChanges = currentContent !== lastSavedContentRef.current;
-    const contentSize = hasChanges ? new Blob([currentContent]).size : 0;
+    const hasChanges = dirtyOrderRef.current || dirtyCellsRef.current.size > 0;
+    const contentSize = hasChanges ? lastSavedSizeRef.current : 0;
 
     if (!hasChanges) {
       setUiStatus(prev => prev.status === 'unsaved' ? { ...prev, status: 'saved' } : prev);
     }
 
     dispatch({ type: 'CHECK_COMPLETE', hasChanges, contentSize });
-  }, [cells, serializeCells, dispatch]);
+  }, [dispatch]);
 
   // Execute a single effect
   const executeEffect = useCallback((effect: AutosaveEffect) => {
@@ -200,19 +273,25 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
   // React to cells changes
   useEffect(() => {
     if (!fileId || !enabled) return;
-    // Block autosave when redo history exists (user has undone)
-    if (hasRedoHistory) return;
 
     // Quick reference check - if cells array reference hasn't changed, skip
     if (cells === cellsRef.current) return;
     cellsRef.current = cells;
 
-    // Mark as unsaved immediately
-    setUiStatus(prev => prev.status === 'unsaved' ? prev : { ...prev, status: 'unsaved' });
+    const hasChanges = refreshDirtyState(cells);
+    setUiStatus(prev => {
+      if (hasChanges) {
+        return prev.status === 'unsaved' ? prev : { ...prev, status: 'unsaved' };
+      }
+      return prev.status === 'unsaved' ? { ...prev, status: 'saved' } : prev;
+    });
+
+    // Block autosave when redo history exists (user has undone)
+    if (hasRedoHistory) return;
 
     // Dispatch cells changed event
     dispatch({ type: 'CELLS_CHANGED' });
-  }, [cells, fileId, enabled, hasRedoHistory, dispatch]);
+  }, [cells, fileId, enabled, hasRedoHistory, dispatch, refreshDirtyState]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -226,8 +305,8 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
     cancelPendingOperations();
 
     // Check if there are actual changes to save
-    const currentContent = serializeCells(cells);
-    if (currentContent === lastSavedContentRef.current) {
+    const hasChanges = refreshDirtyState(cells);
+    if (!hasChanges) {
       // No changes, but still refresh the timestamp to give visual feedback
       setUiStatus({ status: 'saved', lastSaved: Date.now() });
       return;
@@ -236,12 +315,12 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
     // Mark as manual save to show "Saving..." indicator
     isManualSaveRef.current = true;
     dispatch({ type: 'MANUAL_SAVE' });
-  }, [cancelPendingOperations, cells, serializeCells, dispatch]);
+  }, [cancelPendingOperations, cells, dispatch, refreshDirtyState]);
 
   // Initialize last saved content when file changes
   useEffect(() => {
     if (fileId) {
-      lastSavedContentRef.current = serializeCells(cells);
+      updateSavedState(cells);
       setUiStatus({ status: 'saved', lastSaved: Date.now() });
       setMachineState(getInitialState());
     }

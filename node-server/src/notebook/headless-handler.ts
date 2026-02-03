@@ -204,8 +204,8 @@ export class HeadlessOperationHandler {
     const notebookPath = (operation.notebookPath as string) || '';
 
     // Read-only operations
-    const readOnlyOps = new Set(['readCell', 'readCellOutput', 'searchCells', 'startAgentSession', 'endAgentSession']);
-    const permissionExemptOps = new Set(['createNotebook', 'readCell', 'readCellOutput', 'searchCells', 'startAgentSession', 'endAgentSession']);
+    const readOnlyOps = new Set(['readCell', 'readCellOutput', 'searchCells', 'getUpdatesSince', 'startAgentSession', 'endAgentSession']);
+    const permissionExemptOps = new Set(['createNotebook', 'readCell', 'readCellOutput', 'searchCells', 'getUpdatesSince', 'startAgentSession', 'endAgentSession']);
 
     // Check permission for write operations
     if (!permissionExemptOps.has(opType) && notebookPath) {
@@ -261,6 +261,16 @@ export class HeadlessOperationHandler {
         case 'searchCells':
           result = await this.searchCells(operation);
           break;
+        case 'getUpdatesSince': {
+          const sinceTimestamp = (operation.sinceTimestamp as number) || 0;
+          const updatesSince = this.getUpdatesSince(notebookPath, sinceTimestamp);
+          result = {
+            success: true,
+            updatesSince,
+            serverTimestamp: Date.now(),
+          };
+          break;
+        }
         case 'clearOutputs':
           result = await this.clearOutputs(operation);
           break;

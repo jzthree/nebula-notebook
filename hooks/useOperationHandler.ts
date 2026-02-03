@@ -79,7 +79,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { Cell, CellType } from '../types';
 import { validateMetadataValue, CELL_METADATA_SCHEMA } from '../lib/cellMetadata';
 import { authService } from '../services/authService';
-import { EditSource } from './useUndoRedo';
+import { EditSource, UpdateSummary } from './useUndoRedo';
 
 // Operation types (matching backend/MCP types)
 export interface InsertCellOp {
@@ -234,8 +234,8 @@ export interface RedoOp {
   notebookPath: string;
 }
 
-export interface GetUserChangesOp {
-  type: 'getUserChanges';
+export interface GetUpdatesSinceOp {
+  type: 'getUpdatesSince';
   notebookPath: string;
   sinceTimestamp: number;
 }
@@ -263,7 +263,7 @@ export type NotebookOperation =
   | InterruptKernelOp
   | UndoOp
   | RedoOp
-  | GetUserChangesOp;
+  | GetUpdatesSinceOp;
 
 export interface OperationResult {
   success: boolean;
@@ -325,14 +325,8 @@ export interface OperationResult {
   // For createNotebook operation (popup handling)
   popupBlocked?: boolean;
   popupMessage?: string;
-  // For getUserChanges operation
-  userChanges?: Array<{
-    type: string;
-    cellId?: string;
-    cellIndex?: number;
-    timestamp: number;
-    description: string;
-  }>;
+  // For getUpdatesSince operation
+  updatesSince?: UpdateSummary[];
   // Server timestamp for tracking (returned with every operation)
   serverTimestamp?: number;
 }
@@ -465,14 +459,8 @@ interface UseOperationHandlerOptions {
   /** Whether redo is available */
   canRedo?: boolean;
 
-  /** Get user changes since a timestamp (from useUndoRedo) */
-  getUserChangesSince?: (sinceTimestamp: number) => Array<{
-    type: string;
-    cellId?: string;
-    cellIndex?: number;
-    timestamp: number;
-    description: string;
-  }>;
+  /** Get updates since a timestamp (from useUndoRedo) */
+  getUpdatesSince?: (sinceTimestamp: number) => UpdateSummary[];
 }
 
 export function useOperationHandler(options: UseOperationHandlerOptions) {
@@ -497,7 +485,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     redo,
     canUndo,
     canRedo,
-    getUserChangesSince,
+    getUpdatesSince,
   } = options;
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -525,7 +513,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const redoRef = useRef(redo);
   const canUndoRef = useRef(canUndo);
   const canRedoRef = useRef(canRedo);
-  const getUserChangesSinceRef = useRef(getUserChangesSince);
+  const getUpdatesSinceRef = useRef(getUpdatesSince);
 
   // Update refs on each render
   cellsRef.current = cells;
@@ -547,7 +535,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   redoRef.current = redo;
   canUndoRef.current = canUndo;
   canRedoRef.current = canRedo;
-  getUserChangesSinceRef.current = getUserChangesSince;
+  getUpdatesSinceRef.current = getUpdatesSince;
 
   const [isConnected, setIsConnected] = useState(false);
   const [activeOperation, setActiveOperation] = useState<AgentOperationInfo | null>(null);
@@ -1249,21 +1237,21 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           };
         }
 
-        case 'getUserChanges': {
-          const { sinceTimestamp } = operation as GetUserChangesOp;
+        case 'getUpdatesSince': {
+          const { sinceTimestamp } = operation as GetUpdatesSinceOp;
 
-          if (!getUserChangesSinceRef.current) {
+          if (!getUpdatesSinceRef.current) {
             return {
               success: true,
-              userChanges: [],
+              updatesSince: [],
               serverTimestamp: Date.now(),
             };
           }
 
-          const changes = getUserChangesSinceRef.current(sinceTimestamp);
+          const updates = getUpdatesSinceRef.current(sinceTimestamp);
           return {
             success: true,
-            userChanges: changes,
+            updatesSince: updates,
             serverTimestamp: Date.now(),
           };
         }
@@ -1313,7 +1301,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
       // Skip for session management and read-only operations
       const isSessionOp = operation.type === 'startAgentSession' || operation.type === 'endAgentSession';
       const isReadOnlyOp = operation.type === 'readCell' || operation.type === 'readCellOutput' ||
-                          operation.type === 'searchCells' || operation.type === 'getUserChanges';
+                          operation.type === 'searchCells' || operation.type === 'getUpdatesSince';
       if (agentSessionRef.current && !isSessionOp && !isReadOnlyOp) {
         agentSessionRef.current.lastActivityAt = Date.now();
       }

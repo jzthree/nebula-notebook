@@ -117,13 +117,19 @@ export interface UnflushedState {
   lastFlushedContent: string;
 }
 
-/** Summary of a user change for agent awareness */
-export interface UserChangeSummary {
+/** Summary of an update (edit or event) for agent awareness */
+export interface UpdateSummary {
+  kind: 'edit' | 'event';
   type: string;
+  category?: EventCategory;
+  name?: string;
   cellId?: string;
   cellIndex?: number;
   timestamp: number;
   description: string;
+  source?: EditSource;
+  runId?: string;
+  data?: Record<string, unknown>;
 }
 
 // ============================================================================
@@ -826,21 +832,150 @@ export class UndoRedoManager {
   }
 
   // -------------------------------------------------------------------------
-  // User change tracking for agent awareness
+  // Update tracking for agent awareness
   // -------------------------------------------------------------------------
 
-  getUserChangesSince(sinceTimestamp: number): UserChangeSummary[] {
-    const summaries: UserChangeSummary[] = [];
+  getUpdatesSince(sinceTimestamp: number): UpdateSummary[] {
+    const summaries: UpdateSummary[] = [];
+    const cells = this.cells;
+
+    const describeEvent = (event: {
+      category: EventCategory;
+      name: string;
+      target?: EventTarget;
+      data?: Record<string, unknown>;
+      runId?: string;
+      source?: EditSource;
+    }, timestamp: number): void => {
+      const cellId = event.target?.cellId;
+      const cellIndex = event.target?.cellIndex;
+      const data = event.data ? { ...event.data } : undefined;
+      if (data && event.name === 'runCellComplete' && 'output' in data) {
+        delete (data as Record<string, unknown>).output;
+      }
+
+      let description = '';
+      switch (event.name) {
+        case 'runCell': {
+          description = `Ran cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}`;
+          break;
+        }
+        case 'runAllCells': {
+          const count = typeof data?.cellCount === 'number'
+            ? data.cellCount
+            : (Array.isArray(data?.cellIds) ? data.cellIds.length : undefined);
+          description = `Ran all cells${count !== undefined ? ` (${count})` : ''}`;
+          break;
+        }
+        case 'runCellComplete': {
+          const durationMs = typeof data?.durationMs === 'number' ? data.durationMs : undefined;
+          const success = typeof data?.success === 'boolean' ? data.success : undefined;
+          const status = success === undefined ? 'complete' : (success ? 'success' : 'failed');
+          description = `Run complete${cellIndex !== undefined ? ` for cell #${cellIndex + 1}` : ''}${durationMs !== undefined ? ` (${durationMs}ms)` : ''} • ${status}`;
+          break;
+        }
+        case 'interruptKernel':
+          description = 'Kernel interrupted';
+          break;
+        case 'restartKernel':
+          description = 'Kernel restarted';
+          break;
+        case 'startKernel': {
+          const kernelName = typeof data?.kernelName === 'string' ? data.kernelName : undefined;
+          description = `Kernel started${kernelName ? ` (${kernelName})` : ''}`;
+          break;
+        }
+        case 'shutdownKernel':
+          description = 'Kernel shutdown';
+          break;
+        default:
+          description = `Event: ${event.name}`;
+      }
+
+      summaries.push({
+        kind: 'event',
+        type: event.name,
+        category: event.category,
+        name: event.name,
+        cellId,
+        cellIndex,
+        timestamp,
+        description,
+        source: event.source,
+        runId: event.runId,
+        data,
+      });
+    };
+
+    const toEvent = (op: TimestampedOperation): {
+      category: EventCategory;
+      name: string;
+      target?: EventTarget;
+      data?: Record<string, unknown>;
+      runId?: string;
+      source?: EditSource;
+    } | null => {
+      if (op.type === 'event') {
+        return {
+          category: op.category,
+          name: op.name,
+          target: op.target,
+          data: op.data as Record<string, unknown> | undefined,
+          runId: op.runId,
+          source: op.source,
+        };
+      }
+
+      switch (op.type) {
+        case 'runCell':
+          return {
+            category: 'execution',
+            name: 'runCell',
+            target: { cellId: op.cellId, cellIndex: op.cellIndex },
+            runId: (op as any).runId,
+          };
+        case 'runAllCells':
+          return {
+            category: 'execution',
+            name: 'runAllCells',
+            data: {
+              cellCount: (op as any).cellCount,
+              cellIds: (op as any).cellIds,
+            },
+          };
+        case 'runCellComplete':
+          return {
+            category: 'execution',
+            name: 'runCellComplete',
+            target: { cellId: op.cellId, cellIndex: op.cellIndex },
+            data: {
+              durationMs: (op as any).durationMs,
+              success: (op as any).success,
+              output: (op as any).output,
+            },
+            runId: (op as any).runId,
+          };
+        case 'interruptKernel':
+        case 'restartKernel':
+          return {
+            category: 'kernel',
+            name: op.type,
+          };
+        default:
+          return null;
+      }
+    };
 
     for (const op of this.fullHistory) {
       if (op.timestamp <= sinceTimestamp) continue;
       if ((op as any).isUndo) continue;
-      if ((op as any).source === 'ai') continue;
-      if (op.type === 'event') continue;
-      if (op.type === 'runCell' || op.type === 'runAllCells' ||
-          op.type === 'interruptKernel' || op.type === 'restartKernel' ||
-          op.type === 'runCellComplete' ||
-          op.type === 'snapshot') continue;
+      if (op.type === 'snapshot') continue;
+
+      const event = toEvent(op);
+      if (event) {
+        describeEvent(event, op.timestamp);
+        continue;
+      }
 
       let description = '';
       let cellId: string | undefined;
@@ -858,28 +993,34 @@ export class UndoRedoManager {
           description = `Deleted cell #${op.index + 1}`;
           break;
         case 'moveCell':
-          if (op.toIndex >= 0 && op.toIndex < this.cells.length) {
-            cellId = this.cells[op.toIndex].id;
+          if (op.toIndex >= 0 && op.toIndex < cells.length) {
+            cellId = cells[op.toIndex].id;
           }
           description = `Moved cell from #${op.fromIndex + 1} to #${op.toIndex + 1}`;
           break;
-        case 'updateContent':
-        case 'updateContentPatch':
+        case 'updateContent': {
           cellId = op.cellId;
-          cellIndex = this.cells.findIndex(c => c.id === op.cellId);
+          cellIndex = cells.findIndex(c => c.id === op.cellId);
           if (cellIndex === -1) cellIndex = undefined;
-          const preview = op.type === 'updateContent'
-            ? op.newContent.slice(0, 50).replace(/\n/g, ' ')
-            : '[content updated]';
+          const preview = op.newContent.slice(0, 50).replace(/\n/g, ' ');
           description = `Edited cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}: "${preview}${preview.length >= 50 ? '...' : ''}"`;
           break;
-        case 'updateMetadata':
+        }
+        case 'updateContentPatch': {
           cellId = op.cellId;
-          cellIndex = this.cells.findIndex(c => c.id === op.cellId);
+          cellIndex = cells.findIndex(c => c.id === op.cellId);
+          if (cellIndex === -1) cellIndex = undefined;
+          description = `Edited cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}: "[content updated]"`;
+          break;
+        }
+        case 'updateMetadata': {
+          cellId = op.cellId;
+          cellIndex = cells.findIndex(c => c.id === op.cellId);
           if (cellIndex === -1) cellIndex = undefined;
           const changes = Object.keys(op.changes).join(', ');
           description = `Changed ${changes} on cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}`;
           break;
+        }
         case 'batch':
           description = `Batch operation (${op.operations.length} changes)`;
           break;
@@ -888,11 +1029,13 @@ export class UndoRedoManager {
       }
 
       summaries.push({
+        kind: 'edit',
         type: (op as TimestampedOperation).type,
         cellId,
         cellIndex,
         timestamp: (op as TimestampedOperation).timestamp,
         description,
+        source: (op as any).source as EditSource | undefined,
       });
     }
 

@@ -49,8 +49,74 @@ export interface RootDirectoryResponse {
   root: string;
 }
 
+interface CellJsonCacheEntry {
+  ref: Cell;
+  json: string;
+}
+
 // Storage keys for local state
 const STORAGE_ACTIVE_PATH = 'nebula-active-path';
+
+let cellJsonCache = new Map<string, CellJsonCacheEntry>();
+
+const getShadowSerializeConfig = () => {
+  if (typeof window === 'undefined') {
+    return { enabled: false, logMatches: false, sample: 1 };
+  }
+  const globals = window as typeof window & {
+    __NEBULA_SERIALIZE_SHADOW__?: boolean;
+    __NEBULA_SERIALIZE_SHADOW_LOG__?: boolean;
+    __NEBULA_SERIALIZE_SHADOW_SAMPLE__?: number;
+  };
+  return {
+    enabled: globals.__NEBULA_SERIALIZE_SHADOW__ ?? true,
+    logMatches: globals.__NEBULA_SERIALIZE_SHADOW_LOG__ ?? true,
+    sample: globals.__NEBULA_SERIALIZE_SHADOW_SAMPLE__ ?? 1,
+  };
+};
+
+const shouldRunShadowSerialize = (sample: number) => {
+  if (!Number.isFinite(sample) || sample <= 0) return false;
+  if (sample === 1) return true;
+  if (sample < 1) return Math.random() < sample;
+  return Math.random() < 1 / sample;
+};
+
+const buildShadowPayload = (
+  path: string,
+  cells: Cell[],
+  kernelName?: string,
+  history?: TimestampedOperation[]
+) => {
+  let reused = 0;
+  let updated = 0;
+  const nextCache = new Map<string, CellJsonCacheEntry>();
+  const cellJson = cells.map(cell => {
+    const cached = cellJsonCache.get(cell.id);
+    if (cached && cached.ref === cell) {
+      reused += 1;
+      nextCache.set(cell.id, cached);
+      return cached.json;
+    }
+    updated += 1;
+    const json = JSON.stringify(cell);
+    nextCache.set(cell.id, { ref: cell, json });
+    return json;
+  });
+
+  cellJsonCache = nextCache;
+
+  let payload = `{\"path\":${JSON.stringify(path)},\"cells\":[${cellJson.join(',')}]`;
+  if (kernelName !== undefined) {
+    payload += `,\"kernel_name\":${JSON.stringify(kernelName)}`;
+  }
+  if (history !== undefined) {
+    payload += `,\"history\":${JSON.stringify(history)}`;
+  }
+  payload += '}';
+
+  return { payload, reused, updated };
+};
 
 /**
  * List contents of a directory
@@ -330,10 +396,31 @@ export const saveNotebookCells = async (
   kernelName?: string,
   history?: any[]
 ): Promise<SaveResult> => {
+  const shadowConfig = getShadowSerializeConfig();
+  const payload = { path, cells, kernel_name: kernelName, history };
+  const body = JSON.stringify(payload);
+
+  if (shadowConfig.enabled && shouldRunShadowSerialize(shadowConfig.sample)) {
+    const shadow = buildShadowPayload(path, cells, kernelName, history);
+    if (shadow.payload !== body) {
+      console.warn('[Autosave] Shadow serialization mismatch', {
+        path,
+        reused: shadow.reused,
+        updated: shadow.updated
+      });
+    } else if (shadowConfig.logMatches) {
+      console.info('[Autosave] Shadow serialization match', {
+        path,
+        reused: shadow.reused,
+        updated: shadow.updated
+      });
+    }
+  }
+
   const response = await fetch(`${API_BASE}/notebook/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, cells, kernel_name: kernelName, history })
+    body
   });
 
   if (!response.ok) {

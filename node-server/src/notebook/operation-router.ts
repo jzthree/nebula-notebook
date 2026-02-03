@@ -316,7 +316,7 @@ export class OperationRouter {
     }
 
     // Enforce agent session for write operations
-    const readOnlyOps = new Set(['readCell', 'readCellOutput', 'searchCells', 'readNotebook']);
+    const readOnlyOps = new Set(['readCell', 'readCellOutput', 'searchCells', 'readNotebook', 'getUpdatesSince']);
     const sessionOps = new Set(['startAgentSession', 'endAgentSession']);
     const creationOps = new Set(['createNotebook']); // Operations that create files (don't require session)
     const isWrite = !readOnlyOps.has(opType) && !sessionOps.has(opType) && !creationOps.has(opType);
