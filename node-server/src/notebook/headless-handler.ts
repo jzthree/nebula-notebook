@@ -468,6 +468,7 @@ export class HeadlessOperationHandler {
     const notebookPath = operation.notebookPath as string;
     const index = operation.index as number;
     const cellData = operation.cell as Record<string, unknown>;
+    const metadata = (cellData.metadata as Record<string, unknown> | undefined) || {};
 
     const cells = this.getCells(notebookPath);
     let cellId = cellData.id as string;
@@ -491,6 +492,8 @@ export class HeadlessOperationHandler {
       outputs: [],
       isExecuting: false,
       executionCount: null,
+      scrolled: metadata.scrolled as boolean | undefined,
+      scrolledHeight: metadata.scrolledHeight as number | undefined,
     };
 
     let actualIndex: number;
@@ -769,8 +772,9 @@ export class HeadlessOperationHandler {
     }
 
     const newCell: NebulaCell = {
-      ...JSON.parse(JSON.stringify(originalCell)),
       id: actualId,
+      type: originalCell.type,
+      content: originalCell.content,
       outputs: [],
       isExecuting: false,
       executionCount: null,
@@ -1049,12 +1053,27 @@ export class HeadlessOperationHandler {
     const cells = this.getCells(notebookPath);
     const deletedCount = cells.length;
 
-    this.saveCells(notebookPath, []);
+    if (deletedCount === 0) {
+      return { success: true, deletedCount: 0 };
+    }
+
+    // Delete from end to start to avoid index shifting issues
+    for (let i = cells.length - 1; i >= 0; i--) {
+      const deletedCell = { ...cells[i] };
+      cells.splice(i, 1);
+      this.saveCells(notebookPath, cells);
+
+      this.recordUndoableOperation(notebookPath, {
+        type: 'deleteCell',
+        index: i,
+        cell: deletedCell,
+        source: 'mcp'
+      });
+    }
 
     return {
       success: true,
       deletedCount,
-      totalCells: 0,
     };
   }
 
@@ -1226,7 +1245,6 @@ export class HeadlessOperationHandler {
       for (const cell of cells) {
         if (cell.outputs && cell.outputs.length > 0) {
           cell.outputs = [];
-          cell.executionCount = null;
           clearedIds.push(cell.id);
         }
       }
@@ -1236,7 +1254,6 @@ export class HeadlessOperationHandler {
         const cell = cells.find(c => c.id === id);
         if (cell) {
           cell.outputs = [];
-          cell.executionCount = null;
           clearedIds.push(id);
         } else {
           notFound.push(id);

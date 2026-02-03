@@ -384,7 +384,8 @@ export const Notebook: React.FC = () => {
   const handleCreateNotebook = useCallback(async (
     path: string,
     overwrite: boolean,
-    kernelName: string
+    kernelName: string,
+    kernelDisplayName?: string
   ): Promise<{ success: boolean; mtime?: number; error?: string }> => {
     try {
       // First check if file exists (if not overwriting)
@@ -407,7 +408,7 @@ export const Notebook: React.FC = () => {
         metadata: {
           kernelspec: {
             name: kernelName,
-            display_name: kernelName === 'python3' ? 'Python 3' : kernelName,
+            display_name: kernelDisplayName ?? (kernelName === 'python3' ? 'Python 3' : kernelName),
           },
           language_info: { name: 'python' },
         },

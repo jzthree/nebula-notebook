@@ -124,6 +124,23 @@ export interface MoveCellOp {
   afterCellId?: string;
 }
 
+export interface DeleteCellsOp {
+  type: 'deleteCells';
+  notebookPath: string;
+  cellIds: string[];
+}
+
+export interface InsertCellsOp {
+  type: 'insertCells';
+  notebookPath: string;
+  cells: Array<{
+    id?: string;
+    type?: 'code' | 'markdown';
+    content: string;
+  }>;
+  position?: number;
+}
+
 export interface DuplicateCellOp {
   type: 'duplicateCell';
   notebookPath: string;
@@ -250,6 +267,8 @@ export type NotebookOperation =
   | UpdateContentOp
   | UpdateMetadataOp
   | MoveCellOp
+  | DeleteCellsOp
+  | InsertCellsOp
   | DuplicateCellOp
   | UpdateOutputsOp
   | CreateNotebookOp
@@ -397,7 +416,7 @@ interface UseOperationHandlerOptions {
   setCellOutputs?: (cellId: string, outputs: Cell['outputs'], executionCount?: number) => void;
 
   /** Create notebook callback - returns promise with mtime */
-  createNotebook?: (path: string, overwrite: boolean, kernelName: string) => Promise<{ success: boolean; mtime?: number; error?: string }>;
+  createNotebook?: (path: string, overwrite: boolean, kernelName: string, kernelDisplayName?: string) => Promise<{ success: boolean; mtime?: number; error?: string }>;
 
   /**
    * Execute cell callback - runs a cell and returns results
@@ -692,17 +711,35 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             return { success: false, error: errors.join('; ') };
           }
 
-          // ID changes are not supported (would require delete + recreate)
-          if ('id' in changes && changes.id !== cellId) {
-            return { success: false, error: 'ID changes are not supported via updateMetadata' };
+          let actualId = cellId;
+          if ('id' in changes) {
+            const requestedId = changes.id as string;
+            if (requestedId !== cellId) {
+              const existingIds = new Set(currentCells.map(c => c.id));
+              existingIds.delete(cellId);
+              let resolvedId = requestedId;
+              if (existingIds.has(resolvedId)) {
+                let counter = 2;
+                while (existingIds.has(`${resolvedId}-${counter}`)) {
+                  counter++;
+                }
+                resolvedId = `${resolvedId}-${counter}`;
+              }
+              actualId = resolvedId;
+            }
           }
 
           // Convert operation format { key: value } to MetadataChanges format { key: { old, new } }
           // Schema validation passed, so all keys are valid
           const metadataChanges: Record<string, { old: unknown; new: unknown }> = {};
           for (const [key, newValue] of Object.entries(changes)) {
-            if (key === 'id') continue; // Skip ID (handled above)
             const oldValue = (cell as unknown as Record<string, unknown>)[key];
+            if (key === 'id') {
+              if (actualId !== cellId) {
+                metadataChanges[key] = { old: oldValue, new: actualId };
+              }
+              continue;
+            }
             metadataChanges[key] = { old: oldValue, new: newValue };
           }
 
@@ -713,7 +750,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
           return {
             success: true,
-            cellId,
+            cellId: actualId,
             cellIndex,
           };
         }
@@ -762,6 +799,97 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             cellId: cellId ?? currentCells[resolvedFrom]?.id,
             fromIndex: resolvedFrom,
             toIndex: resolvedTo,
+          };
+        }
+
+        case 'deleteCells': {
+          const { cellIds } = operation;
+
+          if (!cellIds || cellIds.length === 0) {
+            return { success: false, error: 'No cell IDs provided' };
+          }
+
+          const deletedIds: string[] = [];
+          const notFound: string[] = [];
+          const indicesToDelete = new Set<number>();
+
+          for (const cellId of cellIds) {
+            const idx = currentCells.findIndex(c => c.id === cellId);
+            if (idx !== -1) {
+              indicesToDelete.add(idx);
+              deletedIds.push(cellId);
+            } else {
+              notFound.push(cellId);
+            }
+          }
+
+          // Delete in reverse order to avoid index shifts
+          const sortedIndices = Array.from(indicesToDelete).sort((a, b) => b - a);
+          for (const idx of sortedIndices) {
+            deleteCellRef.current(idx, 'ai');
+          }
+
+          const updatedCells = currentCells.filter((_, i) => !indicesToDelete.has(i));
+          cellsRef.current = updatedCells;
+
+          return {
+            success: true,
+            deletedCount: deletedIds.length,
+            deletedIds,
+            notFound: notFound.length > 0 ? notFound : undefined,
+            totalCells: updatedCells.length,
+          };
+        }
+
+        case 'insertCells': {
+          const { cells: newCells = [], position = -1 } = operation;
+
+          if (!newCells || newCells.length === 0) {
+            return { success: false, error: 'No cells provided' };
+          }
+
+          const usedIds = new Set(currentCells.map(c => c.id));
+          const insertedIds: string[] = [];
+          const baseIndex = position < 0 || position >= currentCells.length
+            ? currentCells.length
+            : position;
+
+          const updatedCells = [...currentCells];
+
+          for (let i = 0; i < newCells.length; i += 1) {
+            const cellData = newCells[i];
+            const baseId = cellData.id || `cell-${Date.now()}-${i}`;
+            let cellId = baseId;
+            if (usedIds.has(cellId)) {
+              let counter = 2;
+              while (usedIds.has(`${cellId}-${counter}`)) {
+                counter++;
+              }
+              cellId = `${cellId}-${counter}`;
+            }
+            usedIds.add(cellId);
+            const newCell: Cell = {
+              id: cellId,
+              type: (cellData.type || 'code') as 'code' | 'markdown',
+              content: cellData.content,
+              outputs: [],
+              isExecuting: false,
+            };
+
+            const insertIndex = baseIndex + i;
+            insertCellRef.current(insertIndex, newCell, 'ai');
+            updatedCells.splice(insertIndex, 0, newCell);
+            insertedIds.push(cellId);
+          }
+
+          cellsRef.current = updatedCells;
+
+          return {
+            success: true,
+            insertedCount: insertedIds.length,
+            insertedIds,
+            startIndex: baseIndex,
+            totalCells: updatedCells.length,
           };
         }
 
@@ -868,13 +996,18 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
         }
 
         case 'createNotebook': {
-          const { notebookPath, overwrite = false, kernelName = 'python3' } = operation;
+          const {
+            notebookPath,
+            overwrite = false,
+            kernelName = 'python3',
+            kernelDisplayName,
+          } = operation;
 
           if (!createNotebookRef.current) {
             return { success: false, error: 'createNotebook callback not provided' };
           }
 
-          const result = await createNotebookRef.current(notebookPath, overwrite, kernelName);
+          const result = await createNotebookRef.current(notebookPath, overwrite, kernelName, kernelDisplayName);
 
           // If creation succeeded, try to open in a new tab
           let popupBlocked = false;
