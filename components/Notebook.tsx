@@ -2919,6 +2919,22 @@ export const Notebook: React.FC = () => {
     }
   };
 
+  const scrollToCellOutput = useCallback((cellId: string, cellIndex: number) => {
+    setActiveCellId(cellId);
+    scrollToCell(cellIndex);
+    const attemptScroll = (attempt: number) => {
+      const anchor = document.getElementById(`cell-output-${cellId}`);
+      if (anchor) {
+        anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+      if (attempt < 5) {
+        setTimeout(() => attemptScroll(attempt + 1), 60);
+      }
+    };
+    attemptScroll(0);
+  }, [scrollToCell]);
+
   const fileBrowserInitialPath = getDirectoryFromPath(currentFileId);
 
   return (
@@ -3332,8 +3348,7 @@ export const Notebook: React.FC = () => {
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   if (executionIndicator.cellIndex >= 0) {
-                                    setActiveCellId(executionIndicator.cellId);
-                                    scrollToCell(executionIndicator.cellIndex);
+                                    scrollToCellOutput(executionIndicator.cellId, executionIndicator.cellIndex);
                                   }
                                 }}
                                 title="Jump to cell"
@@ -3380,8 +3395,7 @@ export const Notebook: React.FC = () => {
                                             onClick={(e) => {
                                               e.stopPropagation();
                                               if (cellIndex >= 0) {
-                                                setActiveCellId(cellId);
-                                                scrollToCell(cellIndex);
+                                                scrollToCellOutput(cellId, cellIndex);
                                                 setIsExecutionQueueOpen(false);
                                               }
                                             }}
@@ -3428,8 +3442,7 @@ export const Notebook: React.FC = () => {
                           <button
                             onClick={() => {
                               if (lastExecutionResult.cellIndex >= 0) {
-                                setActiveCellId(lastExecutionResult.cellId);
-                                scrollToCell(lastExecutionResult.cellIndex);
+                                scrollToCellOutput(lastExecutionResult.cellId, lastExecutionResult.cellIndex);
                               }
                               dismissExecutionResult();
                             }}

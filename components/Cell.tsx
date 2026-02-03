@@ -537,14 +537,16 @@ const CellComponent: React.FC<Props> = ({
 
       {/* Output Area - show if has outputs, is executing, or has execution time */}
       {(cell.outputs.length > 0 || cell.isExecuting || cell.lastExecutionMs !== undefined) && (
-         <CellOutput
-           outputs={cell.outputs}
-           executionMs={cell.lastExecutionMs}
-           scrolled={cell.scrolled}
-           onScrolledChange={onSetCellScrolled ? (scrolled) => onSetCellScrolled(cell.id, scrolled) : undefined}
-           scrolledHeight={cell.scrolledHeight}
-           onScrolledHeightChange={onSetCellScrolledHeight ? (height) => onSetCellScrolledHeight(cell.id, height) : undefined}
-         />
+         <div id={`cell-output-${cell.id}`} className="scroll-mt-20">
+           <CellOutput
+             outputs={cell.outputs}
+             executionMs={cell.lastExecutionMs}
+             scrolled={cell.scrolled}
+             onScrolledChange={onSetCellScrolled ? (scrolled) => onSetCellScrolled(cell.id, scrolled) : undefined}
+             scrolledHeight={cell.scrolledHeight}
+             onScrolledHeightChange={onSetCellScrolledHeight ? (height) => onSetCellScrolledHeight(cell.id, height) : undefined}
+           />
+         </div>
       )}
     </div>
   );
