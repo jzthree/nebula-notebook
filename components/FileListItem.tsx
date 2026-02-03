@@ -86,6 +86,8 @@ export const FileListItem: React.FC<FileListItemProps> = ({
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const isNotebook = item.extension === '.ipynb';
+  const isHtml = item.extension === '.html' || item.extension === '.htm';
+  const isOpenableInTab = isNotebook || isHtml;
   const isClickable = (item.isDirectory || isNotebook) && !isEditing;
 
   // Focus input when entering edit mode
@@ -195,7 +197,7 @@ export const FileListItem: React.FC<FileListItemProps> = ({
             {/* File-specific actions */}
             {!item.isDirectory && (
               <>
-                {isNotebook && onOpenNewTab && (
+                {isOpenableInTab && onOpenNewTab && (
                   <>
                     <button
                       onClick={(e) => handleAction(e, () => onOpenNewTab(item.path))}

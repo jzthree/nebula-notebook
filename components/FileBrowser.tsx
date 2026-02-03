@@ -17,6 +17,8 @@ import {
   Upload
 } from 'lucide-react';
 import { FileListItem } from './FileListItem';
+import { readFile } from '../services/fileService';
+import { encodeHtmlParam, wrapHtmlDocument, MAX_HTML_PARAM_LENGTH } from '../utils/htmlPreview';
 import {
   listDirectory,
   getDirectoryMtime,
@@ -517,9 +519,34 @@ export const FileBrowser: React.FC<Props> = ({
     // Keep for compatibility but actual rename happens in handleConfirmEdit
   };
 
-  const handleOpenNewTab = (path: string) => {
+  const handleOpenNewTab = async (path: string) => {
     const baseUrl = window.location.pathname;
-    window.open(`${baseUrl}?file=${path}`, '_blank');
+    const lower = path.toLowerCase();
+    const isHtml = lower.endsWith('.html') || lower.endsWith('.htm');
+    if (!isHtml) {
+      window.open(`${baseUrl}?file=${path}`, '_blank');
+      return;
+    }
+
+    try {
+      const result = await readFile(path);
+      if (result.type !== 'text' || typeof result.content !== 'string') {
+        toast('HTML file is not readable as text', 'error');
+        return;
+      }
+      const encoded = encodeHtmlParam(result.content);
+      if (encoded.length <= MAX_HTML_PARAM_LENGTH) {
+        window.open(`${baseUrl}?html=${encoded}`, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      const fullHtml = wrapHtmlDocument(result.content);
+      const blob = new Blob([fullHtml], { type: 'text/html' });
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    } catch (err: any) {
+      toast(err.message || 'Failed to open HTML file', 'error');
+    }
   };
 
   const handleSelectFile = (path: string) => {
