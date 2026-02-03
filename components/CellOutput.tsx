@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { CellOutput as ICellOutput } from '../types';
-import { ChevronDown, ChevronRight, GripHorizontal, WrapText, ArrowRightLeft } from 'lucide-react';
+import { ChevronDown, ChevronRight, GripHorizontal, WrapText, ArrowRightLeft, ExternalLink } from 'lucide-react';
+import { encodeHtmlParam, wrapHtmlDocument, MAX_HTML_PARAM_LENGTH } from '../utils/htmlPreview';
 import {
   MAX_OUTPUT_LINES,
   MAX_OUTPUT_CHARS,
@@ -48,6 +49,19 @@ const compactOutput = (text: string): string => {
 
 const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean }> = ({ output, wrapText }) => {
   const textClass = wrapText ? 'whitespace-pre-wrap break-words' : 'whitespace-pre overflow-x-auto';
+  const openHtmlInNewTab = useCallback((html: string) => {
+    const encoded = encodeHtmlParam(html);
+    if (encoded.length <= MAX_HTML_PARAM_LENGTH) {
+      const url = `${window.location.origin}/?html=${encoded}`;
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    const fullHtml = wrapHtmlDocument(html);
+    const blob = new Blob([fullHtml], { type: 'text/html' });
+    const blobUrl = URL.createObjectURL(blob);
+    window.open(blobUrl, '_blank', 'noopener,noreferrer');
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+  }, []);
 
   switch (output.type) {
     case 'stdout':
@@ -71,7 +85,21 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean }> = ({ outp
         </div>
       );
     case 'html':
-      return <div dangerouslySetInnerHTML={{ __html: output.content }} className="my-2 overflow-x-auto" />;
+      return (
+        <div className="my-2">
+          <div className="flex justify-end mb-1">
+            <button
+              onClick={() => openHtmlInNewTab(output.content)}
+              className="inline-flex items-center gap-1 text-[0.625rem] text-slate-500 hover:text-slate-700 hover:bg-slate-100 px-2 py-1 rounded transition-colors"
+              title="Open HTML output in new tab"
+            >
+              <ExternalLink className="w-3 h-3" />
+              <span>Open in new tab</span>
+            </button>
+          </div>
+          <div dangerouslySetInnerHTML={{ __html: output.content }} className="overflow-x-auto" />
+        </div>
+      );
     default:
       return null;
   }
