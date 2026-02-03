@@ -35,10 +35,10 @@ const editorTheme = EditorView.theme({
   },
 });
 
-const getLanguageExtension = (path: string) => {
+const getLanguageExtensions = (path: string) => {
   const lower = path.toLowerCase();
-  if (lower.endsWith('.py')) return python();
-  if (lower.endsWith('.md') || lower.endsWith('.markdown')) return markdown();
+  if (lower.endsWith('.py')) return [python()];
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) return [markdown()];
   return [];
 };
 
@@ -52,7 +52,7 @@ export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath, varian
 
   const filename = useMemo(() => filePath.split('/').pop() || filePath, [filePath]);
   const extensions = useMemo(() => {
-    const language = getLanguageExtension(filePath);
+    const language = getLanguageExtensions(filePath);
     return [editorTheme, lineNumbers(), ...language];
   }, [filePath]);
 
