@@ -37,8 +37,8 @@ export interface BaseOperation {
   undoesOperationId?: string; // ID of the operation being undone (for pairing)
 }
 
-/** Source of content edit (for tracking AI vs user edits) */
-export type EditSource = 'user' | 'ai';
+/** Source of content edit (for tracking AI vs user/system edits) */
+export type EditSource = 'user' | 'ai' | 'mcp' | 'system' | 'error';
 
 /**
  * Generic metadata change - each key maps to old/new values
@@ -58,12 +58,40 @@ export type UndoableOperation =
   | { type: 'batch'; operations: UndoableOperation[]; source?: EditSource };
 
 /** Non-undoable operations - for tracking/logging only */
-export type LogOperation =
-  | { type: 'runCell'; cellId: string; cellIndex: number }
-  | { type: 'runAllCells'; cellCount: number }
+export type EventCategory = 'execution' | 'kernel' | 'system' | 'ui';
+
+export type EventTarget = {
+  cellId?: string;
+  cellIndex?: number;
+};
+
+export type EventOperation = {
+  type: 'event';
+  category: EventCategory;
+  name: string;
+  target?: EventTarget;
+  runId?: string; // Pairs runCell/runCellComplete
+  data?: Record<string, unknown>;
+  source?: EditSource;
+};
+
+// Legacy log operations (kept for backwards compatibility with persisted history)
+export type LegacyLogOperation =
+  | { type: 'runCell'; cellId: string; cellIndex: number; runId?: string }
+  | { type: 'runAllCells'; cellCount?: number; cellIds?: string[] }
   | { type: 'interruptKernel' }
   | { type: 'restartKernel' }
-  | { type: 'executionComplete'; cellId: string; cellIndex: number; durationMs: number; success: boolean; output?: string };
+  | {
+      type: 'runCellComplete';
+      cellId: string;
+      cellIndex: number;
+      durationMs: number;
+      success: boolean;
+      output?: string;
+      runId?: string;
+    };
+
+export type LogOperation = EventOperation | LegacyLogOperation;
 
 /** Snapshot of notebook state at a point in time (for reconstruction) */
 export interface SnapshotOperation {
@@ -808,9 +836,11 @@ export class UndoRedoManager {
       if (op.timestamp <= sinceTimestamp) continue;
       if ((op as any).isUndo) continue;
       if ((op as any).source === 'ai') continue;
+      if (op.type === 'event') continue;
       if (op.type === 'runCell' || op.type === 'runAllCells' ||
           op.type === 'interruptKernel' || op.type === 'restartKernel' ||
-          op.type === 'executionComplete' || op.type === 'snapshot') continue;
+          op.type === 'runCellComplete' ||
+          op.type === 'snapshot') continue;
 
       let description = '';
       let cellId: string | undefined;

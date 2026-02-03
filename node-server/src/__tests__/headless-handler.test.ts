@@ -711,7 +711,7 @@ describe('HeadlessOperationHandler', () => {
 
       const kernelService = {
         hasSession: vi.fn((sessionId: string) => sessionId === 'session-1'),
-        getOrCreateKernel: vi.fn(async () => 'session-auto'),
+        getOrCreateKernel: vi.fn(async () => ({ sessionId: 'session-auto', created: true })),
         executeCode: vi.fn(async (
           _sessionId: string,
           _code: string,
@@ -965,9 +965,9 @@ describe('HeadlessOperationHandler', () => {
     });
   });
 
-  describe('Change tracking', () => {
-    it('should return changes since timestamp including MCP edits', async () => {
-      const notebookPath = createTestNotebook('changes-since.ipynb', []);
+  describe('Update tracking', () => {
+    it('should return updates since timestamp including MCP edits', async () => {
+      const notebookPath = createTestNotebook('updates-since.ipynb', []);
       const start = Date.now();
 
       await handler.applyOperation({
@@ -984,9 +984,9 @@ describe('HeadlessOperationHandler', () => {
         content: 'x=2',
       });
 
-      const changes = handler.getChangesSince(notebookPath, start);
-      expect(changes.length).toBeGreaterThanOrEqual(2);
-      expect(changes.some(change => change.source === 'mcp')).toBe(true);
+      const updates = handler.getUpdatesSince(notebookPath, start);
+      expect(updates.length).toBeGreaterThanOrEqual(2);
+      expect(updates.some(update => update.source === 'mcp')).toBe(true);
     });
   });
 });

@@ -189,6 +189,27 @@ export interface ExecuteCellOp {
   saveOutputs?: boolean;
 }
 
+export interface StartKernelOp {
+  type: 'startKernel';
+  notebookPath: string;
+  kernelName?: string;
+}
+
+export interface ShutdownKernelOp {
+  type: 'shutdownKernel';
+  notebookPath: string;
+}
+
+export interface RestartKernelOp {
+  type: 'restartKernel';
+  notebookPath: string;
+}
+
+export interface InterruptKernelOp {
+  type: 'interruptKernel';
+  notebookPath: string;
+}
+
 export interface StartAgentSessionOp {
   type: 'startAgentSession';
   notebookPath: string;
@@ -236,6 +257,10 @@ export type NotebookOperation =
   | ClearNotebookOp
   | ClearOutputsOp
   | ExecuteCellOp
+  | StartKernelOp
+  | ShutdownKernelOp
+  | RestartKernelOp
+  | InterruptKernelOp
   | UndoOp
   | RedoOp
   | GetUserChangesOp;
@@ -249,6 +274,8 @@ export interface OperationResult {
   error?: string;
   path?: string;
   mtime?: number;
+  sessionId?: string;
+  kernelName?: string;
   // For readCell operation
   cell?: {
     id: string;
@@ -394,6 +421,35 @@ interface UseOperationHandlerOptions {
     error?: string;
   }>;
 
+  /** Start kernel callback (notebook-scoped) */
+  startKernel?: (kernelName?: string, source?: EditSource) => Promise<{
+    success: boolean;
+    sessionId?: string;
+    kernelName?: string;
+    error?: string;
+  }>;
+
+  /** Shutdown kernel callback (notebook-scoped) */
+  shutdownKernel?: (source?: EditSource) => Promise<{
+    success: boolean;
+    sessionId?: string;
+    error?: string;
+  }>;
+
+  /** Restart kernel callback (notebook-scoped) */
+  restartKernel?: (source?: EditSource) => Promise<{
+    success: boolean;
+    sessionId?: string;
+    error?: string;
+  }>;
+
+  /** Interrupt kernel callback (notebook-scoped) */
+  interruptKernel?: (source?: EditSource) => Promise<{
+    success: boolean;
+    sessionId?: string;
+    error?: string;
+  }>;
+
   /** Callback when an agent operation is applied (for toasts/notifications) */
   onAgentOperation?: (operation: NotebookOperation, result: OperationResult) => void;
 
@@ -432,6 +488,10 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     setCellOutputs,
     createNotebook,
     executeCell,
+    startKernel,
+    shutdownKernel,
+    restartKernel,
+    interruptKernel,
     onAgentOperation,
     undo,
     redo,
@@ -456,6 +516,10 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const setCellOutputsRef = useRef(setCellOutputs);
   const createNotebookRef = useRef(createNotebook);
   const executeCellRef = useRef(executeCell);
+  const startKernelRef = useRef(startKernel);
+  const shutdownKernelRef = useRef(shutdownKernel);
+  const restartKernelRef = useRef(restartKernel);
+  const interruptKernelRef = useRef(interruptKernel);
   const onAgentOperationRef = useRef(onAgentOperation);
   const undoRef = useRef(undo);
   const redoRef = useRef(redo);
@@ -474,6 +538,10 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   setCellOutputsRef.current = setCellOutputs;
   createNotebookRef.current = createNotebook;
   executeCellRef.current = executeCell;
+  startKernelRef.current = startKernel;
+  shutdownKernelRef.current = shutdownKernel;
+  restartKernelRef.current = restartKernel;
+  interruptKernelRef.current = interruptKernel;
   onAgentOperationRef.current = onAgentOperation;
   undoRef.current = undo;
   redoRef.current = redo;
@@ -1028,6 +1096,59 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           setAgentSession(null);
 
           return { success: true, sessionDuration };
+        }
+
+        case 'startKernel': {
+          if (!startKernelRef.current) {
+            return { success: false, error: 'startKernel callback not provided - UI cannot start kernel' };
+          }
+
+          const result = await startKernelRef.current(operation.kernelName, 'mcp');
+          return {
+            success: result.success,
+            sessionId: result.sessionId,
+            kernelName: result.kernelName,
+            error: result.error,
+          };
+        }
+
+        case 'shutdownKernel': {
+          if (!shutdownKernelRef.current) {
+            return { success: false, error: 'shutdownKernel callback not provided - UI cannot shutdown kernel' };
+          }
+
+          const result = await shutdownKernelRef.current('mcp');
+          return {
+            success: result.success,
+            sessionId: result.sessionId,
+            error: result.error,
+          };
+        }
+
+        case 'restartKernel': {
+          if (!restartKernelRef.current) {
+            return { success: false, error: 'restartKernel callback not provided - UI cannot restart kernel' };
+          }
+
+          const result = await restartKernelRef.current('mcp');
+          return {
+            success: result.success,
+            sessionId: result.sessionId,
+            error: result.error,
+          };
+        }
+
+        case 'interruptKernel': {
+          if (!interruptKernelRef.current) {
+            return { success: false, error: 'interruptKernel callback not provided - UI cannot interrupt kernel' };
+          }
+
+          const result = await interruptKernelRef.current('mcp');
+          return {
+            success: result.success,
+            sessionId: result.sessionId,
+            error: result.error,
+          };
         }
 
         case 'executeCell': {

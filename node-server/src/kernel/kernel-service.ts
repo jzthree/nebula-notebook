@@ -574,9 +574,10 @@ export class KernelService {
   }
 
   /**
-   * Get or create kernel for a file (one notebook = one kernel)
+   * Get or create kernel for a file (one notebook = one kernel).
+   * Returns whether a new session was created.
    */
-  async getOrCreateKernel(filePath: string, kernelName: string = 'python3'): Promise<string> {
+  async getOrCreateKernel(filePath: string, kernelName: string = 'python3'): Promise<{ sessionId: string; created: boolean }> {
     const normalizedPath = this.normalizePath(filePath);
 
     // Check for existing session in fileToSession map
@@ -612,7 +613,7 @@ export class KernelService {
               if (!updated || updated.status === 'dead') break;
               if (updated.status === 'idle' || updated.status === 'busy') {
                 if (updated.kernelName === kernelName) {
-                  return existingSessionId;
+                  return { sessionId: existingSessionId, created: false };
                 }
                 break;
               }
@@ -621,13 +622,13 @@ export class KernelService {
             const stillStarting = this.sessions.get(existingSessionId);
             if (stillStarting?.status === 'starting') {
               console.log(`[Kernel] Session ${existingSessionId} still starting after wait; keeping it alive`);
-              return existingSessionId;
+              return { sessionId: existingSessionId, created: false };
             }
           }
         } else {
           // Session is idle or busy
           if (session.kernelName === kernelName) {
-            return existingSessionId;
+            return { sessionId: existingSessionId, created: false };
           }
           // Kernel type changed, stop old and start new
           await this.stopKernel(existingSessionId);
@@ -636,11 +637,38 @@ export class KernelService {
     }
 
     // Start new kernel
-    return this.startKernel({
+    const sessionId = await this.startKernel({
       kernelName,
       filePath: normalizedPath,
       cwd: path.dirname(normalizedPath),
     });
+    return { sessionId, created: true };
+  }
+
+  /**
+   * Get existing kernel session ID for a notebook file (if any).
+   * Returns null if no live session is associated with the file.
+   */
+  getSessionIdForFile(filePath: string): string | null {
+    const normalizedPath = this.normalizePath(filePath);
+
+    let existingSessionId = this.fileToSession.get(normalizedPath);
+    if (existingSessionId) {
+      const session = this.sessions.get(existingSessionId);
+      if (session && session.status !== 'dead') {
+        return existingSessionId;
+      }
+    }
+
+    for (const [sessionId, session] of this.sessions.entries()) {
+      if (session.filePath === normalizedPath && session.status !== 'dead') {
+        this.fileToSession.set(normalizedPath, sessionId);
+        existingSessionId = sessionId;
+        break;
+      }
+    }
+
+    return existingSessionId || null;
   }
 
   /**

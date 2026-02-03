@@ -32,6 +32,7 @@ import {
   User,
   Eye,
   RotateCw,
+  Power,
 } from 'lucide-react';
 import { TimestampedOperation } from '../hooks/useUndoRedo';
 
@@ -64,10 +65,79 @@ const OPERATION_META: Record<string, { icon: React.FC<{ className?: string }>; c
   batch: { icon: Layers, color: 'text-cyan-500', label: 'Batch' },
   runCell: { icon: Play, color: 'text-green-600', label: 'Run Cell' },
   runAllCells: { icon: Play, color: 'text-green-600', label: 'Run All' },
-  executionComplete: { icon: CheckCircle, color: 'text-green-600', label: 'Complete' },
+  runCellComplete: { icon: CheckCircle, color: 'text-green-600', label: 'Run Complete' },
+  startKernel: { icon: Play, color: 'text-emerald-600', label: 'Kernel Start' },
+  shutdownKernel: { icon: Power, color: 'text-amber-600', label: 'Kernel Shutdown' },
   interruptKernel: { icon: Square, color: 'text-amber-500', label: 'Interrupt' },
   restartKernel: { icon: RotateCcw, color: 'text-amber-500', label: 'Restart' },
 };
+
+type EventInfo = {
+  category: string;
+  name: string;
+  target?: { cellId?: string; cellIndex?: number };
+  data?: Record<string, unknown>;
+  runId?: string;
+};
+
+function getEventInfo(op: TimestampedOperation): EventInfo | null {
+  if (op.type === 'event') {
+    return {
+      category: (op as any).category,
+      name: (op as any).name,
+      target: (op as any).target,
+      data: (op as any).data,
+      runId: (op as any).runId,
+    };
+  }
+
+  switch (op.type) {
+    case 'runCell':
+      return {
+        category: 'execution',
+        name: 'runCell',
+        target: { cellId: (op as any).cellId, cellIndex: (op as any).cellIndex },
+        runId: (op as any).runId,
+      };
+    case 'runAllCells':
+      return {
+        category: 'execution',
+        name: 'runAllCells',
+        data: {
+          cellCount: (op as any).cellCount,
+          cellIds: (op as any).cellIds,
+        },
+      };
+    case 'runCellComplete':
+      return {
+        category: 'execution',
+        name: 'runCellComplete',
+        target: { cellId: (op as any).cellId, cellIndex: (op as any).cellIndex },
+        data: {
+          durationMs: (op as any).durationMs,
+          success: (op as any).success,
+          output: (op as any).output,
+        },
+        runId: (op as any).runId,
+      };
+    case 'interruptKernel':
+    case 'restartKernel':
+      return {
+        category: 'kernel',
+        name: op.type,
+      };
+    default:
+      return null;
+  }
+}
+
+function getOperationMeta(op: TimestampedOperation): { icon: React.FC<{ className?: string }>; color: string; label: string } {
+  const event = getEventInfo(op);
+  if (event) {
+    return OPERATION_META[event.name] || { icon: Edit3, color: 'text-slate-400', label: event.name };
+  }
+  return OPERATION_META[op.type] || { icon: Edit3, color: 'text-slate-400', label: op.type };
+}
 
 // Format timestamp for display
 function formatTime(timestamp: number): string {
@@ -306,6 +376,36 @@ function groupOperationsByTime(operations: TimestampedOperation[]): OperationGro
 
 // Get description for an operation
 function getOperationDescription(op: TimestampedOperation): string {
+  const event = getEventInfo(op);
+  if (event) {
+    switch (event.name) {
+      case 'runCell':
+        return event.target?.cellIndex !== undefined ? `cell ${event.target.cellIndex + 1}` : '';
+      case 'runAllCells': {
+        const cellCount = event.data?.cellCount;
+        const cellIds = event.data?.cellIds;
+        const count = typeof cellCount === 'number'
+          ? cellCount
+          : (Array.isArray(cellIds) ? cellIds.length : undefined);
+        return count !== undefined ? `${count} cells` : '';
+      }
+      case 'runCellComplete': {
+        const successValue = event.data?.success;
+        const durationValue = event.data?.durationMs;
+        const success = typeof successValue === 'boolean' ? successValue : undefined;
+        const durationMs = typeof durationValue === 'number' ? durationValue : undefined;
+        if (success === undefined && durationMs === undefined) return '';
+        if (success === undefined) return `${durationMs}ms`;
+        return success ? `${durationMs ?? ''}ms`.trim() : 'failed';
+      }
+      case 'interruptKernel':
+      case 'restartKernel':
+        return '';
+      default:
+        return '';
+    }
+  }
+
   switch (op.type) {
     case 'snapshot':
       return `${op.cells?.length || 0} cells`;
@@ -324,12 +424,6 @@ function getOperationDescription(op: TimestampedOperation): string {
     }
     case 'batch':
       return `${op.operations?.length || 0} ops`;
-    case 'runCell':
-      return `cell ${op.cellIndex + 1}`;
-    case 'runAllCells':
-      return `${op.cellCount} cells`;
-    case 'executionComplete':
-      return op.success ? `${op.durationMs}ms` : 'failed';
     default:
       return '';
   }
@@ -359,7 +453,11 @@ function matchesFilter(op: TimestampedOperation, filter: FilterType): boolean {
     return ['insertCell', 'deleteCell', 'moveCell', 'batch', 'snapshot'].includes(op.type);
   }
   if (filter === 'execution') {
-    return ['runCell', 'runAllCells', 'executionComplete', 'interruptKernel', 'restartKernel'].includes(op.type);
+    const event = getEventInfo(op);
+    if (event) {
+      return event.category === 'execution' || event.category === 'kernel';
+    }
+    return false;
   }
   return true;
 }
@@ -698,11 +796,7 @@ const GroupSection: React.FC<GroupSectionProps> = ({
             /* Render operations directly */
             <div className="divide-y divide-slate-100">
               {group.operations.map((op, index) => {
-              const meta = OPERATION_META[op.type] || {
-                icon: Edit3,
-                color: 'text-slate-400',
-                label: op.type
-              };
+              const meta = getOperationMeta(op);
               const Icon = meta.icon;
               const opId = op.operationId || `${op.timestamp}-${index}`;
               const isExpanded = expandedOps.has(opId);
@@ -710,10 +804,13 @@ const GroupSection: React.FC<GroupSectionProps> = ({
               const isUndo = (op as any).isUndo;
 
               // Check if execution failed
-              const isFailed = op.type === 'executionComplete' && !(op as any).success;
+              const event = getEventInfo(op);
+              const eventDurationMs = typeof event?.data?.durationMs === 'number' ? (event.data.durationMs as number) : undefined;
+              const eventSuccess = typeof event?.data?.success === 'boolean' ? (event.data.success as boolean) : undefined;
+              const isFailed = event?.name === 'runCellComplete' && eventSuccess === false;
               const iconColor = isFailed ? 'text-red-500' : meta.color;
               const FailIcon = isFailed ? XCircle : meta.icon;
-              const DisplayIcon = op.type === 'executionComplete' ? FailIcon : Icon;
+              const DisplayIcon = isFailed ? FailIcon : Icon;
 
               // Check if this operation is currently being previewed
               const isPreviewing = previewTimestamp === op.timestamp;
@@ -795,11 +892,7 @@ const GroupSection: React.FC<GroupSectionProps> = ({
                       {op.type === 'batch' && (op as any).operations && (
                         <>
                           {((op as any).operations as TimestampedOperation[]).map((subOp, subIndex) => {
-                            const subMeta = OPERATION_META[subOp.type] || {
-                              icon: Edit3,
-                              color: 'text-slate-400',
-                              label: subOp.type
-                            };
+                            const subMeta = getOperationMeta(subOp as TimestampedOperation);
                             const SubIcon = subMeta.icon;
                             return (
                               <div key={subIndex} className="flex items-center gap-2 py-0.5">
@@ -885,20 +978,30 @@ const GroupSection: React.FC<GroupSectionProps> = ({
                       )}
 
                       {/* Run cell */}
-                      {op.type === 'runCell' && (
+                      {event?.name === 'runCell' && (
                         <div className="text-[0.6875rem] py-1 text-slate-500">
-                          Executed cell at position <span className="text-slate-600">{(op as any).cellIndex + 1}</span>
-                          <div className="font-mono text-slate-400 mt-0.5">ID: {(op as any).cellId}</div>
+                          Executed cell{event.target?.cellIndex !== undefined ? (
+                            <> at position <span className="text-slate-600">{event.target.cellIndex + 1}</span></>
+                          ) : null}
+                          {event.target?.cellId && (
+                            <div className="font-mono text-slate-400 mt-0.5">ID: {event.target.cellId}</div>
+                          )}
                         </div>
                       )}
 
-                      {/* Execution complete */}
-                      {op.type === 'executionComplete' && (
+                      {/* Run complete */}
+                      {event?.name === 'runCellComplete' && (
                         <div className="text-[0.6875rem] py-1">
                           <div className="text-slate-500">
-                            Cell <span className="text-slate-600">{(op as any).cellIndex + 1}</span> •
-                            Duration: <span className="text-slate-600">{(op as any).durationMs}ms</span> •
-                            Status: <span className={(op as any).success ? 'text-green-600' : 'text-red-500'}>{(op as any).success ? 'Success' : 'Failed'}</span>
+                            {event.target?.cellIndex !== undefined && (
+                              <>Cell <span className="text-slate-600">{event.target.cellIndex + 1}</span> • </>
+                            )}
+                            {typeof eventDurationMs === 'number' && (
+                              <>Duration: <span className="text-slate-600">{eventDurationMs}ms</span> • </>
+                            )}
+                            {typeof eventSuccess === 'boolean' && (
+                              <>Status: <span className={eventSuccess ? 'text-green-600' : 'text-red-500'}>{eventSuccess ? 'Success' : 'Failed'}</span></>
+                            )}
                           </div>
                         </div>
                       )}

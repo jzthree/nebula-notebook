@@ -275,6 +275,7 @@ describe('API Contract Tests - Snake Case Response Format', () => {
       expect(response.body).toHaveProperty('session_id');
       expect(response.body).toHaveProperty('kernel_name');
       expect(response.body).toHaveProperty('file_path');
+      expect(response.body).toHaveProperty('created');
 
       // Verify camelCase does NOT exist
       expect(response.body).not.toHaveProperty('sessionId');

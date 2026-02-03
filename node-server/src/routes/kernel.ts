@@ -296,12 +296,19 @@ router.post('/kernels/for-file', async (req: Request, res: Response) => {
       // Start on remote server
       const result = await startRemoteKernel(effectiveServerId, effectiveKernelName, file_path);
       kernelService.saveNotebookKernelPreference(normalizedFilePath, effectiveKernelName, effectiveServerId);
-      res.json({ session_id: result.sessionId, kernel_name: effectiveKernelName, file_path, server_id: effectiveServerId });
+      res.json({
+        session_id: result.sessionId,
+        kernel_name: effectiveKernelName,
+        file_path,
+        server_id: effectiveServerId,
+        created: result.created ?? false,
+        created_at: result.createdAt,
+      });
       return;
     }
 
     // Start locally
-    const sessionId = await kernelService.getOrCreateKernel(normalizedFilePath, effectiveKernelName);
+    const { sessionId, created } = await kernelService.getOrCreateKernel(normalizedFilePath, effectiveKernelName);
     const sessionInfo = await kernelService.getSessionStatus(sessionId);
     kernelService.saveNotebookKernelPreference(normalizedFilePath, effectiveKernelName, localServerId);
     res.json({
@@ -309,6 +316,7 @@ router.post('/kernels/for-file', async (req: Request, res: Response) => {
       kernel_name: effectiveKernelName,
       file_path,
       server_id: localServerId,
+      created,
       created_at: sessionInfo?.createdAt,
     });
   } catch (err) {

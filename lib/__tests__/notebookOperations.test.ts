@@ -507,7 +507,7 @@ describe('reconstructStateAt', () => {
       createHistoryEntry(createSnapshot(cells), 1000),
       createHistoryEntry({ type: 'runCell', cellId: 'a', cellIndex: 0 }, 2000),
       createHistoryEntry({
-        type: 'executionComplete', cellId: 'a', cellIndex: 0, durationMs: 100, success: true
+        type: 'runCellComplete', cellId: 'a', cellIndex: 0, durationMs: 100, success: true
       }, 2100),
       createHistoryEntry({
         type: 'updateContent', cellId: 'a', oldContent: 'code', newContent: 'modified'
@@ -560,7 +560,7 @@ describe('extractExecutionTrajectory', () => {
       createHistoryEntry(createSnapshot(cells), 1000),
       createHistoryEntry({ type: 'runCell', cellId: 'cell-1', cellIndex: 0 }, 2000),
       createHistoryEntry({
-        type: 'executionComplete',
+        type: 'runCellComplete',
         cellId: 'cell-1',
         cellIndex: 0,
         durationMs: 50,
@@ -582,6 +582,34 @@ describe('extractExecutionTrajectory', () => {
     });
   });
 
+  it('supports event envelope for runCell/runCellComplete', () => {
+    const cells = [makeCell('cell-1', 'print(1)')];
+    const history: HistoryEntry[] = [
+      createHistoryEntry(createSnapshot(cells), 1000),
+      createHistoryEntry({
+        type: 'event',
+        category: 'execution',
+        name: 'runCell',
+        target: { cellId: 'cell-1', cellIndex: 0 },
+        runId: 'run-1',
+      }, 2000),
+      createHistoryEntry({
+        type: 'event',
+        category: 'execution',
+        name: 'runCellComplete',
+        target: { cellId: 'cell-1', cellIndex: 0 },
+        runId: 'run-1',
+        data: { durationMs: 10, success: true },
+      }, 2010),
+    ];
+
+    const trajectory = extractExecutionTrajectory(history);
+    expect(trajectory).toHaveLength(1);
+    expect(trajectory[0].runId).toBe('run-1');
+    expect(trajectory[0].durationMs).toBe(10);
+    expect(trajectory[0].success).toBe(true);
+  });
+
   it('handles edit-then-run sequence', () => {
     const cells = [makeCell('a', 'v1')];
     const history: HistoryEntry[] = [
@@ -591,14 +619,14 @@ describe('extractExecutionTrajectory', () => {
       }, 1500),
       createHistoryEntry({ type: 'runCell', cellId: 'a', cellIndex: 0 }, 2000),
       createHistoryEntry({
-        type: 'executionComplete', cellId: 'a', cellIndex: 0, durationMs: 100, success: true
+        type: 'runCellComplete', cellId: 'a', cellIndex: 0, durationMs: 100, success: true
       }, 2100),
       createHistoryEntry({
         type: 'updateContent', cellId: 'a', oldContent: 'v2', newContent: 'v3'
       }, 3000),
       createHistoryEntry({ type: 'runCell', cellId: 'a', cellIndex: 0 }, 3500),
       createHistoryEntry({
-        type: 'executionComplete', cellId: 'a', cellIndex: 0, durationMs: 200, success: false
+        type: 'runCellComplete', cellId: 'a', cellIndex: 0, durationMs: 200, success: false
       }, 3700)
     ];
 
@@ -623,11 +651,11 @@ describe('extractExecutionTrajectory', () => {
       createHistoryEntry(createSnapshot(cells), 1000),
       createHistoryEntry({ type: 'runCell', cellId: 'a', cellIndex: 0 }, 2000),
       createHistoryEntry({
-        type: 'executionComplete', cellId: 'a', cellIndex: 0, durationMs: 50, success: true
+        type: 'runCellComplete', cellId: 'a', cellIndex: 0, durationMs: 50, success: true
       }, 2050),
       createHistoryEntry({ type: 'runCell', cellId: 'b', cellIndex: 1 }, 3000),
       createHistoryEntry({
-        type: 'executionComplete', cellId: 'b', cellIndex: 1, durationMs: 1000, success: true
+        type: 'runCellComplete', cellId: 'b', cellIndex: 1, durationMs: 1000, success: true
       }, 4000)
     ];
 
@@ -649,7 +677,7 @@ describe('validateHistory', () => {
       createHistoryEntry(createSnapshot(cells), 1000),
       createHistoryEntry({ type: 'runCell', cellId: 'a', cellIndex: 0 }, 2000),
       createHistoryEntry({
-        type: 'executionComplete', cellId: 'a', cellIndex: 0, durationMs: 100, success: true
+        type: 'runCellComplete', cellId: 'a', cellIndex: 0, durationMs: 100, success: true
       }, 2100)
     ];
 
@@ -724,7 +752,7 @@ describe('full analysis session', () => {
 
     timestamp += 100;
     history.push(createHistoryEntry({
-      type: 'executionComplete',
+      type: 'runCellComplete',
       cellId: 'imports',
       cellIndex: 0,
       durationMs: 100,
@@ -755,7 +783,7 @@ describe('full analysis session', () => {
 
     timestamp += 2000;
     history.push(createHistoryEntry({
-      type: 'executionComplete',
+      type: 'runCellComplete',
       cellId: 'load-data',
       cellIndex: 1,
       durationMs: 2000,
@@ -780,7 +808,7 @@ describe('full analysis session', () => {
 
     timestamp += 1500;
     history.push(createHistoryEntry({
-      type: 'executionComplete',
+      type: 'runCellComplete',
       cellId: 'load-data',
       cellIndex: 1,
       durationMs: 1500,

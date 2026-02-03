@@ -13,7 +13,13 @@ import { FilesystemService } from '../fs/fs-service';
 import { NebulaCell, CellOutput } from '../fs/types';
 import { validateMetadataValue } from './cell-metadata';
 import { KernelService } from '../kernel/kernel-service';
-import { getUndoRedoManager, HeadlessUndoRedoManager, UndoableOperation, ChangeSummary } from './undoRedoManager';
+import {
+  getUndoRedoManager,
+  HeadlessUndoRedoManager,
+  LogOperation,
+  UndoableOperation,
+  UpdateSummary,
+} from './undoRedoManager';
 
 // Helper to create a CellOutput (API-compatible format matching Python)
 function createCellOutput(type: CellOutput['type'], content: string): CellOutput {
@@ -257,6 +263,18 @@ export class HeadlessOperationHandler {
           break;
         case 'clearOutputs':
           result = await this.clearOutputs(operation);
+          break;
+        case 'startKernel':
+          result = await this.startKernelOp(operation, notebookPath);
+          break;
+        case 'shutdownKernel':
+          result = await this.shutdownKernelOp(notebookPath);
+          break;
+        case 'restartKernel':
+          result = await this.restartKernelOp(notebookPath);
+          break;
+        case 'interruptKernel':
+          result = await this.interruptKernelOp(notebookPath);
           break;
         case 'executeCell':
           result = await this.executeCell(operation, notebookPath);
@@ -1301,7 +1319,8 @@ export class HeadlessOperationHandler {
       sessionId = requestedSessionId;
     } else {
       try {
-        sessionId = await this.kernelService.getOrCreateKernel(notebookPath, 'python3');
+        const result = await this.kernelService.getOrCreateKernel(notebookPath, 'python3');
+        sessionId = result.sessionId;
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         return { success: false, error: `Failed to start kernel: ${errMsg}` };
@@ -1309,8 +1328,19 @@ export class HeadlessOperationHandler {
     }
 
     // Execute the cell with periodic output saving
-    const outputs: CellOutput[] = [];
+    const runId = uuidv4();
     const startTime = Date.now();
+    this.recordLogOperation(notebookPath, {
+      type: 'event',
+      category: 'execution',
+      name: 'runCell',
+      target: { cellId: actualCellId, cellIndex: targetIndex },
+      runId,
+      data: { sessionId },
+      source: 'mcp',
+    });
+
+    const outputs: CellOutput[] = [];
     let executionCount: number | null = null;
     let executionError: string | null = null;
     let executionComplete = false;
@@ -1376,6 +1406,31 @@ export class HeadlessOperationHandler {
       const qi = queueInfo as { queuePosition: number; queueLength: number } | null;
 
       if (!executionComplete) {
+        // Execution continues in background - finalize when promise resolves
+        executionPromise.then(() => {
+          const finalElapsed = Date.now() - startTime;
+          cell.outputs = [...outputs];
+          if (executionCount !== null) {
+            cell.executionCount = executionCount;
+          }
+          cell.isExecuting = false;
+
+          if (saveOutputs) {
+            this.saveCells(notebookPath, cells);
+          }
+
+          const success = !executionError;
+          this.recordLogOperation(notebookPath, {
+            type: 'event',
+            category: 'execution',
+            name: 'runCellComplete',
+            target: { cellId: actualCellId, cellIndex: targetIndex },
+            runId,
+            data: { durationMs: finalElapsed, success },
+            source: 'mcp',
+          });
+        }).catch(() => {});
+
         // Execution is still running
         return {
           success: true,
@@ -1391,6 +1446,16 @@ export class HeadlessOperationHandler {
         };
       }
 
+      const success = !executionError;
+      this.recordLogOperation(notebookPath, {
+        type: 'event',
+        category: 'execution',
+        name: 'runCellComplete',
+        target: { cellId: actualCellId, cellIndex: targetIndex },
+        runId,
+        data: { durationMs: elapsed, success },
+        source: 'mcp',
+      });
       return {
         success: true,
         cellId: actualCellId,
@@ -1465,11 +1530,130 @@ export class HeadlessOperationHandler {
   }
 
   /**
-   * Get changes since a timestamp (public method for operation router).
+   * Record a non-undoable log operation (helper method for other operations).
+   */
+  private recordLogOperation(notebookPath: string, op: LogOperation): void {
+    const cells = this.getCells(notebookPath);
+    this.undoRedoManager.recordLogOperation(notebookPath, cells, op);
+  }
+
+  /**
+   * Get updates since a timestamp (public method for operation router).
    * Used by startAgentSession to inform agent what changed between sessions.
    */
-  getChangesSince(notebookPath: string, sinceTimestamp: number): ChangeSummary[] {
+  getUpdatesSince(notebookPath: string, sinceTimestamp: number): UpdateSummary[] {
     const cells = this.getCells(notebookPath);
-    return this.undoRedoManager.getChangesSince(notebookPath, cells, sinceTimestamp);
+    return this.undoRedoManager.getUpdatesSince(notebookPath, cells, sinceTimestamp);
   }
+
+  // -------------------------------------------------------------------------
+  // Kernel Operations
+  // -------------------------------------------------------------------------
+
+  private async startKernelOp(operation: Record<string, unknown>, notebookPath: string): Promise<OperationResult> {
+    if (!this.kernelService) {
+      return { success: false, error: 'Kernel service not available' };
+    }
+
+    const kernelName = (operation.kernelName as string) || 'python3';
+
+    try {
+      const { sessionId, created } = await this.kernelService.getOrCreateKernel(notebookPath, kernelName);
+      this.kernelService.saveNotebookKernelPreference(notebookPath, kernelName);
+
+      if (created) {
+        this.recordLogOperation(notebookPath, {
+          type: 'event',
+          category: 'kernel',
+          name: 'startKernel',
+          data: { sessionId, kernelName },
+          source: 'mcp',
+        });
+      }
+
+      return { success: true, sessionId, kernelName };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: `Failed to start kernel: ${errMsg}` };
+    }
+  }
+
+  private async shutdownKernelOp(notebookPath: string): Promise<OperationResult> {
+    if (!this.kernelService) {
+      return { success: false, error: 'Kernel service not available' };
+    }
+
+    const sessionId = this.kernelService.getSessionIdForFile(notebookPath);
+    if (!sessionId) {
+      return { success: false, error: 'No kernel session found for notebook' };
+    }
+
+    const success = await this.kernelService.stopKernel(sessionId);
+    if (!success) {
+      return { success: false, error: 'Failed to shutdown kernel (session not found)' };
+    }
+
+    this.recordLogOperation(notebookPath, {
+      type: 'event',
+      category: 'kernel',
+      name: 'shutdownKernel',
+      data: { sessionId },
+      source: 'mcp',
+    });
+
+    return { success: true, sessionId };
+  }
+
+  private async restartKernelOp(notebookPath: string): Promise<OperationResult> {
+    if (!this.kernelService) {
+      return { success: false, error: 'Kernel service not available' };
+    }
+
+    const sessionId = this.kernelService.getSessionIdForFile(notebookPath);
+    if (!sessionId) {
+      return { success: false, error: 'No kernel session found for notebook' };
+    }
+
+    const success = await this.kernelService.restartKernel(sessionId);
+    if (!success) {
+      return { success: false, error: 'Failed to restart kernel (session not found)' };
+    }
+
+    this.recordLogOperation(notebookPath, {
+      type: 'event',
+      category: 'kernel',
+      name: 'restartKernel',
+      data: { sessionId },
+      source: 'mcp',
+    });
+
+    return { success: true, sessionId };
+  }
+
+  private async interruptKernelOp(notebookPath: string): Promise<OperationResult> {
+    if (!this.kernelService) {
+      return { success: false, error: 'Kernel service not available' };
+    }
+
+    const sessionId = this.kernelService.getSessionIdForFile(notebookPath);
+    if (!sessionId) {
+      return { success: false, error: 'No kernel session found for notebook' };
+    }
+
+    const success = await this.kernelService.interruptKernel(sessionId);
+    if (!success) {
+      return { success: false, error: 'Failed to interrupt kernel (session not found)' };
+    }
+
+    this.recordLogOperation(notebookPath, {
+      type: 'event',
+      category: 'kernel',
+      name: 'interruptKernel',
+      data: { sessionId },
+      source: 'mcp',
+    });
+
+    return { success: true, sessionId };
+  }
+
 }

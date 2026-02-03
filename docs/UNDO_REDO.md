@@ -77,13 +77,28 @@ type UndoableOperation =
 ### Log Operations (Non-undoable)
 
 ```typescript
+type EventOperation = {
+  type: 'event';
+  category: 'execution' | 'kernel' | 'system' | 'ui';
+  name: string;
+  target?: { cellId?: string; cellIndex?: number };
+  runId?: string;          // Pairs runCell/runCellComplete
+  data?: Record<string, unknown>;
+};
+
+// Legacy log operations kept for backwards compatibility
 type LogOperation =
-  | { type: 'runCell'; cellId: string; cellIndex: number }
-  | { type: 'runAllCells'; cellCount: number }
-  | { type: 'executionComplete'; cellId: string; cellIndex: number; durationMs: number; success: boolean; output?: string }
+  | EventOperation
+  | { type: 'runCell'; cellId: string; cellIndex: number; runId?: string }
+  | { type: 'runAllCells'; cellCount?: number; cellIds?: string[] }
+  | { type: 'runCellComplete'; cellId: string; cellIndex: number; durationMs: number; success: boolean; output?: string; runId?: string }
   | { type: 'interruptKernel' }
   | { type: 'restartKernel' }
 ```
+
+Kernel lifecycle events are logged via the event envelope (`type: 'event'`) with
+`category: 'kernel'` and names like `startKernel`, `shutdownKernel`,
+`restartKernel`, and `interruptKernel`.
 
 ### Snapshots
 

@@ -16,7 +16,7 @@ import { FilesystemService } from '../fs/fs-service';
 // TYPE DEFINITIONS
 // ============================================================================
 
-export type EditSource = 'user' | 'ai' | 'mcp';
+export type EditSource = 'user' | 'ai' | 'mcp' | 'system' | 'error';
 
 export type MetadataChanges = Record<string, { old: unknown; new: unknown }>;
 
@@ -37,9 +37,40 @@ export type UndoableOperation =
   | { type: 'updateMetadata'; cellId: string; changes: MetadataChanges; source?: EditSource }
   | { type: 'batch'; operations: UndoableOperation[]; source?: EditSource };
 
-export type LogOperation =
-  | { type: 'runCell'; cellId: string; cellIndex: number }
-  | { type: 'executionComplete'; cellId: string; cellIndex: number; durationMs: number; success: boolean };
+export type EventCategory = 'execution' | 'kernel' | 'system' | 'ui';
+
+export type EventTarget = {
+  cellId?: string;
+  cellIndex?: number;
+};
+
+export type EventOperation = {
+  type: 'event';
+  category: EventCategory;
+  name: string;
+  target?: EventTarget;
+  runId?: string;
+  data?: Record<string, unknown>;
+  source?: EditSource;
+};
+
+// Legacy log operations (kept for backwards compatibility with persisted history)
+export type LegacyLogOperation =
+  | { type: 'runCell'; cellId: string; cellIndex: number; runId?: string }
+  | { type: 'runAllCells'; cellCount?: number; cellIds?: string[] }
+  | { type: 'interruptKernel' }
+  | { type: 'restartKernel' }
+  | {
+      type: 'runCellComplete';
+      cellId: string;
+      cellIndex: number;
+      durationMs: number;
+      success: boolean;
+      output?: string;
+      runId?: string;
+    };
+
+export type LogOperation = EventOperation | LegacyLogOperation;
 
 export interface SnapshotOperation {
   type: 'snapshot';
@@ -64,14 +95,19 @@ export interface UndoRedoResult {
   error?: string;
 }
 
-/** Summary of a change for agent awareness */
-export interface ChangeSummary {
+/** Summary of an update for agent awareness */
+export interface UpdateSummary {
+  kind: 'edit' | 'event';
   type: string;
+  category?: EventCategory;
+  name?: string;
   cellId?: string;
   cellIndex?: number;
   timestamp: number;
   description: string;
   source?: EditSource;
+  runId?: string;
+  data?: Record<string, unknown>;
 }
 
 // ============================================================================
@@ -332,6 +368,23 @@ export class HeadlessUndoRedoManager {
   }
 
   /**
+   * Record a non-undoable log operation (history only).
+   */
+  recordLogOperation(
+    notebookPath: string,
+    cells: NebulaCell[],
+    op: LogOperation
+  ): void {
+    const state = this.getState(notebookPath, cells);
+    const timestampedOp: TimestampedOperation = {
+      ...op,
+      timestamp: Date.now(),
+      operationId: uuidv4(),
+    };
+    state.fullHistory.push(timestampedOp);
+  }
+
+  /**
    * Undo the last operation.
    */
   undo(notebookPath: string, cells: NebulaCell[]): { cells: NebulaCell[]; result: UndoRedoResult } {
@@ -460,19 +513,151 @@ export class HeadlessUndoRedoManager {
   }
 
   /**
-   * Get changes since a timestamp (for agent awareness).
+   * Get updates since a timestamp (for agent awareness).
    * Returns human-readable summaries of operations made between agent sessions.
-   * Returns all edits (no source filtering).
+   * Includes both edits and non-undoable events (no source filtering).
    */
-  getChangesSince(notebookPath: string, cells: NebulaCell[], sinceTimestamp: number): ChangeSummary[] {
+  getUpdatesSince(notebookPath: string, cells: NebulaCell[], sinceTimestamp: number): UpdateSummary[] {
     const state = this.getState(notebookPath, cells);
-    const summaries: ChangeSummary[] = [];
+    const summaries: UpdateSummary[] = [];
+
+    const describeEvent = (event: {
+      category: EventCategory;
+      name: string;
+      target?: EventTarget;
+      data?: Record<string, unknown>;
+      runId?: string;
+      source?: EditSource;
+    }, timestamp: number): void => {
+      const cellId = event.target?.cellId;
+      const cellIndex = event.target?.cellIndex;
+      const data = event.data ? { ...event.data } : undefined;
+      if (data && event.name === 'runCellComplete' && 'output' in data) {
+        delete (data as Record<string, unknown>).output;
+      }
+
+      let description = '';
+      switch (event.name) {
+        case 'runCell': {
+          description = `Ran cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}`;
+          break;
+        }
+        case 'runAllCells': {
+          const count = typeof data?.cellCount === 'number'
+            ? data.cellCount
+            : (Array.isArray(data?.cellIds) ? data.cellIds.length : undefined);
+          description = `Ran all cells${count !== undefined ? ` (${count})` : ''}`;
+          break;
+        }
+        case 'runCellComplete': {
+          const durationMs = typeof data?.durationMs === 'number' ? data.durationMs : undefined;
+          const success = typeof data?.success === 'boolean' ? data.success : undefined;
+          const status = success === undefined ? 'complete' : (success ? 'success' : 'failed');
+          description = `Run complete${cellIndex !== undefined ? ` for cell #${cellIndex + 1}` : ''}${durationMs !== undefined ? ` (${durationMs}ms)` : ''} • ${status}`;
+          break;
+        }
+        case 'interruptKernel':
+          description = 'Kernel interrupted';
+          break;
+        case 'restartKernel':
+          description = 'Kernel restarted';
+          break;
+        case 'startKernel': {
+          const kernelName = typeof data?.kernelName === 'string' ? data.kernelName : undefined;
+          description = `Kernel started${kernelName ? ` (${kernelName})` : ''}`;
+          break;
+        }
+        case 'shutdownKernel':
+          description = 'Kernel shutdown';
+          break;
+        default:
+          description = `Event: ${event.name}`;
+      }
+
+      summaries.push({
+        kind: 'event',
+        type: event.name,
+        category: event.category,
+        name: event.name,
+        cellId,
+        cellIndex,
+        timestamp,
+        description,
+        source: event.source,
+        runId: event.runId,
+        data,
+      });
+    };
+
+    const toEvent = (op: TimestampedOperation): {
+      category: EventCategory;
+      name: string;
+      target?: EventTarget;
+      data?: Record<string, unknown>;
+      runId?: string;
+      source?: EditSource;
+    } | null => {
+      if (op.type === 'event') {
+        return {
+          category: op.category,
+          name: op.name,
+          target: op.target,
+          data: op.data as Record<string, unknown> | undefined,
+          runId: op.runId,
+          source: op.source,
+        };
+      }
+
+      switch (op.type) {
+        case 'runCell':
+          return {
+            category: 'execution',
+            name: 'runCell',
+            target: { cellId: op.cellId, cellIndex: op.cellIndex },
+            runId: (op as any).runId,
+          };
+        case 'runAllCells':
+          return {
+            category: 'execution',
+            name: 'runAllCells',
+            data: {
+              cellCount: (op as any).cellCount,
+              cellIds: (op as any).cellIds,
+            },
+          };
+        case 'runCellComplete':
+          return {
+            category: 'execution',
+            name: 'runCellComplete',
+            target: { cellId: op.cellId, cellIndex: op.cellIndex },
+            data: {
+              durationMs: (op as any).durationMs,
+              success: (op as any).success,
+              output: (op as any).output,
+            },
+            runId: (op as any).runId,
+          };
+        case 'interruptKernel':
+        case 'restartKernel':
+          return {
+            category: 'kernel',
+            name: op.type,
+          };
+        default:
+          return null;
+      }
+    };
 
     for (const op of state.fullHistory) {
       if (op.timestamp <= sinceTimestamp) continue;
       if ((op as any).isUndo) continue;
-      // Skip execution and snapshot operations
-      if (op.type === 'runCell' || op.type === 'executionComplete' || op.type === 'snapshot') continue;
+      if (op.type === 'snapshot') continue;
+
+      const event = toEvent(op);
+      if (event) {
+        describeEvent(event, op.timestamp);
+        continue;
+      }
 
       let description = '';
       let cellId: string | undefined;
@@ -495,20 +680,22 @@ export class HeadlessUndoRedoManager {
           }
           description = `Moved cell from #${op.fromIndex + 1} to #${op.toIndex + 1}`;
           break;
-        case 'updateContent':
+        case 'updateContent': {
           cellId = op.cellId;
           cellIndex = cells.findIndex(c => c.id === op.cellId);
           if (cellIndex === -1) cellIndex = undefined;
           const preview = op.newContent.slice(0, 50).replace(/\n/g, ' ');
-          description = `Edited cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}: "${preview}${preview.length >= 50 ? '...' : ''}"`;
+          description = `Edited cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}: \"${preview}${preview.length >= 50 ? '...' : ''}\"`;
           break;
-        case 'updateMetadata':
+        }
+        case 'updateMetadata': {
           cellId = op.cellId;
           cellIndex = cells.findIndex(c => c.id === op.cellId);
           if (cellIndex === -1) cellIndex = undefined;
           const changes = Object.keys(op.changes).join(', ');
           description = `Changed ${changes} on cell${cellIndex !== undefined ? ` #${cellIndex + 1}` : ''}`;
           break;
+        }
         case 'batch':
           description = `Batch operation (${op.operations.length} changes)`;
           break;
@@ -517,6 +704,7 @@ export class HeadlessUndoRedoManager {
       }
 
       summaries.push({
+        kind: 'edit',
         type: (op as TimestampedOperation).type,
         cellId,
         cellIndex,
@@ -528,6 +716,7 @@ export class HeadlessUndoRedoManager {
 
     return summaries;
   }
+
 }
 
 // Manager instances per FilesystemService to avoid cross-root leakage in tests/multi-root setups

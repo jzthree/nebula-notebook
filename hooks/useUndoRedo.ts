@@ -711,10 +711,12 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
       if ((op as any).isUndo) continue;
       // Skip AI-sourced operations
       if ((op as any).source === 'ai') continue;
-      // Skip log-only operations (runCell, etc.) - they don't change content
+      // Skip log-only operations (events, runCell, etc.) - they don't change content
+      if (op.type === 'event') continue;
       if (op.type === 'runCell' || op.type === 'runAllCells' ||
           op.type === 'interruptKernel' || op.type === 'restartKernel' ||
-          op.type === 'executionComplete' || op.type === 'snapshot') continue;
+          op.type === 'runCellComplete' ||
+          op.type === 'snapshot') continue;
 
       // Build a human-readable summary
       let description = '';

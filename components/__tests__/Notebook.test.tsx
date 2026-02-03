@@ -17,7 +17,7 @@ vi.mock('../../services/kernelService', () => ({
       environments: []
     }),
     startKernel: vi.fn().mockResolvedValue('test-session-id'),
-    getOrCreateKernelForFile: vi.fn().mockResolvedValue({ sessionId: 'test-session-id', createdAt: Date.now() / 1000 }),
+    getOrCreateKernelForFile: vi.fn().mockResolvedValue({ sessionId: 'test-session-id', created: true, createdAt: Date.now() / 1000 }),
     getKernelPreference: vi.fn().mockResolvedValue(null),
     getStatus: vi.fn().mockResolvedValue({ status: 'idle', execution_count: 0 }),
     stopKernel: vi.fn().mockResolvedValue(true),

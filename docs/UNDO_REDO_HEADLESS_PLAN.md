@@ -69,7 +69,7 @@ Keep current operation types, no changes:
 - `insertCell`, `deleteCell`, `moveCell`
 - `updateContentPatch` (replacing `updateContent` in memory)
 - `updateMetadata`, `batch`
-- Log operations: `runCell`, `executionComplete`, etc.
+- Log operations: event envelope (`event` with `category`/`name`) and legacy `runCell`/`runCellComplete` for compatibility.
 
 ---
 
@@ -358,8 +358,9 @@ Start agent session with optional user change detection.
 {
   "success": true,
   "lock": { "agentId": "...", "expiresAt": ... },
-  "changesSince": [  // Only if lastSessionTimestamp provided
+  "updatesSince": [  // Only if lastSessionTimestamp provided
     {
+      "kind": "edit",
       "type": "insertCell",
       "cellId": "cell-1",
       "cellIndex": 0,
@@ -367,6 +368,7 @@ Start agent session with optional user change detection.
       "description": "Inserted code cell at #1"
     },
     {
+      "kind": "edit",
       "type": "updateContent",
       "cellId": "cell-2",
       "cellIndex": 1,

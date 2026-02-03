@@ -12,7 +12,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { WebSocket } from 'ws';
 import { HeadlessOperationHandler } from './headless-handler';
-import type { ChangeSummary } from './undoRedoManager';
+import type { UpdateSummary } from './undoRedoManager';
 
 interface PendingRequest {
   resolve: (value: OperationResult) => void;
@@ -293,13 +293,13 @@ export class OperationRouter {
       }
 
       // If lastSessionTimestamp provided and we have headless handler, return changes since then
-      let changesSince: ChangeSummary[] | undefined;
+      let updatesSince: UpdateSummary[] | undefined;
       if (result.success && lastSessionTimestamp !== undefined && this.headlessHandler) {
-        changesSince = this.headlessHandler.getChangesSince(normalizedPath, lastSessionTimestamp);
-        console.log(`  -> Returning ${changesSince.length} changes since ${new Date(lastSessionTimestamp).toISOString()}`);
+        updatesSince = this.headlessHandler.getUpdatesSince(normalizedPath, lastSessionTimestamp);
+        console.log(`  -> Returning ${updatesSince.length} updates since ${new Date(lastSessionTimestamp).toISOString()}`);
       }
 
-      return { ...result, backend, changesSince };
+      return { ...result, backend, updatesSince };
     }
 
     if (opType === 'endAgentSession') {

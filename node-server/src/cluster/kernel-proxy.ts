@@ -65,7 +65,7 @@ export async function startRemoteKernel(
   serverId: string,
   kernelName: string,
   filePath?: string
-): Promise<{ sessionId: string }> {
+): Promise<{ sessionId: string; created?: boolean; createdAt?: number }> {
   const server = serverRegistry.getServer(serverId);
   if (!server) {
     throw new Error(`Server not found: ${serverId}`);
@@ -95,7 +95,7 @@ export async function startRemoteKernel(
     throw new Error(error.detail || `Failed to start kernel on ${serverId}`);
   }
 
-  const result = await response.json() as { session_id: string };
+  const result = await response.json() as { session_id: string; created?: boolean; created_at?: number };
   const remoteSessionId = result.session_id;
 
   // Create composite session ID
@@ -109,7 +109,11 @@ export async function startRemoteKernel(
 
   console.log(`[KernelProxy] Started kernel on ${serverId}, session: ${proxySessionId}`);
 
-  return { sessionId: proxySessionId };
+  return {
+    sessionId: proxySessionId,
+    created: filePath ? result.created : true,
+    createdAt: result.created_at,
+  };
 }
 
 /**

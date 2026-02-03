@@ -18,6 +18,7 @@
 import { Cell, CellType } from '../types';
 import { generateCellId } from '../utils/cellId';
 import { Patch, applyPatch, reversePatch, hashNotebookState } from './diffUtils';
+import type { EventOperation } from './undoRedoCore';
 
 // ============================================================================
 // Types
@@ -52,14 +53,17 @@ export type EditOperation =
   | { type: 'batch'; operations: EditOperation[] };
 
 /**
- * Execution events (logged but not undoable)
+ * Execution/kernel events (logged but not undoable)
+ * Supports both modern event envelope and legacy event types.
  */
-export type ExecutionEvent =
-  | { type: 'runCell'; cellId: string; cellIndex: number }
-  | { type: 'runAllCells'; cellIds: string[] }
-  | { type: 'executionComplete'; cellId: string; cellIndex: number; durationMs: number; success: boolean; output?: string }
+export type LegacyExecutionEvent =
+  | { type: 'runCell'; cellId: string; cellIndex: number; runId?: string }
+  | { type: 'runAllCells'; cellCount?: number; cellIds?: string[] }
+  | { type: 'runCellComplete'; cellId: string; cellIndex: number; durationMs: number; success: boolean; output?: string; runId?: string }
   | { type: 'interruptKernel' }
   | { type: 'restartKernel' };
+
+export type ExecutionEvent = EventOperation | LegacyExecutionEvent;
 
 /**
  * Snapshot of notebook state at a point in time
@@ -276,7 +280,8 @@ export function isEditOperation(entry: HistoryEntry): entry is { timestamp: numb
  * Type guard for execution events
  */
 export function isExecutionEvent(entry: HistoryEntry): entry is { timestamp: number } & ExecutionEvent {
-  return ['runCell', 'runAllCells', 'executionComplete', 'interruptKernel', 'restartKernel'].includes(entry.type);
+  if (entry.type === 'event') return true;
+  return ['runCell', 'runAllCells', 'runCellComplete', 'interruptKernel', 'restartKernel'].includes(entry.type);
 }
 
 // ============================================================================
@@ -288,9 +293,69 @@ export interface ExecutionStep {
   cellId: string;
   cellIndex: number;
   code: string;
+  runId?: string;
   durationMs?: number;
   success?: boolean;
   output?: string;
+}
+
+type EventDetails = {
+  category: string;
+  name: string;
+  target?: { cellId?: string; cellIndex?: number };
+  data?: Record<string, unknown>;
+  runId?: string;
+};
+
+function getEventDetails(entry: HistoryEntry): EventDetails | null {
+  if (entry.type === 'event') {
+    return {
+      category: entry.category,
+      name: entry.name,
+      target: entry.target,
+      data: entry.data,
+      runId: entry.runId,
+    };
+  }
+
+  switch (entry.type) {
+    case 'runCell':
+      return {
+        category: 'execution',
+        name: 'runCell',
+        target: { cellId: entry.cellId, cellIndex: entry.cellIndex },
+        runId: entry.runId,
+      };
+    case 'runAllCells':
+      return {
+        category: 'execution',
+        name: 'runAllCells',
+        data: {
+          cellCount: entry.cellCount,
+          cellIds: entry.cellIds,
+        },
+      };
+    case 'runCellComplete':
+      return {
+        category: 'execution',
+        name: 'runCellComplete',
+        target: { cellId: entry.cellId, cellIndex: entry.cellIndex },
+        data: {
+          durationMs: entry.durationMs,
+          success: entry.success,
+          output: entry.output,
+        },
+        runId: entry.runId,
+      };
+    case 'interruptKernel':
+    case 'restartKernel':
+      return {
+        category: 'kernel',
+        name: entry.type,
+      };
+    default:
+      return null;
+  }
 }
 
 /**
@@ -301,28 +366,46 @@ export function extractExecutionTrajectory(history: HistoryEntry[]): ExecutionSt
   const steps: ExecutionStep[] = [];
 
   for (const entry of history) {
-    if (entry.type === 'runCell') {
+    const event = getEventDetails(entry);
+    if (!event || event.category !== 'execution') continue;
+
+    if (event.name === 'runCell') {
+      const cellId = event.target?.cellId;
+      const cellIndex = event.target?.cellIndex;
+      if (!cellId || cellIndex === undefined) continue;
+
       // Reconstruct what the cell content was at execution time
-      const code = getCellContentAt(history, entry.cellId, entry.timestamp);
+      const code = getCellContentAt(history, cellId, entry.timestamp);
       if (code !== null) {
         steps.push({
           timestamp: entry.timestamp,
-          cellId: entry.cellId,
-          cellIndex: entry.cellIndex,
-          code
+          cellId,
+          cellIndex,
+          code,
+          runId: event.runId,
         });
       }
-    } else if (entry.type === 'executionComplete') {
+    } else if (event.name === 'runCellComplete') {
+      const cellId = event.target?.cellId;
+      if (!cellId) continue;
+
+      const data = event.data || {};
+      const durationMs = typeof data.durationMs === 'number' ? data.durationMs : undefined;
+      const success = typeof data.success === 'boolean' ? data.success : undefined;
+      const output = typeof data.output === 'string' ? data.output : undefined;
+
       // Find the corresponding runCell and add execution results
-      const runStep = steps.find(s =>
-        s.cellId === entry.cellId &&
-        s.timestamp < entry.timestamp &&
-        s.durationMs === undefined
-      );
+      const runStep = event.runId
+        ? steps.find(s => s.runId === event.runId)
+        : steps.find(s =>
+            s.cellId === cellId &&
+            s.timestamp < entry.timestamp &&
+            s.durationMs === undefined
+          );
       if (runStep) {
-        runStep.durationMs = entry.durationMs;
-        runStep.success = entry.success;
-        runStep.output = entry.output;
+        runStep.durationMs = durationMs;
+        runStep.success = success;
+        runStep.output = output;
       }
     }
   }
@@ -354,8 +437,14 @@ export function validateHistory(history: HistoryEntry[]): { valid: boolean; erro
 
   // Every runCell must have a reconstructable cell content
   for (const entry of history) {
-    if (entry.type === 'runCell') {
-      const content = getCellContentAt(history, entry.cellId, entry.timestamp);
+    const event = getEventDetails(entry);
+    if (event?.name === 'runCell') {
+      const cellId = event.target?.cellId;
+      if (!cellId) {
+        errors.push(`Cannot reconstruct cell content for runCell at ${entry.timestamp}`);
+        continue;
+      }
+      const content = getCellContentAt(history, cellId, entry.timestamp);
       if (content === null) {
         errors.push(`Cannot reconstruct cell content for runCell at ${entry.timestamp}`);
       }

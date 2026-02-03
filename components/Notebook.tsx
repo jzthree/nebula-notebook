@@ -33,7 +33,7 @@ import { TerminalPanel } from './TerminalPanel';
 import { HistoryPanel } from './HistoryPanel';
 import { RestoreDialog } from './RestoreDialog';
 import { VirtualCellList } from './VirtualCellList';
-import { useUndoRedo } from '../hooks/useUndoRedo';
+import { useUndoRedo, EditSource } from '../hooks/useUndoRedo';
 import { useOperationHandler } from '../hooks/useOperationHandler';
 import { SettingsModal } from './SettingsModal';
 import { KernelManager } from './KernelManager';
@@ -251,6 +251,20 @@ export const Notebook: React.FC = () => {
     getUserChangesSince,
   } = useUndoRedo([]);  // Start with empty cells
 
+  const logKernelEvent = useCallback((
+    name: string,
+    data?: Record<string, unknown>,
+    source: EditSource = 'user'
+  ) => {
+    logOperation({
+      type: 'event',
+      category: 'kernel',
+      name,
+      data,
+      source,
+    });
+  }, [logOperation]);
+
   // Compute preview cells when viewing history
   // Reconstruct cells at preview timestamp
   const previewCells = useMemo(() => {
@@ -277,9 +291,12 @@ export const Notebook: React.FC = () => {
     const history = getFullHistory();
 
     for (const entry of history) {
-      if (entry.timestamp > previewTimestamp && entry.type === 'runCell') {
-        executed.add((entry as any).cellId);
-      }
+      if (entry.timestamp <= previewTimestamp) continue;
+      const isRunCell = entry.type === 'runCell' ||
+        (entry.type === 'event' && (entry as any).name === 'runCell');
+      if (!isRunCell) continue;
+      const cellId = entry.type === 'event' ? (entry as any).target?.cellId : (entry as any).cellId;
+      if (cellId) executed.add(cellId);
     }
     return executed;
   }, [previewTimestamp, getFullHistory]);
@@ -500,9 +517,19 @@ export const Notebook: React.FC = () => {
     // The useEffect execution processor will handle the actual execution
     // Only add and log if not already in queue (matches queueExecution behavior)
     if (existingIndex < 0) {
+      const runId = createRunId();
+      executionRunIdsRef.current.set(cellId, runId);
       setExecutionQueue(prev => [...prev, cellId]);
       // Log cell run for history (same as UI queueExecution)
-      logOperation({ type: 'runCell', cellId, cellIndex });
+      logOperation({
+        type: 'event',
+        category: 'execution',
+        name: 'runCell',
+        target: { cellId, cellIndex },
+        runId,
+      });
+    } else if (!executionRunIdsRef.current.has(cellId)) {
+      executionRunIdsRef.current.set(cellId, createRunId());
     }
 
     // Wait for execution to complete (isExecuting becomes false) or timeout
@@ -574,6 +601,41 @@ export const Notebook: React.FC = () => {
     });
   }, [kernelSessionId]);
 
+  const kernelOpsRef = useRef<{
+    startKernel?: (kernelName?: string, source?: EditSource) => Promise<{ success: boolean; sessionId?: string; kernelName?: string; error?: string }>;
+    shutdownKernel?: (source?: EditSource) => Promise<{ success: boolean; sessionId?: string; error?: string }>;
+    restartKernel?: (source?: EditSource) => Promise<{ success: boolean; sessionId?: string; error?: string }>;
+    interruptKernel?: (source?: EditSource) => Promise<{ success: boolean; sessionId?: string; error?: string }>;
+  }>({});
+
+  const startKernelForAgent = useCallback(async (kernelName?: string, source: EditSource = 'mcp') => {
+    if (!kernelOpsRef.current.startKernel) {
+      return { success: false, error: 'startKernel not initialized' };
+    }
+    return kernelOpsRef.current.startKernel(kernelName, source);
+  }, []);
+
+  const shutdownKernelForAgent = useCallback(async (source: EditSource = 'mcp') => {
+    if (!kernelOpsRef.current.shutdownKernel) {
+      return { success: false, error: 'shutdownKernel not initialized' };
+    }
+    return kernelOpsRef.current.shutdownKernel(source);
+  }, []);
+
+  const restartKernelForAgent = useCallback(async (source: EditSource = 'mcp') => {
+    if (!kernelOpsRef.current.restartKernel) {
+      return { success: false, error: 'restartKernel not initialized' };
+    }
+    return kernelOpsRef.current.restartKernel(source);
+  }, []);
+
+  const interruptKernelForAgent = useCallback(async (source: EditSource = 'mcp') => {
+    if (!kernelOpsRef.current.interruptKernel) {
+      return { success: false, error: 'interruptKernel not initialized' };
+    }
+    return kernelOpsRef.current.interruptKernel(source);
+  }, []);
+
   // Operation handler - receives operations routed from backend OperationRouter
   const { isConnected: isAgentConnected, activeOperation: agentOperation, agentSession } = useOperationHandler({
     filePath: currentFileId,
@@ -587,6 +649,10 @@ export const Notebook: React.FC = () => {
     setCellOutputs,
     createNotebook: handleCreateNotebook,
     executeCell: handleAgentExecuteCell,
+    startKernel: startKernelForAgent,
+    shutdownKernel: shutdownKernelForAgent,
+    restartKernel: restartKernelForAgent,
+    interruptKernel: interruptKernelForAgent,
     undo: rawUndo,
     redo: rawRedo,
     canUndo,
@@ -668,6 +734,7 @@ export const Notebook: React.FC = () => {
   const [cellQueue, setCellQueue] = useState<CellClipboardItem[]>([]);
   const cellQueueRef = useRef<CellClipboardItem[]>([]);
   const executionQueueRef = useRef<string[]>([]);
+  const executionRunIdsRef = useRef<Map<string, string>>(new Map());
 
   const cellsRef = useRef<Cell[]>(cells);
   const activeCellIdRef = useRef<string | null>(activeCellId);
@@ -1104,6 +1171,16 @@ export const Notebook: React.FC = () => {
   }, [executionQueue]);
   executionQueueRef.current = executionQueue;
   queuePositionMapRef.current = queuePositionMap;
+
+  // Cleanup runIds for cells removed from the queue
+  useEffect(() => {
+    const currentIds = new Set(executionQueue);
+    for (const id of executionRunIdsRef.current.keys()) {
+      if (!currentIds.has(id)) {
+        executionRunIdsRef.current.delete(id);
+      }
+    }
+  }, [executionQueue]);
 
   // Timer to update elapsed time while execution is in progress
   useEffect(() => {
@@ -1714,7 +1791,7 @@ export const Notebook: React.FC = () => {
     // Get or create kernel for this file (one notebook = one kernel)
     try {
       setKernelStatus('starting');
-      const { sessionId, createdAt, serverId: resolvedServerId } = await kernelService.getOrCreateKernelForFile(
+      const { sessionId, created, createdAt, serverId: resolvedServerId } = await kernelService.getOrCreateKernelForFile(
         id,
         kernelToUse,
         preferredServerId
@@ -1723,6 +1800,14 @@ export const Notebook: React.FC = () => {
       if (createdAt) setKernelCreatedAt(createdAt);
       if (resolvedServerId && resolvedServerId !== selectedServerId) {
         setSelectedServerId(resolvedServerId);
+      }
+      if (created) {
+        logKernelEvent('startKernel', {
+          sessionId,
+          kernelName: kernelToUse,
+          serverId: resolvedServerId,
+          reason: 'auto',
+        }, 'system');
       }
       setIsKernelReady(true);
       // Note: Don't set status to 'idle' here - the WebSocket will send the actual status
@@ -1911,9 +1996,12 @@ export const Notebook: React.FC = () => {
       // Find cells that were executed after restore point - their outputs are stale
       const cellsExecutedAfter = new Set<string>();
       for (const entry of fullHistory) {
-        if (entry.timestamp > restoreDialogTimestamp && entry.type === 'runCell') {
-          cellsExecutedAfter.add((entry as any).cellId);
-        }
+        if (entry.timestamp <= restoreDialogTimestamp) continue;
+        const isRunCell = entry.type === 'runCell' ||
+          (entry.type === 'event' && (entry as any).name === 'runCell');
+        if (!isRunCell) continue;
+        const cellId = entry.type === 'event' ? (entry as any).target?.cellId : (entry as any).cellId;
+        if (cellId) cellsExecutedAfter.add(cellId);
       }
 
       // Preserve outputs for cells that weren't re-executed after restore point
@@ -1986,7 +2074,12 @@ export const Notebook: React.FC = () => {
 
   // --- KERNEL OPERATIONS ---
 
-  const switchKernel = async (kernelName: string, serverId?: string | null, keepMenuOpen = false) => {
+  const switchKernel = async (
+    kernelName: string,
+    serverId?: string | null,
+    keepMenuOpen = false,
+    source: EditSource = 'user'
+  ): Promise<{ success: boolean; sessionId?: string; kernelName?: string; error?: string }> => {
     if (!keepMenuOpen) {
       setIsKernelMenuOpen(false);
     }
@@ -1998,18 +2091,28 @@ export const Notebook: React.FC = () => {
     const targetServerId = serverId !== undefined ? serverId : selectedServerId;
 
     try {
+      let startedSessionId: string | undefined;
       // Use getOrCreateKernelForFile which handles kernel switching on the backend
       // (it will stop the old kernel if kernel type differs)
       if (currentFileId) {
-        const { sessionId: newSessionId, createdAt, serverId: resolvedServerId } = await kernelService.getOrCreateKernelForFile(
+        const { sessionId: newSessionId, created, createdAt, serverId: resolvedServerId } = await kernelService.getOrCreateKernelForFile(
           currentFileId,
           kernelName,
           targetServerId
         );
+        startedSessionId = newSessionId;
         setKernelSessionId(newSessionId);
         if (createdAt) setKernelCreatedAt(createdAt);
         if (resolvedServerId && resolvedServerId !== selectedServerId) {
           setSelectedServerId(resolvedServerId);
+        }
+        if (created) {
+          logKernelEvent('startKernel', {
+            sessionId: newSessionId,
+            kernelName,
+            serverId: resolvedServerId,
+            reason: kernelSessionId ? 'switch' : 'start',
+          }, source);
         }
       } else {
         // No file open, just start a standalone kernel
@@ -2017,7 +2120,15 @@ export const Notebook: React.FC = () => {
           await kernelService.stopKernel(kernelSessionId);
         }
         const newSessionId = await kernelService.startKernel(kernelName, undefined, undefined, targetServerId);
+        startedSessionId = newSessionId;
+        resolvedServer = targetServerId ?? undefined;
         setKernelSessionId(newSessionId);
+        logKernelEvent('startKernel', {
+          sessionId: newSessionId,
+          kernelName,
+          serverId: targetServerId,
+          reason: kernelSessionId ? 'switch' : 'start',
+        }, source);
       }
       setIsKernelReady(true);
       setKernelStatus('idle');
@@ -2025,9 +2136,11 @@ export const Notebook: React.FC = () => {
       setCells(prev => prev.map(c => ({ ...c, executionCount: undefined })));
       setKernelExecutionCount(0);
       saveSettings({ lastKernel: kernelName });
+      return { success: true, sessionId: startedSessionId, kernelName: kernelName || undefined, error: undefined };
     } catch (error) {
       console.error('Failed to switch kernel:', error);
       setKernelStatus('disconnected');
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   };
 
@@ -2073,6 +2186,7 @@ export const Notebook: React.FC = () => {
     if (kernelSessionId) {
       try {
         await kernelService.stopKernel(kernelSessionId);
+        logKernelEvent('shutdownKernel', { sessionId: kernelSessionId, reason: 'switchServer' }, 'user');
       } catch (e) {
         console.error('Failed to stop kernel:', e);
       }
@@ -2083,20 +2197,26 @@ export const Notebook: React.FC = () => {
     // Menu stays open so user can choose a kernel on the new server
   };
 
-  const restartKernel = async () => {
+  const restartKernel = async (
+    source: EditSource = 'user'
+  ): Promise<{ success: boolean; sessionId?: string; error?: string }> => {
     setIsKernelMenuOpen(false);
     setKernelStatus('starting');
 
+    if (!kernelSessionId) {
+      setKernelStatus('disconnected');
+      return { success: false, error: 'No kernel session to restart' };
+    }
+
     try {
-      if (kernelSessionId) {
-        await kernelService.restartKernel(kernelSessionId);
-      }
+      await kernelService.restartKernel(kernelSessionId);
       setKernelStatus('idle');
       // Reset execution counter but preserve outputs
       setCells(prev => prev.map(c => ({ ...c, executionCount: undefined })));
       setKernelExecutionCount(0);
       // Log kernel restart for history
-      logOperation({ type: 'restartKernel' });
+      logKernelEvent('restartKernel', kernelSessionId ? { sessionId: kernelSessionId } : undefined, source);
+      return { success: true, sessionId: kernelSessionId ?? undefined };
     } catch (error) {
       console.error('Failed to restart kernel:', error);
       // If session not found, start a fresh kernel
@@ -2123,33 +2243,47 @@ export const Notebook: React.FC = () => {
           setIsKernelReady(true);
           setCells(prev => prev.map(c => ({ ...c, executionCount: undefined })));
           setKernelExecutionCount(0);
-          logOperation({ type: 'restartKernel' });
-          return;
+          logKernelEvent('restartKernel', newSessionId ? { sessionId: newSessionId } : undefined, source);
+          return { success: true, sessionId: newSessionId };
         } catch (startError) {
           console.error('Failed to start fresh kernel:', startError);
         }
       }
       setKernelStatus('disconnected');
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   };
 
-  const shutdownKernel = async () => {
+  const shutdownKernel = async (
+    source: EditSource = 'user'
+  ): Promise<{ success: boolean; sessionId?: string; error?: string }> => {
     setIsKernelMenuOpen(false);
-    if (!kernelSessionId) return;
+    if (!kernelSessionId) {
+      return { success: false, error: 'No kernel session to shutdown' };
+    }
 
     try {
       await kernelService.stopKernel(kernelSessionId);
+      logKernelEvent('shutdownKernel', { sessionId: kernelSessionId }, source);
     } catch (error) {
       console.error('Failed to shutdown kernel:', error);
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
     } finally {
       setKernelSessionId(null);
       setKernelStatus('disconnected');
       setIsKernelReady(false);
       setMemoryUsage(null);
     }
+    return { success: true, sessionId: kernelSessionId ?? undefined };
   };
 
-  const interruptKernel = async () => {
+  const interruptKernel = async (
+    source: EditSource = 'user'
+  ): Promise<{ success: boolean; sessionId?: string; error?: string }> => {
+    if (!kernelSessionId) {
+      return { success: false, error: 'No kernel session to interrupt' };
+    }
+
     try {
       if (kernelSessionId) {
         await kernelService.interruptKernel(kernelSessionId);
@@ -2158,10 +2292,22 @@ export const Notebook: React.FC = () => {
       setIsProcessingQueue(false);
       setCells(prev => prev.map(c => ({ ...c, isExecuting: false })));
       // Log kernel interrupt for history
-      logOperation({ type: 'interruptKernel' });
+      logKernelEvent('interruptKernel', kernelSessionId ? { sessionId: kernelSessionId } : undefined, source);
+      return { success: true, sessionId: kernelSessionId ?? undefined };
     } catch (error) {
       console.error('Failed to interrupt kernel:', error);
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
+  };
+
+  kernelOpsRef.current = {
+    startKernel: async (kernelName?: string, source: EditSource = 'user') => {
+      const nameToUse = kernelName || currentKernel || 'python3';
+      return switchKernel(nameToUse, undefined, true, source);
+    },
+    shutdownKernel,
+    restartKernel,
+    interruptKernel,
   };
 
   // --- CELL OPERATIONS ---
@@ -2342,21 +2488,39 @@ export const Notebook: React.FC = () => {
     setCells(prev => prev.map(c => c.id === id ? { ...c, outputs: newOutputs, isExecuting: isExec } : c));
   };
 
+  const createRunId = () => {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  };
+
   const queueExecution = (id: string) => {
     // Keyframe: flush active cell before execution
     flushActiveCell();
 
     // Check if already in queue (idempotent - safe to call multiple times)
     if (executionQueueRef.current.includes(id)) {
+      if (!executionRunIdsRef.current.has(id)) {
+        executionRunIdsRef.current.set(id, createRunId());
+      }
       return;
     }
 
+    const runId = createRunId();
+    executionRunIdsRef.current.set(id, runId);
     setExecutionQueue(prev => [...prev, id]);
     // Log cell run for history
     // Note: content is NOT stored here - it's reconstructed from edit history + snapshot
     const cellIndex = cells.findIndex(c => c.id === id);
     if (cellIndex >= 0) {
-      logOperation({ type: 'runCell', cellId: id, cellIndex });
+      logOperation({
+        type: 'event',
+        category: 'execution',
+        name: 'runCell',
+        target: { cellId: id, cellIndex },
+        runId,
+      });
     }
   };
 
@@ -2590,14 +2754,20 @@ export const Notebook: React.FC = () => {
         const fullOutput = collectedOutputs.join('\n');
         const loggedOutput = outputLoggingMode === 'full' ? fullOutput : undefined;
 
+        const runId = executionRunIdsRef.current.get(cellId);
         logOperation({
-          type: 'executionComplete',
-          cellId,
-          cellIndex,
-          durationMs,
-          success: !hasError,
-          output: loggedOutput
+          type: 'event',
+          category: 'execution',
+          name: 'runCellComplete',
+          target: { cellId, cellIndex },
+          runId,
+          data: {
+            durationMs,
+            success: !hasError,
+            output: loggedOutput,
+          },
         });
+        executionRunIdsRef.current.delete(cellId);
 
         // Increment global counter and assign to cell
         setKernelExecutionCount(prev => {
@@ -2892,20 +3062,20 @@ export const Notebook: React.FC = () => {
                           {/* Kernel Actions */}
                           <div className="border-b border-slate-100 py-1">
                             <button
-                              onClick={interruptKernel}
+                              onClick={() => interruptKernel()}
                               disabled={kernelStatus !== 'busy'}
                               className="w-full text-left px-3 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-2 disabled:opacity-40 disabled:hover:bg-transparent"
                             >
                               <Square className="w-3 h-3" /> Interrupt
                             </button>
                             <button
-                              onClick={restartKernel}
+                              onClick={() => restartKernel()}
                               className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                             >
                               <RotateCw className="w-3 h-3" /> Restart Kernel
                             </button>
                             <button
-                              onClick={shutdownKernel}
+                              onClick={() => shutdownKernel()}
                               disabled={!kernelSessionId}
                               className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2 disabled:opacity-40 disabled:hover:bg-transparent"
                             >
@@ -3350,7 +3520,13 @@ export const Notebook: React.FC = () => {
                       <Save className="w-4 h-4" /> Save
                   </button>
                   <button onClick={() => {
-                    logOperation({ type: 'runAllCells', cellCount: cells.filter(c => c.type === 'code').length });
+                    const codeCellCount = cells.filter(c => c.type === 'code').length;
+                    logOperation({
+                      type: 'event',
+                      category: 'execution',
+                      name: 'runAllCells',
+                      data: { cellCount: codeCellCount },
+                    });
                     cells.forEach(c => queueExecution(c.id));
                   }} className="btn-primary flex items-center gap-2 bg-slate-900 text-white px-3 py-1.5 rounded-md hover:bg-slate-700 text-xs font-medium transition-colors shadow-sm">
                       <Play className="w-4 h-4" /> Run All

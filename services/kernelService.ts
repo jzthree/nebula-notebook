@@ -165,13 +165,13 @@ class KernelService {
    * @param filePath - The notebook file path
    * @param kernelName - The kernel to start if creating new
    * @param serverId - Optional server ID for cluster support (null for local)
-   * @returns Object with session ID and created_at timestamp
+   * @returns Object with session ID, created flag, and created_at timestamp
    */
   async getOrCreateKernelForFile(
     filePath: string,
     kernelName: string = 'python3',
     serverId?: string | null
-  ): Promise<{ sessionId: string; createdAt?: number; serverId?: string | null }> {
+  ): Promise<{ sessionId: string; created?: boolean; createdAt?: number; serverId?: string | null }> {
     const body: { file_path: string; kernel_name: string; server_id?: string } = {
       file_path: filePath,
       kernel_name: kernelName
@@ -193,6 +193,7 @@ class KernelService {
 
     const data = await response.json();
     const sessionId = data.session_id;
+    const created = data.created as boolean | undefined;
     const createdAt = data.created_at as number | undefined;
     const resolvedServerId = data.server_id ?? serverId ?? null;
 
@@ -222,7 +223,7 @@ class KernelService {
       }
     }
 
-    return { sessionId, createdAt, serverId: resolvedServerId };
+    return { sessionId, created, createdAt, serverId: resolvedServerId };
   }
 
   /**
