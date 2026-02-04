@@ -1367,6 +1367,18 @@ export const Notebook: React.FC = () => {
     // The kernel stays running on the server until explicitly stopped
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = kernelService.onBufferedOutput((sessionId, output, cellId) => {
+      if (!cellId) return;
+      setCells(prev => prev.map(c => {
+        if (c.id !== cellId) return c;
+        const existingOutputs = c.outputs || [];
+        return { ...c, outputs: [...existingOutputs, output] };
+      }));
+    });
+    return unsubscribe;
+  }, [setCells]);
+
   // Load the initial file (currentFileId is already set synchronously from URL/localStorage)
   useEffect(() => {
     if (currentFileId) {
@@ -2799,7 +2811,7 @@ export const Notebook: React.FC = () => {
 
             // Schedule a throttled flush to update UI
             scheduleFlush();
-          });
+          }, cellId);
 
           // Cancel any pending flush and do final flush
           if (pendingFlush !== null) {

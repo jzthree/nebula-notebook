@@ -67,6 +67,8 @@ interface SessionState {
     reject: (error: any) => void;
     onOutput: (output: CellOutput) => void;
   }>;
+  lastAckedSeq?: number;
+  lastSeenSeq?: number;
   pendingCompletion?: {
     resolve: (result: CompletionResult) => void;
     reject: (error: any) => void;
@@ -90,6 +92,7 @@ class KernelService {
   private onReconnectCallbacks: ReconnectCallback[] = [];
   private onDisconnectCallbacks: ((sessionId: string) => void)[] = [];
   private onStatusCallbacks: StatusCallback[] = [];
+  private onBufferedOutputCallbacks: Array<(sessionId: string, output: CellOutput, cellId?: string | null) => void> = [];
 
   /**
    * Get list of available kernels on the system
@@ -148,6 +151,8 @@ class KernelService {
       sessionId,
       ws: null,
       messageQueue: [],
+      lastAckedSeq: 0,
+      lastSeenSeq: 0,
       filePath,
       kernelName: kernelName,
       serverId: resolvedServerId,
@@ -201,9 +206,11 @@ class KernelService {
     if (!this.sessions.has(sessionId)) {
       this.sessions.set(sessionId, {
         sessionId,
-        ws: null,
-        messageQueue: [],
-        filePath,
+      ws: null,
+      messageQueue: [],
+      lastAckedSeq: 0,
+      lastSeenSeq: 0,
+      filePath,
         kernelName,
         serverId: resolvedServerId,
       });
@@ -247,6 +254,14 @@ class KernelService {
       ws.onopen = () => {
         console.log('Kernel WebSocket connected');
         session.ws = ws;
+        const since = session.lastAckedSeq ?? 0;
+        if (since >= 0) {
+          try {
+            ws.send(JSON.stringify({ type: 'sync_outputs', since }));
+          } catch (err) {
+            console.error('Failed to request output sync:', err);
+          }
+        }
         resolve();
       };
 
@@ -316,6 +331,39 @@ class KernelService {
       return;
     }
 
+    if (data.type === 'sync_outputs') {
+      const outputs = Array.isArray(data.outputs) ? data.outputs : [];
+      for (const entry of outputs) {
+        if (!entry || !entry.output) continue;
+        const seq = typeof entry.seq === 'number' ? entry.seq : undefined;
+        if (seq !== undefined) {
+          const lastSeen = session.lastSeenSeq ?? 0;
+          if (seq <= lastSeen) {
+            continue;
+          }
+          session.lastSeenSeq = Math.max(lastSeen, seq);
+        }
+        const cellOutput: CellOutput = {
+          id: crypto.randomUUID(),
+          type: entry.output.type,
+          content: entry.output.content,
+          timestamp: Date.now(),
+        };
+        for (const callback of this.onBufferedOutputCallbacks) {
+          try {
+            callback(sessionId, cellOutput, entry.cell_id ?? entry.cellId ?? null);
+          } catch (e) {
+            console.error('Buffered output callback error:', e);
+          }
+        }
+      }
+      const latestSeq = typeof data.latest_seq === 'number' ? data.latest_seq : undefined;
+      if (latestSeq !== undefined) {
+        this.sendAck(sessionId, latestSeq);
+      }
+      return;
+    }
+
     // Handle completion replies - also don't require execution handler
     if (data.type === 'complete_reply') {
       if (session.pendingCompletion) {
@@ -325,22 +373,49 @@ class KernelService {
       return;
     }
 
-    // Other message types require an active execution handler
     const handler = session.messageQueue[0];
+
+    if (data.type === 'output') {
+      const output = data.output;
+      const seq = typeof data.seq === 'number' ? data.seq : undefined;
+      const cellId = data.cell_id ?? data.cellId ?? null;
+      if (seq !== undefined) {
+        const lastSeen = session.lastSeenSeq ?? 0;
+        if (seq <= lastSeen) {
+          this.sendAck(sessionId, seq);
+          return;
+        }
+        session.lastSeenSeq = Math.max(lastSeen, seq);
+      }
+      const cellOutput: CellOutput = {
+        id: crypto.randomUUID(),
+        type: output.type,
+        content: output.content,
+        timestamp: Date.now(),
+      };
+
+      if (handler) {
+        handler.onOutput(cellOutput);
+      } else {
+        for (const callback of this.onBufferedOutputCallbacks) {
+          try {
+            callback(sessionId, cellOutput, cellId);
+          } catch (e) {
+            console.error('Buffered output callback error:', e);
+          }
+        }
+      }
+
+      if (seq !== undefined) {
+        this.sendAck(sessionId, seq);
+      }
+      return;
+    }
+
+    // Other message types require an active execution handler
     if (!handler) return;
 
     switch (data.type) {
-      case 'output':
-        // Stream output to callback
-        const output = data.output;
-        handler.onOutput({
-          id: crypto.randomUUID(),
-          type: output.type,
-          content: output.content,
-          timestamp: Date.now()
-        });
-        break;
-
       case 'result':
         // Execution complete
         session.messageQueue.shift();
@@ -354,6 +429,17 @@ class KernelService {
     }
   }
 
+  private sendAck(sessionId: string, upToSeq: number): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || !session.ws || session.ws.readyState !== WebSocket.OPEN) return;
+    session.lastAckedSeq = Math.max(session.lastAckedSeq ?? 0, upToSeq);
+    try {
+      session.ws.send(JSON.stringify({ type: 'ack_outputs', up_to: upToSeq }));
+    } catch (e) {
+      console.error('Failed to send output ack:', e);
+    }
+  }
+
   /**
    * Execute code in a specific kernel session
    * @param sessionId - The session to execute in
@@ -363,7 +449,8 @@ class KernelService {
   async executeCode(
     sessionId: string,
     code: string,
-    onOutput: (output: CellOutput) => void
+    onOutput: (output: CellOutput) => void,
+    cellId?: string | null
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -379,7 +466,8 @@ class KernelService {
 
       session.ws!.send(JSON.stringify({
         type: 'execute',
-        code: code
+        code: code,
+        cell_id: cellId ?? undefined,
       }));
     });
   }
@@ -542,6 +630,16 @@ class KernelService {
     this.onStatusCallbacks.push(callback);
     return () => {
       this.onStatusCallbacks = this.onStatusCallbacks.filter(cb => cb !== callback);
+    };
+  }
+
+  /**
+   * Subscribe to buffered output replay events (e.g. after reconnect)
+   */
+  onBufferedOutput(callback: (sessionId: string, output: CellOutput, cellId?: string | null) => void): () => void {
+    this.onBufferedOutputCallbacks.push(callback);
+    return () => {
+      this.onBufferedOutputCallbacks = this.onBufferedOutputCallbacks.filter(cb => cb !== callback);
     };
   }
 

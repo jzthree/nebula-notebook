@@ -84,6 +84,12 @@ export interface KernelOutput {
   content: string;
 }
 
+export interface SequencedKernelOutput {
+  seq: number;
+  output: KernelOutput;
+  cellId?: string | null;
+}
+
 /**
  * Execution queue metadata for a kernel session.
  */

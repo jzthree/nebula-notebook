@@ -512,6 +512,7 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
 
         if (message.type === 'execute') {
           const code = message.code || '';
+          const cellId = message.cell_id || null;
 
           // Send busy status
           ws.send(JSON.stringify({ type: 'status', status: 'busy' }));
@@ -520,14 +521,30 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
           const result = await kernelService.executeCode(
             sessionId,
             code,
-            async (output) => {
-              ws.send(JSON.stringify({ type: 'output', output }));
-            }
+            async (entry) => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: 'output',
+                  output: entry.output,
+                  seq: entry.seq,
+                  cell_id: entry.cellId ?? null,
+                }));
+              }
+            },
+            undefined,
+            cellId
           );
 
           // Send result and idle status
           ws.send(JSON.stringify({ type: 'result', result }));
           ws.send(JSON.stringify({ type: 'status', status: 'idle' }));
+        } else if (message.type === 'sync_outputs') {
+          const since = Number(message.since ?? 0);
+          const { outputs, latestSeq } = kernelService.getBufferedOutputs(sessionId, since);
+          ws.send(JSON.stringify({ type: 'sync_outputs', outputs, latest_seq: latestSeq }));
+        } else if (message.type === 'ack_outputs') {
+          const upToSeq = Number(message.up_to ?? message.seq ?? 0);
+          kernelService.ackOutputs(sessionId, upToSeq);
         } else if (message.type === 'complete') {
           const code = message.code || '';
           const cursorPos = message.cursor_pos ?? code.length;

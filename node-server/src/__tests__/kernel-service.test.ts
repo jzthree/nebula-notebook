@@ -496,10 +496,12 @@ describe('KernelService', () => {
 
       expect(result.status).toBe('error');
       expect(result.error).toContain('another execution');
-      expect(onOutput).toHaveBeenCalledWith({
-        type: 'error',
-        content: expect.stringContaining('another execution'),
-      });
+      expect(onOutput).toHaveBeenCalledWith(expect.objectContaining({
+        output: expect.objectContaining({
+          type: 'error',
+          content: expect.stringContaining('another execution'),
+        })
+      }));
     });
   });
 

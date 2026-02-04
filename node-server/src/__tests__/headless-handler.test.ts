@@ -826,11 +826,12 @@ describe('HeadlessOperationHandler', () => {
         executeCode: vi.fn(async (
           _sessionId: string,
           _code: string,
-          onOutput: (output: any) => Promise<void>,
-          onQueueInfo?: (info: { queuePosition: number; queueLength: number }) => void
+          onOutput: (entry: any) => Promise<void>,
+          onQueueInfo?: (info: { queuePosition: number; queueLength: number }) => void,
+          _cellId?: string | null
         ) => {
           onQueueInfo?.({ queuePosition: 0, queueLength: 1 });
-          await onOutput({ type: 'stdout', content: 'ok' });
+          await onOutput({ seq: 1, output: { type: 'stdout', content: 'ok' } });
           return { status: 'ok', executionCount: 1, queuePosition: 0, queueLength: 1 };
         }),
       };
@@ -852,7 +853,8 @@ describe('HeadlessOperationHandler', () => {
         'session-1',
         'print(\"hi\")',
         expect.any(Function),
-        expect.any(Function)
+        expect.any(Function),
+        'cell-1'
       );
     });
   });
