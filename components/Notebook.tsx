@@ -252,6 +252,7 @@ export const Notebook: React.FC = () => {
   const [availableKernels, setAvailableKernels] = useState<KernelSpec[]>([]);
   const [pythonEnvironments, setPythonEnvironments] = useState<PythonEnvironment[]>([]);
   const [currentKernel, setCurrentKernel] = useState<string>('python3');
+  const [kernelSelectionRequired, setKernelSelectionRequired] = useState(false);
   const [kernelSessionId, setKernelSessionId] = useState<string | null>(null);
   const [kernelStatus, setKernelStatus] = useState<'idle' | 'busy' | 'starting' | 'disconnected'>('disconnected');
   const [kernelCreatedAt, setKernelCreatedAt] = useState<number | null>(null);
@@ -2151,6 +2152,7 @@ export const Notebook: React.FC = () => {
     setKernelStatus('starting');
     setIsKernelReady(false);
     setCurrentKernel(kernelName); // Update name immediately so UI shows new kernel with "starting" status
+    setKernelSelectionRequired(false);
 
     // Use provided serverId or fall back to currently selected server
     const targetServerId = serverId !== undefined ? serverId : selectedServerId;
@@ -2239,6 +2241,11 @@ export const Notebook: React.FC = () => {
     if (serverId === selectedServerId) return; // No change
 
     setSelectedServerId(serverId);
+    // Clear current kernel selection so user explicitly chooses from new server
+    setCurrentKernel('');
+    setKernelSelectionRequired(true);
+    setKernelStatus('disconnected');
+    setIsKernelReady(false);
 
     try {
       // Load environments without auto-selecting a kernel - user must choose
@@ -2256,7 +2263,7 @@ export const Notebook: React.FC = () => {
         console.error('Failed to stop kernel:', e);
       }
       setKernelSessionId(null);
-      setKernelStatus('idle');
+      setKernelStatus('disconnected');
       setIsKernelReady(false);
     }
     // Menu stays open so user can choose a kernel on the new server
@@ -2959,6 +2966,7 @@ export const Notebook: React.FC = () => {
   }, [executionQueue.length, currentFilename, scrollToCell]);
 
   const getKernelDisplayName = () => {
+    if (kernelSelectionRequired || !currentKernel) return 'Select kernel';
     const kernel = availableKernels.find(k => k.name === currentKernel);
     return kernel?.display_name || currentKernel;
   };
@@ -3251,13 +3259,14 @@ export const Notebook: React.FC = () => {
                                 (kernel.python_path && env.path && kernel.python_path === env.path)
                               );
                               const envLabel = matchedEnv?.env_name || (matchedEnv && matchedEnv.display_name !== kernel.display_name ? matchedEnv.display_name : null);
+                              const isSelected = !kernelSelectionRequired && kernel.name === currentKernel;
 
                               return (
                                 <button
                                   key={kernel.name}
                                   onClick={() => switchKernel(kernel.name)}
                                   className={`w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 ${
-                                    kernel.name === currentKernel ? 'bg-green-50 text-green-700' : 'text-slate-700'
+                                    isSelected ? 'bg-green-50 text-green-700' : 'text-slate-700'
                                   }`}
                                 >
                                   <span className="w-2 h-2 rounded-full flex-shrink-0 bg-green-500"></span>
