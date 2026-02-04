@@ -41,6 +41,7 @@ interface Props {
   currentFileId: string | null;
   onSelect: (id: string) => void;
   onOpenTextFile?: (path: string) => void;
+  onOpenImageFile?: (path: string) => void;
   onRefresh: () => void;
   isOpen?: boolean;
   onClose?: () => void;
@@ -59,6 +60,7 @@ export const FileBrowser: React.FC<Props> = ({
   currentFileId,
   onSelect,
   onOpenTextFile,
+  onOpenImageFile,
   onRefresh,
   isOpen = true,
   onClose,
@@ -557,6 +559,15 @@ export const FileBrowser: React.FC<Props> = ({
     }
   };
 
+  const handleOpenImageFile = (item: FileItem) => {
+    if (onOpenImageFile) {
+      onOpenImageFile(item.path);
+      return;
+    }
+    const downloadUrl = `/api/fs/download?path=${encodeURIComponent(item.path)}`;
+    window.open(downloadUrl, '_blank', 'noopener,noreferrer');
+  };
+
   const handleSelectFile = (path: string) => {
     onSelect(path);
     // Close sidebar on mobile for sidebar variant
@@ -815,6 +826,7 @@ export const FileBrowser: React.FC<Props> = ({
             onSelect={handleSelectFile}
             onOpenNewTab={handleOpenNewTab}
             onOpenTextFile={handleOpenTextFile}
+            onOpenImageFile={handleOpenImageFile}
             onRename={handleRenameItem}
             onDuplicate={handleDuplicateItem}
             onDownload={handleDownloadItem}

@@ -279,6 +279,7 @@ router.post('/kernels/for-file', async (req: Request, res: Response) => {
     const normalizedFilePath = kernelService.normalizeNotebookPath(file_path);
     let effectiveKernelName = kernel_name;
     let effectiveServerId = server_id as string | undefined;
+    const localServerId = serverRegistry.getLocalServerId();
 
     if (!effectiveServerId) {
       const preference = kernelService.getNotebookKernelPreference(normalizedFilePath);
@@ -296,7 +297,6 @@ router.post('/kernels/for-file', async (req: Request, res: Response) => {
     }
 
     // Check if we should start on a remote server
-    const localServerId = serverRegistry.getLocalServerId();
     if (effectiveServerId && effectiveServerId !== localServerId && effectiveServerId !== 'local') {
       // Start on remote server
       const result = await startRemoteKernel(effectiveServerId, effectiveKernelName, file_path);

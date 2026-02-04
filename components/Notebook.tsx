@@ -153,6 +153,7 @@ export const Notebook: React.FC = () => {
   const [currentFileMetadata, setCurrentFileMetadata] = useState<NotebookMetadata | null>(null);
   const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false);
   const [textEditorPath, setTextEditorPath] = useState<string | null>(null);
+  const [imageViewerPath, setImageViewerPath] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -204,6 +205,45 @@ export const Notebook: React.FC = () => {
       document.body.style.overflow = previousOverflow;
     };
   }, [textEditorPath]);
+
+  const imageViewportRef = useRef<HTMLDivElement>(null);
+  const imagePanStateRef = useRef<{ isPanning: boolean; startX: number; startY: number; scrollLeft: number; scrollTop: number }>({
+    isPanning: false,
+    startX: 0,
+    startY: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+  });
+
+  useEffect(() => {
+    if (!imageViewerPath) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [imageViewerPath]);
+
+  const handleImageViewerMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!imageViewportRef.current) return;
+    imagePanStateRef.current.isPanning = true;
+    imagePanStateRef.current.startX = event.clientX;
+    imagePanStateRef.current.startY = event.clientY;
+    imagePanStateRef.current.scrollLeft = imageViewportRef.current.scrollLeft;
+    imagePanStateRef.current.scrollTop = imageViewportRef.current.scrollTop;
+  };
+
+  const handleImageViewerMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!imagePanStateRef.current.isPanning || !imageViewportRef.current) return;
+    const deltaX = event.clientX - imagePanStateRef.current.startX;
+    const deltaY = event.clientY - imagePanStateRef.current.startY;
+    imageViewportRef.current.scrollLeft = imagePanStateRef.current.scrollLeft - deltaX;
+    imageViewportRef.current.scrollTop = imagePanStateRef.current.scrollTop - deltaY;
+  };
+
+  const stopImageViewerPan = () => {
+    imagePanStateRef.current.isPanning = false;
+  };
 
 
   // Kernel State
@@ -1774,6 +1814,19 @@ export const Notebook: React.FC = () => {
       console.warn('Failed to load kernel preference:', error);
     }
 
+    if (preferredServerId) {
+      const knownServers = clusterInfo?.servers ?? [];
+      const isPreferredServerKnown =
+        preferredServerId === 'local' ||
+        preferredServerId === clusterInfo?.localServerId ||
+        knownServers.some(server => server.id === preferredServerId);
+      if (!isPreferredServerKnown) {
+        const fallbackServerId = selectedServerId ?? clusterInfo?.localServerId ?? null;
+        console.warn(`Ignoring unknown preferred server: ${preferredServerId}`);
+        preferredServerId = fallbackServerId;
+      }
+    }
+
     let kernelsForCheck = availableKernels;
     if (preferredServerId && preferredServerId !== selectedServerId) {
       setSelectedServerId(preferredServerId);
@@ -2946,6 +2999,7 @@ export const Notebook: React.FC = () => {
         currentFileId={currentFileId}
         onSelect={loadFile}
         onOpenTextFile={(path) => setTextEditorPath(path)}
+        onOpenImageFile={(path) => setImageViewerPath(path)}
         onRefresh={refreshFileList}
         isOpen={isFileBrowserOpen}
         onClose={() => setIsFileBrowserOpen(false)}
@@ -2954,6 +3008,34 @@ export const Notebook: React.FC = () => {
 
       {/* Main Content */}
       <div className={`relative flex-1 flex flex-col h-screen transition-all duration-300 ${isFileBrowserOpen ? 'nebula-filebrowser-offset' : ''} ${isChatOpen ? 'lg:mr-80' : ''}`}>
+
+        {imageViewerPath && (
+          <div className="fixed inset-0 z-50 bg-slate-900/70 flex items-center justify-center p-4">
+            <button
+              type="button"
+              onClick={() => setImageViewerPath(null)}
+              className="absolute top-4 right-4 text-white/80 hover:text-white text-xl"
+              title="Close"
+            >
+              ✕
+            </button>
+            <div
+              ref={imageViewportRef}
+              className="w-full h-full overflow-auto cursor-grab active:cursor-grabbing"
+              onMouseDown={handleImageViewerMouseDown}
+              onMouseMove={handleImageViewerMouseMove}
+              onMouseUp={stopImageViewerPan}
+              onMouseLeave={stopImageViewerPan}
+            >
+              <img
+                src={`/api/fs/download?path=${encodeURIComponent(imageViewerPath)}`}
+                alt="Preview"
+                className="block max-w-none max-h-none"
+                draggable={false}
+              />
+            </div>
+          </div>
+        )}
 
         {textEditorPath && (
           <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6 overflow-hidden">
