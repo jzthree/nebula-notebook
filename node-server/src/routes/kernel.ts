@@ -214,8 +214,8 @@ router.post('/kernels/start', async (req: Request, res: Response) => {
   try {
     const { kernel_name = 'python3', cwd, file_path, server_id } = req.body;
 
-    // Check if we should start on a remote server
     const localServerId = serverRegistry.getLocalServerId();
+    // Check if we should start on a remote server
     if (server_id && server_id !== localServerId && server_id !== 'local') {
       // Start on remote server
       const result = await startRemoteKernel(server_id, kernel_name, file_path);
@@ -286,7 +286,12 @@ router.post('/kernels/for-file', async (req: Request, res: Response) => {
         effectiveKernelName = preference.kernelName;
       }
       if (preference?.serverId) {
-        effectiveServerId = preference.serverId;
+        const preferredServerId = preference.serverId;
+        const isLocalPreference = preferredServerId === localServerId || preferredServerId === 'local';
+        const hasServer = !!serverRegistry.getServer(preferredServerId);
+        if (isLocalPreference || hasServer) {
+          effectiveServerId = preferredServerId;
+        }
       }
     }
 
