@@ -131,6 +131,31 @@ describe('HeadlessOperationHandler', () => {
       expect(saved.cells[1].metadata.nebula_id).toBe('middle-cell');
       expect(saved.cells[2].metadata.nebula_id).toBe('cell-2');
     });
+
+    it('should preserve scrolled metadata on insert', async () => {
+      const notebookPath = createTestNotebook('insert-metadata.ipynb', [
+        { id: 'cell-1', content: 'first' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 0,
+        cell: {
+          id: 'new-cell',
+          type: 'code',
+          content: 'metadata cell',
+          metadata: { scrolled: true, scrolledHeight: 120 },
+        },
+      });
+
+      expect(result.success).toBe(true);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells[0].metadata.scrolled).toBe(true);
+      expect(saved.cells[0].metadata.scrolled_height).toBe(120);
+    });
   });
 
   describe('deleteCell', () => {
@@ -264,6 +289,27 @@ describe('HeadlessOperationHandler', () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain('Unknown field');
     });
+
+    it('should allow id change with dedupe', async () => {
+      const notebookPath = createTestNotebook('update-id.ipynb', [
+        { id: 'cell-1', content: 'first' },
+        { id: 'cell-2', content: 'second' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'updateMetadata',
+        notebookPath,
+        cellId: 'cell-1',
+        changes: { id: 'cell-2' },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.cellId).toBe('cell-2-2');
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells[0].metadata.nebula_id).toBe('cell-2-2');
+    });
   });
 
   describe('moveCell', () => {
@@ -335,6 +381,28 @@ describe('HeadlessOperationHandler', () => {
       await handler.flush(notebookPath);
       const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
       expect(saved.cells).toHaveLength(2);
+    });
+
+    it('should not copy scrolled or custom metadata', async () => {
+      const notebookPath = createTestNotebook('duplicate-metadata.ipynb', [
+        { id: 'cell-1', content: 'original', metadata: { scrolled: true, custom: 'x' } },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'duplicateCell',
+        notebookPath,
+        cellIndex: 0,
+        newCellId: 'cell-1-copy',
+      });
+
+      expect(result.success).toBe(true);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      const newCell = saved.cells.find((cell: any) => cell.metadata.nebula_id === result.cellId);
+      expect(newCell).toBeDefined();
+      expect(newCell.metadata.scrolled).toBeUndefined();
+      expect(newCell.metadata.custom).toBeUndefined();
     });
   });
 
@@ -530,6 +598,49 @@ describe('HeadlessOperationHandler', () => {
       expect(saved.cells[0].outputs).toEqual([]);
       // cell-2 should still have outputs
       expect(saved.cells[1].outputs).not.toEqual([]);
+    });
+
+    it('should preserve execution count when clearing outputs', async () => {
+      const notebookPath = createTestNotebook('clear-outputs-exec.ipynb', [
+        {
+          id: 'cell-1',
+          content: 'x=1',
+          outputs: [{ type: 'stdout', content: '1\n' }],
+          execution_count: 7,
+        },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'clearOutputs',
+        notebookPath,
+      });
+
+      expect(result.success).toBe(true);
+
+      await handler.flush(notebookPath);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.cells[0].outputs).toEqual([]);
+      expect(saved.cells[0].execution_count).toBe(7);
+    });
+  });
+
+  describe('createNotebook', () => {
+    it('should respect kernel display name', async () => {
+      const notebookPath = path.join(testDir, 'create-kernel.ipynb');
+
+      const result = await handler.applyOperation({
+        type: 'createNotebook',
+        notebookPath,
+        overwrite: true,
+        kernelName: 'python3',
+        kernelDisplayName: 'Custom Kernel',
+      });
+
+      expect(result.success).toBe(true);
+
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.metadata.kernelspec.name).toBe('python3');
+      expect(saved.metadata.kernelspec.display_name).toBe('Custom Kernel');
     });
   });
 

@@ -74,6 +74,7 @@ describe('useOperationHandler', () => {
   let mockUpdateContentAI: ReturnType<typeof vi.fn>;
   let mockUpdateMetadata: ReturnType<typeof vi.fn>;
   let mockSetCellOutputs: ReturnType<typeof vi.fn>;
+  let mockCreateNotebook: ReturnType<typeof vi.fn>;
 
   // Initial cells
   let initialCells: Cell[];
@@ -91,6 +92,7 @@ describe('useOperationHandler', () => {
     mockUpdateContentAI = vi.fn();
     mockUpdateMetadata = vi.fn();
     mockSetCellOutputs = vi.fn();
+    mockCreateNotebook = vi.fn();
 
     // Initial cells state
     initialCells = [
@@ -118,6 +120,7 @@ describe('useOperationHandler', () => {
         updateContentAI: mockUpdateContentAI as any,
         updateMetadata: mockUpdateMetadata as any,
         setCellOutputs: mockSetCellOutputs as (cellId: string, outputs: CellOutput[], executionCount?: number) => void,
+        createNotebook: mockCreateNotebook as any,
       })
     );
   };
@@ -184,7 +187,7 @@ describe('useOperationHandler', () => {
         id: 'new-cell',
         type: 'code',
         content: 'new content',
-      }));
+      }), 'ai');
 
       // Wait for async operation to complete
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -226,7 +229,7 @@ describe('useOperationHandler', () => {
       // Should have auto-fixed the ID
       expect(mockInsertCell).toHaveBeenCalledWith(3, expect.objectContaining({
         id: 'cell-1-2', // Auto-fixed
-      }));
+      }), 'ai');
 
       // Wait for async operation to complete
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -258,7 +261,7 @@ describe('useOperationHandler', () => {
         });
       });
 
-      expect(mockDeleteCell).toHaveBeenCalledWith(1);
+      expect(mockDeleteCell).toHaveBeenCalledWith(1, 'ai');
     });
 
     it('should delete cell by ID', async () => {
@@ -280,7 +283,7 @@ describe('useOperationHandler', () => {
         });
       });
 
-      expect(mockDeleteCell).toHaveBeenCalledWith(1); // cell-2 is at index 1
+      expect(mockDeleteCell).toHaveBeenCalledWith(1, 'ai'); // cell-2 is at index 1
     });
 
     it('should return error for non-existent cell ID', async () => {
@@ -396,7 +399,7 @@ describe('useOperationHandler', () => {
         });
       });
 
-      expect(mockMoveCell).toHaveBeenCalledWith(0, 2);
+      expect(mockMoveCell).toHaveBeenCalledWith(0, 2, 'ai');
     });
 
     it('should return error for invalid indices', async () => {
@@ -508,7 +511,7 @@ describe('useOperationHandler', () => {
       // Uses generic updateMetadata callback with { key: { old, new } } format
       expect(mockUpdateMetadata).toHaveBeenCalledWith('cell-1', {
         type: { old: 'code', new: 'markdown' },
-      });
+      }, 'ai');
     });
 
     it('should reject invalid metadata fields', async () => {
@@ -567,7 +570,112 @@ describe('useOperationHandler', () => {
 
       expect(mockUpdateMetadata).toHaveBeenCalledWith('cell-1', {
         scrolled: { old: undefined, new: true },
+      }, 'ai');
+    });
+
+    it('should allow id change with dedupe', async () => {
+      renderOperationHandler();
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const ws = MockWebSocket.instances[0];
+
+      act(() => {
+        ws.receiveMessage({
+          type: 'operation',
+          requestId: 'req-1',
+          operation: {
+            type: 'updateMetadata',
+            notebookPath: '/test/notebook.ipynb',
+            cellId: 'cell-1',
+            changes: { id: 'cell-2' }, // conflicts with existing cell
+          },
+        });
       });
+
+      expect(mockUpdateMetadata).toHaveBeenCalledWith('cell-1', {
+        id: { old: 'cell-1', new: 'cell-2-2' },
+      }, 'ai');
+    });
+  });
+
+  describe('Batch Operations', () => {
+    it('should insert multiple cells with deduped ids', async () => {
+      renderOperationHandler();
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const ws = MockWebSocket.instances[0];
+
+      act(() => {
+        ws.receiveMessage({
+          type: 'operation',
+          requestId: 'req-1',
+          operation: {
+            type: 'insertCells',
+            notebookPath: '/test/notebook.ipynb',
+            position: 1,
+            cells: [
+              { id: 'cell-2', type: 'markdown', content: 'a' }, // duplicate
+              { id: 'cell-4', type: 'code', content: 'b' },
+            ],
+          },
+        });
+      });
+
+      expect(mockInsertCell).toHaveBeenNthCalledWith(1, 1, expect.objectContaining({
+        id: 'cell-2-2',
+        type: 'markdown',
+        content: 'a',
+      }), 'ai');
+      expect(mockInsertCell).toHaveBeenNthCalledWith(2, 2, expect.objectContaining({
+        id: 'cell-4',
+        type: 'code',
+        content: 'b',
+      }), 'ai');
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const responses = ws.sentMessages.filter(m => m.includes('operationResult'));
+      const response = JSON.parse(responses[0]);
+      expect(response.result.success).toBe(true);
+      expect(response.result.insertedCount).toBe(2);
+      expect(response.result.insertedIds).toEqual(['cell-2-2', 'cell-4']);
+      expect(response.result.startIndex).toBe(1);
+      expect(response.result.totalCells).toBe(5);
+    });
+
+    it('should delete multiple cells and report notFound', async () => {
+      renderOperationHandler();
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const ws = MockWebSocket.instances[0];
+
+      act(() => {
+        ws.receiveMessage({
+          type: 'operation',
+          requestId: 'req-1',
+          operation: {
+            type: 'deleteCells',
+            notebookPath: '/test/notebook.ipynb',
+            cellIds: ['cell-1', 'missing-cell', 'cell-3'],
+          },
+        });
+      });
+
+      expect(mockDeleteCell).toHaveBeenCalledWith(2, 'ai');
+      expect(mockDeleteCell).toHaveBeenCalledWith(0, 'ai');
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const responses = ws.sentMessages.filter(m => m.includes('operationResult'));
+      const response = JSON.parse(responses[0]);
+      expect(response.result.success).toBe(true);
+      expect(response.result.deletedCount).toBe(2);
+      expect(response.result.deletedIds).toEqual(['cell-1', 'cell-3']);
+      expect(response.result.notFound).toEqual(['missing-cell']);
+      expect(response.result.totalCells).toBe(1);
     });
   });
 
@@ -627,6 +735,35 @@ describe('useOperationHandler', () => {
       expect(response.result.success).toBe(true);
       expect(response.result.data.cells.length).toBe(3);
       expect(response.result.data.cells[0].id).toBe('cell-1');
+    });
+  });
+
+  describe('Create Notebook Operation', () => {
+    it('should pass kernel display name to createNotebook callback', async () => {
+      mockCreateNotebook.mockResolvedValue({ success: true, mtime: 123 });
+      renderOperationHandler();
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const ws = MockWebSocket.instances[0];
+
+      act(() => {
+        ws.receiveMessage({
+          type: 'operation',
+          requestId: 'req-1',
+          operation: {
+            type: 'createNotebook',
+            notebookPath: '/test/new.ipynb',
+            overwrite: true,
+            kernelName: 'python3',
+            kernelDisplayName: 'Custom Kernel',
+          },
+        });
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      expect(mockCreateNotebook).toHaveBeenCalledWith('/test/new.ipynb', true, 'python3', 'Custom Kernel');
     });
   });
 
