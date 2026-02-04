@@ -47,7 +47,7 @@ const compactOutput = (text: string): string => {
   return text.replace(/\n{3,}/g, '\n\n').trim();
 };
 
-const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean }> = ({ output, wrapText }) => {
+const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage: (src: string) => void }> = ({ output, wrapText, onOpenImage }) => {
   const textClass = wrapText ? 'whitespace-pre-wrap break-words' : 'whitespace-pre overflow-x-auto';
   const openHtmlInNewTab = useCallback((html: string) => {
       const encoded = encodeHtmlParam(html);
@@ -77,11 +77,18 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean }> = ({ outp
     case 'image':
       return (
         <div className="my-4 flex justify-start">
-          <img
-            src={`data:image/png;base64,${output.content}`}
-            alt="Plot Output"
-            className="max-w-full h-auto bg-white rounded shadow-sm border border-slate-200"
-          />
+          <button
+            type="button"
+            onClick={() => onOpenImage(`data:image/png;base64,${output.content}`)}
+            className="text-left"
+            title="Open image viewer"
+          >
+            <img
+              src={`data:image/png;base64,${output.content}`}
+              alt="Plot Output"
+              className="max-w-full h-auto bg-white rounded shadow-sm border border-slate-200"
+            />
+          </button>
         </div>
       );
     case 'html':
@@ -119,6 +126,15 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
   const [wrapText, setWrapText] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [activeImageSrc, setActiveImageSrc] = useState<string | null>(null);
+  const imageViewportRef = useRef<HTMLDivElement>(null);
+  const panStateRef = useRef<{ isPanning: boolean; startX: number; startY: number; scrollLeft: number; scrollTop: number }>({
+    isPanning: false,
+    startX: 0,
+    startY: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+  });
 
   // Track if this is the initial render to avoid resetting collapse state
   const initialRenderRef = useRef(true);
@@ -132,6 +148,15 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
       resizeCleanupRef.current?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeImageSrc) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [activeImageSrc]);
 
   // Sync local collapsed height with prop when it changes (e.g., from undo/redo)
   useEffect(() => {
@@ -248,6 +273,27 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
     return truncated;
   }, [outputs]);
 
+  const handleImageMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!imageViewportRef.current) return;
+    panStateRef.current.isPanning = true;
+    panStateRef.current.startX = event.clientX;
+    panStateRef.current.startY = event.clientY;
+    panStateRef.current.scrollLeft = imageViewportRef.current.scrollLeft;
+    panStateRef.current.scrollTop = imageViewportRef.current.scrollTop;
+  };
+
+  const handleImageMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!panStateRef.current.isPanning || !imageViewportRef.current) return;
+    const deltaX = event.clientX - panStateRef.current.startX;
+    const deltaY = event.clientY - panStateRef.current.startY;
+    imageViewportRef.current.scrollLeft = panStateRef.current.scrollLeft - deltaX;
+    imageViewportRef.current.scrollTop = panStateRef.current.scrollTop - deltaY;
+  };
+
+  const stopImagePan = () => {
+    panStateRef.current.isPanning = false;
+  };
+
   // Check if output is tall enough to warrant collapse option
   const [showCollapseOption, setShowCollapseOption] = useState(false);
 
@@ -334,10 +380,38 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
   const hasTextOutput = displayOutputs.some(o => o.type === 'stdout' || o.type === 'stderr' || o.type === 'error');
 
   return (
-    <div
-      ref={containerRef}
-      className="relative border-t border-slate-100 rounded-b-lg bg-white"
-    >
+    <>
+      {activeImageSrc && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 flex items-center justify-center p-4">
+          <button
+            type="button"
+            onClick={() => setActiveImageSrc(null)}
+            className="absolute top-4 right-4 text-white/80 hover:text-white text-xl"
+            title="Close"
+          >
+            ✕
+          </button>
+          <div
+            ref={imageViewportRef}
+            className="w-full h-full overflow-auto cursor-grab active:cursor-grabbing"
+            onMouseDown={handleImageMouseDown}
+            onMouseMove={handleImageMouseMove}
+            onMouseUp={stopImagePan}
+            onMouseLeave={stopImagePan}
+          >
+            <img
+              src={activeImageSrc}
+              alt="Output"
+              className="block max-w-none max-h-none"
+              draggable={false}
+            />
+          </div>
+        </div>
+      )}
+      <div
+        ref={containerRef}
+        className="relative border-t border-slate-100 rounded-b-lg bg-white"
+      >
       {/* Left gutter - clickable to collapse/expand */}
       {showCollapseOption && (
         <div
@@ -390,7 +464,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
         }}
       >
         {displayOutputs.map((out) => (
-          <OutputItem key={out.id} output={out} wrapText={wrapText} />
+          <OutputItem key={out.id} output={out} wrapText={wrapText} onOpenImage={setActiveImageSrc} />
         ))}
       </div>
 
@@ -410,6 +484,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
           Scroll for more
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 };
