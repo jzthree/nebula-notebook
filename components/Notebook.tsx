@@ -49,7 +49,6 @@ import { getNotebookAvatar, updateFavicon, resetFavicon } from '../utils/noteboo
 import { playSuccessSound } from '../utils/notificationSound';
 import { generateCellId } from '../utils/cellId';
 import { reconstructStateAt, HistoryEntry } from '../lib/notebookOperations';
-import { perfDebugger } from '../lib/performanceDebugger';
 
 // Initial cell for reset
 const INITIAL_CELL: Cell = {
@@ -923,29 +922,6 @@ export const Notebook: React.FC = () => {
         clearTimeout(scrollTimeoutRef.current);
       }
     };
-  }, []);
-
-  // Enable performance debugger once on mount
-  useEffect(() => {
-    perfDebugger.enable();
-    console.log('[PerfDebug] Use Ctrl+Shift+P to toggle profiling, or window.__nebulaPerf in console');
-  }, []);
-
-  // Register performance debugger callbacks once (uses refs defined above)
-  useEffect(() => {
-    perfDebugger.registerCallbacks({
-      getHistorySize: () => getFullHistoryRef.current().length,
-      getCellCount: () => cellsRef.current.length,
-      getTotalOutputSize: () => {
-        let total = 0;
-        for (const cell of cellsRef.current) {
-          for (const output of cell.outputs) {
-            total += output.content.length;
-          }
-        }
-        return total;
-      },
-    });
   }, []);
 
   // Helper to check if ANY part of a cell is currently visible
@@ -3030,7 +3006,10 @@ export const Notebook: React.FC = () => {
       <div className={`relative flex-1 flex flex-col h-screen transition-all duration-300 ${isFileBrowserOpen ? 'nebula-filebrowser-offset' : ''} ${isChatOpen ? 'lg:mr-80' : ''}`}>
 
         {imageViewerPath && (
-          <div className="fixed inset-0 z-50 bg-slate-900/70 flex items-center justify-center p-4">
+          <div
+            className="fixed inset-0 z-50 bg-slate-900/70 flex items-center justify-center p-4"
+            onClick={() => setImageViewerPath(null)}
+          >
             <button
               type="button"
               onClick={() => setImageViewerPath(null)}
@@ -3042,6 +3021,7 @@ export const Notebook: React.FC = () => {
             <div
               ref={imageViewportRef}
               className="w-full h-full overflow-auto cursor-grab active:cursor-grabbing"
+              onClick={(event) => event.stopPropagation()}
               onMouseDown={handleImageViewerMouseDown}
               onMouseMove={handleImageViewerMouseMove}
               onMouseUp={stopImageViewerPan}
