@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { NotebookMetadata } from '../types';
 import {
   Plus,
@@ -55,7 +55,7 @@ interface Props {
   className?: string;
 }
 
-export const FileBrowser: React.FC<Props> = ({
+const FileBrowserComponent: React.FC<Props> = ({
   files,
   currentFileId,
   onSelect,
@@ -906,3 +906,6 @@ export const FileBrowser: React.FC<Props> = ({
     </>
   );
 };
+
+export const FileBrowser = memo(FileBrowserComponent);
+FileBrowser.displayName = 'FileBrowser';

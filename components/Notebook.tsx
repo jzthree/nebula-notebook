@@ -792,6 +792,8 @@ export const Notebook: React.FC = () => {
   const activeCellIdRef = useRef<string | null>(activeCellId);
   const cellClipboardRef = useRef<CellClipboardItem | null>(cellClipboard);
   const getFullHistoryRef = useRef(getFullHistory);
+  const loadFileRef = useRef<(id: string) => void>(() => {});
+  const refreshFileListRef = useRef<() => void>(() => {});
 
   // ⚠️ PERFORMANCE CRITICAL: Refs for renderCell callback stability
   // These allow the memoized renderCell to access current values without recreating
@@ -1630,6 +1632,7 @@ export const Notebook: React.FC = () => {
       if (current) setCurrentFileMetadata(current);
     }
   };
+  refreshFileListRef.current = refreshFileList;
 
   // Called when settings are saved - updates local state from settings
   const handleSettingsChange = useCallback(() => {
@@ -1911,6 +1914,7 @@ export const Notebook: React.FC = () => {
       saveActiveFileId('');
     }
   };
+  loadFileRef.current = loadFile;
 
   const saveCurrentNotebook = useCallback(async () => {
     // Keyframe: flush active cell before save
@@ -2984,7 +2988,27 @@ export const Notebook: React.FC = () => {
     attemptScroll(0);
   }, [scrollToCell]);
 
-  const fileBrowserInitialPath = getDirectoryFromPath(currentFileId);
+  const handleFileBrowserSelect = useCallback((id: string) => {
+    loadFileRef.current(id);
+  }, []);
+
+  const handleFileBrowserRefresh = useCallback(() => {
+    refreshFileListRef.current();
+  }, []);
+
+  const handleOpenTextFile = useCallback((path: string) => {
+    setTextEditorPath(path);
+  }, []);
+
+  const handleOpenImageFile = useCallback((path: string) => {
+    setImageViewerPath(path);
+  }, []);
+
+  const handleCloseFileBrowser = useCallback(() => {
+    setIsFileBrowserOpen(false);
+  }, []);
+
+  const fileBrowserInitialPath = useMemo(() => getDirectoryFromPath(currentFileId), [currentFileId]);
 
   return (
     <div className="flex min-h-screen bg-slate-50 relative overflow-hidden">
@@ -2993,12 +3017,12 @@ export const Notebook: React.FC = () => {
       <FileBrowser
         files={files}
         currentFileId={currentFileId}
-        onSelect={loadFile}
-        onOpenTextFile={(path) => setTextEditorPath(path)}
-        onOpenImageFile={(path) => setImageViewerPath(path)}
-        onRefresh={refreshFileList}
+        onSelect={handleFileBrowserSelect}
+        onOpenTextFile={handleOpenTextFile}
+        onOpenImageFile={handleOpenImageFile}
+        onRefresh={handleFileBrowserRefresh}
         isOpen={isFileBrowserOpen}
-        onClose={() => setIsFileBrowserOpen(false)}
+        onClose={handleCloseFileBrowser}
         initialPath={fileBrowserInitialPath}
       />
 
