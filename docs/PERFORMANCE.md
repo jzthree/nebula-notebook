@@ -186,6 +186,36 @@ User triggers autocomplete (typing a word, waiting for popup)
 
 **Key insight:** Pass refs instead of computed arrays. The O(N) work happens when autocomplete triggers, not on every keystroke.
 
+### 5. Sidebar Re-render Cascades (File Browser)
+
+**Symptom:** Typing latency spikes when a large file list is open. React profiler shows `FileBrowser` / `FileListItem`
+dominating commit time even though edits are in the notebook.
+
+**Cause:** `Notebook` re-renders on every keystroke and passes unstable callback props to sidebar components.
+If `FileBrowser` (or its items) isn't memoized, it re-renders the entire list on every keypress.
+
+**Fix:**
+```tsx
+// FileBrowser.tsx
+const FileBrowserComponent = (props: Props) => { /* ... */ };
+export const FileBrowser = React.memo(FileBrowserComponent);
+
+// Notebook.tsx
+const handleFileBrowserSelect = useCallback((id: string) => {
+  loadFileRef.current(id);
+}, []);
+
+<FileBrowser
+  onSelect={handleFileBrowserSelect}
+  onRefresh={handleFileBrowserRefresh}
+  onOpenTextFile={handleOpenTextFile}
+  onOpenImageFile={handleOpenImageFile}
+  onClose={handleCloseFileBrowser}
+/>
+```
+
+**Also memoize** `FileListItem` and ensure list item handlers are `useCallback`’d so `React.memo` is effective.
+
 ## Cell Memoization
 
 The `Cell` component is memoized with a custom comparison:
