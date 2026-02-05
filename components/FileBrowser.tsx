@@ -207,6 +207,29 @@ const FileBrowserComponent: React.FC<Props> = ({
     document.documentElement.style.setProperty('--nebula-filebrowser-width', `${sidebarWidth}px`);
   }, [sidebarWidth, variant]);
 
+  const loadDirectory = useCallback(async (path: string) => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const listing = await listDirectory(path);
+      setItems(listing.items);
+      setParentPath(listing.parent);
+      setCurrentPath(listing.path);
+      setLoadedPath(listing.path); // Mark this path as loaded
+      setLoadedMtime(listing.mtime); // Store mtime for change detection
+    } catch (err: any) {
+      setError(err.message || 'Failed to load directory');
+      if (path === currentPath) {
+        setItems([]);
+        setParentPath(computeParentPath(path));
+        setLoadedMtime(null);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [currentPath]);
+
   // Load directory on first open or when path changes
   useEffect(() => {
     if (!isOpen) return;
@@ -237,29 +260,6 @@ const FileBrowserComponent: React.FC<Props> = ({
     const interval = setInterval(checkForChanges, DIRECTORY_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [isOpen, currentPath, loadedMtime]);
-
-  const loadDirectory = useCallback(async (path: string) => {
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const listing = await listDirectory(path);
-      setItems(listing.items);
-      setParentPath(listing.parent);
-      setCurrentPath(listing.path);
-      setLoadedPath(listing.path); // Mark this path as loaded
-      setLoadedMtime(listing.mtime); // Store mtime for change detection
-    } catch (err: any) {
-      setError(err.message || 'Failed to load directory');
-      if (path === currentPath) {
-        setItems([]);
-        setParentPath(computeParentPath(path));
-        setLoadedMtime(null);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [currentPath]);
 
   const handleNavigate = useCallback((path: string) => {
     // If there's an error, force reload even if same path
