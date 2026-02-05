@@ -4,7 +4,7 @@
  * Used by both FileBrowser and Dashboard for consistent UX.
  */
 
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, memo } from 'react';
 import {
   Folder,
   Book,
@@ -68,7 +68,7 @@ function getFileIcon(item: FileItem) {
   return <File className="w-4 h-4 text-slate-400" />;
 }
 
-export const FileListItem: React.FC<FileListItemProps> = ({
+const FileListItemComponent: React.FC<FileListItemProps> = ({
   item,
   isCurrentFile = false,
   onNavigate,
@@ -315,3 +315,6 @@ export const FileListItem: React.FC<FileListItemProps> = ({
     </div>
   );
 };
+
+export const FileListItem = memo(FileListItemComponent);
+FileListItem.displayName = 'FileListItem';

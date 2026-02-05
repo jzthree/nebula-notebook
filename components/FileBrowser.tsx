@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { NotebookMetadata } from '../types';
 import {
   Plus,
@@ -55,6 +55,35 @@ interface Props {
   className?: string;
 }
 
+const computeParentPath = (path: string): string | null => {
+  const trimmed = path.trim();
+  if (!trimmed || trimmed === '~' || trimmed === '/') {
+    return null;
+  }
+
+  const withoutTrailing = trimmed.endsWith('/') && trimmed.length > 1
+    ? trimmed.replace(/\/+$/, '')
+    : trimmed;
+
+  if (withoutTrailing === '~') {
+    return null;
+  }
+
+  if (withoutTrailing.startsWith('~/')) {
+    const lastSlash = withoutTrailing.lastIndexOf('/');
+    if (lastSlash <= 1) {
+      return '~';
+    }
+    return withoutTrailing.slice(0, lastSlash);
+  }
+
+  const lastSlash = withoutTrailing.lastIndexOf('/');
+  if (lastSlash <= 0) {
+    return '/';
+  }
+  return withoutTrailing.slice(0, lastSlash);
+};
+
 const FileBrowserComponent: React.FC<Props> = ({
   files,
   currentFileId,
@@ -71,34 +100,6 @@ const FileBrowserComponent: React.FC<Props> = ({
 }) => {
   const { toast, confirm } = useNotification();
   const defaultSidebarWidth = 320;
-  const computeParentPath = (path: string): string | null => {
-    const trimmed = path.trim();
-    if (!trimmed || trimmed === '~' || trimmed === '/') {
-      return null;
-    }
-
-    const withoutTrailing = trimmed.endsWith('/') && trimmed.length > 1
-      ? trimmed.replace(/\/+$/, '')
-      : trimmed;
-
-    if (withoutTrailing === '~') {
-      return null;
-    }
-
-    if (withoutTrailing.startsWith('~/')) {
-      const lastSlash = withoutTrailing.lastIndexOf('/');
-      if (lastSlash <= 1) {
-        return '~';
-      }
-      return withoutTrailing.slice(0, lastSlash);
-    }
-
-    const lastSlash = withoutTrailing.lastIndexOf('/');
-    if (lastSlash <= 0) {
-      return '/';
-    }
-    return withoutTrailing.slice(0, lastSlash);
-  };
   const [currentPath, setCurrentPath] = useState<string>(() => initialPath || '~');
   const [rootPath, setRootPath] = useState<string>('~');
   const [pathInput, setPathInput] = useState<string>(initialPath || '~');
@@ -212,7 +213,7 @@ const FileBrowserComponent: React.FC<Props> = ({
     if (loadedPath === currentPath) return; // Already loaded this path
 
     loadDirectory(currentPath);
-  }, [isOpen, currentPath, loadedPath]);
+  }, [isOpen, currentPath, loadedPath, loadDirectory]);
 
   // Poll mtime every 5 seconds - only refresh if directory changed
   useEffect(() => {
@@ -237,7 +238,7 @@ const FileBrowserComponent: React.FC<Props> = ({
     return () => clearInterval(interval);
   }, [isOpen, currentPath, loadedMtime]);
 
-  const loadDirectory = async (path: string) => {
+  const loadDirectory = useCallback(async (path: string) => {
     setIsLoading(true);
     setError(null);
 
@@ -258,35 +259,35 @@ const FileBrowserComponent: React.FC<Props> = ({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentPath]);
 
-  const handleNavigate = (path: string) => {
+  const handleNavigate = useCallback((path: string) => {
     // If there's an error, force reload even if same path
     if (error) {
       setError(null);
       setLoadedPath(null);
     }
     setCurrentPath(path);
-  };
+  }, [error]);
 
-  const handleGoUp = () => {
+  const handleGoUp = useCallback(() => {
     if (parentPath) {
       handleNavigate(parentPath);
     }
-  };
+  }, [handleNavigate, parentPath]);
 
-  const handleGoHome = () => {
+  const handleGoHome = useCallback(() => {
     handleNavigate(rootPath || '~');
-  };
+  }, [handleNavigate, rootPath]);
 
-  const handlePathSubmit = () => {
+  const handlePathSubmit = useCallback(() => {
     const nextPath = pathInput.trim();
     if (nextPath) {
       loadDirectory(nextPath);
     }
-  };
+  }, [loadDirectory, pathInput]);
 
-  const handleSetRoot = async () => {
+  const handleSetRoot = useCallback(async () => {
     const nextRoot = pathInput.trim() || currentPath;
     try {
       const updated = await setRootDirectory(nextRoot);
@@ -297,7 +298,7 @@ const FileBrowserComponent: React.FC<Props> = ({
     } catch (err: any) {
       toast(err.message || 'Failed to set root directory', 'error');
     }
-  };
+  }, [currentPath, pathInput, toast]);
 
   const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -388,7 +389,7 @@ const FileBrowserComponent: React.FC<Props> = ({
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
@@ -409,22 +410,22 @@ const FileBrowserComponent: React.FC<Props> = ({
         fileInputRef.current.value = '';
       }
     }
-  };
+  }, [currentPath, loadDirectory, onRefresh, toast]);
 
   // Drag-and-drop upload handlers
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(true);
-  };
+  }, []);
 
-  const handleDragLeave = (e: React.DragEvent) => {
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
-  };
+  }, []);
 
-  const handleDrop = async (e: React.DragEvent) => {
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
@@ -445,10 +446,10 @@ const FileBrowserComponent: React.FC<Props> = ({
     } finally {
       setIsUploading(false);
     }
-  };
+  }, [currentPath, loadDirectory, onRefresh, toast]);
 
   // Wrapper handlers for FileListItem (no event parameter)
-  const handleDuplicateItem = async (item: FileItem) => {
+  const handleDuplicateItem = useCallback(async (item: FileItem) => {
     try {
       await duplicateFile(item.path);
       loadDirectory(currentPath);
@@ -457,18 +458,18 @@ const FileBrowserComponent: React.FC<Props> = ({
     } catch (err: any) {
       toast(err.message || 'Failed to duplicate file', 'error');
     }
-  };
+  }, [currentPath, loadDirectory, onRefresh, toast]);
 
-  const handleDownloadItem = async (item: FileItem) => {
+  const handleDownloadItem = useCallback(async (item: FileItem) => {
     try {
       await downloadFile(item.path, item.name);
       toast(`Downloaded ${item.name}`, 'success');
     } catch (err: any) {
       toast(err.message || 'Failed to download file', 'error');
     }
-  };
+  }, [toast]);
 
-  const handleDeleteItem = async (item: FileItem) => {
+  const handleDeleteItem = useCallback(async (item: FileItem) => {
     const itemType = item.isDirectory ? 'folder' : 'file';
     const confirmed = await confirm({
       title: `Delete ${item.isDirectory ? 'Folder' : 'File'}`,
@@ -486,20 +487,20 @@ const FileBrowserComponent: React.FC<Props> = ({
         toast(err.message || `Failed to delete ${itemType}`, 'error');
       }
     }
-  };
+  }, [confirm, currentPath, loadDirectory, onRefresh, toast]);
 
   // Inline rename handlers
-  const handleStartEdit = (item: FileItem) => {
+  const handleStartEdit = useCallback((item: FileItem) => {
     setEditingItem(item);
     setEditValue(item.name);
-  };
+  }, []);
 
-  const handleCancelEdit = () => {
+  const handleCancelEdit = useCallback(() => {
     setEditingItem(null);
     setEditValue('');
-  };
+  }, []);
 
-  const handleConfirmEdit = async () => {
+  const handleConfirmEdit = useCallback(async () => {
     if (!editingItem) return;
 
     const newName = editValue.trim();
@@ -521,14 +522,14 @@ const FileBrowserComponent: React.FC<Props> = ({
     } finally {
       handleCancelEdit();
     }
-  };
+  }, [currentPath, editValue, editingItem, handleCancelEdit, loadDirectory, onRefresh, toast]);
 
-  const handleRenameItem = async (item: FileItem, newName: string) => {
+  const handleRenameItem = useCallback(async (item: FileItem, newName: string) => {
     // This is called from FileListItem but we use inline editing now
     // Keep for compatibility but actual rename happens in handleConfirmEdit
-  };
+  }, []);
 
-  const handleOpenNewTab = (path: string) => {
+  const handleOpenNewTab = useCallback((path: string) => {
     const baseUrl = window.location.pathname;
     const lower = path.toLowerCase();
     if (lower.endsWith('.html') || lower.endsWith('.htm')) {
@@ -545,9 +546,9 @@ const FileBrowserComponent: React.FC<Props> = ({
       return;
     }
     window.open(`${baseUrl}?file=${path}`, '_blank');
-  };
+  }, [items, maxTextEditorBytes, toast]);
 
-  const handleOpenTextFile = (item: FileItem) => {
+  const handleOpenTextFile = useCallback((item: FileItem) => {
     if (item.sizeBytes > maxTextEditorBytes) {
       toast(`File is too large to open in editor (${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB).`, 'warning');
       return;
@@ -557,24 +558,24 @@ const FileBrowserComponent: React.FC<Props> = ({
     } else {
       handleOpenNewTab(item.path);
     }
-  };
+  }, [handleOpenNewTab, maxTextEditorBytes, onOpenTextFile, toast]);
 
-  const handleOpenImageFile = (item: FileItem) => {
+  const handleOpenImageFile = useCallback((item: FileItem) => {
     if (onOpenImageFile) {
       onOpenImageFile(item.path);
       return;
     }
     const downloadUrl = `/api/fs/download?path=${encodeURIComponent(item.path)}`;
     window.open(downloadUrl, '_blank', 'noopener,noreferrer');
-  };
+  }, [onOpenImageFile]);
 
-  const handleSelectFile = (path: string) => {
+  const handleSelectFile = useCallback((path: string) => {
     onSelect(path);
     // Close sidebar on mobile for sidebar variant
     if (variant === 'sidebar' && window.innerWidth < 1024 && onClose) {
       onClose();
     }
-  };
+  }, [onClose, onSelect, variant]);
 
   const filteredItems = useMemo(() => {
     return items
