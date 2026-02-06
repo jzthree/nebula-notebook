@@ -1105,7 +1105,9 @@ export const Notebook: React.FC = () => {
     fileId: currentFileId,
     cells,
     onSave: performSaveToFile,
-    enabled: true,
+    // Avoid repeated conflict checks / log spam while the conflict modal is open.
+    // Once resolved, autosave resumes and will persist any buffered output changes.
+    enabled: !conflictDialog?.show,
     hasRedoHistory: canRedo, // Block autosave when redo history exists
   });
 

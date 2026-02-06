@@ -37,13 +37,25 @@ type OutputDrainState = { timer: NodeJS.Timeout | null; running: boolean };
 const outputDrain: Map<string, OutputDrainState> = new Map();
 
 // Delay before starting persistence after UI disappears (prevents thrash on quick refresh/reconnect).
-const OUTPUT_DRAIN_GRACE_MS = 2000;
+// NOTE: This is intentionally long because a browser refresh can easily take a few seconds
+// to reload JS + reconnect websockets. Writing outputs to the notebook file during that
+// window causes spurious mtime conflicts and can force the UI to reload.
+const OUTPUT_DRAIN_GRACE_MS = 15000;
 // While running, persist at most once per interval.
 const OUTPUT_DRAIN_INTERVAL_MS = 1000;
 // Cap outputs per persistence batch to avoid huge writes for very chatty cells.
 const OUTPUT_DRAIN_MAX_BATCH = 200;
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+function hasKernelClients(sessionId: string): boolean {
+  const sockets = sessionWebSockets.get(sessionId);
+  if (!sockets || sockets.size === 0) return false;
+  for (const socket of sockets) {
+    if (socket.readyState === WebSocket.OPEN) return true;
+  }
+  return false;
+}
 
 // Shared kernel service instance - exported for use by headless handler
 const kernelService = new KernelService();
@@ -57,6 +69,7 @@ async function persistBufferedOutputsIfNoUI(sessionId: string): Promise<number> 
   const notebookPath = kernelService.getSessionFilePath(sessionId);
   if (!notebookPath) return 0;
   if (operationRouter.hasUI(notebookPath)) return 0;
+  if (hasKernelClients(sessionId)) return 0;
 
   const { outputs } = kernelService.getBufferedOutputs(sessionId, 0);
   if (outputs.length === 0) return 0;
@@ -81,6 +94,12 @@ async function persistBufferedOutputsIfNoUI(sessionId: string): Promise<number> 
 
   if (ackSeq === 0) return 0;
 
+  // Re-check right before commit. The UI may have reconnected while we were preparing
+  // the write, and in that case we prefer to leave output buffered for replay and let
+  // the UI autosave, avoiding unnecessary file churn + conflicts.
+  if (operationRouter.hasUI(notebookPath)) return 0;
+  if (hasKernelClients(sessionId)) return 0;
+
   // Persist using the bundle API to get the write lock + atomic commit.
   await fsService.saveNotebookBundle(notebookPath, cells, kernelName);
   return ackSeq;
@@ -96,6 +115,7 @@ async function runOutputDrain(sessionId: string): Promise<void> {
       const notebookPath = kernelService.getSessionFilePath(sessionId);
       if (!notebookPath) break;
       if (operationRouter.hasUI(notebookPath)) break;
+      if (hasKernelClients(sessionId)) break;
 
       let ackSeq = 0;
       try {
