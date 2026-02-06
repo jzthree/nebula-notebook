@@ -348,7 +348,9 @@ class KernelService {
         }
         const entryCellId = entry.cell_id ?? entry.cellId ?? null;
         const cellOutput: CellOutput = {
-          id: crypto.randomUUID(),
+          // Deterministic per-session output ID. Useful for correlating what was
+          // actually applied to the UI with what we tell the server is durable.
+          id: seq !== undefined ? `kseq:${seq}` : crypto.randomUUID(),
           type: entry.output.type,
           content: entry.output.content,
           timestamp: Date.now(),
@@ -395,7 +397,9 @@ class KernelService {
         session.lastSeenSeq = Math.max(lastSeen, seq);
       }
       const cellOutput: CellOutput = {
-        id: crypto.randomUUID(),
+        // Deterministic per-session output ID. Useful for correlating what was
+        // actually applied to the UI with what we tell the server is durable.
+        id: seq !== undefined ? `kseq:${seq}` : crypto.randomUUID(),
         type: output.type,
         content: output.content,
         timestamp: Date.now(),

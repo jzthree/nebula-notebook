@@ -96,6 +96,21 @@ function getDirectoryFromPath(filePath: string | null): string | undefined {
   return filePath.slice(0, idx);
 }
 
+function parseKernelOutputSeqFromId(outputId: string | null | undefined): number | null {
+  if (!outputId) return null;
+  if (!outputId.startsWith('kseq:')) return null;
+  const seq = Number(outputId.slice('kseq:'.length));
+  return Number.isFinite(seq) && seq > 0 ? seq : null;
+}
+
+function getLatestKernelOutputSeq(outputs: Array<{ id: string }>): number {
+  for (let i = outputs.length - 1; i >= 0; i -= 1) {
+    const seq = parseKernelOutputSeqFromId(outputs[i]?.id);
+    if (seq != null) return seq;
+  }
+  return 0;
+}
+
 // Get initial file ID synchronously to avoid "Untitled" flash
 function getInitialFileId(): string | null {
   // Check URL parameter first
@@ -257,6 +272,13 @@ export const Notebook: React.FC = () => {
   const [kernelCreatedAt, setKernelCreatedAt] = useState<number | null>(null);
   const [isDiscoveringPythons, setIsDiscoveringPythons] = useState(false);
   const [isInstallingKernel, setIsInstallingKernel] = useState<string | null>(null);
+
+  // Highest kernel output seq that we've applied to local cell state.
+  // Used as the durability watermark when pruning server-side output buffers.
+  const kernelOutputSeqRef = useRef<number>(0);
+  useEffect(() => {
+    kernelOutputSeqRef.current = 0;
+  }, [currentFileId, kernelSessionId]);
 
   // Cluster State
   const [clusterInfo, setClusterInfo] = useState<ClusterInfo | null>(null);
@@ -1036,7 +1058,7 @@ export const Notebook: React.FC = () => {
       const history = historyReady ? getFullHistory() : undefined;
 
       const kernelOutputSeqRaw = (kernelSessionId && fileId === currentFileId)
-        ? kernelService.getLastSeenSeq(kernelSessionId)
+        ? kernelOutputSeqRef.current
         : 0;
       const kernelOutputSeq = kernelOutputSeqRaw > 0 ? kernelOutputSeqRaw : null;
 
@@ -1367,7 +1389,12 @@ export const Notebook: React.FC = () => {
 
   useEffect(() => {
     const unsubscribe = kernelService.onBufferedOutput((sessionId, output, cellId) => {
+      if (kernelSessionId && sessionId !== kernelSessionId) return;
       if (!cellId) return;
+      const seq = parseKernelOutputSeqFromId(output.id);
+      if (seq != null) {
+        kernelOutputSeqRef.current = Math.max(kernelOutputSeqRef.current, seq);
+      }
       setCells(prev => prev.map(c => {
         if (c.id !== cellId) return c;
         const existingOutputs = c.outputs || [];
@@ -1375,7 +1402,7 @@ export const Notebook: React.FC = () => {
       }));
     });
     return unsubscribe;
-  }, [setCells]);
+  }, [kernelSessionId, setCells]);
 
   // Load the initial file (currentFileId is already set synchronously from URL/localStorage)
   useEffect(() => {
@@ -2746,6 +2773,10 @@ export const Notebook: React.FC = () => {
           if (allOutputs.length === 0) return;
           // Copy current accumulated outputs - don't clear, keep accumulating
           const snapshot = [...allOutputs];
+          const snapshotSeq = getLatestKernelOutputSeq(snapshot);
+          if (snapshotSeq > 0) {
+            kernelOutputSeqRef.current = Math.max(kernelOutputSeqRef.current, snapshotSeq);
+          }
           lastFlushTime = Date.now();
 
           // Replace entire outputs array - this is idempotent and race-condition-free
