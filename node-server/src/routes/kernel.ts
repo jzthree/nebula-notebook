@@ -28,6 +28,9 @@ import { serverRegistry } from '../cluster/server-registry';
 
 const router = Router();
 
+// Track all WebSocket connections per kernel session for broadcasting
+const sessionWebSockets: Map<string, Set<WebSocket>> = new Map();
+
 // Shared kernel service instance - exported for use by headless handler
 const kernelService = new KernelService();
 
@@ -499,8 +502,15 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
 
     console.log(`[Kernel WS] Connected for session ${sessionId} (kernel: ${session.kernelName}, status: ${session.status})`);
 
+    // Track this WebSocket for broadcasting
+    if (!sessionWebSockets.has(sessionId)) {
+      sessionWebSockets.set(sessionId, new Set());
+    }
+    sessionWebSockets.get(sessionId)!.add(ws);
+
     // Send initial status so frontend knows the kernel state immediately
-    ws.send(JSON.stringify({ type: 'status', status: session.status }));
+    const executingCellId = kernelService.getExecutingCellId(sessionId);
+    ws.send(JSON.stringify({ type: 'status', status: session.status, ...(executingCellId != null && { cell_id: executingCellId }) }));
 
     ws.on('error', (err) => {
       console.error(`[Kernel WS] WebSocket error for session ${sessionId}:`, err);
@@ -514,30 +524,40 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
           const code = message.code || '';
           const cellId = message.cell_id || null;
 
-          // Send busy status
-          ws.send(JSON.stringify({ type: 'status', status: 'busy' }));
+          // Broadcast helper: send to all connected WebSockets for this session
+          const broadcast = (msg: string) => {
+            const sockets = sessionWebSockets.get(sessionId);
+            if (sockets) {
+              for (const socket of sockets) {
+                if (socket.readyState === WebSocket.OPEN) {
+                  socket.send(msg);
+                }
+              }
+            }
+          };
 
-          // Execute code with streaming output
+          // Send busy status to all clients
+          broadcast(JSON.stringify({ type: 'status', status: 'busy', ...(cellId != null && { cell_id: cellId }) }));
+
+          // Execute code with streaming output broadcast to all clients
           const result = await kernelService.executeCode(
             sessionId,
             code,
             async (entry) => {
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'output',
-                  output: entry.output,
-                  seq: entry.seq,
-                  cell_id: entry.cellId ?? null,
-                }));
-              }
+              broadcast(JSON.stringify({
+                type: 'output',
+                output: entry.output,
+                seq: entry.seq,
+                cell_id: entry.cellId ?? null,
+              }));
             },
             undefined,
             cellId
           );
 
-          // Send result and idle status
-          ws.send(JSON.stringify({ type: 'result', result }));
-          ws.send(JSON.stringify({ type: 'status', status: 'idle' }));
+          // Broadcast result and idle status to all clients
+          broadcast(JSON.stringify({ type: 'result', result }));
+          broadcast(JSON.stringify({ type: 'status', status: 'idle' }));
         } else if (message.type === 'sync_outputs') {
           const since = Number(message.since ?? 0);
           const { outputs, latestSeq } = kernelService.getBufferedOutputs(sessionId, since);
@@ -561,6 +581,11 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
 
     ws.on('close', () => {
       console.log(`[Kernel WS] Disconnected for session ${sessionId}`);
+      const sockets = sessionWebSockets.get(sessionId);
+      if (sockets) {
+        sockets.delete(ws);
+        if (sockets.size === 0) sessionWebSockets.delete(sessionId);
+      }
     });
   });
 }

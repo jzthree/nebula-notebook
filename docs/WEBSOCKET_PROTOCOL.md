@@ -5,7 +5,7 @@ This document describes the WebSocket protocol used for code execution between t
 ## Connection
 
 ```
-ws://localhost:8000/api/kernels/{session_id}/ws
+ws(s)://{host}/api/kernels/{session_id}/ws
 ```
 
 Replace `{session_id}` with the kernel session ID obtained from `/api/kernels/start` or `/api/kernels/for-file`.
@@ -25,7 +25,8 @@ Request code execution in the kernel.
 ```json
 {
   "type": "execute",
-  "code": "print('Hello, World!')"
+  "code": "print('Hello, World!')",
+  "cell_id": "abc123"
 }
 ```
 
@@ -33,6 +34,43 @@ Request code execution in the kernel.
 |-------|------|----------|-------------|
 | type | string | Yes | Must be `"execute"` |
 | code | string | Yes | Python code to execute |
+| cell_id | string | No | Notebook cell ID for routing output/status |
+
+---
+
+### Sync Buffered Outputs
+
+Request replay of outputs that may have been missed due to a disconnect.
+
+```json
+{
+  "type": "sync_outputs",
+  "since": 123
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| type | string | Yes | Must be `"sync_outputs"` |
+| since | number | Yes | Replay outputs with `seq > since` |
+
+---
+
+### Acknowledge Outputs
+
+Tell the server it may prune buffered outputs up to a sequence number.
+
+```json
+{
+  "type": "ack_outputs",
+  "up_to": 123
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| type | string | Yes | Must be `"ack_outputs"` |
+| up_to | number | Yes | Highest received output sequence number |
 
 ---
 
@@ -45,7 +83,8 @@ Indicates kernel execution state changes.
 ```json
 {
   "type": "status",
-  "status": "busy"
+  "status": "busy",
+  "cell_id": "abc123"
 }
 ```
 
@@ -53,6 +92,7 @@ Indicates kernel execution state changes.
 |-------|------|-------------|
 | type | string | Always `"status"` |
 | status | string | `"busy"` when executing, `"idle"` when complete |
+| cell_id | string | Optional cell ID currently executing |
 
 ### Output
 
@@ -64,7 +104,9 @@ Streamed output from code execution.
   "output": {
     "type": "stdout",
     "content": "Hello, World!\n"
-  }
+  },
+  "seq": 123,
+  "cell_id": "abc123"
 }
 ```
 
@@ -73,6 +115,8 @@ Streamed output from code execution.
 | type | string | Always `"output"` |
 | output.type | string | Output type (see below) |
 | output.content | string | Output content |
+| seq | number | Monotonic per-session output sequence |
+| cell_id | string | Optional cell ID this output belongs to |
 
 **Output Types:**
 
@@ -83,6 +127,30 @@ Streamed output from code execution.
 | `image` | Image (PNG) | Base64-encoded PNG |
 | `html` | Rich HTML output | HTML string |
 | `error` | Execution error | Error traceback (ANSI stripped) |
+
+### Buffered Output Replay
+
+Response to `sync_outputs`.
+
+```json
+{
+  "type": "sync_outputs",
+  "outputs": [
+    {
+      "seq": 123,
+      "cell_id": "abc123",
+      "output": { "type": "stdout", "content": "Hello\n" }
+    }
+  ],
+  "latest_seq": 123
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| type | string | Always `"sync_outputs"` |
+| outputs | array | Buffered outputs since requested `since` |
+| latest_seq | number | Latest output sequence known to the server |
 
 ### Execution Result
 
@@ -144,9 +212,9 @@ Client                          Server
    |                               |
    |<------status: busy------------|
    |                               |
-   |<------output: stdout----------|  (0 or more)
-   |<------output: stderr----------|  (0 or more)
-   |<------output: image-----------|  (0 or more)
+   |<------output: stdout----------|  (0 or more, includes seq)
+   |<------output: stderr----------|  (0 or more, includes seq)
+   |<------output: image-----------|  (0 or more, includes seq)
    |                               |
    |<------result: ok--------------|
    |<------status: idle------------|
@@ -180,6 +248,13 @@ The WebSocket has no timeout. Cells can run indefinitely until:
 
 ---
 
+## Notes
+
+- The server broadcasts status and outputs to all WebSocket clients connected to the same kernel session.
+- `ack_outputs` currently prunes the server-side buffer globally for the session (not per-client).
+
+---
+
 ## Output Processing
 
 ### Standard Output/Error
@@ -192,8 +267,8 @@ print("Error", file=sys.stderr)
 ```
 
 ```json
-{"type": "output", "output": {"type": "stdout", "content": "Hello\n"}}
-{"type": "output", "output": {"type": "stderr", "content": "Error\n"}}
+{"type": "output", "output": {"type": "stdout", "content": "Hello\n"}, "seq": 1, "cell_id": "abc123"}
+{"type": "output", "output": {"type": "stderr", "content": "Error\n"}, "seq": 2, "cell_id": "abc123"}
 ```
 
 ### Display Data (Matplotlib, PIL, etc.)
@@ -206,7 +281,7 @@ plt.show()
 ```
 
 ```json
-{"type": "output", "output": {"type": "image", "content": "<base64-png>"}}
+{"type": "output", "output": {"type": "image", "content": "<base64-png>"}, "seq": 3, "cell_id": "abc123"}
 ```
 
 ### HTML Output (DataFrames, etc.)
@@ -219,7 +294,7 @@ df
 ```
 
 ```json
-{"type": "output", "output": {"type": "html", "content": "<table>...</table>"}}
+{"type": "output", "output": {"type": "html", "content": "<table>...</table>"}, "seq": 4, "cell_id": "abc123"}
 ```
 
 ### Execution Errors
@@ -235,7 +310,9 @@ x = undefined_variable
   "output": {
     "type": "error",
     "content": "NameError: name 'undefined_variable' is not defined\n\n    x = undefined_variable\n        ^^^^^^^^^^^^^^^^^^^"
-  }
+  },
+  "seq": 5,
+  "cell_id": "abc123"
 }
 ```
 
@@ -251,11 +328,13 @@ Note: ANSI escape codes are stripped from error tracebacks.
 interface ExecuteMessage {
   type: 'execute';
   code: string;
+  cell_id?: string;
 }
 
 interface StatusMessage {
   type: 'status';
   status: 'busy' | 'idle';
+  cell_id?: string;
 }
 
 interface OutputMessage {
@@ -264,6 +343,8 @@ interface OutputMessage {
     type: 'stdout' | 'stderr' | 'image' | 'html' | 'error';
     content: string;
   };
+  seq: number;
+  cell_id?: string;
 }
 
 interface ResultMessage {
@@ -391,7 +472,7 @@ asyncio.run(execute_code("session-id-here", "print('Hello')"))
 ### Establishing Connection
 
 1. Obtain session ID via `/api/kernels/start` or `/api/kernels/for-file`
-2. Connect to WebSocket: `ws://localhost:8000/api/kernels/{session_id}/ws`
+2. Connect to WebSocket: `ws(s)://{host}/api/kernels/{session_id}/ws`
 3. Connection is ready immediately after WebSocket `onopen`
 
 ### Connection Loss
@@ -399,7 +480,7 @@ asyncio.run(execute_code("session-id-here", "print('Hello')"))
 - Server logs `WebSocket disconnected for session {session_id}`
 - Kernel continues running (not terminated)
 - Client can reconnect with same session ID
-- In-flight execution continues; reconnected client receives output from current position
+- On reconnect, client should request replay via `sync_outputs` (using its last seen/acked `seq`)
 
 ### Graceful Disconnect
 

@@ -66,6 +66,7 @@ interface SessionState {
     resolve: (value: any) => void;
     reject: (error: any) => void;
     onOutput: (output: CellOutput) => void;
+    cellId?: string | null;
   }>;
   lastAckedSeq?: number;
   lastSeenSeq?: number;
@@ -80,7 +81,7 @@ interface SessionState {
 
 // Reconnection callback type
 type ReconnectCallback = (sessionId: string, filePath?: string) => void;
-type StatusCallback = (sessionId: string, status: 'idle' | 'busy' | 'starting') => void;
+type StatusCallback = (sessionId: string, status: 'idle' | 'busy' | 'starting', cellId?: string | null) => void;
 
 class KernelService {
   // Multi-session state: sessionId -> SessionState
@@ -321,9 +322,10 @@ class KernelService {
     // This is important for receiving initial status on WebSocket connect
     if (data.type === 'status') {
       const status = data.status as 'idle' | 'busy' | 'starting';
+      const cellId = data.cell_id ?? null;
       for (const callback of this.onStatusCallbacks) {
         try {
-          callback(sessionId, status);
+          callback(sessionId, status, cellId);
         } catch (e) {
           console.error('Status callback error:', e);
         }
@@ -343,20 +345,31 @@ class KernelService {
           }
           session.lastSeenSeq = Math.max(lastSeen, seq);
         }
+        const entryCellId = entry.cell_id ?? entry.cellId ?? null;
         const cellOutput: CellOutput = {
           id: crypto.randomUUID(),
           type: entry.output.type,
           content: entry.output.content,
           timestamp: Date.now(),
         };
-        for (const callback of this.onBufferedOutputCallbacks) {
-          try {
-            callback(sessionId, cellOutput, entry.cell_id ?? entry.cellId ?? null);
-          } catch (e) {
-            console.error('Buffered output callback error:', e);
+
+        // If there's an active execution handler for this cell, route replayed outputs
+        // through it so the UI's in-flight output accumulator doesn't overwrite them.
+        const handler = session.messageQueue[0];
+        if (handler && handler.cellId && entryCellId && handler.cellId === entryCellId) {
+          handler.onOutput(cellOutput);
+        } else {
+          for (const callback of this.onBufferedOutputCallbacks) {
+            try {
+              callback(sessionId, cellOutput, entryCellId);
+            } catch (e) {
+              console.error('Buffered output callback error:', e);
+            }
           }
         }
       }
+      // Ack the latest sequence after replay so the server can prune buffered
+      // outputs and reset output-limit bookkeeping.
       const latestSeq = typeof data.latest_seq === 'number' ? data.latest_seq : undefined;
       if (latestSeq !== undefined) {
         this.sendAck(sessionId, latestSeq);
@@ -394,7 +407,16 @@ class KernelService {
         timestamp: Date.now(),
       };
 
-      if (handler) {
+      if (handler && handler.cellId && cellId && handler.cellId !== cellId) {
+        // Output for a different cell than the active handler. Treat as buffered.
+        for (const callback of this.onBufferedOutputCallbacks) {
+          try {
+            callback(sessionId, cellOutput, cellId);
+          } catch (e) {
+            console.error('Buffered output callback error:', e);
+          }
+        }
+      } else if (handler) {
         handler.onOutput(cellOutput);
       } else {
         for (const callback of this.onBufferedOutputCallbacks) {
@@ -462,7 +484,7 @@ class KernelService {
     }
 
     return new Promise((resolve, reject) => {
-      session.messageQueue.push({ resolve, reject, onOutput });
+      session.messageQueue.push({ resolve, reject, onOutput, cellId });
 
       session.ws!.send(JSON.stringify({
         type: 'execute',

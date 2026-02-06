@@ -71,6 +71,7 @@ export class KernelService {
   private outputLineCounts: Map<string, { regular: number; error: number }> = new Map();
   private outputCharCounts: Map<string, { regular: number; error: number }> = new Map();
   private outputTruncation: Map<string, { regular: boolean; error: boolean }> = new Map();
+  private executingCellIds: Map<string, string | null> = new Map();
 
   constructor(config?: KernelServiceConfig, sessionStore?: SessionStore) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -704,6 +705,7 @@ export class KernelService {
       onQueueInfo(queueInfo);
     }
     return this.enqueueExecution(sessionId, async () => {
+      this.executingCellIds.set(sessionId, cellId ?? null);
       try {
         const result = await this.executeCodeInternal(sessionId, code, async (output) => {
           const entries = this.bufferOutput(sessionId, output, cellId);
@@ -720,6 +722,7 @@ export class KernelService {
         }
         return { status: 'error', executionCount: null, error: errorMsg, ...queueInfo };
       } finally {
+        this.executingCellIds.delete(sessionId);
         this.releaseExecutionSlot(sessionId);
       }
     });
@@ -1116,6 +1119,10 @@ export class KernelService {
     }
 
     return [this.appendBufferedOutput(sessionId, output, cellId)];
+  }
+
+  getExecutingCellId(sessionId: string): string | null {
+    return this.executingCellIds.get(sessionId) ?? null;
   }
 
   getBufferedOutputs(sessionId: string, sinceSeq: number = 0): { outputs: { seq: number; output: KernelOutput; cellId?: string | null }[]; latestSeq: number } {

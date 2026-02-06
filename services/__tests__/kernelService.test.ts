@@ -182,4 +182,89 @@ describe('KernelService', () => {
       expect(outputs[0].content).toBe('hello\n');
     });
   });
+
+  describe('output replay routing', () => {
+    it('should route sync_outputs for active cell through the executeCode handler', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ session_id: 'replay-session', kernel_name: 'python3' })
+      });
+      const sessionId = await kernelService.startKernel('python3');
+
+      // Wait for WebSocket
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const onOutput = vi.fn();
+      const onBuffered = vi.fn();
+      const unsubscribe = kernelService.onBufferedOutput((sid, output, cellId) => {
+        onBuffered(sid, output, cellId);
+      });
+
+      const executePromise = kernelService.executeCode(
+        sessionId,
+        'print("replay")',
+        (output) => onOutput(output),
+        'cell-1'
+      );
+
+      const ws = MockWebSocket.instances.find(w => w.url.includes('replay-session'));
+      expect(ws).toBeDefined();
+
+      ws?.simulateMessage({
+        type: 'sync_outputs',
+        outputs: [{ seq: 1, cell_id: 'cell-1', output: { type: 'stdout', content: 'replayed\n' } }],
+        latest_seq: 1,
+      });
+      ws?.simulateMessage({ type: 'result', result: { status: 'ok' } });
+
+      await executePromise;
+      unsubscribe();
+
+      expect(onOutput).toHaveBeenCalledTimes(1);
+      expect(onOutput.mock.calls[0][0].content).toBe('replayed\n');
+      expect(onBuffered).not.toHaveBeenCalled();
+    });
+
+    it('should route sync_outputs for other cells to buffered output subscribers', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ session_id: 'replay-other-session', kernel_name: 'python3' })
+      });
+      const sessionId = await kernelService.startKernel('python3');
+
+      // Wait for WebSocket
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const onOutput = vi.fn();
+      const onBuffered = vi.fn();
+      const unsubscribe = kernelService.onBufferedOutput((sid, output, cellId) => {
+        onBuffered(sid, output, cellId);
+      });
+
+      const executePromise = kernelService.executeCode(
+        sessionId,
+        'print("replay")',
+        (output) => onOutput(output),
+        'cell-1'
+      );
+
+      const ws = MockWebSocket.instances.find(w => w.url.includes('replay-other-session'));
+      expect(ws).toBeDefined();
+
+      ws?.simulateMessage({
+        type: 'sync_outputs',
+        outputs: [{ seq: 1, cell_id: 'cell-2', output: { type: 'stdout', content: 'buffered\n' } }],
+        latest_seq: 1,
+      });
+      ws?.simulateMessage({ type: 'result', result: { status: 'ok' } });
+
+      await executePromise;
+      unsubscribe();
+
+      expect(onOutput).not.toHaveBeenCalled();
+      expect(onBuffered).toHaveBeenCalledTimes(1);
+      expect(onBuffered.mock.calls[0][1].content).toBe('buffered\n');
+      expect(onBuffered.mock.calls[0][2]).toBe('cell-2');
+    });
+  });
 });

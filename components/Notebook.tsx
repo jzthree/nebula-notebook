@@ -1142,14 +1142,28 @@ export const Notebook: React.FC = () => {
     });
 
     // Subscribe to status updates from server
-    const unsubscribeStatus = kernelService.onStatus((sessionId, status) => {
+    const unsubscribeStatus = kernelService.onStatus((sessionId, status, cellId) => {
       if (kernelSessionId === sessionId) {
-        console.log(`Kernel status update: ${status}`);
+        console.log(`Kernel status update: ${status}${cellId ? ` (cell: ${cellId})` : ''}`);
         if (status === 'idle' || status === 'busy') {
           setKernelStatus(status);
           setIsKernelReady(true);
         } else if (status === 'starting') {
           setKernelStatus('starting');
+        }
+        // If kernel is busy with a specific cell (reconnect scenario),
+        // mark that cell as executing so the spinner shows and output streams.
+        if (status === 'busy' && cellId) {
+          setCells(prev => prev.map(c =>
+            c.id === cellId ? { ...c, isExecuting: true } : c
+          ));
+        }
+        // When kernel goes idle, clear isExecuting on all cells
+        if (status === 'idle') {
+          setCells(prev => {
+            const anyExecuting = prev.some(c => c.isExecuting);
+            return anyExecuting ? prev.map(c => c.isExecuting ? { ...c, isExecuting: false } : c) : prev;
+          });
         }
       }
     });
