@@ -220,7 +220,8 @@ describe('conflictService', () => {
         '/path/to/file.ipynb',
         mockCells,
         'python3',
-        mockHistory
+        mockHistory,
+        undefined
       );
     });
   });
@@ -270,7 +271,8 @@ describe('conflictService', () => {
         '/path/to/file.ipynb',
         mockCells,
         'python3',
-        mockHistory
+        mockHistory,
+        undefined
       );
     });
   });

@@ -691,6 +691,21 @@ export class KernelService {
   }
 
   /**
+   * Get the notebook file path associated with a session (if any).
+   * Used for output persistence when no UI is connected.
+   */
+  getSessionFilePath(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.filePath ?? null;
+  }
+
+  /**
+   * Get the kernel name associated with a session (if any).
+   */
+  getSessionKernelName(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.kernelName ?? null;
+  }
+
+  /**
    * Execute code in a kernel session
    */
   async executeCode(

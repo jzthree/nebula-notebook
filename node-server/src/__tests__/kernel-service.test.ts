@@ -550,8 +550,8 @@ describe('KernelService', () => {
       const result = await service.executeCode(
         sessionId,
         'print("Hello from Python!")',
-        async (output) => {
-          outputs.push(output.content);
+        async (entry) => {
+          outputs.push(entry.output.content);
         }
       );
 
@@ -575,8 +575,8 @@ describe('KernelService', () => {
       const result = await service.executeCode(
         sessionId,
         'raise ValueError("Test error")',
-        async (output) => {
-          outputs.push(output.content);
+        async (entry) => {
+          outputs.push(entry.output.content);
         }
       );
 

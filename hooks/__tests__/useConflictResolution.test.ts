@@ -172,7 +172,8 @@ describe('useConflictResolution', () => {
         '/test/file.ipynb',
         mockCells,
         'python3',
-        undefined // history
+        undefined, // history
+        undefined  // saveOptions
       );
       expect(mockOnMtimeUpdate).toHaveBeenCalledWith(3000);
       expect(result.current.conflictDialog).toBeNull();

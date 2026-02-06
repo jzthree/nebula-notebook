@@ -1035,13 +1035,19 @@ export const Notebook: React.FC = () => {
       // History is ready after loadHistory() or initializeNewHistory() completes
       const history = historyReady ? getFullHistory() : undefined;
 
+      const kernelOutputSeqRaw = (kernelSessionId && fileId === currentFileId)
+        ? kernelService.getLastSeenSeq(kernelSessionId)
+        : 0;
+      const kernelOutputSeq = kernelOutputSeqRaw > 0 ? kernelOutputSeqRaw : null;
+
       // Use ref for mtime to avoid stale closures causing false conflicts
       const result = await saveWithCheck(
         fileId,
         cellsToSave,
         lastKnownMtimeRef.current,
         currentKernel,
-        history
+        history,
+        kernelSessionId ? { sessionId: kernelSessionId, kernelOutputSeq } : undefined
       );
 
       if (result.needsResolution) {
@@ -1071,7 +1077,7 @@ export const Notebook: React.FC = () => {
       setPendingSave(true);
       throw error; // Re-throw so autosave knows it failed
     }
-  }, [historyReady, getFullHistory, currentKernel, saveWithCheck, getUnflushedState]);
+  }, [historyReady, getFullHistory, currentKernel, saveWithCheck, getUnflushedState, kernelSessionId, currentFileId]);
 
   const { status: autosaveStatus, saveNow } = useAutosave({
     fileId: currentFileId,

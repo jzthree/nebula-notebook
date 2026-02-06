@@ -76,7 +76,7 @@ router.get('/notebook/cells', async (req: Request, res: Response) => {
  */
 router.post('/notebook/save', async (req: Request, res: Response) => {
   try {
-    const { path: filePath, cells, kernel_name, history } = req.body;
+    const { path: filePath, cells, kernel_name, history, session_id, kernel_output_seq } = req.body;
     if (!filePath) {
       res.status(400).json({ detail: 'path is required' });
       return;
@@ -92,6 +92,17 @@ router.post('/notebook/save', async (req: Request, res: Response) => {
       kernel_name,
       history
     );
+
+    // Prune kernel output buffer only after a successful atomic save.
+    // This prevents losing output on UI refresh/disconnect before persistence.
+    const sessionId = typeof session_id === 'string'
+      ? session_id
+      : kernelService.getSessionIdForFile(filePath);
+    const seq = Number(kernel_output_seq);
+    if (sessionId && Number.isFinite(seq) && seq > 0) {
+      const { latestSeq } = kernelService.getBufferedOutputs(sessionId, 0);
+      kernelService.ackOutputs(sessionId, Math.min(seq, latestSeq));
+    }
 
     res.json({ status: 'ok', path: filePath, mtime: result.mtime });
   } catch (err) {

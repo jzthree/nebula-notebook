@@ -59,6 +59,7 @@ Request replay of outputs that may have been missed due to a disconnect.
 ### Acknowledge Outputs
 
 Tell the server it may prune buffered outputs up to a sequence number.
+This should only be sent after outputs are durably persisted (for example, written to the notebook file), not merely received by the UI.
 
 ```json
 {
@@ -70,7 +71,7 @@ Tell the server it may prune buffered outputs up to a sequence number.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | Yes | Must be `"ack_outputs"` |
-| up_to | number | Yes | Highest received output sequence number |
+| up_to | number | Yes | Highest persisted output sequence number |
 
 ---
 

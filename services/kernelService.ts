@@ -255,7 +255,8 @@ class KernelService {
       ws.onopen = () => {
         console.log('Kernel WebSocket connected');
         session.ws = ws;
-        const since = session.lastAckedSeq ?? 0;
+        // Replay anything we haven't seen yet (dedupe by seq in handleMessage).
+        const since = session.lastSeenSeq ?? 0;
         if (since >= 0) {
           try {
             ws.send(JSON.stringify({ type: 'sync_outputs', since }));
@@ -368,12 +369,6 @@ class KernelService {
           }
         }
       }
-      // Ack the latest sequence after replay so the server can prune buffered
-      // outputs and reset output-limit bookkeeping.
-      const latestSeq = typeof data.latest_seq === 'number' ? data.latest_seq : undefined;
-      if (latestSeq !== undefined) {
-        this.sendAck(sessionId, latestSeq);
-      }
       return;
     }
 
@@ -395,7 +390,6 @@ class KernelService {
       if (seq !== undefined) {
         const lastSeen = session.lastSeenSeq ?? 0;
         if (seq <= lastSeen) {
-          this.sendAck(sessionId, seq);
           return;
         }
         session.lastSeenSeq = Math.max(lastSeen, seq);
@@ -428,9 +422,6 @@ class KernelService {
         }
       }
 
-      if (seq !== undefined) {
-        this.sendAck(sessionId, seq);
-      }
       return;
     }
 
@@ -623,6 +614,15 @@ class KernelService {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
     return session.ws !== null && session.ws.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Get the highest output sequence we've seen for this session.
+   * Used to inform the server what output has been persisted to disk.
+   */
+  getLastSeenSeq(sessionId: string): number {
+    const session = this.sessions.get(sessionId);
+    return session?.lastSeenSeq ?? 0;
   }
 
   /**

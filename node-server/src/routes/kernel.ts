@@ -9,6 +9,8 @@ import * as path from 'path';
 import * as os from 'os';
 import { KernelService } from '../kernel/kernel-service';
 import { getKernelSearchPaths } from '../kernel/kernelspec';
+import { fsService } from '../fs/fs-service';
+import { operationRouter } from '../notebook/operation-router';
 import {
   isProxiedSession,
   parseSessionId,
@@ -31,6 +33,18 @@ const router = Router();
 // Track all WebSocket connections per kernel session for broadcasting
 const sessionWebSockets: Map<string, Set<WebSocket>> = new Map();
 
+type OutputDrainState = { timer: NodeJS.Timeout | null; running: boolean };
+const outputDrain: Map<string, OutputDrainState> = new Map();
+
+// Delay before starting persistence after UI disappears (prevents thrash on quick refresh/reconnect).
+const OUTPUT_DRAIN_GRACE_MS = 2000;
+// While running, persist at most once per interval.
+const OUTPUT_DRAIN_INTERVAL_MS = 1000;
+// Cap outputs per persistence batch to avoid huge writes for very chatty cells.
+const OUTPUT_DRAIN_MAX_BATCH = 200;
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
 // Shared kernel service instance - exported for use by headless handler
 const kernelService = new KernelService();
 
@@ -38,6 +52,93 @@ const kernelService = new KernelService();
 kernelService.initialize().catch(err => {
   console.error('Failed to initialize kernel service:', err);
 });
+
+async function persistBufferedOutputsIfNoUI(sessionId: string): Promise<number> {
+  const notebookPath = kernelService.getSessionFilePath(sessionId);
+  if (!notebookPath) return 0;
+  if (operationRouter.hasUI(notebookPath)) return 0;
+
+  const { outputs } = kernelService.getBufferedOutputs(sessionId, 0);
+  if (outputs.length === 0) return 0;
+
+  let ackSeq = 0;
+  const kernelName = kernelService.getSessionKernelName(sessionId) || undefined;
+
+  const { cells } = fsService.getNotebookCells(notebookPath);
+  const byId = new Map(cells.map(c => [c.id, c]));
+
+  let applied = 0;
+  for (const entry of outputs) {
+    if (applied >= OUTPUT_DRAIN_MAX_BATCH) break;
+    const cellId = entry.cellId ?? null;
+    if (!cellId) break;
+    const cell = byId.get(cellId);
+    if (!cell) break;
+    cell.outputs.push({ type: entry.output.type, content: entry.output.content });
+    ackSeq = entry.seq;
+    applied += 1;
+  }
+
+  if (ackSeq === 0) return 0;
+
+  // Persist using the bundle API to get the write lock + atomic commit.
+  await fsService.saveNotebookBundle(notebookPath, cells, kernelName);
+  return ackSeq;
+}
+
+async function runOutputDrain(sessionId: string): Promise<void> {
+  const state = outputDrain.get(sessionId);
+  if (!state || state.running) return;
+
+  state.running = true;
+  try {
+    while (true) {
+      const notebookPath = kernelService.getSessionFilePath(sessionId);
+      if (!notebookPath) break;
+      if (operationRouter.hasUI(notebookPath)) break;
+
+      let ackSeq = 0;
+      try {
+        ackSeq = await persistBufferedOutputsIfNoUI(sessionId);
+      } catch (err) {
+        console.warn(`[Kernel WS] Output drain persist failed for ${sessionId}:`, err);
+      }
+
+      if (ackSeq > 0) {
+        kernelService.ackOutputs(sessionId, ackSeq);
+      }
+
+      const executingCellId = kernelService.getExecutingCellId(sessionId);
+      const { outputs } = kernelService.getBufferedOutputs(sessionId, 0);
+      if (outputs.length === 0 && executingCellId == null) {
+        break;
+      }
+
+      await sleep(OUTPUT_DRAIN_INTERVAL_MS);
+    }
+  } finally {
+    state.running = false;
+    if (!state.timer) {
+      outputDrain.delete(sessionId);
+    }
+  }
+}
+
+function scheduleOutputDrain(sessionId: string): void {
+  const state = outputDrain.get(sessionId) || { timer: null, running: false };
+
+  if (state.timer || state.running) {
+    outputDrain.set(sessionId, state);
+    return;
+  }
+
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    void runOutputDrain(sessionId);
+  }, OUTPUT_DRAIN_GRACE_MS);
+
+  outputDrain.set(sessionId, state);
+}
 
 /**
  * List available kernelspecs
@@ -550,6 +651,11 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
                 seq: entry.seq,
                 cell_id: entry.cellId ?? null,
               }));
+
+              const notebookPath = kernelService.getSessionFilePath(sessionId);
+              if (notebookPath && !operationRouter.hasUI(notebookPath)) {
+                scheduleOutputDrain(sessionId);
+              }
             },
             undefined,
             cellId
@@ -584,7 +690,13 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
       const sockets = sessionWebSockets.get(sessionId);
       if (sockets) {
         sockets.delete(ws);
-        if (sockets.size === 0) sessionWebSockets.delete(sessionId);
+        if (sockets.size === 0) {
+          sessionWebSockets.delete(sessionId);
+          const notebookPath = kernelService.getSessionFilePath(sessionId);
+          if (notebookPath && !operationRouter.hasUI(notebookPath)) {
+            scheduleOutputDrain(sessionId);
+          }
+        }
       }
     });
   });
