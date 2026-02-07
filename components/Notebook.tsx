@@ -192,6 +192,7 @@ export const Notebook: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isKernelManagerOpen, setIsKernelManagerOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchSeed, setSearchSeed] = useState<string | null>(null);
   const [isKeyboardHelpOpen, setIsKeyboardHelpOpen] = useState(false);
   const [memoryUsage, setMemoryUsage] = useState<{ used: number; total: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState<{
@@ -1533,6 +1534,17 @@ export const Notebook: React.FC = () => {
       // Ctrl+F: Search (works everywhere)
       if ((e.metaKey || e.ctrlKey) && key === 'f') {
         e.preventDefault();
+        let selectedText = '';
+        const selection = window.getSelection();
+        if (selection && selection.toString().trim()) {
+          selectedText = selection.toString().trim();
+        } else if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+          const input = target as HTMLInputElement | HTMLTextAreaElement;
+          if (input.selectionStart != null && input.selectionEnd != null && input.selectionStart !== input.selectionEnd) {
+            selectedText = input.value.slice(input.selectionStart, input.selectionEnd).trim();
+          }
+        }
+        setSearchSeed(selectedText || null);
         setIsSearchOpen(true);
         return;
       }
@@ -4160,6 +4172,7 @@ export const Notebook: React.FC = () => {
         onReplaceAllInCell={handleReplaceAllInCell}
         onReplaceAllInNotebook={handleReplaceAllInNotebook}
         activeCellId={activeCellId}
+        initialQuery={searchSeed || undefined}
       />
 
       {/* Keyboard Shortcuts Help Modal */}

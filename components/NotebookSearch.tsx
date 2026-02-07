@@ -25,6 +25,7 @@ interface Props {
   onReplaceAllInCell?: (cellId: string, query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => void;
   onReplaceAllInNotebook?: (query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => void;
   activeCellId?: string | null; // Start search from this cell
+  initialQuery?: string;
 }
 
 export const NotebookSearch: React.FC<Props> = ({
@@ -37,6 +38,7 @@ export const NotebookSearch: React.FC<Props> = ({
   onReplaceAllInCell,
   onReplaceAllInNotebook,
   activeCellId,
+  initialQuery,
 }) => {
   const [query, setQuery] = useState('');
   const [replaceText, setReplaceText] = useState('');
@@ -58,6 +60,16 @@ export const NotebookSearch: React.FC<Props> = ({
       searchInputRef.current.select();
     }
   }, [isOpen]);
+
+  // Seed search query from selection when opening
+  const lastInitialQueryRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isOpen || !initialQuery) return;
+    if (initialQuery === lastInitialQueryRef.current) return;
+    setQuery(initialQuery);
+    setCurrentMatchIndex(0);
+    lastInitialQueryRef.current = initialQuery;
+  }, [isOpen, initialQuery]);
 
   // Close replace all menu when clicking outside
   useEffect(() => {
