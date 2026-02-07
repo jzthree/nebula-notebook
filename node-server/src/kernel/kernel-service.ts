@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import * as net from 'net';
 import { v4 as uuidv4 } from 'uuid';
 import { spawn, exec, ChildProcess } from 'child_process';
 import { promisify } from 'util';
@@ -318,20 +319,47 @@ export class KernelService {
   /**
    * Generate a connection file for the kernel
    */
-  private generateConnectionFile(sessionId: string): { config: ConnectionConfig; filePath: string } {
-    // Generate random ports
-    const getPort = () => Math.floor(Math.random() * 10000) + 50000;
+  private async allocateEphemeralPort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.unref();
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        if (!addr || typeof addr === 'string') {
+          server.close(() => reject(new Error('Failed to allocate ephemeral port')));
+          return;
+        }
+        const port = addr.port;
+        server.close(() => resolve(port));
+      });
+    });
+  }
+
+  private async generateConnectionFile(sessionId: string): Promise<{ config: ConnectionConfig; filePath: string }> {
+    // Avoid random collisions by asking the OS for currently-free ephemeral ports.
+    // There's still a small TOCTOU window between close() and kernel bind, but this
+    // is far more reliable than picking random ports blindly.
+    const ports: number[] = [];
+    const seen = new Set<number>();
+    while (ports.length < 5) {
+      const port = await this.allocateEphemeralPort();
+      if (seen.has(port)) continue;
+      seen.add(port);
+      ports.push(port);
+    }
+    const [shellPort, stdinPort, controlPort, iopubPort, hbPort] = ports;
 
     const config: ConnectionConfig = {
       ip: '127.0.0.1',
       transport: 'tcp',
       signatureScheme: 'hmac-sha256',
       key: crypto.randomBytes(16).toString('hex'),
-      shellPort: getPort(),
-      stdinPort: getPort(),
-      controlPort: getPort(),
-      iopubPort: getPort(),
-      hbPort: getPort(),
+      shellPort,
+      stdinPort,
+      controlPort,
+      iopubPort,
+      hbPort,
     };
 
     // Write connection file
@@ -372,7 +400,7 @@ export class KernelService {
 
 
     // Generate connection file
-    const { config: connConfig, filePath: connFile } = this.generateConnectionFile(sessionId);
+    const { config: connConfig, filePath: connFile } = await this.generateConnectionFile(sessionId);
 
     // Build kernel command
     const argv = (spec.argv || []).map(arg =>
@@ -433,8 +461,14 @@ export class KernelService {
       this.cleanupKernelResources(sessionId);
     });
 
-    // Wait for kernel to be ready
-    await this.waitForReady(sessionId);
+    // Wait for kernel to be ready. If startup fails, clean up aggressively so we
+    // don't leave behind orphaned sessions/processes/connection files.
+    try {
+      await this.waitForReady(sessionId);
+    } catch (err) {
+      await this.stopKernel(sessionId).catch(() => undefined);
+      throw err;
+    }
 
     const kernelStartTime = proc.pid ? await this.getProcessStartTime(proc.pid) : null;
 
@@ -1321,6 +1355,21 @@ export class KernelService {
    * Cleanup kernel resources
    */
   private cleanupKernelResources(sessionId: string): void {
+    // stopKernel() already handles these, but unexpected process exits and failed startups
+    // may call cleanup directly. Ensure we don't leak sockets or stale ChildProcess handles.
+    const sockets = this.zmqSockets.get(sessionId);
+    if (sockets) {
+      try {
+        sockets.shell.close();
+        sockets.iopub.close();
+      } catch {
+        // Ignore close errors
+      }
+      this.zmqSockets.delete(sessionId);
+    }
+
+    this.kernelProcesses.delete(sessionId);
+
     const session = this.sessions.get(sessionId);
     if (session) {
       // Remove file mapping
@@ -1351,6 +1400,8 @@ export class KernelService {
     this.outputBuffers.delete(sessionId);
     this.outputLineCounts.delete(sessionId);
     this.outputCharCounts.delete(sessionId);
+    this.outputTruncation.delete(sessionId);
+    this.executingCellIds.delete(sessionId);
   }
 
   /**
@@ -1491,7 +1542,7 @@ export class KernelService {
 
     try {
       // Generate new connection file (reusing same session ID)
-      const { config: connConfig, filePath: connFile } = this.generateConnectionFile(sessionId);
+      const { config: connConfig, filePath: connFile } = await this.generateConnectionFile(sessionId);
 
       // Build kernel command
       const argv = (spec.argv || []).map(arg =>
@@ -1532,6 +1583,7 @@ export class KernelService {
       newProc.on('exit', (code) => {
         console.log(`Kernel ${sessionId} exited with code ${code}`);
         session.status = 'dead';
+        this.cleanupKernelResources(sessionId);
       });
 
       // Wait for kernel to be ready
@@ -1567,6 +1619,24 @@ export class KernelService {
   /**
    * Get session status
    */
+  getSessionStatusFast(sessionId: string): SessionInfo | null {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return null;
+    }
+
+    return {
+      id: session.id,
+      kernelName: session.kernelName,
+      filePath: session.filePath,
+      status: session.status,
+      executionCount: session.executionCount,
+      memoryMb: null,
+      pid: session.pid,
+      createdAt: session.createdAt,
+    };
+  }
+
   async getSessionStatus(sessionId: string): Promise<SessionInfo | null> {
     const session = this.sessions.get(sessionId);
     if (!session) {

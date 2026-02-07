@@ -594,7 +594,7 @@ router.get('/kernels/:sessionId/status', async (req: Request, res: Response) => 
  * Setup WebSocket handler for kernel execution
  */
 export function setupKernelWebSocket(wss: WebSocketServer): void {
-  wss.on('connection', async (ws: WebSocket, req) => {
+  wss.on('connection', (ws: WebSocket, req) => {
     // Extract session ID from URL path: /api/kernels/{sessionId}/ws
     const url = req.url || '';
     const match = url.match(/\/api\/kernels\/([^/]+)\/ws/);
@@ -616,8 +616,14 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
       return;
     }
 
-    // Validate session exists
-    const session = await kernelService.getSessionStatus(sessionId);
+    ws.on('error', (err) => {
+      console.error(`[Kernel WS] WebSocket error for session ${sessionId}:`, err);
+    });
+
+    // Validate session exists and register socket before handling any messages.
+    // Use a fast session snapshot here to avoid `ps`/memory lookups blocking the
+    // initial `sync_outputs` handshake on refresh/reconnect.
+    const session = kernelService.getSessionStatusFast(sessionId);
     if (!session) {
       console.log(`[Kernel WS] Session ${sessionId} not found, closing connection`);
       ws.send(JSON.stringify({ type: 'error', error: 'Session not found' }));
@@ -637,13 +643,9 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
     const executingCellId = kernelService.getExecutingCellId(sessionId);
     ws.send(JSON.stringify({ type: 'status', status: session.status, ...(executingCellId != null && { cell_id: executingCellId }) }));
 
-    ws.on('error', (err) => {
-      console.error(`[Kernel WS] WebSocket error for session ${sessionId}:`, err);
-    });
-
-    ws.on('message', async (data) => {
+    const handleMessage = async (raw: string) => {
       try {
-        const message = JSON.parse(data.toString());
+        const message = JSON.parse(raw);
 
         if (message.type === 'execute') {
           const code = message.code || '';
@@ -730,6 +732,10 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
         console.error('[Kernel WS] Error:', errMessage);
         ws.send(JSON.stringify({ type: 'error', error: errMessage }));
       }
+    };
+
+    ws.on('message', (data) => {
+      void handleMessage(data.toString());
     });
 
     ws.on('close', () => {
