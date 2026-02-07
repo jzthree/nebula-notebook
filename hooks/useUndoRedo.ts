@@ -210,8 +210,10 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
   }, []);
 
   // Execute an operation and push to undo stack
+  // Apply against the latest ref state to avoid stale updates under rapid undo/redo.
   const executeOperation = useCallback((op: Operation) => {
-    setCellsInternal(prev => applyOperation(prev, op));
+    const newCells = applyOperation(cellsRef.current, op);
+    setCellsInternal(newCells);
     // Keyframe: first edit after undo - convert redo stack to history before clearing
     if (redoStackRef.current.length > 0) {
       convertRedoStackToHistory(redoStackRef.current);
@@ -525,11 +527,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
 
     const reversedOp = reverseOperation(op);
 
-    let newCells: Cell[] = [];
-    setCellsInternal(prev => {
-      newCells = applyOperation(prev, reversedOp);
-      return newCells;
-    });
+    const newCells = applyOperation(cellsRef.current, reversedOp);
+    setCellsInternal(newCells);
 
     redoStackRef.current.push(op); // O(1) push
     setCanRedo(true);
@@ -553,11 +552,8 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     const op = stack.pop()!; // O(1) pop
     setCanRedo(stack.length > 0);
 
-    let newCells: Cell[] = [];
-    setCellsInternal(prev => {
-      newCells = applyOperation(prev, op);
-      return newCells;
-    });
+    const newCells = applyOperation(cellsRef.current, op);
+    setCellsInternal(newCells);
 
     undoStackRef.current.push(op); // O(1) push
     setCanUndo(true);

@@ -1,9 +1,10 @@
 /**
  * Tests for kernelService multi-session support
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 
 // Mock fetch globally
+const originalFetch = global.fetch;
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
@@ -37,6 +38,7 @@ class MockWebSocket {
 }
 
 // @ts-ignore
+const originalWebSocket = global.WebSocket;
 global.WebSocket = MockWebSocket;
 
 // Import after mocks are set up
@@ -53,6 +55,13 @@ describe('KernelService', () => {
   afterEach(() => {
     // Clean up any open sessions
     MockWebSocket.instances.forEach(ws => ws.close());
+  });
+
+  afterAll(() => {
+    // Restore globals so other test files in the same Vitest worker are not affected.
+    global.fetch = originalFetch;
+    // @ts-ignore
+    global.WebSocket = originalWebSocket;
   });
 
   describe('startKernel', () => {

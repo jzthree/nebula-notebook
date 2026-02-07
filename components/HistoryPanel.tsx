@@ -41,6 +41,7 @@ interface HistoryPanelProps {
   onClose: () => void;
   history: TimestampedOperation[];
   defaultHeight?: number;
+  onResetHistory?: () => void;
   // Preview functionality
   onPreview?: (timestamp: number) => void;
   onExitPreview?: () => void;
@@ -467,6 +468,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
   onClose,
   history,
   defaultHeight = DEFAULT_HEIGHT,
+  onResetHistory,
   onPreview,
   onExitPreview,
   previewTimestamp,
@@ -632,6 +634,17 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
               </>
             )}
           </div>
+
+          {onResetHistory && (
+            <button
+              data-testid="history-reset"
+              onClick={onResetHistory}
+              className="p-0.5 text-slate-400 hover:text-amber-700 hover:bg-amber-100 rounded transition-colors"
+              title="Reset history (clears undo/redo)"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          )}
 
           {/* Close button */}
           <button

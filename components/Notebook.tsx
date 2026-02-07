@@ -920,6 +920,8 @@ export const Notebook: React.FC = () => {
 
   // Pending scroll after cell changes (for undo/redo of insert/delete)
   const pendingScrollCellIdRef = useRef<string | null>(null);
+  const undoRedoInFlightRef = useRef(false);
+  const pendingUndoRedoRef = useRef<(() => void) | null>(null);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // UNIFIED SCROLL UTILITY
@@ -1047,28 +1049,43 @@ export const Notebook: React.FC = () => {
     applyFn: () => { affectedCellIds: string[] } | null,
     willDeleteCell: boolean
   ) => {
-    flushActiveCell();
+    const run = () => {
+      flushActiveCell();
 
-    const peek = peekFn();
-    if (!peek || peek.affectedCellIds.length === 0) {
-      applyFn();
-      return;
-    }
+      const finalize = () => {
+        undoRedoInFlightRef.current = false;
+        const pending = pendingUndoRedoRef.current;
+        if (pending) {
+          pendingUndoRedoRef.current = null;
+          pending();
+        }
+      };
 
-    const firstCellId = peek.affectedCellIds[0];
-    const cellIndex = cells.findIndex(c => c.id === firstCellId);
-    const cellExists = cellIndex >= 0;
-    // Only scroll if no part of the cell is currently visible
-    const needsScroll = cellExists && !isCellVisible(cellIndex);
+      const peek = peekFn();
+      if (!peek || peek.affectedCellIds.length === 0) {
+        applyFn();
+        finalize();
+        return;
+      }
 
-    if (willDeleteCell && needsScroll) {
-      // Scroll to cell first so user sees it before deletion
-      scrollToCell(cellIndex);
-      setTimeout(() => {
-        const result = applyFn();
-        if (result?.affectedCellIds.length) showUndoRedoFeedback(result.affectedCellIds);
-      }, 300);
-    } else {
+      const firstCellId = peek.affectedCellIds[0];
+      const currentCells = cellsRef.current;
+      const cellIndex = currentCells.findIndex(c => c.id === firstCellId);
+      const cellExists = cellIndex >= 0;
+      // Only scroll if no part of the cell is currently visible
+      const needsScroll = cellExists && !isCellVisible(cellIndex);
+
+      if (willDeleteCell && needsScroll) {
+        // Scroll to cell before deletion, then apply on next frame
+        scrollToCell(cellIndex);
+        requestAnimationFrame(() => {
+          const result = applyFn();
+          if (result?.affectedCellIds.length) showUndoRedoFeedback(result.affectedCellIds);
+          finalize();
+        });
+        return;
+      }
+
       // Apply first, then scroll (only if not visible) and highlight
       const result = applyFn();
       if (result?.affectedCellIds.length) {
@@ -1079,8 +1096,16 @@ export const Notebook: React.FC = () => {
           pendingScrollCellIdRef.current = result.affectedCellIds[0];
         }
       }
+      finalize();
+    };
+
+    if (undoRedoInFlightRef.current) {
+      pendingUndoRedoRef.current = run;
+      return;
     }
-  }, [flushActiveCell, cells, isCellVisible, showUndoRedoFeedback, scrollToCell]);
+    undoRedoInFlightRef.current = true;
+    run();
+  }, [flushActiveCell, isCellVisible, showUndoRedoFeedback, scrollToCell]);
 
   // Undo: deleteCell restores a cell, insertCell removes it
   const undo = useCallback(() => {
@@ -2210,6 +2235,54 @@ export const Notebook: React.FC = () => {
       toast('Failed to save restored notebook', 'error');
     }
   }, [restoreDialogTimestamp, previewCells, currentFileId, currentCellMap, generateRestoredFilename, getFullHistory, currentKernel, toast, refreshFileList]);
+
+  const handleResetHistory = useCallback(async () => {
+    if (!currentFileId) return;
+    if (!historyReady) {
+      toast('History is still loading', 'info', 2000);
+      return;
+    }
+
+    const confirmed = await confirm({
+      title: 'Reset history',
+      message: 'This will clear the entire history and undo/redo stack, replacing it with a single snapshot of the current notebook. This cannot be undone.',
+      confirmLabel: 'Reset History',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
+    // Resetting history invalidates preview/restore contexts.
+    setPreviewTimestamp(null);
+    setRestoreDialogTimestamp(null);
+    setUnflushedState(null);
+
+    // Spread to avoid React bailing out on identical array references.
+    initializeNewHistory([...cellsRef.current]);
+
+    const newHistory = getFullHistory();
+    const savedHistory = await saveNotebookHistory(currentFileId, newHistory);
+    const savedSession = await saveNotebookSession(currentFileId, {
+      activeCellId: activeCellIdRef.current ?? undefined,
+    });
+
+    if (savedHistory && savedSession) {
+      toast('History reset', 'success', 2000);
+      return;
+    }
+    if (!savedHistory) {
+      toast('Failed to persist history reset', 'error');
+      return;
+    }
+    toast('History reset, but failed to persist session state', 'warning', 2500);
+  }, [
+    currentFileId,
+    historyReady,
+    confirm,
+    toast,
+    setUnflushedState,
+    initializeNewHistory,
+    getFullHistory,
+  ]);
 
   // Toggle agent permission for the notebook
   const handleToggleAgentPermission = useCallback(async () => {
@@ -4032,6 +4105,7 @@ export const Notebook: React.FC = () => {
           isOpen={isHistoryOpen}
           onClose={() => setIsHistoryOpen(false)}
           history={getFullHistory()}
+          onResetHistory={currentFileId && historyReady ? handleResetHistory : undefined}
           onPreview={setPreviewTimestamp}
           onExitPreview={() => setPreviewTimestamp(null)}
           previewTimestamp={previewTimestamp}
