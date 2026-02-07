@@ -28,6 +28,7 @@ vi.mock('../../services/kernelService', () => ({
     onReconnect: vi.fn().mockReturnValue(() => {}),
     onDisconnect: vi.fn().mockReturnValue(() => {}),
     onStatus: vi.fn().mockReturnValue(() => {}),
+    onBufferedOutput: vi.fn().mockReturnValue(() => {}),
   },
   KernelSpec: {},
   PythonEnvironment: {},

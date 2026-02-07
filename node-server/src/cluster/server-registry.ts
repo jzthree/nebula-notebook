@@ -65,9 +65,20 @@ class ServerRegistry {
    * Validate registration secret
    */
   private getClusterSecret(): string | null {
-    const secret = process.env.NEBULA_CLUSTER_SECRET || readClusterSecret() || null;
-    if (secret && secret !== this.clusterSecret) {
-      this.clusterSecret = secret;
+    const envSecret = process.env.NEBULA_CLUSTER_SECRET;
+    // If the env var is explicitly set (even to an empty string), treat it as the
+    // source of truth. This allows users/tests to intentionally disable a disk secret
+    // without relying on filesystem state.
+    if (envSecret !== undefined) {
+      this.clusterSecret = envSecret || null;
+      return this.clusterSecret;
+    }
+
+    // Disk secret is cached defensively: if the file can't be read, don't clear an
+    // existing secret to avoid accidentally dropping auth due to transient errors.
+    const diskSecret = readClusterSecret() || null;
+    if (diskSecret && diskSecret !== this.clusterSecret) {
+      this.clusterSecret = diskSecret;
     }
     return this.clusterSecret;
   }

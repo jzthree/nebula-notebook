@@ -32,6 +32,10 @@ const router = Router();
 
 // Track all WebSocket connections per kernel session for broadcasting
 const sessionWebSockets: Map<string, Set<WebSocket>> = new Map();
+// Only send streaming outputs to sockets after they've performed an initial output sync.
+// This prevents a race where live `output` messages arrive before `sync_outputs`, causing
+// the frontend to advance its seq watermark and skip replayed outputs on refresh/reconnect.
+const outputSubscribedSockets: WeakSet<WebSocket> = new WeakSet();
 
 type OutputDrainState = { timer: NodeJS.Timeout | null; running: boolean };
 const outputDrain: Map<string, OutputDrainState> = new Map();
@@ -646,11 +650,13 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
           const cellId = message.cell_id || null;
 
           // Broadcast helper: send to all connected WebSockets for this session
-          const broadcast = (msg: string) => {
+          const broadcast = (msg: string, options?: { outputsOnly?: boolean }) => {
+            const outputsOnly = options?.outputsOnly ?? false;
             const sockets = sessionWebSockets.get(sessionId);
             if (sockets) {
               for (const socket of sockets) {
                 if (socket.readyState === WebSocket.OPEN) {
+                  if (outputsOnly && !outputSubscribedSockets.has(socket)) continue;
                   socket.send(msg);
                 }
               }
@@ -670,7 +676,7 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
                 output: entry.output,
                 seq: entry.seq,
                 cell_id: entry.cellId ?? null,
-              }));
+              }), { outputsOnly: true });
 
               const notebookPath = kernelService.getSessionFilePath(sessionId);
               if (notebookPath && !operationRouter.hasUI(notebookPath)) {
@@ -688,6 +694,8 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
           const since = Number(message.since ?? 0);
           const { outputs, latestSeq } = kernelService.getBufferedOutputs(sessionId, since);
           ws.send(JSON.stringify({ type: 'sync_outputs', outputs, latest_seq: latestSeq }));
+          // Only start streaming outputs after the client has performed an initial sync.
+          outputSubscribedSockets.add(ws);
         } else if (message.type === 'ack_outputs') {
           const upToSeq = Number(message.up_to ?? message.seq ?? 0);
           kernelService.ackOutputs(sessionId, upToSeq);

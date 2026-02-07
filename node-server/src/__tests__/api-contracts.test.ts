@@ -52,7 +52,7 @@ const { MockKernelService, MockPythonDiscoveryService, mockDiscoverKernelSpecs }
       status: 'idle',
     }));
     startKernel = mockFn(async () => 'session-new-123');
-    getOrCreateKernel = mockFn(async () => 'session-file-123');
+    getOrCreateKernel = mockFn(async () => ({ sessionId: 'session-file-123', created: false }));
     saveNotebookKernelPreference = mockFn(() => undefined);
     getNotebookKernelPreference = mockFn(() => null);
     cleanup = mockFn(async () => undefined);
@@ -111,14 +111,32 @@ vi.mock('../discovery/discovery-service', () => ({
   PythonDiscoveryService: MockPythonDiscoveryService,
 }));
 
-// Import routes after mocking
-import kernelRoutes from '../routes/kernel';
-import pythonRoutes from '../routes/python';
+let routesPromise: Promise<{ kernelRoutes: any; pythonRoutes: any }> | null = null;
+
+async function getRoutes(): Promise<{ kernelRoutes: any; pythonRoutes: any }> {
+  if (!routesPromise) {
+    routesPromise = (async () => {
+      // Ensure routes are imported fresh with mocks applied, even if another test file
+      // imported these modules earlier in the same worker.
+      vi.resetModules();
+
+      const [{ default: kernelRoutes }, { default: pythonRoutes }] = await Promise.all([
+        import('../routes/kernel'),
+        import('../routes/python'),
+      ]);
+
+      return { kernelRoutes, pythonRoutes };
+    })();
+  }
+  return routesPromise;
+}
 
 describe('API Contract Tests - Snake Case Response Format', () => {
   let app: Express;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    const { kernelRoutes, pythonRoutes } = await getRoutes();
+
     app = express();
     app.use(express.json());
     app.use('/api', kernelRoutes);
@@ -308,7 +326,9 @@ describe('API Contract Tests - Snake Case Response Format', () => {
 describe('API Contract Tests - Field Types', () => {
   let app: Express;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    const { kernelRoutes, pythonRoutes } = await getRoutes();
+
     app = express();
     app.use(express.json());
     app.use('/api', kernelRoutes);

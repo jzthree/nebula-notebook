@@ -1,7 +1,7 @@
 /**
  * Tests for cluster functionality
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { serverRegistry } from '../cluster/server-registry';
 import {
   createProxiedSessionId,
@@ -10,13 +10,27 @@ import {
 } from '../cluster/kernel-proxy';
 
 describe('ServerRegistry', () => {
+  const originalSecret = process.env.NEBULA_CLUSTER_SECRET;
+
   beforeEach(() => {
+    // Force-disable cluster auth for these unit tests, regardless of what's configured
+    // on the developer machine.
+    process.env.NEBULA_CLUSTER_SECRET = '';
+
     // Clear all servers before each test
     for (const server of serverRegistry.getAllServers()) {
       serverRegistry.unregister(server.id);
     }
     // Reset local server ID
     serverRegistry.setLocalServerId('local:3000');
+  });
+
+  afterAll(() => {
+    if (originalSecret === undefined) {
+      delete process.env.NEBULA_CLUSTER_SECRET;
+    } else {
+      process.env.NEBULA_CLUSTER_SECRET = originalSecret;
+    }
   });
 
   describe('setLocalServerId / getLocalServerId', () => {
