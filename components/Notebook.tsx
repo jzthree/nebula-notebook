@@ -111,6 +111,17 @@ function getLatestKernelOutputSeq(outputs: Array<{ id: string }>): number {
   return 0;
 }
 
+function getLatestKernelOutputSeqInCells(cells: Array<{ outputs?: Array<{ id: string }> }>): number {
+  let max = 0;
+  for (const cell of cells) {
+    const outputs = cell.outputs;
+    if (!outputs || outputs.length === 0) continue;
+    const seq = getLatestKernelOutputSeq(outputs);
+    if (seq > max) max = seq;
+  }
+  return max;
+}
+
 // Get initial file ID synchronously to avoid "Untitled" flash
 function getInitialFileId(): string | null {
   // Check URL parameter first
@@ -1097,8 +1108,12 @@ export const Notebook: React.FC = () => {
       // History is ready after loadHistory() or initializeNewHistory() completes
       const history = historyReady ? getFullHistory() : undefined;
 
+      // IMPORTANT: The kernel output seq we send to the server must reflect what is
+      // actually included in this save payload. Using a ref that can get ahead of
+      // React state (due to async setState) can cause premature server-side pruning
+      // and output loss on refresh/reconnect.
       const kernelOutputSeqRaw = (kernelSessionId && fileId === currentFileId)
-        ? kernelOutputSeqRef.current
+        ? getLatestKernelOutputSeqInCells(cellsToSave)
         : 0;
       const kernelOutputSeq = kernelOutputSeqRaw > 0 ? kernelOutputSeqRaw : null;
 
