@@ -168,6 +168,9 @@ export const Notebook: React.FC = () => {
   const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false);
   const [textEditorPath, setTextEditorPath] = useState<string | null>(null);
   const [imageViewerPath, setImageViewerPath] = useState<string | null>(null);
+  const [isNavigatorOpen, setIsNavigatorOpen] = useState(false);
+  const [navigatorQuery, setNavigatorQuery] = useState('');
+  const [navigatorSelection, setNavigatorSelection] = useState(0);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -237,6 +240,43 @@ export const Notebook: React.FC = () => {
       document.body.style.overflow = previousOverflow;
     };
   }, [imageViewerPath]);
+
+  useEffect(() => {
+    if (!isNavigatorOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isNavigatorOpen]);
+
+  const openNavigator = useCallback(() => {
+    setNavigatorQuery('');
+    setNavigatorSelection(0);
+    setIsNavigatorOpen(true);
+  }, []);
+
+  const closeNavigator = useCallback(() => {
+    setIsNavigatorOpen(false);
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isMac = navigator.platform.toLowerCase().includes('mac');
+      const isShortcut = event.shiftKey && event.code === 'KeyP' && (isMac ? (event.metaKey || event.ctrlKey) : event.ctrlKey);
+      if (!isShortcut) return;
+
+      event.preventDefault();
+      if (isNavigatorOpen) {
+        closeNavigator();
+      } else {
+        openNavigator();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isNavigatorOpen, closeNavigator, openNavigator]);
 
   const handleImageViewerMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
     if (!imageViewportRef.current) return;
@@ -3041,6 +3081,43 @@ export const Notebook: React.FC = () => {
     attemptScroll(0);
   }, [scrollToCell]);
 
+  const navigatorItems = useMemo(() => {
+    return cells.map((cell, index) => {
+      const lines = cell.content.split('\n');
+      let preview = '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          preview = trimmed;
+          break;
+        }
+      }
+      return {
+        cellId: cell.id,
+        index,
+        type: cell.type,
+        preview,
+      };
+    });
+  }, [cells]);
+
+  const navigatorResults = useMemo(() => {
+    if (!navigatorQuery.trim()) {
+      return navigatorItems;
+    }
+    const q = navigatorQuery.toLowerCase();
+    return navigatorItems.filter(item => (
+      item.cellId.toLowerCase().includes(q) ||
+      item.preview.toLowerCase().includes(q) ||
+      String(item.index + 1).includes(q)
+    ));
+  }, [navigatorItems, navigatorQuery]);
+
+  useEffect(() => {
+    if (!isNavigatorOpen) return;
+    setNavigatorSelection(0);
+  }, [isNavigatorOpen, navigatorQuery]);
+
   const handleFileBrowserSelect = useCallback((id: string) => {
     loadFileRef.current(id);
   }, []);
@@ -3110,6 +3187,83 @@ export const Notebook: React.FC = () => {
                 className="block max-w-none max-h-none"
                 draggable={false}
               />
+            </div>
+          </div>
+        )}
+
+        {isNavigatorOpen && (
+          <div
+            className="fixed inset-0 z-50 bg-slate-900/30 backdrop-blur-sm flex items-start justify-center pt-24 px-4"
+            onClick={closeNavigator}
+          >
+            <div
+              className="w-full max-w-3xl bg-white rounded-lg shadow-2xl border border-slate-200 overflow-hidden"
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  closeNavigator();
+                } else if (event.key === 'ArrowDown') {
+                  event.preventDefault();
+                  if (navigatorResults.length === 0) return;
+                  setNavigatorSelection(prev => Math.min(prev + 1, navigatorResults.length - 1));
+                } else if (event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  if (navigatorResults.length === 0) return;
+                  setNavigatorSelection(prev => Math.max(prev - 1, 0));
+                } else if (event.key === 'Enter') {
+                  event.preventDefault();
+                  const target = navigatorResults[navigatorSelection];
+                  if (target) {
+                    setActiveCellId(target.cellId);
+                    scrollToCell(target.index, { behavior: 'auto', retryOnce: true });
+                    closeNavigator();
+                  }
+                }
+              }}
+            >
+              <div className="px-3 py-2 border-b border-slate-200 flex items-center gap-2">
+                <input
+                  autoFocus
+                  type="text"
+                  value={navigatorQuery}
+                  onChange={(event) => setNavigatorQuery(event.target.value)}
+                  placeholder="Search cells by index, id, or content..."
+                  className="w-full text-sm bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                />
+                <span className="text-[0.625rem] text-slate-400 whitespace-nowrap">⇧⌘/⌃P</span>
+              </div>
+              <div className="max-h-[75vh] overflow-y-auto">
+                {navigatorResults.length === 0 && (
+                  <div className="px-3 py-5 text-sm text-slate-400 text-center">No matching cells</div>
+                )}
+                {navigatorResults.map((item, idx) => (
+                  <button
+                    key={item.cellId}
+                    className="w-full text-left px-3 py-1 border-b border-slate-100 transition-colors bg-white"
+                    onClick={() => {
+                      setActiveCellId(item.cellId);
+                      scrollToCell(item.index, { behavior: 'auto', retryOnce: true });
+                      closeNavigator();
+                    }}
+                  >
+                    <div className="flex items-center justify-between text-[0.6875rem] text-slate-500 leading-tight">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-semibold flex-shrink-0">#{item.index + 1}</span>
+                        <span className="text-[0.625rem] text-slate-500 font-medium truncate">
+                          {item.cellId}
+                        </span>
+                      </div>
+                      <span className="text-[0.625rem] uppercase tracking-wide text-slate-400 flex-shrink-0">
+                        {item.type}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-[0.8125rem] text-slate-700 font-mono truncate leading-tight">
+                      {item.preview || <span className="text-slate-400 italic">Empty cell</span>}
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -4041,6 +4195,7 @@ export const Notebook: React.FC = () => {
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Exit to cell mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Escape</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Undo / Redo (text only)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Z / Y</kbd></div>
+                  <div className="text-[0.6875rem] text-slate-400 mt-2">Editing uses CodeMirror keybindings (most standard editor shortcuts apply).</div>
                 </div>
               </div>
               <div>
@@ -4048,6 +4203,7 @@ export const Notebook: React.FC = () => {
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Save</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + S</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Search</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + F</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Quick Navigator</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + P</kbd></div>
                 </div>
               </div>
             </div>

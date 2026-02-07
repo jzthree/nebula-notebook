@@ -103,7 +103,7 @@ export const ResourceStatusBar: React.FC<Props> = ({ serverId, className = '' })
 
       {/* GPU(s) */}
       {resources.gpus && resources.gpus.devices.length > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {resources.gpus.devices.map((gpu) => (
             <GPUIndicator key={gpu.index} gpu={gpu} vendor={resources.gpus!.vendor} />
           ))}
@@ -138,24 +138,25 @@ export const ResourceStatusBar: React.FC<Props> = ({ serverId, className = '' })
 
 // Individual GPU indicator
 const GPUIndicator: React.FC<{ gpu: GPUDevice; vendor: 'nvidia' | 'amd' }> = ({ gpu }) => {
-  // Short name for display
-  const shortName = gpu.name
-    .replace(/NVIDIA |AMD |GeForce |Radeon /gi, '')
-    .replace(/RTX |GTX /gi, '')
-    .trim();
+  const percent = gpu.memoryTotal > 0 ? Math.round((gpu.memoryUsed / gpu.memoryTotal) * 100) : 0;
+  const tooltip = [
+    gpu.name,
+    `${resourceService.formatMemory(gpu.memoryUsed)} / ${resourceService.formatMemory(gpu.memoryTotal)} (${percent}%)`,
+    gpu.temperature ? `${gpu.temperature}°C` : null,
+    gpu.utilization !== undefined ? `${gpu.utilization}% util` : null,
+  ].filter(Boolean).join(' • ');
 
   return (
-    <div
-      className="flex items-center gap-1.5 group"
-      title={`${gpu.name}${gpu.temperature ? ` - ${gpu.temperature}°C` : ''}${gpu.utilization !== undefined ? ` - ${gpu.utilization}% util` : ''}`}
-    >
+    <div className="flex items-center gap-1.5 group" title={tooltip}>
       <GpuIcon className="w-3.5 h-3.5 text-emerald-600" />
-      <span className="text-slate-600 font-medium tabular-nums">
-        {resourceService.formatMemory(gpu.memoryUsed)} / {resourceService.formatMemory(gpu.memoryTotal)}
-      </span>
-      <span className="text-slate-400">
-        GPU {gpu.index}
-      </span>
+      <span className="text-slate-400 text-[0.625rem]">GPU {gpu.index}</span>
+      <div className="h-1.5 w-16 rounded-full bg-slate-200 overflow-hidden">
+        <div
+          className="h-full bg-emerald-500"
+          style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }}
+        />
+      </div>
+      <span className="text-slate-500 text-[0.625rem] tabular-nums">{percent}%</span>
     </div>
   );
 };
