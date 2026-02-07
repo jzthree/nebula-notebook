@@ -1393,7 +1393,28 @@ export class KernelService {
         return false;
       }
     }
-    return false;
+
+    const session = this.sessions.get(sessionId);
+    const pid = session?.pid ?? null;
+    if (!pid) return false;
+
+    try {
+      // Best-effort: validate PID still matches the kernel we started/reattached to.
+      // This matters when a server restarts and we no longer have a ChildProcess handle.
+      const persisted = this.sessionStore.getSession(sessionId);
+      const expectedStartTime = persisted?.kernelStartTime ?? null;
+      const connectionFile = session?.connectionFile ?? persisted?.connectionFile ?? null;
+      const ok = await this.isExpectedKernelProcess(pid, connectionFile, expectedStartTime);
+      if (!ok) {
+        console.warn(`[Kernel] Refusing to interrupt PID ${pid} for session ${sessionId}: unexpected process`);
+        return false;
+      }
+
+      process.kill(pid, 'SIGINT');
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1435,6 +1456,21 @@ export class KernelService {
         // Ignore kill errors
       }
       this.kernelProcesses.delete(sessionId);
+    } else if (session.pid) {
+      // Reattached session: no ChildProcess handle, but we may still have a PID.
+      // Validate before terminating to avoid PID reuse mistakes.
+      const persisted = this.sessionStore.getSession(sessionId);
+      const expectedStartTime = persisted?.kernelStartTime ?? null;
+      const connectionFile = oldConnFile ?? persisted?.connectionFile ?? null;
+      const ok = await this.isExpectedKernelProcess(session.pid, connectionFile, expectedStartTime);
+      if (!ok) {
+        console.warn(`[Kernel] Refusing to restart PID ${session.pid} for session ${sessionId}: unexpected process`);
+        session.status = 'dead';
+        return false;
+      }
+
+      await this.terminatePid(session.pid);
+      session.pid = null;
     }
 
     // Delete old connection file

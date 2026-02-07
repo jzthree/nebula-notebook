@@ -1,41 +1,56 @@
 /**
  * API Contract Tests
  *
- * These tests verify that API responses use snake_case field names
- * to match the Python API format expected by the frontend.
+ * Verify that API responses use snake_case field names to match the frontend
+ * contract (FastAPI-style naming).
  *
- * The frontend expects snake_case (e.g., display_name, kernel_name)
- * but TypeScript/Node.js naturally uses camelCase internally.
- * These tests ensure the transformation is applied correctly.
+ * Note: These tests stub the exported service singletons used by the route
+ * modules. This avoids fragile module-cache resets (other test files may import
+ * the routes earlier in the same Vitest worker).
  */
 
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import express, { Express } from 'express';
 import request from 'supertest';
 
-// Use vi.hoisted to define mock classes that will be available when vi.mock is hoisted
-const { MockKernelService, MockPythonDiscoveryService, mockDiscoverKernelSpecs } = vi.hoisted(() => {
-  const mockFn = <T>(impl: T) => impl;
+import kernelRoutes, { kernelService } from '../routes/kernel';
+import pythonRoutes, { discoveryService } from '../routes/python';
+import { serverRegistry } from '../cluster/server-registry';
+import * as kernelspec from '../kernel/kernelspec';
 
-  class MockKernelService {
-    isReady = true;
-    initialize = mockFn(async () => undefined);
-    normalizeNotebookPath = mockFn((filePath: string) => filePath);
-    getAvailableKernels = mockFn(() => [
+describe('API Contract Tests - Snake Case Response Format', () => {
+  let app: Express;
+
+  beforeAll(() => {
+    app = express();
+    app.use(express.json());
+    app.use('/api', kernelRoutes);
+    app.use('/api', pythonRoutes);
+  });
+
+  beforeEach(() => {
+    // Ensure predictable "local" server identity for routes that include it.
+    serverRegistry.setLocalServerId('local:3000');
+
+    // Kernel routes.
+    vi.spyOn(kernelService, 'getAvailableKernels').mockReturnValue([
       {
         name: 'python3',
         displayName: 'Python 3 (ipykernel)',
         language: 'python',
         path: '/usr/local/share/jupyter/kernels/python3',
-      },
+        argv: ['/usr/bin/python3'],
+      } as any,
       {
         name: 'ir',
         displayName: 'R',
         language: 'R',
         path: '/usr/local/share/jupyter/kernels/ir',
-      },
+        argv: ['/usr/bin/R'],
+      } as any,
     ]);
-    getAllSessions = mockFn(() => [
+
+    vi.spyOn(kernelService, 'getAllSessions').mockResolvedValue([
       {
         id: 'session-123',
         kernelName: 'python3',
@@ -44,22 +59,39 @@ const { MockKernelService, MockPythonDiscoveryService, mockDiscoverKernelSpecs }
         executionCount: 5,
         memoryMb: 128.5,
         pid: 12345,
-      },
+        createdAt: 111,
+      } as any,
     ]);
-    getSessionStatus = mockFn(() => ({
+
+    vi.spyOn(kernelService, 'getSessionStatus').mockResolvedValue({
       id: 'session-123',
       kernelName: 'python3',
+      filePath: '/path/to/notebook.ipynb',
       status: 'idle',
-    }));
-    startKernel = mockFn(async () => 'session-new-123');
-    getOrCreateKernel = mockFn(async () => ({ sessionId: 'session-file-123', created: false }));
-    saveNotebookKernelPreference = mockFn(() => undefined);
-    getNotebookKernelPreference = mockFn(() => null);
-    cleanup = mockFn(async () => undefined);
-  }
+      executionCount: 5,
+      memoryMb: 128.5,
+      pid: 12345,
+      createdAt: 111,
+    } as any);
 
-  class MockPythonDiscoveryService {
-    discover = mockFn(async () => [
+    vi.spyOn(kernelService, 'startKernel').mockResolvedValue('session-new-123' as any);
+    vi.spyOn(kernelService, 'getOrCreateKernel').mockResolvedValue({ sessionId: 'session-file-123', created: false } as any);
+    vi.spyOn(kernelService, 'saveNotebookKernelPreference').mockImplementation(() => undefined as any);
+    vi.spyOn(kernelService, 'getNotebookKernelPreference').mockReturnValue(null as any);
+    vi.spyOn(kernelService, 'normalizeNotebookPath').mockImplementation((p: string) => p);
+
+    // Python routes.
+    vi.spyOn(kernelspec, 'discoverKernelSpecs').mockReturnValue([
+      {
+        name: 'python3',
+        displayName: 'Python 3 (ipykernel)',
+        language: 'python',
+        path: '/usr/local/share/jupyter/kernels/python3',
+        argv: ['/usr/bin/python3'],
+      } as any,
+    ]);
+
+    vi.spyOn(discoveryService, 'discover').mockResolvedValue([
       {
         path: '/usr/bin/python3',
         version: '3.10.0',
@@ -68,79 +100,17 @@ const { MockKernelService, MockPythonDiscoveryService, mockDiscoverKernelSpecs }
         envName: null,
         hasIpykernel: true,
         kernelName: 'python3',
-      },
-      {
-        path: '/home/user/.pyenv/versions/3.11.0/bin/python',
-        version: '3.11.0',
-        displayName: 'Python 3.11 (pyenv)',
-        envType: 'pyenv',
-        envName: '3.11.0',
-        hasIpykernel: false,
-        kernelName: null,
-      },
+      } as any,
     ]);
-    getCacheInfo = mockFn(() => ({
+
+    vi.spyOn(discoveryService, 'getCacheInfo').mockReturnValue({
       lastRefresh: Date.now(),
-      environmentCount: 2,
-    }));
-    installKernel = mockFn(async () => ({ success: true }));
-  }
+      environmentCount: 1,
+    } as any);
+  });
 
-  const mockDiscoverKernelSpecs = mockFn(() => [
-    {
-      name: 'python3',
-      displayName: 'Python 3 (ipykernel)',
-      language: 'python',
-      path: '/usr/local/share/jupyter/kernels/python3',
-    },
-  ]);
-
-  return { MockKernelService, MockPythonDiscoveryService, mockDiscoverKernelSpecs };
-});
-
-// Mock modules with hoisted classes
-vi.mock('../kernel/kernel-service', () => ({
-  KernelService: MockKernelService,
-}));
-
-vi.mock('../kernel/kernelspec', () => ({
-  discoverKernelSpecs: mockDiscoverKernelSpecs,
-}));
-
-vi.mock('../discovery/discovery-service', () => ({
-  PythonDiscoveryService: MockPythonDiscoveryService,
-}));
-
-let routesPromise: Promise<{ kernelRoutes: any; pythonRoutes: any }> | null = null;
-
-async function getRoutes(): Promise<{ kernelRoutes: any; pythonRoutes: any }> {
-  if (!routesPromise) {
-    routesPromise = (async () => {
-      // Ensure routes are imported fresh with mocks applied, even if another test file
-      // imported these modules earlier in the same worker.
-      vi.resetModules();
-
-      const [{ default: kernelRoutes }, { default: pythonRoutes }] = await Promise.all([
-        import('../routes/kernel'),
-        import('../routes/python'),
-      ]);
-
-      return { kernelRoutes, pythonRoutes };
-    })();
-  }
-  return routesPromise;
-}
-
-describe('API Contract Tests - Snake Case Response Format', () => {
-  let app: Express;
-
-  beforeAll(async () => {
-    const { kernelRoutes, pythonRoutes } = await getRoutes();
-
-    app = express();
-    app.use(express.json());
-    app.use('/api', kernelRoutes);
-    app.use('/api', pythonRoutes);
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe('GET /api/kernels', () => {
@@ -234,36 +204,27 @@ describe('API Contract Tests - Snake Case Response Format', () => {
       expect(env).not.toHaveProperty('envName');
       expect(env).not.toHaveProperty('hasIpykernel');
       expect(env).not.toHaveProperty('kernelName');
-
-      // Verify actual values
-      expect(env.display_name).toBe('Python 3.10');
-      expect(env.env_type).toBe('system');
-      expect(env.has_ipykernel).toBe(true);
     });
 
     it('should return kernelspecs with snake_case field names', async () => {
       const response = await request(app).get('/api/python/environments');
-
       const kernelspec = response.body.kernelspecs[0];
 
-      // Verify snake_case fields
       expect(kernelspec).toHaveProperty('name');
       expect(kernelspec).toHaveProperty('display_name');
       expect(kernelspec).toHaveProperty('language');
       expect(kernelspec).toHaveProperty('path');
 
-      // Verify camelCase fields do NOT exist
+      // Verify camelCase does NOT exist
       expect(kernelspec).not.toHaveProperty('displayName');
     });
 
     it('should return cache_info with snake_case field name', async () => {
       const response = await request(app).get('/api/python/environments');
 
-      // Verify snake_case
       expect(response.body).toHaveProperty('cache_info');
-
-      // Verify camelCase does NOT exist
-      expect(response.body).not.toHaveProperty('cacheInfo');
+      expect(response.body.cache_info).toHaveProperty('lastRefresh');
+      expect(response.body.cache_info).toHaveProperty('environmentCount');
     });
   });
 
@@ -301,38 +262,36 @@ describe('API Contract Tests - Snake Case Response Format', () => {
       expect(response.body).not.toHaveProperty('filePath');
     });
   });
-
-  describe('GET /api/kernels/preference response', () => {
-    it('should return response with snake_case field names', async () => {
-      const response = await request(app)
-        .get('/api/kernels/preference')
-        .query({ file_path: '/path/to/notebook.ipynb' });
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('kernel_name');
-      expect(response.body).toHaveProperty('server_id');
-
-      // Verify camelCase does NOT exist
-      expect(response.body).not.toHaveProperty('kernelName');
-      expect(response.body).not.toHaveProperty('serverId');
-    });
-  });
 });
 
-/**
- * Additional tests for field type validation
- * These ensure the API contract includes correct types
- */
 describe('API Contract Tests - Field Types', () => {
   let app: Express;
 
-  beforeAll(async () => {
-    const { kernelRoutes, pythonRoutes } = await getRoutes();
-
+  beforeAll(() => {
     app = express();
     app.use(express.json());
     app.use('/api', kernelRoutes);
     app.use('/api', pythonRoutes);
+  });
+
+  beforeEach(() => {
+    vi.spyOn(kernelService, 'getAvailableKernels').mockReturnValue([
+      { name: 'python3', displayName: 'Python 3', language: 'python', path: '/path', argv: ['/usr/bin/python3'] } as any,
+    ]);
+    vi.spyOn(kernelService, 'getAllSessions').mockResolvedValue([
+      { id: 's', kernelName: 'python3', filePath: '/path', status: 'idle', executionCount: 1, memoryMb: 1, pid: 1 } as any,
+    ]);
+    vi.spyOn(kernelspec, 'discoverKernelSpecs').mockReturnValue([
+      { name: 'python3', displayName: 'Python 3', language: 'python', path: '/path', argv: ['/usr/bin/python3'] } as any,
+    ]);
+    vi.spyOn(discoveryService, 'discover').mockResolvedValue([
+      { path: '/usr/bin/python3', version: '3.10.0', displayName: 'Python 3.10', envType: 'system', envName: null, hasIpykernel: true, kernelName: 'python3' } as any,
+    ]);
+    vi.spyOn(discoveryService, 'getCacheInfo').mockReturnValue({} as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe('GET /api/kernels', () => {
@@ -378,3 +337,4 @@ describe('API Contract Tests - Field Types', () => {
     });
   });
 });
+

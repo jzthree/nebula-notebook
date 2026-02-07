@@ -693,9 +693,28 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
         } else if (message.type === 'sync_outputs') {
           const since = Number(message.since ?? 0);
           const { outputs, latestSeq } = kernelService.getBufferedOutputs(sessionId, since);
-          ws.send(JSON.stringify({ type: 'sync_outputs', outputs, latest_seq: latestSeq }));
+          const normalized = outputs.map(entry => ({
+            seq: entry.seq,
+            output: entry.output,
+            cell_id: entry.cellId ?? null,
+          }));
+          ws.send(JSON.stringify({ type: 'sync_outputs', outputs: normalized, latest_seq: latestSeq }));
+
           // Only start streaming outputs after the client has performed an initial sync.
           outputSubscribedSockets.add(ws);
+
+          // Defensive catch-up: if new outputs arrived after we took the snapshot but before
+          // the socket was marked subscribed, push them as streaming output now.
+          const { outputs: tail } = kernelService.getBufferedOutputs(sessionId, latestSeq);
+          for (const entry of tail) {
+            if (ws.readyState !== WebSocket.OPEN) break;
+            ws.send(JSON.stringify({
+              type: 'output',
+              output: entry.output,
+              seq: entry.seq,
+              cell_id: entry.cellId ?? null,
+            }));
+          }
         } else if (message.type === 'ack_outputs') {
           const upToSeq = Number(message.up_to ?? message.seq ?? 0);
           kernelService.ackOutputs(sessionId, upToSeq);

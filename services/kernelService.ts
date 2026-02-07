@@ -70,6 +70,14 @@ interface SessionState {
   }>;
   lastAckedSeq?: number;
   lastSeenSeq?: number;
+  // WebSocket output replay handshake. We require an initial `sync_outputs` round-trip
+  // before sending execute/complete requests to avoid races on refresh/reconnect where
+  // live outputs arrive before replay and advance the seq watermark.
+  initialSyncDone?: boolean;
+  initialSyncPromise?: Promise<void>;
+  initialSyncResolve?: (() => void) | null;
+  initialSyncTimeout?: ReturnType<typeof setTimeout> | null;
+  initialSyncTimedOut?: boolean;
   pendingCompletion?: {
     resolve: (result: CompletionResult) => void;
     reject: (error: any) => void;
@@ -243,6 +251,16 @@ class KernelService {
       throw new Error(`Session ${sessionId} not found`);
     }
 
+    // Reset initial sync state on (re)connect.
+    session.initialSyncDone = false;
+    session.initialSyncTimedOut = false;
+    session.initialSyncPromise = undefined;
+    session.initialSyncResolve = null;
+    if (session.initialSyncTimeout) {
+      clearTimeout(session.initialSyncTimeout);
+    }
+    session.initialSyncTimeout = null;
+
     return new Promise((resolve, reject) => {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       // Encode session ID to handle proxied sessions with "::" in the ID
@@ -255,15 +273,10 @@ class KernelService {
       ws.onopen = () => {
         console.log('Kernel WebSocket connected');
         session.ws = ws;
-        // Replay anything we haven't seen yet (dedupe by seq in handleMessage).
-        const since = session.lastSeenSeq ?? 0;
-        if (since >= 0) {
-          try {
-            ws.send(JSON.stringify({ type: 'sync_outputs', since }));
-          } catch (err) {
-            console.error('Failed to request output sync:', err);
-          }
-        }
+        // Request replay before we send any execute/complete messages. This prevents
+        // a race on refresh where live outputs can arrive before replay and cause
+        // the UI to skip buffered outputs.
+        this.requestInitialSync(sessionId);
         resolve();
       };
 
@@ -368,6 +381,22 @@ class KernelService {
             } catch (e) {
               console.error('Buffered output callback error:', e);
             }
+          }
+        }
+      }
+
+      // Mark initial sync complete after we've applied the replay.
+      if (!session.initialSyncDone) {
+        session.initialSyncDone = true;
+        if (session.initialSyncTimeout) {
+          clearTimeout(session.initialSyncTimeout);
+          session.initialSyncTimeout = null;
+        }
+        if (session.initialSyncResolve) {
+          try {
+            session.initialSyncResolve();
+          } catch {
+            // Ignore resolve errors.
           }
         }
       }
@@ -478,6 +507,8 @@ class KernelService {
       throw new Error('Kernel not connected');
     }
 
+    await this.waitForInitialSync(sessionId);
+
     return new Promise((resolve, reject) => {
       session.messageQueue.push({ resolve, reject, onOutput, cellId });
 
@@ -509,6 +540,8 @@ class KernelService {
     if (!session.ws || session.ws.readyState !== WebSocket.OPEN) {
       return { status: 'error', matches: [], cursor_start: cursorPos, cursor_end: cursorPos };
     }
+
+    await this.waitForInitialSync(sessionId);
 
     // Cancel any pending completion
     if (session.pendingCompletion) {
@@ -567,8 +600,6 @@ class KernelService {
    * Interrupt kernel execution for a specific session
    */
   async interruptKernel(sessionId: string): Promise<void> {
-    if (!this.sessions.has(sessionId)) return;
-
     const response = await fetch(`${API_BASE}/kernels/${encodeURIComponent(sessionId)}/interrupt`, {
       method: 'POST'
     });
@@ -583,8 +614,6 @@ class KernelService {
    * Restart a specific kernel
    */
   async restartKernel(sessionId: string): Promise<void> {
-    if (!this.sessions.has(sessionId)) return;
-
     const response = await fetch(`${API_BASE}/kernels/${encodeURIComponent(sessionId)}/restart`, {
       method: 'POST'
     });
@@ -868,6 +897,48 @@ class KernelService {
     }
     const data = await response.json();
     return data.sessions;
+  }
+
+  private requestInitialSync(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    if (session.initialSyncDone) return;
+    if (session.initialSyncPromise) return;
+    if (!session.ws || session.ws.readyState !== WebSocket.OPEN) return;
+
+    session.initialSyncPromise = new Promise<void>((resolve) => {
+      session.initialSyncResolve = resolve;
+    });
+
+    // Replay anything we haven't seen yet (dedupe by seq in handleMessage).
+    const since = session.lastSeenSeq ?? 0;
+    try {
+      session.ws.send(JSON.stringify({ type: 'sync_outputs', since }));
+    } catch (err) {
+      console.error('Failed to request output sync:', err);
+      // Don't block execution forever if we couldn't send the message.
+      session.initialSyncDone = true;
+      session.initialSyncResolve?.();
+      return;
+    }
+
+    // Safety valve: don't block UI actions forever if the server doesn't respond.
+    session.initialSyncTimeout = setTimeout(() => {
+      if (session.initialSyncDone) return;
+      session.initialSyncTimedOut = true;
+      console.warn('[Kernel WS] Initial output sync timed out; continuing without sync');
+      session.initialSyncResolve?.();
+    }, 5000);
+  }
+
+  private async waitForInitialSync(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    if (session.initialSyncDone) return;
+    if (session.initialSyncTimedOut) return;
+    this.requestInitialSync(sessionId);
+    if (!session.initialSyncPromise) return;
+    await session.initialSyncPromise;
   }
 }
 

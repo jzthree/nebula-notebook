@@ -161,6 +161,11 @@ describe('KernelService', () => {
       // Wait for WebSocket
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      // Complete initial sync handshake so executeCode won't block.
+      const ws = MockWebSocket.instances.find(w => w.url.includes('exec-session'));
+      expect(ws).toBeDefined();
+      ws?.simulateMessage({ type: 'sync_outputs', outputs: [], latest_seq: 0 });
+
       const outputs: any[] = [];
       const executePromise = kernelService.executeCode(
         sessionId,
@@ -168,12 +173,11 @@ describe('KernelService', () => {
         (output) => outputs.push(output)
       );
 
-      // Find the WebSocket for this session
-      const ws = MockWebSocket.instances.find(w => w.url.includes('exec-session'));
-      expect(ws).toBeDefined();
+      // Allow the async executeCode() call to enqueue its handler before we simulate messages.
+      await new Promise(resolve => setTimeout(resolve, 0));
 
       // Simulate output and result
-      ws?.simulateMessage({ type: 'output', output: { type: 'stdout', content: 'hello\n' } });
+      ws?.simulateMessage({ type: 'output', output: { type: 'stdout', content: 'hello\n' }, seq: 1, cell_id: null });
       ws?.simulateMessage({ type: 'result', result: { status: 'ok' } });
 
       await executePromise;
@@ -194,6 +198,11 @@ describe('KernelService', () => {
       // Wait for WebSocket
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      // Complete initial sync handshake so executeCode will enqueue its handler immediately.
+      const ws = MockWebSocket.instances.find(w => w.url.includes('replay-session'));
+      expect(ws).toBeDefined();
+      ws?.simulateMessage({ type: 'sync_outputs', outputs: [], latest_seq: 0 });
+
       const onOutput = vi.fn();
       const onBuffered = vi.fn();
       const unsubscribe = kernelService.onBufferedOutput((sid, output, cellId) => {
@@ -207,8 +216,8 @@ describe('KernelService', () => {
         'cell-1'
       );
 
-      const ws = MockWebSocket.instances.find(w => w.url.includes('replay-session'));
-      expect(ws).toBeDefined();
+      // Allow the async executeCode() call to enqueue its handler before we simulate replay.
+      await new Promise(resolve => setTimeout(resolve, 0));
 
       ws?.simulateMessage({
         type: 'sync_outputs',
@@ -235,6 +244,11 @@ describe('KernelService', () => {
       // Wait for WebSocket
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      // Complete initial sync handshake so executeCode will enqueue its handler immediately.
+      const ws = MockWebSocket.instances.find(w => w.url.includes('replay-other-session'));
+      expect(ws).toBeDefined();
+      ws?.simulateMessage({ type: 'sync_outputs', outputs: [], latest_seq: 0 });
+
       const onOutput = vi.fn();
       const onBuffered = vi.fn();
       const unsubscribe = kernelService.onBufferedOutput((sid, output, cellId) => {
@@ -248,8 +262,8 @@ describe('KernelService', () => {
         'cell-1'
       );
 
-      const ws = MockWebSocket.instances.find(w => w.url.includes('replay-other-session'));
-      expect(ws).toBeDefined();
+      // Allow the async executeCode() call to enqueue its handler before we simulate replay.
+      await new Promise(resolve => setTimeout(resolve, 0));
 
       ws?.simulateMessage({
         type: 'sync_outputs',
