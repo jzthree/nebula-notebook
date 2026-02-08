@@ -874,6 +874,9 @@ export const Notebook: React.FC = () => {
   const getFullHistoryRef = useRef(getFullHistory);
   const loadFileRef = useRef<(id: string) => void>(() => {});
   const refreshFileListRef = useRef<() => void>(() => {});
+  const getCellsRef = useRef<() => Cell[]>(() => cellsRef.current);
+  const cellStructureSigRef = useRef<string>('');
+  const [cellStats, setCellStats] = useState<{ count: number; codeCount: number; markdownCount: number }>({ count: 0, codeCount: 0, markdownCount: 0 });
 
   // ⚠️ PERFORMANCE CRITICAL: Refs for renderCell callback stability
   // These allow the memoized renderCell to access current values without recreating
@@ -891,7 +894,28 @@ export const Notebook: React.FC = () => {
   cellClipboardRef.current = cellClipboard;
   cellQueueRef.current = cellQueue;
   getFullHistoryRef.current = getFullHistory;
+  getCellsRef.current = () => cellsRef.current;
   // Note: Other ref updates for renderCell stability are done after their state is defined
+
+  useEffect(() => {
+    const signature = cells.map(cell => `${cell.id}:${cell.type}`).join('|');
+    if (signature !== cellStructureSigRef.current) {
+      cellStructureSigRef.current = signature;
+      let codeCount = 0;
+      let markdownCount = 0;
+      for (const cell of cells) {
+        if (cell.type === 'code') {
+          codeCount += 1;
+        } else if (cell.type === 'markdown') {
+          markdownCount += 1;
+        }
+      }
+      setCellStats({ count: cells.length, codeCount, markdownCount });
+    }
+  }, [cells]);
+
+  const handleChatClose = useCallback(() => setIsChatOpen(false), []);
+  const getCells = useCallback(() => getCellsRef.current(), []);
 
   // Flush active cell's pending content changes before keyframe operations
   const flushActiveCell = useCallback(() => {
@@ -2804,13 +2828,43 @@ export const Notebook: React.FC = () => {
   runAndAdvanceRef.current = runAndAdvance;
   queueExecutionRef.current = queueExecution;
 
+  const handleRunAllCells = useCallback(() => {
+    logOperation({
+      type: 'event',
+      category: 'execution',
+      name: 'runAllCells',
+      data: { cellCount: cellStats.codeCount },
+    });
+    cellsRef.current.forEach(c => queueExecution(c.id));
+  }, [cellStats.codeCount, logOperation, queueExecution]);
+
   // Navigate to a specific cell (used by search)
   const navigateToCell = useCallback((_cellIndex: number, cellId: string) => {
     setActiveCellId(cellId);
     // Find current index by ID in case cells have been modified since search
     const currentIndex = cells.findIndex(c => c.id === cellId);
     if (currentIndex !== -1) {
-      scrollToCell(currentIndex, { retryOnce: true });
+      // Avoid snapping to the top of a cell when it's already on-screen. The
+      // match-level scroll happens inside CodeEditor (and is much less jarring).
+      const escapedId = (() => {
+        if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(cellId);
+        return cellId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      })();
+      const cellEl = document.querySelector(`[data-cell-id="${escapedId}"]`) as HTMLElement | null;
+      const scrollerEl = cellEl?.closest('[data-virtuoso-scroller]') as HTMLElement | null;
+
+      const isCellInViewport = (() => {
+        if (!cellEl) return false; // Not mounted (virtualized out)
+        const cellRect = cellEl.getBoundingClientRect();
+        const viewportRect = scrollerEl
+          ? scrollerEl.getBoundingClientRect()
+          : { top: 0, bottom: window.innerHeight } as DOMRect;
+        return cellRect.bottom > viewportRect.top && cellRect.top < viewportRect.bottom;
+      })();
+
+      if (!isCellInViewport) {
+        scrollToCell(currentIndex, { behavior: 'auto' });
+      }
     }
   }, [cells, scrollToCell]);
 
@@ -3795,9 +3849,9 @@ export const Notebook: React.FC = () => {
                                 {/* Queue Items */}
                                 <div className="max-h-[18.75rem] overflow-y-auto">
                                   {executionQueue.map((cellId, queueIndex) => {
-                                    const cellIndex = cells.findIndex(c => c.id === cellId);
+                                    const cellIndex = cellsRef.current.findIndex(c => c.id === cellId);
                                     const isExecuting = queueIndex === 0;
-                                    const cellContent = cells[cellIndex]?.content.split('\n')[0].slice(0, 20) || 'Empty';
+                                    const cellContent = cellsRef.current[cellIndex]?.content.split('\n')[0].slice(0, 20) || 'Empty';
                                     return (
                                       <div
                                         key={`${cellId}-${queueIndex}`}
@@ -3973,16 +4027,10 @@ export const Notebook: React.FC = () => {
                   <button onClick={handleManualSave} className="btn-secondary hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors">
                       <Save className="w-4 h-4" /> Save
                   </button>
-                  <button onClick={() => {
-                    const codeCellCount = cells.filter(c => c.type === 'code').length;
-                    logOperation({
-                      type: 'event',
-                      category: 'execution',
-                      name: 'runAllCells',
-                      data: { cellCount: codeCellCount },
-                    });
-                    cells.forEach(c => queueExecution(c.id));
-                  }} className="btn-primary flex items-center gap-2 bg-slate-900 text-white px-3 py-1.5 rounded-md hover:bg-slate-700 text-xs font-medium transition-colors shadow-sm">
+                  <button
+                    onClick={handleRunAllCells}
+                    className="btn-primary flex items-center gap-2 bg-slate-900 text-white px-3 py-1.5 rounded-md hover:bg-slate-700 text-xs font-medium transition-colors shadow-sm"
+                  >
                       <Play className="w-4 h-4" /> Run All
                   </button>
 
@@ -4165,9 +4213,9 @@ export const Notebook: React.FC = () => {
           {/* Right side */}
           <div className="flex items-center gap-3">
             {/* Cell count */}
-            <span className="flex items-center gap-1" title={`${cells.filter(c => c.type === 'code').length} code, ${cells.filter(c => c.type === 'markdown').length} markdown`}>
+            <span className="flex items-center gap-1" title={`${cellStats.codeCount} code, ${cellStats.markdownCount} markdown`}>
               <Layers className="w-3 h-3" />
-              {cells.length} cells
+              {cellStats.count} cells
             </span>
 
             {/* Kernel memory usage */}
@@ -4210,8 +4258,8 @@ export const Notebook: React.FC = () => {
       {/* AI Chat Sidebar */}
       <AIChatSidebar
         isOpen={isChatOpen}
-        onClose={() => setIsChatOpen(false)}
-        cells={cells}
+        onClose={handleChatClose}
+        getCells={getCells}
         fileId={currentFileId}
         onInsertCode={handleInsertCode}
         onEditCell={handleEditCell}

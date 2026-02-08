@@ -172,96 +172,102 @@ const currentMatchField = StateField.define<{ start: number; end: number } | nul
 });
 
 // Create extension for search highlighting
-// ⚠️ PERFORMANCE: This extension only rebuilds when search query/options change,
-// NOT when navigating between matches. Current match updates via StateEffect.
+// ⚠️ PERFORMANCE: We avoid full document rescans during match navigation.
+// - All-matches decorations rebuild on doc changes (or when query/options change
+//   and the extension is recreated).
+// - Current match is a tiny decoration updated via StateEffect (O(1)).
 function createSearchHighlightExtension(
   query: string,
   caseSensitive: boolean,
   useRegex: boolean
 ) {
-  return [
-    currentMatchField,
-    ViewPlugin.fromClass(
-      class {
-        decorations: DecorationSet;
-        query: string;
-        caseSensitive: boolean;
-        useRegex: boolean;
+  const allMatchesPlugin = ViewPlugin.fromClass(class {
+    decorations: DecorationSet;
 
-        constructor(view: EditorView) {
-          this.query = query;
-          this.caseSensitive = caseSensitive;
-          this.useRegex = useRegex;
-          this.decorations = this.buildDecorations(view);
-        }
+    constructor(view: EditorView) {
+      this.decorations = this.buildDecorations(view);
+    }
 
-        update(update: ViewUpdate) {
-          // Rebuild decorations if doc changed, viewport changed, or current match changed
-          const currentMatchChanged = update.transactions.some(tr =>
-            tr.effects.some(e => e.is(setCurrentMatch))
-          );
-          if (update.docChanged || update.viewportChanged || currentMatchChanged) {
-            this.decorations = this.buildDecorations(update.view);
-          }
-        }
+    update(update: ViewUpdate) {
+      // Key idea: don't rebuild on viewport changes, since navigating/scrolling
+      // should be cheap even for long documents.
+      if (update.docChanged) {
+        this.decorations = this.buildDecorations(update.view);
+      }
+    }
 
-        buildDecorations(view: EditorView): DecorationSet {
-          const builder = new RangeSetBuilder<Decoration>();
+    buildDecorations(view: EditorView): DecorationSet {
+      const builder = new RangeSetBuilder<Decoration>();
+      if (!query) return builder.finish();
 
-          if (!this.query) return builder.finish();
+      const doc = view.state.doc.toString();
 
-          const doc = view.state.doc.toString();
-          const currentMatch = view.state.field(currentMatchField);
-
-          if (this.useRegex) {
-            // Regex search
-            try {
-              const regex = new RegExp(this.query, this.caseSensitive ? 'g' : 'gi');
-              let match;
-              while ((match = regex.exec(doc)) !== null) {
-                const idx = match.index;
-                const matchLen = match[0].length;
-                if (matchLen === 0) {
-                  regex.lastIndex++; // Prevent infinite loop on zero-length matches
-                  continue;
-                }
-
-                const isCurrentMatch = currentMatch !== null &&
-                  idx === currentMatch.start &&
-                  idx + matchLen === currentMatch.end;
-
-                builder.add(idx, idx + matchLen, isCurrentMatch ? currentMatchMark : searchHighlightMark);
-              }
-            } catch {
-              // Invalid regex, return empty decorations
-              return builder.finish();
+      if (useRegex) {
+        try {
+          const regex = new RegExp(query, caseSensitive ? 'g' : 'gi');
+          let match;
+          while ((match = regex.exec(doc)) !== null) {
+            const idx = match.index;
+            const matchLen = match[0].length;
+            if (matchLen === 0) {
+              regex.lastIndex++; // Prevent infinite loop on zero-length matches
+              continue;
             }
-          } else {
-            // String search
-            const searchStr = this.caseSensitive ? this.query : this.query.toLowerCase();
-            const searchIn = this.caseSensitive ? doc : doc.toLowerCase();
-
-            let pos = 0;
-            while (pos < searchIn.length) {
-              const idx = searchIn.indexOf(searchStr, pos);
-              if (idx === -1) break;
-
-              // Check if this is the current match
-              const isCurrentMatch = currentMatch !== null &&
-                idx === currentMatch.start &&
-                idx + this.query.length === currentMatch.end;
-
-              builder.add(idx, idx + this.query.length, isCurrentMatch ? currentMatchMark : searchHighlightMark);
-              pos = idx + 1;
-            }
+            builder.add(idx, idx + matchLen, searchHighlightMark);
           }
-
+        } catch {
+          // Invalid regex: show no highlights.
           return builder.finish();
         }
-      },
-      { decorations: (v) => v.decorations }
-    ),
-  ];
+      } else {
+        const searchStr = caseSensitive ? query : query.toLowerCase();
+        const searchIn = caseSensitive ? doc : doc.toLowerCase();
+
+        let pos = 0;
+        while (pos < searchIn.length) {
+          const idx = searchIn.indexOf(searchStr, pos);
+          if (idx === -1) break;
+          builder.add(idx, idx + query.length, searchHighlightMark);
+          pos = idx + 1;
+        }
+      }
+
+      return builder.finish();
+    }
+  }, { decorations: v => v.decorations });
+
+  const currentMatchPlugin = ViewPlugin.fromClass(class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = this.buildDecorations(view);
+    }
+
+    update(update: ViewUpdate) {
+      const currentMatchChanged = update.transactions.some(tr =>
+        tr.effects.some(e => e.is(setCurrentMatch))
+      );
+      if (update.docChanged || currentMatchChanged) {
+        this.decorations = this.buildDecorations(update.view);
+      }
+    }
+
+    buildDecorations(view: EditorView): DecorationSet {
+      const builder = new RangeSetBuilder<Decoration>();
+      const currentMatch = view.state.field(currentMatchField);
+      if (!currentMatch) return builder.finish();
+
+      const docLen = view.state.doc.length;
+      const start = Math.max(0, Math.min(currentMatch.start, docLen));
+      const end = Math.max(0, Math.min(currentMatch.end, docLen));
+      if (start >= end) return builder.finish();
+
+      builder.add(start, end, currentMatchMark);
+      return builder.finish();
+    }
+  }, { decorations: v => v.decorations });
+
+  return [currentMatchField, allMatchesPlugin, currentMatchPlugin];
 }
 
 // Extract Python identifiers from code
@@ -608,31 +614,86 @@ export const CodeEditor: React.FC<Props> = ({
   // ⚠️ PERFORMANCE CRITICAL: Update current match via StateEffect, NOT by rebuilding extensions.
   // This allows navigating through search results without recreating all CodeMirror extensions.
   useEffect(() => {
-    if (!editorRef.current?.view) return;
-
-    const view = editorRef.current.view;
     const matchValue = (currentMatchStart !== undefined && currentMatchEnd !== undefined)
       ? { start: currentMatchStart, end: currentMatchEnd }
       : null;
 
-    view.dispatch({
-      effects: setCurrentMatch.of(matchValue),
-    });
-  }, [currentMatchStart, currentMatchEnd]);
+    let cancelled = false;
+    let rafId: number | null = null;
+
+    const dispatchWhenReady = (attempt: number) => {
+      if (cancelled) return;
+
+      const view = editorRef.current?.view;
+      if (!view) {
+        if (attempt < 60) {
+          rafId = requestAnimationFrame(() => dispatchWhenReady(attempt + 1));
+        }
+        return;
+      }
+
+      view.dispatch({ effects: setCurrentMatch.of(matchValue) });
+    };
+
+    dispatchWhenReady(0);
+    return () => {
+      cancelled = true;
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
+  }, [searchQuery, currentMatchStart, currentMatchEnd]);
 
   // Scroll current search match into view (without changing selection)
   useEffect(() => {
     if (!isSearchOpen) return;
-    if (!editorRef.current?.view) return;
     if (currentMatchStart === undefined || currentMatchEnd === undefined) return;
 
-    const view = editorRef.current.view;
-    const docLen = view.state.doc.length;
-    const pos = Math.max(0, Math.min(currentMatchStart, docLen));
+    let cancelled = false;
+    let rafId: number | null = null;
 
-    view.dispatch({
-      effects: EditorView.scrollIntoView(pos, { y: 'center' }),
-    });
+    const scrollWhenReady = (attempt: number) => {
+      if (cancelled) return;
+
+      const view = editorRef.current?.view;
+      if (!view) {
+        if (attempt < 60) {
+          rafId = requestAnimationFrame(() => scrollWhenReady(attempt + 1));
+        }
+        return;
+      }
+
+      const docLen = view.state.doc.length;
+      const pos = Math.max(0, Math.min(currentMatchStart, docLen));
+
+      // Ensure the current match decoration is applied even if the view mounted late.
+      view.dispatch({
+        effects: [
+          setCurrentMatch.of({ start: currentMatchStart, end: currentMatchEnd }),
+          EditorView.scrollIntoView(pos, { y: 'center' }),
+        ],
+      });
+
+      // The mark span may not exist until after the scroll+render tick.
+      const tryScrollDom = (tries: number) => {
+        if (cancelled) return;
+
+        const matchEl = view.dom.querySelector('.cm-searchMatch-current') as HTMLElement | null;
+        if (matchEl) {
+          matchEl.scrollIntoView({ block: 'center', inline: 'nearest' });
+          return;
+        }
+
+        if (tries < 10) {
+          requestAnimationFrame(() => tryScrollDom(tries + 1));
+        }
+      };
+      requestAnimationFrame(() => tryScrollDom(0));
+    };
+
+    scrollWhenReady(0);
+    return () => {
+      cancelled = true;
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
   }, [isSearchOpen, currentMatchStart, currentMatchEnd]);
 
   // ⚠️ PERFORMANCE CRITICAL: Extensions rebuild when dependencies change.
