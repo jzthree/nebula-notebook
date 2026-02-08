@@ -13,7 +13,7 @@ export class SessionStore {
   private db: Database.Database;
 
   constructor(dbPath?: string) {
-    const resolvedPath = dbPath || path.join(__dirname, '../../sessions.db');
+    const resolvedPath = dbPath || process.env.NEBULA_SESSIONS_DB_PATH || path.join(__dirname, '../../sessions.db');
     this.db = new Database(resolvedPath);
     this.initDb();
   }
