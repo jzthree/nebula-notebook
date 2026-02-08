@@ -24,6 +24,7 @@ import { getDeadKernelSessions, cleanupDeadKernelSessions, DeadSession } from '.
 import { getClusterInfo } from '../services/clusterService';
 import { FileBrowser } from './FileBrowser';
 import { ResourcePanel } from './ResourcePanel';
+import { KernelManager } from './KernelManager';
 
 // Kernel session from API
 interface KernelSession {
@@ -133,6 +134,7 @@ export const Dashboard: React.FC = () => {
   // Sessions state
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [kernelSessions, setKernelSessions] = useState<KernelSession[]>([]);
+  const [isKernelManagerOpen, setIsKernelManagerOpen] = useState(false);
 
   // Tips carousel state (random initial index)
   const [tipIndex, setTipIndex] = useState(() => Math.floor(Math.random() * TIPS.length));
@@ -320,6 +322,14 @@ export const Dashboard: React.FC = () => {
               <span className="hidden sm:inline">Terminal</span>
             </button>
             <button
+              onClick={() => setIsKernelManagerOpen(true)}
+              className="flex items-center gap-2 px-3 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium transition-colors"
+              title="Manage kernels"
+            >
+              <Cpu className="w-4 h-4" />
+              <span className="hidden sm:inline">Kernels</span>
+            </button>
+            <button
               onClick={handleNewNotebook}
               className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-sm font-medium transition-colors"
             >
@@ -329,6 +339,13 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
       </header>
+
+      <KernelManager
+        isOpen={isKernelManagerOpen}
+        onClose={() => setIsKernelManagerOpen(false)}
+        currentSessionId={null}
+        onKernelKilled={() => loadSessions()}
+      />
 
       {/* Dead Sessions Cleanup Banner */}
       {totalDeadSessions > 0 && !cleanupDismissed && (
