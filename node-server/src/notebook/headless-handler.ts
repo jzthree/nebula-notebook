@@ -921,20 +921,21 @@ export class HeadlessOperationHandler {
 
   private async readCellOutput(operation: Record<string, unknown>): Promise<OperationResult> {
     const notebookPath = operation.notebookPath as string;
-    const cellId = operation.cellId as string | undefined;
-    const cellIndex = operation.cellIndex as number | undefined;
+    const cellId = (operation.cellId as string | undefined) ?? (operation.cell_id as string | undefined);
+    const cellIndex = (operation.cellIndex as number | undefined) ?? (operation.cell_index as number | undefined);
     const maxLines = (operation.max_lines as number) ?? OUTPUT_DEFAULT_MAX_LINES;
     const maxChars = (operation.max_chars as number) ?? OUTPUT_DEFAULT_MAX_CHARS;
     const maxLinesError = (operation.max_lines_error as number) ?? OUTPUT_DEFAULT_MAX_LINES_ERROR;
     const maxCharsError = (operation.max_chars_error as number) ?? OUTPUT_DEFAULT_MAX_CHARS_ERROR;
     const lineOffset = (operation.line_offset as number) ?? 0;
     const saveToFile = (operation.save_to_file as boolean) ?? false;
-    const maxWait = (operation.maxWait as number) ?? 0; // Polling timeout in seconds
+    const maxWait = ((operation.maxWait as number | undefined) ?? (operation.max_wait as number | undefined) ?? 0); // seconds
 
     let cells = this.getCells(notebookPath);
 
     let targetIndex: number | null = null;
     let cell: NebulaCell | null = null;
+    let targetCellId: string | null = null;
 
     if (cellId) {
       targetIndex = cells.findIndex(c => c.id === cellId);
@@ -942,20 +943,23 @@ export class HeadlessOperationHandler {
         return { success: false, error: `Cell with ID "${cellId}" not found` };
       }
       cell = cells[targetIndex];
+      targetCellId = cell.id;
     } else if (cellIndex !== undefined) {
       if (cellIndex < 0 || cellIndex >= cells.length) {
         return { success: false, error: `Cell index ${cellIndex} out of range` };
       }
       targetIndex = cellIndex;
       cell = cells[cellIndex];
+      targetCellId = cell.id;
     } else {
       return { success: false, error: 'Must provide cellId or cellIndex' };
     }
 
     // Poll for new outputs if maxWait > 0
     if (maxWait > 0) {
-      const initialOutputCount = (cell.outputs || []).length;
-      const initialOutputChars = (cell.outputs || []).reduce((sum, o) => sum + (o.content?.length || 0), 0);
+      let baselineOutputCount = (cell.outputs || []).length;
+      let baselineOutputChars = (cell.outputs || []).reduce((sum, o) => sum + (o.content?.length || 0), 0);
+      let wasExecuting = !!cell.isExecuting;
       const startTime = Date.now();
       const pollInterval = 500; // Poll every 500ms like Python
 
@@ -963,13 +967,35 @@ export class HeadlessOperationHandler {
         await this.sleep(pollInterval);
         // Re-read cells from cache to detect new outputs
         cells = this.getCells(notebookPath);
+        if (targetCellId) {
+          targetIndex = cells.findIndex(c => c.id === targetCellId);
+          if (targetIndex === -1) {
+            return { success: false, error: `Cell with ID "${targetCellId}" not found` };
+          }
+        }
         cell = cells[targetIndex!];
+        if (!cell) {
+          return { success: false, error: 'Cell not found' };
+        }
+
+        // If execution starts after we began polling (e.g. queued), reset the baseline so we
+        // wait for outputs from this run rather than comparing against previous outputs.
+        if (!wasExecuting && cell.isExecuting) {
+          wasExecuting = true;
+          baselineOutputCount = (cell.outputs || []).length;
+          baselineOutputChars = (cell.outputs || []).reduce((sum, o) => sum + (o.content?.length || 0), 0);
+        }
         const currentOutputCount = (cell.outputs || []).length;
         const currentOutputChars = (cell.outputs || []).reduce((sum, o) => sum + (o.content?.length || 0), 0);
 
         // Check if outputs changed (more outputs or more content)
-        if (currentOutputCount > initialOutputCount || currentOutputChars > initialOutputChars) {
+        if (currentOutputCount > baselineOutputCount || currentOutputChars > baselineOutputChars) {
           break; // New output arrived
+        }
+
+        // If the cell finished executing but produced no additional output, stop waiting.
+        if (wasExecuting && !cell.isExecuting) {
+          break;
         }
       }
     }
@@ -1276,10 +1302,10 @@ export class HeadlessOperationHandler {
    * Matches Python headless_handler._execute_cell() behavior.
    */
   private async executeCell(operation: Record<string, unknown>, notebookPath: string): Promise<OperationResult> {
-    const cellId = operation.cellId as string | undefined;
-    const cellIndex = operation.cellIndex as number | undefined;
-    const maxWait = (operation.maxWait as number) || 10;
-    const saveOutputs = (operation.saveOutputs as boolean) ?? true;
+    const cellId = (operation.cellId as string | undefined) ?? (operation.cell_id as string | undefined);
+    const cellIndex = (operation.cellIndex as number | undefined) ?? (operation.cell_index as number | undefined);
+    const maxWait = ((operation.maxWait as number | undefined) ?? (operation.max_wait as number | undefined) ?? 10);
+    const saveOutputs = ((operation.saveOutputs as boolean | undefined) ?? (operation.save_outputs as boolean | undefined) ?? true);
 
     // Get the cell
     const cells = this.getCells(notebookPath);
@@ -1337,7 +1363,7 @@ export class HeadlessOperationHandler {
     }
 
     // Get or create a kernel session for this notebook
-    const requestedSessionId = operation.sessionId as string | undefined;
+    const requestedSessionId = (operation.sessionId as string | undefined) ?? (operation.session_id as string | undefined);
     let sessionId: string;
     if (requestedSessionId) {
       if (!this.kernelService.hasSession(requestedSessionId)) {
@@ -1353,6 +1379,11 @@ export class HeadlessOperationHandler {
         return { success: false, error: `Failed to start kernel: ${errMsg}` };
       }
     }
+
+    // Mark executing and clear outputs immediately so read_output doesn't return stale
+    // outputs from a previous run while this execution is in-flight.
+    cell.isExecuting = true;
+    cell.outputs = [];
 
     // Execute the cell with periodic output saving
     const runId = uuidv4();

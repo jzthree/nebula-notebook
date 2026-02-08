@@ -1074,20 +1074,24 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
         }
 
         case 'readCellOutput': {
-          const { cellId, cellIndex, maxWait = 0 } = operation as ReadCellOutputOp & { maxWait?: number };
+          const { cellId, cellIndex } = operation as ReadCellOutputOp;
+          const maxWait = (operation as any).maxWait ?? (operation as any).max_wait ?? 0;
 
           let targetIndex: number | undefined;
+          let targetCellId: string | undefined;
 
           if (cellId) {
             targetIndex = currentCells.findIndex(c => c.id === cellId);
             if (targetIndex === -1) {
               return { success: false, error: `Cell with ID "${cellId}" not found` };
             }
+            targetCellId = cellId;
           } else if (cellIndex !== undefined) {
             if (cellIndex < 0 || cellIndex >= currentCells.length) {
               return { success: false, error: `Cell index ${cellIndex} out of range` };
             }
             targetIndex = cellIndex;
+            targetCellId = currentCells[cellIndex].id;
           } else {
             return { success: false, error: 'Must provide cellId or cellIndex' };
           }
@@ -1095,8 +1099,9 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           // If maxWait > 0, poll for new outputs
           let cell = currentCells[targetIndex];
           if (maxWait > 0) {
-            const initialOutputCount = cell.outputs.length;
-            const initialOutputChars = cell.outputs.reduce((sum, o) => sum + o.content.length, 0);
+            let baselineOutputCount = cell.outputs.length;
+            let baselineOutputChars = cell.outputs.reduce((sum, o) => sum + o.content.length, 0);
+            let wasExecuting = !!cell.isExecuting;
             const startTime = Date.now();
             const pollInterval = 500; // 500ms
 
@@ -1104,14 +1109,29 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
               await new Promise(resolve => setTimeout(resolve, pollInterval));
               // Re-read from current ref (cells may have updated)
               const updatedCells = cellsRef.current;
-              if (targetIndex >= updatedCells.length) break; // Cell deleted
-              cell = updatedCells[targetIndex];
+              const idx = targetCellId ? updatedCells.findIndex(c => c.id === targetCellId) : targetIndex;
+              if (idx === undefined || idx === -1 || idx >= updatedCells.length) {
+                return { success: false, error: `Cell with ID "${targetCellId || '(unknown)'}" not found` };
+              }
+              targetIndex = idx;
+              cell = updatedCells[idx];
+              if (!wasExecuting && cell.isExecuting) {
+                // Execution started after we began polling (e.g. queued). Reset baseline so we
+                // wait for outputs from this run rather than comparing against previous outputs.
+                wasExecuting = true;
+                baselineOutputCount = cell.outputs.length;
+                baselineOutputChars = cell.outputs.reduce((sum, o) => sum + o.content.length, 0);
+              }
               const currentOutputCount = cell.outputs.length;
               const currentOutputChars = cell.outputs.reduce((sum, o) => sum + o.content.length, 0);
 
               // Check if outputs changed
-              if (currentOutputCount > initialOutputCount || currentOutputChars > initialOutputChars) {
+              if (currentOutputCount > baselineOutputCount || currentOutputChars > baselineOutputChars) {
                 break; // New output arrived
+              }
+
+              if (wasExecuting && !cell.isExecuting) {
+                break; // Execution completed without new output
               }
             }
           }
@@ -1309,7 +1329,11 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
         }
 
         case 'executeCell': {
-          const { cellId, cellIndex, sessionId, maxWait, saveOutputs } = operation;
+          const cellId = (operation as any).cellId ?? (operation as any).cell_id;
+          const cellIndex = (operation as any).cellIndex ?? (operation as any).cell_index;
+          const sessionId = (operation as any).sessionId ?? (operation as any).session_id;
+          const maxWait = (operation as any).maxWait ?? (operation as any).max_wait;
+          const saveOutputs = (operation as any).saveOutputs ?? (operation as any).save_outputs;
 
           // Find the cell
           let targetIndex: number | undefined;

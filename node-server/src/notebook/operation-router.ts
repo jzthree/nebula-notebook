@@ -374,10 +374,10 @@ export class OperationRouter {
     let timeout = this.operationTimeout;
 
     if (opType === 'executeCell') {
-      const maxWait = (operation.maxWait as number) || 10;
+      const maxWait = ((operation.maxWait as number | undefined) ?? (operation.max_wait as number | undefined) ?? 10);
       timeout = (maxWait + 5) * 1000;
     } else if (opType === 'readCellOutput') {
-      const maxWait = (operation.maxWait as number) || 0;
+      const maxWait = ((operation.maxWait as number | undefined) ?? (operation.max_wait as number | undefined) ?? 0);
       timeout = Math.max(this.operationTimeout, (maxWait + 5) * 1000);
     }
 
