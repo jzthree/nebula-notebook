@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * API Contract Tests
  *
@@ -337,4 +338,3 @@ describe('API Contract Tests - Field Types', () => {
     });
   });
 });
-

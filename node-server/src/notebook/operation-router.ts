@@ -65,9 +65,17 @@ export class OperationRouter {
     // Close existing connection if any
     if (this.uiConnections.has(normalizedPath)) {
       const oldConn = this.uiConnections.get(normalizedPath)!;
-      for (const [, request] of oldConn.pendingRequests) {
-        clearTimeout(request.timeoutId);
-        request.reject(new Error('Connection replaced'));
+      if (oldConn.websocket !== websocket) {
+        for (const [, request] of oldConn.pendingRequests) {
+          clearTimeout(request.timeoutId);
+          request.reject(new Error('Connection replaced'));
+        }
+        // Ensure the old connection doesn't later unregister the new one.
+        try {
+          oldConn.websocket.close(1000, 'Connection replaced');
+        } catch {
+          // Ignore close errors from already-closed sockets.
+        }
       }
     }
 
@@ -83,11 +91,15 @@ export class OperationRouter {
   /**
    * Unregister a UI connection.
    */
-  unregisterUI(notebookPath: string): void {
+  unregisterUI(websocket: WebSocket, notebookPath: string): void {
     const normalizedPath = path.resolve(notebookPath);
 
     if (this.uiConnections.has(normalizedPath)) {
       const conn = this.uiConnections.get(normalizedPath)!;
+      // If we replaced the UI connection and the old one closes later, ignore it.
+      if (conn.websocket !== websocket) {
+        return;
+      }
       for (const [, request] of conn.pendingRequests) {
         clearTimeout(request.timeoutId);
         request.reject(new Error('UI disconnected'));

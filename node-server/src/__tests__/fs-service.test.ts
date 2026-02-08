@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Filesystem Service Tests
  *

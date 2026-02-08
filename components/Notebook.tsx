@@ -647,6 +647,12 @@ export const Notebook: React.FC = () => {
     const maxWait = (options?.maxWait ?? 10) * 1000; // Convert to ms
     const pollInterval = 100; // Poll every 100ms
 
+    // Agent operations need a completion signal that can't be missed for fast cells.
+    // `isExecuting` can flip true->false between polls (especially when the kernel is
+    // already warm), so instead we wait for executionCount/lastExecutionMs to change.
+    const baselineExecutionCount = cell.executionCount;
+    const baselineLastExecutionMs = cell.lastExecutionMs;
+
     const currentQueue = executionQueueRef.current;
     const existingIndex = currentQueue.indexOf(cellId);
     const queuePosition = existingIndex >= 0 ? existingIndex : currentQueue.length;
@@ -671,10 +677,8 @@ export const Notebook: React.FC = () => {
       executionRunIdsRef.current.set(cellId, createRunId());
     }
 
-    // Wait for execution to complete (isExecuting becomes false) or timeout
+    // Wait for execution to complete (executionCount/lastExecutionMs changes) or timeout.
     return new Promise((resolve) => {
-      let wasExecuting = false; // Track if execution ever started
-
       const checkCompletion = () => {
         const elapsed = Date.now() - startTime;
 
@@ -694,14 +698,12 @@ export const Notebook: React.FC = () => {
           return;
         }
 
-        // Track if execution started
-        if (currentCell.isExecuting) {
-          wasExecuting = true;
-        }
+        const executionCountChanged = currentCell.executionCount !== baselineExecutionCount;
+        const lastExecutionChanged = currentCell.lastExecutionMs !== baselineLastExecutionMs;
 
-        // Check if execution completed (was executing, now not)
-        if (wasExecuting && !currentCell.isExecuting) {
-          // Execution complete - get outputs from cell state
+        // Check if execution completed (execution markers changed)
+        if (executionCountChanged || lastExecutionChanged) {
+          // Execution complete - read outputs from cell state
           const hasError = currentCell.outputs.some(o => o.type === 'error');
           resolve({
             success: true,

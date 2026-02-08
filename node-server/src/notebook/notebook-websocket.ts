@@ -89,7 +89,7 @@ export function setupNotebookWebSocket(server: HttpServer): WebSocketServer {
 
     ws.on('close', () => {
       console.log(`[Notebook WS] Disconnected for notebook: ${notebookPath}`);
-      operationRouter.unregisterUI(notebookPath);
+      operationRouter.unregisterUI(ws, notebookPath);
     });
   });
 
