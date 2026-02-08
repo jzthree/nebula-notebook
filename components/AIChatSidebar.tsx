@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, memo, useCallback } from 'react';
 import { Bot, X, Send, Plus, CornerDownLeft, Pencil, Trash2, ChevronDown, Settings2 } from 'lucide-react';
 import { Cell } from '../types';
 import {
@@ -15,7 +15,7 @@ import { diffLines } from '../utils/simpleDiff';
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  cells: Cell[];
+  getCells: () => Cell[];
   fileId: string | null;  // Current notebook file ID for per-notebook chat
   onInsertCode: (code: string, targetIndex?: number) => void;
   onEditCell: (index: number, code: string) => void;
@@ -38,8 +38,9 @@ const getChatHistory = (fileId: string): ChatMessage[] => {
 };
 
 // Save chat history for a specific notebook
-const saveChatHistory = (fileId: string, messages: ChatMessage[]) => {
+const saveChatHistory = (fileId: string | null, messages: ChatMessage[]) => {
   try {
+    if (!fileId) return;
     localStorage.setItem(CHAT_STORAGE_PREFIX + fileId, JSON.stringify(messages));
   } catch (e) {
     console.warn('Failed to save chat history:', e);
@@ -66,7 +67,7 @@ const applyPatch = (original: string, patchCode: string): string | null => {
   return null;
 };
 
-export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId, onInsertCode, onEditCell, onDeleteCell }) => {
+const AIChatSidebarComponent: React.FC<Props> = ({ isOpen, onClose, getCells, fileId, onInsertCode, onEditCell, onDeleteCell }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -74,6 +75,7 @@ export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId,
   const [providers, setProviders] = useState<Record<string, string[]>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastFileIdRef = useRef<string | null>(null);
+  const cellsRef = useRef<Cell[]>([]);
 
   // LLM Settings
   const [currentProvider, setCurrentProvider] = useState<LLMProvider>('anthropic');
@@ -117,7 +119,7 @@ export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId,
   const loadProviders = async () => {
     try {
       const response = await getAvailableProviders();
-      setProviders(response.providers);
+      setProviders(response?.providers ?? {});
     } catch (error) {
       console.error('Failed to load providers:', error);
       // Fallback
@@ -135,9 +137,23 @@ export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId,
     }
   }, [messages, isOpen]);
 
+  useEffect(() => {
+    if (isOpen) {
+      cellsRef.current = getCells();
+    }
+  }, [isOpen, getCells]);
+
+  const normalizeModels = useCallback((value: unknown): string[] => (
+    Array.isArray(value) ? value : []
+  ), []);
+
+  const getDefaultModel = useCallback((provider: LLMProvider): string => {
+    const models = normalizeModels(providers?.[provider]);
+    return models[0] || '';
+  }, [providers, normalizeModels]);
+
   const handleProviderChange = (provider: LLMProvider) => {
-    const models = providers[provider] || [];
-    const defaultModel = models[0] || '';
+    const defaultModel = getDefaultModel(provider);
     setCurrentProvider(provider);
     setCurrentModel(defaultModel);
     saveSettings({ llmProvider: provider, llmModel: defaultModel });
@@ -147,6 +163,12 @@ export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId,
     setCurrentModel(model);
     saveSettings({ llmModel: model });
   };
+
+  useEffect(() => {
+    if (!currentModel) {
+      setCurrentModel(getDefaultModel(currentProvider));
+    }
+  }, [currentModel, currentProvider, getDefaultModel]);
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
@@ -161,7 +183,7 @@ export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId,
         provider: currentProvider,
         model: currentModel
       };
-      const response = await chatWithNotebook(userMsg, messages, cells, config);
+      const response = await chatWithNotebook(userMsg, messages, getCells(), config);
       setMessages(prev => [...prev, { role: 'assistant', content: response }]);
     } catch (e) {
       console.error('Chat error:', e);
@@ -237,6 +259,8 @@ export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId,
             let cleanCode = rawCode;
             let patchedContent: string | null = null;
             let isPatchFailed = false;
+
+            const cells = cellsRef.current;
 
             if (suggestion.type === 'edit') {
               cleanCode = rawCode.replace(/#\s*Edit Cell\s+\d+\n?/, '');
@@ -347,7 +371,7 @@ export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId,
     }
   };
 
-  const availableModels = providers[currentProvider] || [];
+  const availableModels = normalizeModels(providers?.[currentProvider]);
 
   return (
     <>
@@ -461,3 +485,5 @@ export const AIChatSidebar: React.FC<Props> = ({ isOpen, onClose, cells, fileId,
     </>
   );
 };
+
+export const AIChatSidebar = memo(AIChatSidebarComponent);
