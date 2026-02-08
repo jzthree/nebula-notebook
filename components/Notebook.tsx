@@ -525,6 +525,12 @@ export const Notebook: React.FC = () => {
             display_name: kernelDisplayName ?? (kernelName === 'python3' ? 'Python 3' : kernelName),
           },
           language_info: { name: 'python' },
+          // Agent-created notebooks should be agent-permitted by default so the agent can
+          // continue modifying the file via headless ops even if no UI is connected.
+          nebula: {
+            agent_created: true,
+            agent_permitted: true,
+          },
         },
         cells: [],
       };
