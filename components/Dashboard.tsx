@@ -25,6 +25,7 @@ import { getClusterInfo } from '../services/clusterService';
 import { FileBrowser } from './FileBrowser';
 import { ResourcePanel } from './ResourcePanel';
 import { KernelManager } from './KernelManager';
+import { TerminalManager } from './TerminalManager';
 
 // Kernel session from API
 interface KernelSession {
@@ -135,6 +136,7 @@ export const Dashboard: React.FC = () => {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [kernelSessions, setKernelSessions] = useState<KernelSession[]>([]);
   const [isKernelManagerOpen, setIsKernelManagerOpen] = useState(false);
+  const [isTerminalManagerOpen, setIsTerminalManagerOpen] = useState(false);
 
   // Tips carousel state (random initial index)
   const [tipIndex, setTipIndex] = useState(() => Math.floor(Math.random() * TIPS.length));
@@ -315,7 +317,7 @@ export const Dashboard: React.FC = () => {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => handleOpenTerminal('default')}
+              onClick={() => setIsTerminalManagerOpen(true)}
               className="flex items-center gap-2 px-3 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium transition-colors"
             >
               <Terminal className="w-4 h-4" />
@@ -345,6 +347,11 @@ export const Dashboard: React.FC = () => {
         onClose={() => setIsKernelManagerOpen(false)}
         currentSessionId={null}
         onKernelKilled={() => loadSessions()}
+      />
+      <TerminalManager
+        isOpen={isTerminalManagerOpen}
+        onClose={() => setIsTerminalManagerOpen(false)}
+        onTerminalClosed={() => loadSessions()}
       />
 
       {/* Dead Sessions Cleanup Banner */}

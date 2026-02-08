@@ -11,6 +11,8 @@ import { Terminal, AlertCircle, ExternalLink } from 'lucide-react';
 import { TerminalInstance } from './TerminalInstance';
 import {
   getOrCreateNamedTerminal,
+  getTerminal,
+  createTerminal,
   checkTerminalServer,
   TerminalInfo,
 } from '../services/terminalService';
@@ -24,6 +26,7 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({ terminalName }) => {
   const [serverAvailable, setServerAvailable] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const isRawTerminalId = terminalName.length > 32;
 
   // Check server and create/get terminal
   useEffect(() => {
@@ -40,10 +43,22 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({ terminalName }) => {
         return;
       }
 
-      // Get or create the named terminal
       try {
-        const terminalInfo = await getOrCreateNamedTerminal(terminalName);
-        setTerminal(terminalInfo);
+        if (isRawTerminalId) {
+          // If the id is longer than the named-terminal normalization limit, treat it as a raw terminal id.
+          // This supports attaching to ephemeral UUID terminals created by the notebook UI.
+          const existing = await getTerminal(terminalName);
+          if (!existing) {
+            setError('Terminal not found. It may have exited or been closed.');
+            setTerminal(null);
+          } else {
+            setTerminal(existing);
+          }
+        } else {
+          // Named terminal semantics (persistent terminals via URL)
+          const terminalInfo = await getOrCreateNamedTerminal(terminalName);
+          setTerminal(terminalInfo);
+        }
       } catch (err) {
         console.error('[TerminalPage] Failed to get/create terminal:', err);
         setError(err instanceof Error ? err.message : 'Failed to create terminal');
@@ -53,10 +68,16 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({ terminalName }) => {
     };
 
     init();
-  }, [terminalName]);
+  }, [terminalName, isRawTerminalId]);
 
   // Handle terminal exit - recreate it
   const handleTerminalExit = useCallback(async (_code: number) => {
+    if (isRawTerminalId) {
+      setTerminal(null);
+      setError('Terminal exited. Create a new one from the dashboard.');
+      return;
+    }
+
     try {
       const terminalInfo = await getOrCreateNamedTerminal(terminalName);
       setTerminal(terminalInfo);
@@ -64,7 +85,17 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({ terminalName }) => {
       console.error('[TerminalPage] Failed to recreate terminal:', err);
       setError('Terminal exited. Refresh to reconnect.');
     }
-  }, [terminalName]);
+  }, [terminalName, isRawTerminalId]);
+
+  const handleCreateNew = useCallback(async () => {
+    try {
+      const t = await createTerminal();
+      window.location.href = `/?terminal=${encodeURIComponent(t.id)}`;
+    } catch (err) {
+      console.error('[TerminalPage] Failed to create terminal:', err);
+      setError(err instanceof Error ? err.message : 'Failed to create terminal');
+    }
+  }, []);
 
   // Update page title
   useEffect(() => {
@@ -127,12 +158,21 @@ export const TerminalPage: React.FC<TerminalPageProps> = ({ terminalName }) => {
               <AlertCircle className="w-12 h-12 mx-auto mb-3 text-red-500" />
               <p className="text-lg font-medium">Error</p>
               <p className="text-sm mt-2 text-slate-400">{error}</p>
-              <button
-                onClick={() => window.location.reload()}
-                className="mt-4 px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded text-sm"
-              >
-                Refresh
-              </button>
+              {isRawTerminalId ? (
+                <button
+                  onClick={handleCreateNew}
+                  className="mt-4 px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded text-sm"
+                >
+                  New Terminal
+                </button>
+              ) : (
+                <button
+                  onClick={() => window.location.reload()}
+                  className="mt-4 px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded text-sm"
+                >
+                  Refresh
+                </button>
+              )}
             </div>
           </div>
         )}
