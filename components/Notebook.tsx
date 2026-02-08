@@ -917,6 +917,13 @@ export const Notebook: React.FC = () => {
   const handleChatClose = useCallback(() => setIsChatOpen(false), []);
   const getCells = useCallback(() => getCellsRef.current(), []);
 
+  // Track last-known cursor position so search next/prev can be relative to cursor.
+  const cursorAnchorRef = useRef<{ cellId: string; pos: number; ts: number } | null>(null);
+  const recordCursorAnchor = useCallback((cellId: string, pos: number) => {
+    cursorAnchorRef.current = { cellId, pos, ts: Date.now() };
+  }, []);
+  const getCursorAnchor = useCallback(() => cursorAnchorRef.current, []);
+
   // Flush active cell's pending content changes before keyframe operations
   const flushActiveCell = useCallback(() => {
     const activeId = activeCellIdRef.current;
@@ -2851,7 +2858,11 @@ export const Notebook: React.FC = () => {
         return cellId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       })();
       const cellEl = document.querySelector(`[data-cell-id="${escapedId}"]`) as HTMLElement | null;
-      const scrollerEl = cellEl?.closest('[data-virtuoso-scroller]') as HTMLElement | null;
+      const scrollerEl = (
+        (cellEl?.closest('[data-virtuoso-scroller]') as HTMLElement | null) ||
+        (document.querySelector('[data-virtuoso-scroller]') as HTMLElement | null) ||
+        (document.querySelector('.virtuoso-scroller') as HTMLElement | null)
+      );
 
       const isCellInViewport = (() => {
         if (!cellEl) return false; // Not mounted (virtualized out)
@@ -4108,7 +4119,7 @@ export const Notebook: React.FC = () => {
               onRangeChange={handleRangeChange}
               renderKey={`${showLineNumbers ? 'line-numbers-on' : 'line-numbers-off'}-${showCellIds ? 'cell-ids-on' : 'cell-ids-off'}-${isPreviewMode ? 'preview' : 'live'}`}
               renderCell={(cell, idx) => (
-                  <CellComponent
+              <CellComponent
                   key={cell.id}
                   cell={cell}
                   index={idx}
@@ -4131,6 +4142,7 @@ export const Notebook: React.FC = () => {
                   onSave={handleManualSave}
                   onSetCellScrolled={setCellScrolled}
                   onSetCellScrolledHeight={setCellScrolledHeight}
+                  onCursorActivity={recordCursorAnchor}
                   searchHighlight={searchQuery}
                   queuePosition={queuePositionMap.get(cell.id) ?? -1}
                   indentConfig={indentConfig}
@@ -4295,6 +4307,7 @@ export const Notebook: React.FC = () => {
         isOpen={isSearchOpen}
         onClose={handleSearchClose}
         onNavigateToCell={navigateToCell}
+        getCursorAnchor={getCursorAnchor}
         onSearchChange={handleSearchChange}
         onReplace={handleReplace}
         onReplaceAllInCell={handleReplaceAllInCell}

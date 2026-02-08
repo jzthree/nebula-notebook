@@ -38,6 +38,7 @@ interface Props {
   onSave?: () => void;
   onSetCellScrolled?: (id: string, scrolled: boolean) => void; // Toggle output scroll/wrap mode
   onSetCellScrolledHeight?: (id: string, height: number) => void; // Set output area height in scroll mode
+  onCursorActivity?: (cellId: string, pos: number) => void; // For search navigation relative to cursor
   searchHighlight?: SearchHighlight | null;
   queuePosition?: number; // Position in execution queue (-1 or undefined = not queued)
   indentConfig?: IndentationConfig; // Detected indentation configuration
@@ -73,6 +74,7 @@ const CellComponent: React.FC<Props> = ({
   onSave,
   onSetCellScrolled,
   onSetCellScrolledHeight,
+  onCursorActivity,
   searchHighlight,
   queuePosition,
   indentConfig = DEFAULT_INDENTATION,
@@ -105,6 +107,7 @@ const CellComponent: React.FC<Props> = ({
   const onFlushRef = useRef(onFlush);
   const onActivateRef = useRef(onActivate);
   const onUpdateRef = useRef(onUpdate);
+  const onCursorActivityRef = useRef(onCursorActivity);
   const cellIdRef = useRef(cell.id);
   const cellContentRef = useRef(cell.content);
 
@@ -116,6 +119,7 @@ const CellComponent: React.FC<Props> = ({
     onFlushRef.current = onFlush;
     onActivateRef.current = onActivate;
     onUpdateRef.current = onUpdate;
+    onCursorActivityRef.current = onCursorActivity;
     cellIdRef.current = cell.id;
     cellContentRef.current = cell.content;
   });
@@ -167,6 +171,10 @@ const CellComponent: React.FC<Props> = ({
   // Stable onChange handler for CodeEditor
   const handleEditorChange = useCallback((value: string) => {
     onUpdateRef.current(cellIdRef.current, value);
+  }, []);
+
+  const handleCursorActivity = useCallback((pos: number) => {
+    onCursorActivityRef.current?.(cellIdRef.current, pos);
   }, []);
 
   const handleEditorBlur = useCallback(() => {
@@ -527,6 +535,7 @@ const CellComponent: React.FC<Props> = ({
           searchHighlight={searchHighlight}
           cellId={cell.id}
           shouldFocus={focusState === 'editor'}
+          onCursorActivity={onCursorActivity ? handleCursorActivity : undefined}
           indentConfig={indentConfig}
           allCellsRef={allCellsRef}
           showLineNumbers={cell.type === 'code' && showLineNumbers}

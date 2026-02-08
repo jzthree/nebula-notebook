@@ -20,6 +20,7 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   onNavigateToCell: (cellIndex: number, cellId: string) => void;
+  getCursorAnchor?: () => { cellId: string; pos: number; ts: number } | null;
   onSearchChange?: (query: string, caseSensitive: boolean, useRegex: boolean, currentMatch: CurrentMatch | null) => void;
   onReplace?: (cellId: string, startIndex: number, endIndex: number, replacement: string) => void;
   onReplaceAllInCell?: (cellId: string, query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => void;
@@ -33,6 +34,7 @@ export const NotebookSearch: React.FC<Props> = ({
   isOpen,
   onClose,
   onNavigateToCell,
+  getCursorAnchor,
   onSearchChange,
   onReplace,
   onReplaceAllInCell,
@@ -52,6 +54,7 @@ export const NotebookSearch: React.FC<Props> = ({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const replaceAllMenuRef = useRef<HTMLDivElement>(null);
+  const navAnchorRef = useRef<{ cellId: string; pos: number; ts: number } | null>(null);
 
   // Focus input when opened
   useEffect(() => {
@@ -83,6 +86,37 @@ export const NotebookSearch: React.FC<Props> = ({
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showReplaceAllMenu]);
+
+  const getEffectiveAnchor = useCallback(() => {
+    const cursor = getCursorAnchor?.() ?? null;
+    const nav = navAnchorRef.current;
+
+    if (cursor && (!nav || cursor.ts >= nav.ts)) return cursor;
+    return nav;
+  }, [getCursorAnchor]);
+
+  const findNextMatchIndexFromAnchor = useCallback((matchList: SearchMatch[], anchor: { cellId: string; pos: number }) => {
+    const anchorCellIndex = cells.findIndex(c => c.id === anchor.cellId);
+    if (anchorCellIndex === -1) return 0;
+
+    const idx = matchList.findIndex(m =>
+      m.cellIndex > anchorCellIndex ||
+      (m.cellIndex === anchorCellIndex && m.startIndex >= anchor.pos)
+    );
+    return idx === -1 ? 0 : idx;
+  }, [cells]);
+
+  const findPrevMatchIndexFromAnchor = useCallback((matchList: SearchMatch[], anchor: { cellId: string; pos: number }) => {
+    const anchorCellIndex = cells.findIndex(c => c.id === anchor.cellId);
+    if (anchorCellIndex === -1) return matchList.length > 0 ? matchList.length - 1 : 0;
+
+    for (let i = matchList.length - 1; i >= 0; i--) {
+      const m = matchList[i];
+      if (m.cellIndex < anchorCellIndex) return i;
+      if (m.cellIndex === anchorCellIndex && m.endIndex < anchor.pos) return i;
+    }
+    return matchList.length > 0 ? matchList.length - 1 : 0;
+  }, [cells]);
 
   // Notify parent of search query changes for highlighting
   useEffect(() => {
@@ -175,21 +209,23 @@ export const NotebookSearch: React.FC<Props> = ({
                          caseSensitive !== prevCaseSensitiveRef.current ||
                          useRegex !== prevUseRegexRef.current;
     if (queryChanged && newMatches.length > 0) {
-      // Find first match at or after the active cell
-      const activeCellIndex = activeCellId
-        ? cells.findIndex(c => c.id === activeCellId)
-        : 0;
+      // Prefer starting from the cursor if available, otherwise from the active cell.
+      const anchor = getEffectiveAnchor();
+      let startIndex: number;
 
-      // Find the first match in active cell or later
-      let startIndex = newMatches.findIndex(m => m.cellIndex >= activeCellIndex);
-
-      // If no match found at or after active cell, wrap to beginning
-      if (startIndex === -1) {
-        startIndex = 0;
+      if (anchor) {
+        startIndex = findNextMatchIndexFromAnchor(newMatches, anchor);
+      } else {
+        const activeCellIndex = activeCellId
+          ? cells.findIndex(c => c.id === activeCellId)
+          : 0;
+        startIndex = newMatches.findIndex(m => m.cellIndex >= activeCellIndex);
+        if (startIndex === -1) startIndex = 0;
       }
 
       setCurrentMatchIndex(startIndex);
       onNavigateToCell(newMatches[startIndex].cellIndex, newMatches[startIndex].cellId);
+      navAnchorRef.current = { cellId: newMatches[startIndex].cellId, pos: newMatches[startIndex].endIndex, ts: Date.now() };
       // Re-focus search input after navigation to prevent cell from stealing focus
       requestAnimationFrame(() => {
         searchInputRef.current?.focus();
@@ -211,6 +247,7 @@ export const NotebookSearch: React.FC<Props> = ({
 
     const match = matches[wrappedIndex];
     onNavigateToCell(match.cellIndex, match.cellId);
+    navAnchorRef.current = { cellId: match.cellId, pos: match.endIndex, ts: Date.now() };
 
     // Re-focus search input after navigation
     requestAnimationFrame(() => {
@@ -219,12 +256,18 @@ export const NotebookSearch: React.FC<Props> = ({
   }, [matches, onNavigateToCell]);
 
   const goToNextMatch = useCallback(() => {
-    goToMatch(currentMatchIndex + 1);
-  }, [currentMatchIndex, goToMatch]);
+    if (matches.length === 0) return;
+    const anchor = getEffectiveAnchor();
+    const nextIndex = anchor ? findNextMatchIndexFromAnchor(matches, anchor) : ((currentMatchIndex + 1) % matches.length);
+    goToMatch(nextIndex);
+  }, [currentMatchIndex, goToMatch, matches, findNextMatchIndexFromAnchor, getEffectiveAnchor]);
 
   const goToPrevMatch = useCallback(() => {
-    goToMatch(currentMatchIndex - 1);
-  }, [currentMatchIndex, goToMatch]);
+    if (matches.length === 0) return;
+    const anchor = getEffectiveAnchor();
+    const prevIndex = anchor ? findPrevMatchIndexFromAnchor(matches, anchor) : ((currentMatchIndex - 1 + matches.length) % matches.length);
+    goToMatch(prevIndex);
+  }, [currentMatchIndex, goToMatch, matches, findPrevMatchIndexFromAnchor, getEffectiveAnchor]);
 
   // Replace current match
   const handleReplace = useCallback(() => {

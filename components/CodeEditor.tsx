@@ -44,6 +44,7 @@ interface Props {
   searchHighlight?: SearchHighlight | null;
   cellId?: string;
   shouldFocus?: boolean; // When true, focus the editor
+  onCursorActivity?: (pos: number) => void; // Updates last-known cursor for search navigation
   indentConfig?: IndentationConfig; // Detected indentation configuration
   allCellsRef?: React.RefObject<Array<{ type: string; content: string }>>; // Ref to all cells for lazy autocomplete
   showLineNumbers?: boolean; // Show line numbers in gutter
@@ -108,14 +109,14 @@ const lightTheme = EditorView.theme({
   },
   // Search match highlighting
   '.cm-searchMatch': {
-    backgroundColor: '#fef08a', // yellow-200
+    backgroundColor: '#fde047', // yellow-300 (more visible)
     borderRadius: '0.125rem',
   },
   // Current search match (highlighted differently)
   '.cm-searchMatch-current': {
     backgroundColor: '#fb923c', // orange-400
     borderRadius: '0.125rem',
-    color: 'white',
+    boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.18)',
   },
   // Autocomplete tooltip styling
   '.cm-tooltip.cm-tooltip-autocomplete': {
@@ -268,6 +269,27 @@ function createSearchHighlightExtension(
   }, { decorations: v => v.decorations });
 
   return [currentMatchField, allMatchesPlugin, currentMatchPlugin];
+}
+
+function createCursorActivityExtension(
+  onCursorActivityRef: React.MutableRefObject<((pos: number) => void) | undefined>
+) {
+  return ViewPlugin.fromClass(class {
+    lastPos: number;
+
+    constructor(view: EditorView) {
+      this.lastPos = view.state.selection.main.head;
+      onCursorActivityRef.current?.(this.lastPos);
+    }
+
+    update(update: ViewUpdate) {
+      if (!update.selectionSet) return;
+      const pos = update.state.selection.main.head;
+      if (pos === this.lastPos) return;
+      this.lastPos = pos;
+      onCursorActivityRef.current?.(pos);
+    }
+  });
 }
 
 // Extract Python identifiers from code
@@ -555,12 +577,15 @@ export const CodeEditor: React.FC<Props> = ({
   searchHighlight,
   cellId,
   shouldFocus = false,
+  onCursorActivity,
   indentConfig = DEFAULT_INDENTATION,
   allCellsRef,
   showLineNumbers = false,
   kernelSessionId,
 }) => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
+  const onCursorActivityRef = useRef<((pos: number) => void) | undefined>(onCursorActivity);
+  onCursorActivityRef.current = onCursorActivity;
 
   // Fallback ref if none provided (for standalone usage)
   const fallbackRef = useRef<Array<{ type: string; content: string }>>([]);
@@ -829,6 +854,11 @@ export const CodeEditor: React.FC<Props> = ({
         searchCaseSensitive ?? false,
         searchUseRegex ?? false
       ));
+    }
+
+    // Track cursor position for search navigation (use refs to avoid rebuilds)
+    if (onCursorActivityRef.current) {
+      exts.push(createCursorActivityExtension(onCursorActivityRef));
     }
 
     return exts;
