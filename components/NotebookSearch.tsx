@@ -91,7 +91,9 @@ export const NotebookSearch: React.FC<Props> = ({
     const cursor = getCursorAnchor?.() ?? null;
     const nav = navAnchorRef.current;
 
-    if (cursor && (!nav || cursor.ts >= nav.ts)) return cursor;
+    // Prefer nav anchor on ties to avoid "cursor" updates that are not user-driven
+    // (e.g., editor mount) from overriding navigation.
+    if (cursor && (!nav || cursor.ts > nav.ts)) return cursor;
     return nav;
   }, [getCursorAnchor]);
 

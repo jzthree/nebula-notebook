@@ -96,6 +96,13 @@ function getDirectoryFromPath(filePath: string | null): string | undefined {
   return filePath.slice(0, idx);
 }
 
+function escapeForAttributeSelector(value: string): string {
+  // Prefer the platform escape when available. This is only used in the browser.
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
+  // Minimal escape for `[attr="..."]` selectors.
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 function parseKernelOutputSeqFromId(outputId: string | null | undefined): number | null {
   if (!outputId) return null;
   if (!outputId.startsWith('kseq:')) return null;
@@ -1048,6 +1055,27 @@ export const Notebook: React.FC = () => {
     return cellIndex >= visibleRange.startIndex && cellIndex <= visibleRange.endIndex;
   }, [visibleRange]);
 
+  const isCellVisibleInViewport = useCallback((cellId: string, cellIndex: number): boolean => {
+    const cellEl = document.querySelector(`[data-cell-id="${escapeForAttributeSelector(cellId)}"]`) as HTMLElement | null;
+    if (!cellEl) {
+      // If the cell isn't mounted (virtualized out), fall back to the index-based check.
+      return isCellVisible(cellIndex);
+    }
+
+    const scrollerEl = (
+      (cellEl.closest('[data-virtuoso-scroller]') as HTMLElement | null) ||
+      (document.querySelector('[data-virtuoso-scroller]') as HTMLElement | null) ||
+      (document.querySelector('.virtuoso-scroller') as HTMLElement | null)
+    );
+
+    const cellRect = cellEl.getBoundingClientRect();
+    const viewportRect = scrollerEl
+      ? scrollerEl.getBoundingClientRect()
+      : { top: 0, bottom: window.innerHeight } as DOMRect;
+
+    return cellRect.bottom > viewportRect.top && cellRect.top < viewportRect.bottom;
+  }, [isCellVisible]);
+
   // Effect to handle pending scroll after cells change (for undo/redo of insert/delete)
   // Clear the ref BEFORE scrolling to prevent double-scroll in Strict Mode
   useEffect(() => {
@@ -1057,10 +1085,12 @@ export const Notebook: React.FC = () => {
       pendingScrollCellIdRef.current = null;
       const index = cells.findIndex(c => c.id === cellId);
       if (index >= 0) {
-        scrollToCell(index);
+        if (!isCellVisibleInViewport(cellId, index)) {
+          scrollToCell(index);
+        }
       }
     }
-  }, [cells, scrollToCell]);
+  }, [cells, scrollToCell, isCellVisibleInViewport]);
 
   // Helper to show visual feedback for undo/redo (highlight only, no scrolling)
   const showUndoRedoFeedback = useCallback((affectedCellIds: string[]) => {
@@ -1110,7 +1140,7 @@ export const Notebook: React.FC = () => {
       const cellIndex = currentCells.findIndex(c => c.id === firstCellId);
       const cellExists = cellIndex >= 0;
       // Only scroll if no part of the cell is currently visible
-      const needsScroll = cellExists && !isCellVisible(cellIndex);
+      const needsScroll = cellExists && !isCellVisibleInViewport(firstCellId, cellIndex);
 
       if (willDeleteCell && needsScroll) {
         // Scroll to cell before deletion, then apply on next frame
@@ -1129,8 +1159,10 @@ export const Notebook: React.FC = () => {
         showUndoRedoFeedback(result.affectedCellIds);
         // Only schedule scroll if cell is not visible (or is a new cell that needs finding)
         // For operations on existing visible cells (like metadata changes), don't scroll
-        if (!cellExists || !isCellVisible(cellIndex)) {
-          pendingScrollCellIdRef.current = result.affectedCellIds[0];
+        const targetId = result.affectedCellIds[0];
+        const targetIndex = currentCells.findIndex(c => c.id === targetId);
+        if (targetIndex === -1 || !isCellVisibleInViewport(targetId, targetIndex)) {
+          pendingScrollCellIdRef.current = targetId;
         }
       }
       finalize();
@@ -1142,7 +1174,7 @@ export const Notebook: React.FC = () => {
     }
     undoRedoInFlightRef.current = true;
     run();
-  }, [flushActiveCell, isCellVisible, showUndoRedoFeedback, scrollToCell]);
+  }, [flushActiveCell, isCellVisibleInViewport, showUndoRedoFeedback, scrollToCell]);
 
   // Undo: deleteCell restores a cell, insertCell removes it
   const undo = useCallback(() => {
@@ -2853,31 +2885,11 @@ export const Notebook: React.FC = () => {
     if (currentIndex !== -1) {
       // Avoid snapping to the top of a cell when it's already on-screen. The
       // match-level scroll happens inside CodeEditor (and is much less jarring).
-      const escapedId = (() => {
-        if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(cellId);
-        return cellId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      })();
-      const cellEl = document.querySelector(`[data-cell-id="${escapedId}"]`) as HTMLElement | null;
-      const scrollerEl = (
-        (cellEl?.closest('[data-virtuoso-scroller]') as HTMLElement | null) ||
-        (document.querySelector('[data-virtuoso-scroller]') as HTMLElement | null) ||
-        (document.querySelector('.virtuoso-scroller') as HTMLElement | null)
-      );
-
-      const isCellInViewport = (() => {
-        if (!cellEl) return false; // Not mounted (virtualized out)
-        const cellRect = cellEl.getBoundingClientRect();
-        const viewportRect = scrollerEl
-          ? scrollerEl.getBoundingClientRect()
-          : { top: 0, bottom: window.innerHeight } as DOMRect;
-        return cellRect.bottom > viewportRect.top && cellRect.top < viewportRect.bottom;
-      })();
-
-      if (!isCellInViewport) {
+      if (!isCellVisibleInViewport(cellId, currentIndex)) {
         scrollToCell(currentIndex, { behavior: 'auto' });
       }
     }
-  }, [cells, scrollToCell]);
+  }, [cells, isCellVisibleInViewport, scrollToCell]);
 
   // Navigate to adjacent cell with virtualization support (used by arrow keys in cell mode)
   const navigateCellRelative = useCallback((fromCellId: string, direction: 'up' | 'down') => {

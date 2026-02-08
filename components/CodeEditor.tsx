@@ -109,14 +109,16 @@ const lightTheme = EditorView.theme({
   },
   // Search match highlighting
   '.cm-searchMatch': {
-    backgroundColor: '#fde047', // yellow-300 (more visible)
+    // Orange background, keep text color unchanged for readability.
+    backgroundColor: 'rgba(251, 146, 60, 0.35)', // orange-400 @ 35%
     borderRadius: '0.125rem',
+    boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.10)',
   },
   // Current search match (highlighted differently)
   '.cm-searchMatch-current': {
-    backgroundColor: '#fb923c', // orange-400
+    backgroundColor: 'rgba(251, 146, 60, 0.70)', // orange-400 @ 70%
     borderRadius: '0.125rem',
-    boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.18)',
+    boxShadow: 'inset 0 0 0 2px rgba(0, 0, 0, 0.18)',
   },
   // Autocomplete tooltip styling
   '.cm-tooltip.cm-tooltip-autocomplete': {
@@ -279,7 +281,6 @@ function createCursorActivityExtension(
 
     constructor(view: EditorView) {
       this.lastPos = view.state.selection.main.head;
-      onCursorActivityRef.current?.(this.lastPos);
     }
 
     update(update: ViewUpdate) {
