@@ -8,6 +8,8 @@ import { NebulaCell } from '../fs/types';
 import { operationRouter } from '../notebook/operation-router';
 import { HeadlessOperationHandler } from '../notebook/headless-handler';
 import { kernelService } from './kernel';
+import { pruneOutputSpoolUpTo } from '../kernel/output-spool';
+import { withKernelOutputLock } from '../kernel/output-lock';
 
 const router = Router();
 // Initialize headless handler with kernel service for cell execution
@@ -100,8 +102,12 @@ router.post('/notebook/save', async (req: Request, res: Response) => {
       : kernelService.getSessionIdForFile(filePath);
     const seq = Number(kernel_output_seq);
     if (sessionId && Number.isFinite(seq) && seq > 0) {
-      const { latestSeq } = kernelService.getBufferedOutputs(sessionId, 0);
-      kernelService.ackOutputs(sessionId, Math.min(seq, latestSeq));
+      await withKernelOutputLock(sessionId, async () => {
+        const { latestSeq } = kernelService.getBufferedOutputs(sessionId, 0);
+        const upTo = Math.min(seq, latestSeq);
+        kernelService.ackOutputs(sessionId, upTo);
+        await pruneOutputSpoolUpTo(sessionId, upTo);
+      });
     }
 
     res.json({ status: 'ok', path: filePath, mtime: result.mtime });

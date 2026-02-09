@@ -6,24 +6,31 @@
  * with the Python backend.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import express, { Express } from 'express';
 import request from 'supertest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import type { Server } from 'http';
 
 // Import routes
 import notebookRoutes from '../routes/notebook';
 
 describe('Notebook Routes', () => {
   let app: Express;
+  let server: Server;
   let testDir: string;
 
   beforeAll(() => {
     app = express();
     app.use(express.json());
     app.use('/api', notebookRoutes);
+    server = app.listen(0);
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   beforeEach(() => {
@@ -40,7 +47,7 @@ describe('Notebook Routes', () => {
 
   describe('GET /api/cell/metadata-schema', () => {
     it('should return cell metadata schema', async () => {
-      const response = await request(app).get('/api/cell/metadata-schema');
+      const response = await request(server).get('/api/cell/metadata-schema');
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('id');
@@ -50,7 +57,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should have agentMutable property on all fields', async () => {
-      const response = await request(app).get('/api/cell/metadata-schema');
+      const response = await request(server).get('/api/cell/metadata-schema');
 
       expect(response.body.id.agentMutable).toBe(true);
       expect(response.body.type.agentMutable).toBe(true);
@@ -59,7 +66,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should have correct type definitions', async () => {
-      const response = await request(app).get('/api/cell/metadata-schema');
+      const response = await request(server).get('/api/cell/metadata-schema');
 
       expect(response.body.id.type).toBe('string');
       expect(response.body.type.type).toBe('enum');
@@ -89,7 +96,7 @@ describe('Notebook Routes', () => {
       };
       fs.writeFileSync(notebookPath, JSON.stringify(notebook));
 
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/notebook/cells')
         .query({ path: notebookPath });
 
@@ -102,14 +109,14 @@ describe('Notebook Routes', () => {
     });
 
     it('should return 400 if path is missing', async () => {
-      const response = await request(app).get('/api/notebook/cells');
+      const response = await request(server).get('/api/notebook/cells');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
     });
 
     it('should return 404 for non-existent notebook', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/notebook/cells')
         .query({ path: '/nonexistent/path.ipynb' });
 
@@ -138,7 +145,7 @@ describe('Notebook Routes', () => {
         },
       ];
 
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/save')
         .send({ path: notebookPath, cells, kernel_name: 'python3' });
 
@@ -149,7 +156,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should return 400 if path is missing', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/save')
         .send({ cells: [] });
 
@@ -158,7 +165,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should return 400 if cells is missing', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/save')
         .send({ path: '/some/path.ipynb' });
 
@@ -177,7 +184,7 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/notebook/history')
         .query({ notebook_path: notebookPath });
 
@@ -187,7 +194,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should return 400 if notebook_path is missing', async () => {
-      const response = await request(app).get('/api/notebook/history');
+      const response = await request(server).get('/api/notebook/history');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -206,7 +213,7 @@ describe('Notebook Routes', () => {
 
       const history = [{ type: 'insertCell', index: 0 }];
 
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/history')
         .send({ notebook_path: notebookPath, history });
 
@@ -216,7 +223,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should return 400 if notebook_path is missing', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/history')
         .send({ history: [] });
 
@@ -235,7 +242,7 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/notebook/session')
         .query({ notebook_path: notebookPath });
 
@@ -245,7 +252,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should return 400 if notebook_path is missing', async () => {
-      const response = await request(app).get('/api/notebook/session');
+      const response = await request(server).get('/api/notebook/session');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -264,7 +271,7 @@ describe('Notebook Routes', () => {
 
       const session = { lastKernel: 'python3' };
 
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/session')
         .send({ notebook_path: notebookPath, session });
 
@@ -274,7 +281,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should return 400 if notebook_path is missing', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/session')
         .send({ session: {} });
 
@@ -293,7 +300,7 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/permit-agent')
         .send({ notebook_path: notebookPath, permitted: true });
 
@@ -307,7 +314,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should return 400 if notebook_path is missing', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/permit-agent')
         .send({ permitted: true });
 
@@ -326,7 +333,7 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/notebook/agent-status')
         .query({ path: notebookPath });
 
@@ -340,7 +347,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should return 400 if path is missing', async () => {
-      const response = await request(app).get('/api/notebook/agent-status');
+      const response = await request(server).get('/api/notebook/agent-status');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -366,7 +373,7 @@ describe('Notebook Routes', () => {
       };
       fs.writeFileSync(notebookPath, JSON.stringify(notebook));
 
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/notebook/read')
         .query({ path: notebookPath });
 
@@ -395,7 +402,7 @@ describe('Notebook Routes', () => {
       };
       fs.writeFileSync(notebookPath, JSON.stringify(notebook));
 
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/notebook/read')
         .query({ path: notebookPath, include_outputs: 'false' });
 
@@ -405,7 +412,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should return 400 if path is missing', async () => {
-      const response = await request(app).get('/api/notebook/read');
+      const response = await request(server).get('/api/notebook/read');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -416,7 +423,7 @@ describe('Notebook Routes', () => {
     it('should return hasUI status', async () => {
       const notebookPath = path.join(testDir, 'has-ui.ipynb');
 
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/notebook/has-ui')
         .query({ path: notebookPath });
 
@@ -427,7 +434,7 @@ describe('Notebook Routes', () => {
     });
 
     it('should return 400 if path is missing', async () => {
-      const response = await request(app).get('/api/notebook/has-ui');
+      const response = await request(server).get('/api/notebook/has-ui');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -436,7 +443,7 @@ describe('Notebook Routes', () => {
 
   describe('POST /api/notebook/operation', () => {
     it('should return 400 if operation type is missing', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/operation')
         .send({ notebookPath: '/some/path.ipynb' });
 
@@ -456,7 +463,7 @@ describe('Notebook Routes', () => {
       const agentId = 'test-agent-insert';
 
       // Start agent session first
-      await request(app)
+      await request(server)
         .post('/api/notebook/operation')
         .send({
           type: 'startAgentSession',
@@ -464,7 +471,7 @@ describe('Notebook Routes', () => {
           agentId,
         });
 
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/operation')
         .send({
           type: 'insertCell',
@@ -492,7 +499,7 @@ describe('Notebook Routes', () => {
       const agentId = 'test-agent-delete';
 
       // Start agent session first
-      await request(app)
+      await request(server)
         .post('/api/notebook/operation')
         .send({
           type: 'startAgentSession',
@@ -500,7 +507,7 @@ describe('Notebook Routes', () => {
           agentId,
         });
 
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/operation')
         .send({
           type: 'deleteCell',
@@ -527,7 +534,7 @@ describe('Notebook Routes', () => {
       const agentId = 'test-agent-update';
 
       // Start agent session first
-      await request(app)
+      await request(server)
         .post('/api/notebook/operation')
         .send({
           type: 'startAgentSession',
@@ -535,7 +542,7 @@ describe('Notebook Routes', () => {
           agentId,
         });
 
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/operation')
         .send({
           type: 'updateContent',
@@ -553,12 +560,18 @@ describe('Notebook Routes', () => {
 
 describe('Notebook Routes - Response Format Parity', () => {
   let app: Express;
+  let server: Server;
   let testDir: string;
 
   beforeAll(() => {
     app = express();
     app.use(express.json());
     app.use('/api', notebookRoutes);
+    server = app.listen(0);
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   beforeEach(() => {
@@ -581,7 +594,7 @@ describe('Notebook Routes - Response Format Parity', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/notebook/agent-status')
         .query({ path: notebookPath });
 
@@ -611,7 +624,7 @@ describe('Notebook Routes - Response Format Parity', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/permit-agent')
         .send({ notebook_path: notebookPath, permitted: true });
 

@@ -10,9 +10,10 @@
  * the routes earlier in the same Vitest worker).
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import express, { Express } from 'express';
 import request from 'supertest';
+import type { Server } from 'http';
 
 import kernelRoutes, { kernelService } from '../routes/kernel';
 import pythonRoutes, { discoveryService } from '../routes/python';
@@ -21,12 +22,18 @@ import * as kernelspec from '../kernel/kernelspec';
 
 describe('API Contract Tests - Snake Case Response Format', () => {
   let app: Express;
+  let server: Server;
 
   beforeAll(() => {
     app = express();
     app.use(express.json());
     app.use('/api', kernelRoutes);
     app.use('/api', pythonRoutes);
+    server = app.listen(0);
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   beforeEach(() => {
@@ -116,7 +123,7 @@ describe('API Contract Tests - Snake Case Response Format', () => {
 
   describe('GET /api/kernels', () => {
     it('should return kernels with snake_case field names', async () => {
-      const response = await request(app).get('/api/kernels');
+      const response = await request(server).get('/api/kernels');
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('kernels');
@@ -138,7 +145,7 @@ describe('API Contract Tests - Snake Case Response Format', () => {
     });
 
     it('should return all discovered kernels', async () => {
-      const response = await request(app).get('/api/kernels');
+      const response = await request(server).get('/api/kernels');
 
       expect(response.body.kernels).toHaveLength(2);
       expect(response.body.kernels[0].name).toBe('python3');
@@ -148,7 +155,7 @@ describe('API Contract Tests - Snake Case Response Format', () => {
 
   describe('GET /api/kernels/sessions', () => {
     it('should return sessions with snake_case field names', async () => {
-      const response = await request(app).get('/api/kernels/sessions');
+      const response = await request(server).get('/api/kernels/sessions');
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('sessions');
@@ -181,7 +188,7 @@ describe('API Contract Tests - Snake Case Response Format', () => {
 
   describe('GET /api/python/environments', () => {
     it('should return environments with snake_case field names', async () => {
-      const response = await request(app).get('/api/python/environments');
+      const response = await request(server).get('/api/python/environments');
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('environments');
@@ -208,7 +215,7 @@ describe('API Contract Tests - Snake Case Response Format', () => {
     });
 
     it('should return kernelspecs with snake_case field names', async () => {
-      const response = await request(app).get('/api/python/environments');
+      const response = await request(server).get('/api/python/environments');
       const kernelspec = response.body.kernelspecs[0];
 
       expect(kernelspec).toHaveProperty('name');
@@ -221,7 +228,7 @@ describe('API Contract Tests - Snake Case Response Format', () => {
     });
 
     it('should return cache_info with snake_case field name', async () => {
-      const response = await request(app).get('/api/python/environments');
+      const response = await request(server).get('/api/python/environments');
 
       expect(response.body).toHaveProperty('cache_info');
       expect(response.body.cache_info).toHaveProperty('lastRefresh');
@@ -231,7 +238,7 @@ describe('API Contract Tests - Snake Case Response Format', () => {
 
   describe('POST /api/kernels/start response', () => {
     it('should return session_id with snake_case', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/kernels/start')
         .send({ kernel_name: 'python3' });
 
@@ -247,7 +254,7 @@ describe('API Contract Tests - Snake Case Response Format', () => {
 
   describe('POST /api/kernels/for-file response', () => {
     it('should return response with snake_case field names', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/kernels/for-file')
         .send({ file_path: '/path/to/notebook.ipynb', kernel_name: 'python3' });
 
@@ -267,12 +274,18 @@ describe('API Contract Tests - Snake Case Response Format', () => {
 
 describe('API Contract Tests - Field Types', () => {
   let app: Express;
+  let server: Server;
 
   beforeAll(() => {
     app = express();
     app.use(express.json());
     app.use('/api', kernelRoutes);
     app.use('/api', pythonRoutes);
+    server = app.listen(0);
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   beforeEach(() => {
@@ -297,7 +310,7 @@ describe('API Contract Tests - Field Types', () => {
 
   describe('GET /api/kernels', () => {
     it('should have correct field types', async () => {
-      const response = await request(app).get('/api/kernels');
+      const response = await request(server).get('/api/kernels');
       const kernel = response.body.kernels[0];
 
       expect(typeof kernel.name).toBe('string');
@@ -309,7 +322,7 @@ describe('API Contract Tests - Field Types', () => {
 
   describe('GET /api/kernels/sessions', () => {
     it('should have correct field types', async () => {
-      const response = await request(app).get('/api/kernels/sessions');
+      const response = await request(server).get('/api/kernels/sessions');
       const session = response.body.sessions[0];
 
       expect(typeof session.id).toBe('string');
@@ -324,7 +337,7 @@ describe('API Contract Tests - Field Types', () => {
 
   describe('GET /api/python/environments', () => {
     it('should have correct field types for environments', async () => {
-      const response = await request(app).get('/api/python/environments');
+      const response = await request(server).get('/api/python/environments');
       const env = response.body.environments[0];
 
       expect(typeof env.path).toBe('string');

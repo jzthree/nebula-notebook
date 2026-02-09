@@ -11,6 +11,8 @@ import { KernelService } from '../kernel/kernel-service';
 import { getKernelSearchPaths } from '../kernel/kernelspec';
 import { fsService } from '../fs/fs-service';
 import { operationRouter } from '../notebook/operation-router';
+import { appendOutputSpool, readOutputSpoolSince } from '../kernel/output-spool';
+import { withKernelOutputLock } from '../kernel/output-lock';
 import {
   isProxiedSession,
   parseSessionId,
@@ -42,8 +44,8 @@ const outputDrain: Map<string, OutputDrainState> = new Map();
 
 // Delay before starting persistence after UI disappears (prevents thrash on quick refresh/reconnect).
 // NOTE: This is intentionally long because a browser refresh can easily take a few seconds
-// to reload JS + reconnect websockets. Writing outputs to the notebook file during that
-// window causes spurious mtime conflicts and can force the UI to reload.
+// to reload JS + reconnect websockets. We persist to a sidecar spool (not the notebook file)
+// so we avoid spurious notebook mtime conflicts during transient disconnects.
 const OUTPUT_DRAIN_GRACE_MS = 15000;
 // While running, persist at most once per interval.
 const OUTPUT_DRAIN_INTERVAL_MS = 1000;
@@ -75,38 +77,26 @@ async function persistBufferedOutputsIfNoUI(sessionId: string): Promise<number> 
   if (operationRouter.hasUI(notebookPath)) return 0;
   if (hasKernelClients(sessionId)) return 0;
 
-  const { outputs } = kernelService.getBufferedOutputs(sessionId, 0);
-  if (outputs.length === 0) return 0;
+  return withKernelOutputLock(sessionId, async () => {
+    const { outputs } = kernelService.getBufferedOutputs(sessionId, 0);
+    if (outputs.length === 0) return 0;
 
-  let ackSeq = 0;
-  const kernelName = kernelService.getSessionKernelName(sessionId) || undefined;
+    // Persist to a sidecar spool (not the notebook file) so we don't bump notebook mtime
+    // during transient disconnects. The UI will replay from this spool on reconnect and
+    // autosave will prune both the in-memory buffer and this spool after atomic save.
+    const batch = outputs.slice(0, OUTPUT_DRAIN_MAX_BATCH);
+    const ackSeq = await appendOutputSpool(sessionId, batch.map(entry => ({
+      seq: entry.seq,
+      output: { type: entry.output.type, content: entry.output.content },
+      cellId: entry.cellId ?? null,
+    })));
 
-  const { cells } = fsService.getNotebookCells(notebookPath);
-  const byId = new Map(cells.map(c => [c.id, c]));
+    if (ackSeq > 0) {
+      kernelService.ackOutputs(sessionId, ackSeq);
+    }
 
-  let applied = 0;
-  for (const entry of outputs) {
-    if (applied >= OUTPUT_DRAIN_MAX_BATCH) break;
-    const cellId = entry.cellId ?? null;
-    if (!cellId) break;
-    const cell = byId.get(cellId);
-    if (!cell) break;
-    cell.outputs.push({ type: entry.output.type, content: entry.output.content });
-    ackSeq = entry.seq;
-    applied += 1;
-  }
-
-  if (ackSeq === 0) return 0;
-
-  // Re-check right before commit. The UI may have reconnected while we were preparing
-  // the write, and in that case we prefer to leave output buffered for replay and let
-  // the UI autosave, avoiding unnecessary file churn + conflicts.
-  if (operationRouter.hasUI(notebookPath)) return 0;
-  if (hasKernelClients(sessionId)) return 0;
-
-  // Persist using the bundle API to get the write lock + atomic commit.
-  await fsService.saveNotebookBundle(notebookPath, cells, kernelName);
-  return ackSeq;
+    return ackSeq;
+  });
 }
 
 async function runOutputDrain(sessionId: string): Promise<void> {
@@ -126,10 +116,6 @@ async function runOutputDrain(sessionId: string): Promise<void> {
         ackSeq = await persistBufferedOutputsIfNoUI(sessionId);
       } catch (err) {
         console.warn(`[Kernel WS] Output drain persist failed for ${sessionId}:`, err);
-      }
-
-      if (ackSeq > 0) {
-        kernelService.ackOutputs(sessionId, ackSeq);
       }
 
       const executingCellId = kernelService.getExecutingCellId(sessionId);
@@ -694,20 +680,30 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
           broadcast(JSON.stringify({ type: 'status', status: 'idle' }));
         } else if (message.type === 'sync_outputs') {
           const since = Number(message.since ?? 0);
-          const { outputs, latestSeq } = kernelService.getBufferedOutputs(sessionId, since);
-          const normalized = outputs.map(entry => ({
-            seq: entry.seq,
-            output: entry.output,
-            cell_id: entry.cellId ?? null,
-          }));
-          ws.send(JSON.stringify({ type: 'sync_outputs', outputs: normalized, latest_seq: latestSeq }));
+          const snapshot = await withKernelOutputLock(sessionId, async () => {
+            const spooled = await readOutputSpoolSince(sessionId, since);
+            const { outputs: buffered, latestSeq } = kernelService.getBufferedOutputs(sessionId, since);
+
+            // Merge + sort by seq to ensure deterministic replay order.
+            const merged = [...spooled, ...buffered]
+              .sort((a, b) => a.seq - b.seq)
+              .map(entry => ({
+                seq: entry.seq,
+                output: entry.output,
+                cell_id: entry.cellId ?? null,
+              }));
+
+            return { merged, latestSeq };
+          });
+
+          ws.send(JSON.stringify({ type: 'sync_outputs', outputs: snapshot.merged, latest_seq: snapshot.latestSeq }));
 
           // Only start streaming outputs after the client has performed an initial sync.
           outputSubscribedSockets.add(ws);
 
           // Defensive catch-up: if new outputs arrived after we took the snapshot but before
           // the socket was marked subscribed, push them as streaming output now.
-          const { outputs: tail } = kernelService.getBufferedOutputs(sessionId, latestSeq);
+          const { outputs: tail } = kernelService.getBufferedOutputs(sessionId, snapshot.latestSeq);
           for (const entry of tail) {
             if (ws.readyState !== WebSocket.OPEN) break;
             ws.send(JSON.stringify({

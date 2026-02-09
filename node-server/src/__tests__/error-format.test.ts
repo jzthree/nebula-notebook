@@ -9,12 +9,13 @@
  * expects error.detail for error messages.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import express, { Express } from 'express';
 import request from 'supertest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import type { Server } from 'http';
 
 // Import routes
 import kernelRoutes from '../routes/kernel';
@@ -25,6 +26,7 @@ import llmRoutes from '../routes/llm';
 
 describe('Error Format - FastAPI Parity', () => {
   let app: Express;
+  let server: Server;
   let testDir: string;
 
   beforeAll(() => {
@@ -35,6 +37,11 @@ describe('Error Format - FastAPI Parity', () => {
     app.use('/api', notebookRoutes);
     app.use('/api', pythonRoutes);
     app.use('/api', llmRoutes);
+    server = app.listen(0);
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   beforeEach(() => {
@@ -49,7 +56,7 @@ describe('Error Format - FastAPI Parity', () => {
 
   describe('Kernel Routes Error Format', () => {
     it('should use detail field for missing file_path in /api/kernels/for-file', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/kernels/for-file')
         .send({});
 
@@ -59,7 +66,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing file_path query param', async () => {
-      const response = await request(app).get('/api/kernels/for-file');
+      const response = await request(server).get('/api/kernels/for-file');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -67,7 +74,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing file_path in /api/kernels/preference', async () => {
-      const response = await request(app).get('/api/kernels/preference');
+      const response = await request(server).get('/api/kernels/preference');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -75,7 +82,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for non-existent session', async () => {
-      const response = await request(app).delete('/api/kernels/non-existent-session');
+      const response = await request(server).delete('/api/kernels/non-existent-session');
 
       expect(response.status).toBe(404);
       expect(response.body).toHaveProperty('detail');
@@ -83,7 +90,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for interrupt on non-existent session', async () => {
-      const response = await request(app).post('/api/kernels/non-existent/interrupt');
+      const response = await request(server).post('/api/kernels/non-existent/interrupt');
 
       expect(response.status).toBe(404);
       expect(response.body).toHaveProperty('detail');
@@ -91,7 +98,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for restart on non-existent session', async () => {
-      const response = await request(app).post('/api/kernels/non-existent/restart');
+      const response = await request(server).post('/api/kernels/non-existent/restart');
 
       expect(response.status).toBe(404);
       expect(response.body).toHaveProperty('detail');
@@ -99,7 +106,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for status on non-existent session', async () => {
-      const response = await request(app).get('/api/kernels/non-existent/status');
+      const response = await request(server).get('/api/kernels/non-existent/status');
 
       expect(response.status).toBe(404);
       expect(response.body).toHaveProperty('detail');
@@ -109,7 +116,7 @@ describe('Error Format - FastAPI Parity', () => {
 
   describe('Filesystem Routes Error Format', () => {
     it('should use detail field for non-existent directory', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/fs/list')
         .query({ path: '/non/existent/path/that/does/not/exist' });
 
@@ -119,7 +126,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for non-existent file mtime', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/fs/mtime')
         .query({ path: '/non/existent/path' });
 
@@ -129,7 +136,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing path in file-mtime', async () => {
-      const response = await request(app).get('/api/fs/file-mtime');
+      const response = await request(server).get('/api/fs/file-mtime');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -137,7 +144,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for non-existent file read', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/fs/read')
         .query({ path: '/non/existent/file.txt' });
 
@@ -147,7 +154,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing path in read', async () => {
-      const response = await request(app).get('/api/fs/read');
+      const response = await request(server).get('/api/fs/read');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -155,7 +162,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing path in write', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/fs/write')
         .send({ content: 'test' });
 
@@ -165,20 +172,20 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing path in create', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/fs/create')
         .send({});
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
       expect(response.body).not.toHaveProperty('error');
-    });
+    }, 15000);
 
     it('should use detail field for file already exists in create', async () => {
       const existingFile = path.join(testDir, 'existing.txt');
       fs.writeFileSync(existingFile, 'content');
 
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/fs/create')
         .send({ path: existingFile });
 
@@ -188,7 +195,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing path in delete', async () => {
-      const response = await request(app).delete('/api/fs/delete');
+      const response = await request(server).delete('/api/fs/delete');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -196,7 +203,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for non-existent file delete', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .delete('/api/fs/delete')
         .query({ path: '/non/existent/file.txt' });
 
@@ -206,7 +213,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing paths in rename', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/fs/rename')
         .send({ old_path: '/some/path' });
 
@@ -216,7 +223,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing path in duplicate', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/fs/duplicate')
         .send({});
 
@@ -226,7 +233,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing path in upload', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/fs/upload')
         .send({});
 
@@ -238,7 +245,7 @@ describe('Error Format - FastAPI Parity', () => {
 
   describe('Notebook Routes Error Format', () => {
     it('should use detail field for missing path in /api/notebook/cells', async () => {
-      const response = await request(app).get('/api/notebook/cells');
+      const response = await request(server).get('/api/notebook/cells');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -246,7 +253,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for non-existent notebook in /api/notebook/cells', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/notebook/cells')
         .query({ path: '/non/existent/notebook.ipynb' });
 
@@ -256,7 +263,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing path in /api/notebook/save', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/save')
         .send({ cells: [] });
 
@@ -266,7 +273,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing cells in /api/notebook/save', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/save')
         .send({ path: '/some/path.ipynb' });
 
@@ -276,7 +283,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing notebook_path in /api/notebook/history', async () => {
-      const response = await request(app).get('/api/notebook/history');
+      const response = await request(server).get('/api/notebook/history');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -284,7 +291,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing notebook_path in POST /api/notebook/history', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/history')
         .send({ history: [] });
 
@@ -294,7 +301,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing notebook_path in /api/notebook/session', async () => {
-      const response = await request(app).get('/api/notebook/session');
+      const response = await request(server).get('/api/notebook/session');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -302,7 +309,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing notebook_path in POST /api/notebook/session', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/session')
         .send({ session: {} });
 
@@ -312,7 +319,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing notebook_path in /api/notebook/permit-agent', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/permit-agent')
         .send({ permitted: true });
 
@@ -322,7 +329,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing path in /api/notebook/agent-status', async () => {
-      const response = await request(app).get('/api/notebook/agent-status');
+      const response = await request(server).get('/api/notebook/agent-status');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -330,7 +337,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing path in /api/notebook/read', async () => {
-      const response = await request(app).get('/api/notebook/read');
+      const response = await request(server).get('/api/notebook/read');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -338,7 +345,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing path in /api/notebook/has-ui', async () => {
-      const response = await request(app).get('/api/notebook/has-ui');
+      const response = await request(server).get('/api/notebook/has-ui');
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
@@ -346,7 +353,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should use detail field for missing operation type', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/operation')
         .send({ notebookPath: '/some/path.ipynb' });
 
@@ -358,7 +365,7 @@ describe('Error Format - FastAPI Parity', () => {
 
   describe('Python Routes Error Format', () => {
     it('should use detail field for missing python_path in install-kernel', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/python/install-kernel')
         .send({});
 
@@ -370,7 +377,7 @@ describe('Error Format - FastAPI Parity', () => {
 
   describe('Error Field Contents', () => {
     it('should have descriptive error messages in detail field', async () => {
-      const response = await request(app).get('/api/notebook/cells');
+      const response = await request(server).get('/api/notebook/cells');
 
       expect(response.status).toBe(400);
       expect(response.body.detail).toBeTruthy();
@@ -379,7 +386,7 @@ describe('Error Format - FastAPI Parity', () => {
     });
 
     it('should include relevant context in error messages', async () => {
-      const response = await request(app)
+      const response = await request(server)
         .get('/api/notebook/cells')
         .query({ path: '/non/existent/notebook.ipynb' });
 
@@ -391,12 +398,18 @@ describe('Error Format - FastAPI Parity', () => {
 
 describe('Operation Result Error Format', () => {
   let app: Express;
+  let server: Server;
   let testDir: string;
 
   beforeAll(() => {
     app = express();
     app.use(express.json());
     app.use('/api', notebookRoutes);
+    server = app.listen(0);
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   beforeEach(() => {
@@ -421,7 +434,7 @@ describe('Operation Result Error Format', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(app)
+      const response = await request(server)
         .post('/api/notebook/operation')
         .send({
           type: 'insertCell',

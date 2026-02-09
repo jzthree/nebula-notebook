@@ -10,6 +10,7 @@
 
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { WebSocket } from 'ws';
 import { HeadlessOperationHandler } from './headless-handler';
 import type { UpdateSummary } from './undoRedoManager';
@@ -46,6 +47,15 @@ interface AgentLock {
 
 const AGENT_LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
+function normalizeNotebookPath(notebookPath: string): string {
+  // IMPORTANT: This must match how the kernel service normalizes file paths.
+  // If the UI registers `~/foo.ipynb` but the kernel associates the session
+  // with `/home/user/foo.ipynb`, `hasUI()` would return false and background
+  // tasks (like output persistence) can incorrectly write the file and trigger
+  // spurious conflict dialogs.
+  return path.resolve(notebookPath.replace(/^~/, os.homedir()));
+}
+
 export class OperationRouter {
   private uiConnections: Map<string, UIConnection> = new Map();
   private headlessHandler: HeadlessOperationHandler | null = null;
@@ -60,7 +70,7 @@ export class OperationRouter {
    * Register a UI connection for a notebook path.
    */
   async registerUI(websocket: WebSocket, notebookPath: string): Promise<void> {
-    const normalizedPath = path.resolve(notebookPath);
+    const normalizedPath = normalizeNotebookPath(notebookPath);
 
     // Close existing connection if any
     if (this.uiConnections.has(normalizedPath)) {
@@ -92,7 +102,7 @@ export class OperationRouter {
    * Unregister a UI connection.
    */
   unregisterUI(websocket: WebSocket, notebookPath: string): void {
-    const normalizedPath = path.resolve(notebookPath);
+    const normalizedPath = normalizeNotebookPath(notebookPath);
 
     if (this.uiConnections.has(normalizedPath)) {
       const conn = this.uiConnections.get(normalizedPath)!;
@@ -113,7 +123,7 @@ export class OperationRouter {
    * Check if a UI is connected for the notebook.
    */
   hasUI(notebookPath: string): boolean {
-    const normalizedPath = path.resolve(notebookPath);
+    const normalizedPath = normalizeNotebookPath(notebookPath);
     return this.uiConnections.has(normalizedPath);
   }
 
@@ -126,7 +136,7 @@ export class OperationRouter {
     agentId: string,
     metadata?: { clientName?: string; clientVersion?: string }
   ): { success: boolean; error?: string; lock?: AgentLock } {
-    const normalizedPath = path.resolve(notebookPath);
+    const normalizedPath = normalizeNotebookPath(notebookPath);
     try {
       const stat = fs.statSync(normalizedPath);
       if (!stat.isFile()) {
@@ -178,7 +188,7 @@ export class OperationRouter {
    * Only the lock holder can release the lock.
    */
   endAgentSession(notebookPath: string, agentId: string): { success: boolean; error?: string } {
-    const normalizedPath = path.resolve(notebookPath);
+    const normalizedPath = normalizeNotebookPath(notebookPath);
 
     const existingLock = this.agentLocks.get(normalizedPath);
     if (!existingLock) {
@@ -203,7 +213,7 @@ export class OperationRouter {
    * Check if a notebook is in an agent session.
    */
   isAgentSession(notebookPath: string): boolean {
-    const normalizedPath = path.resolve(notebookPath);
+    const normalizedPath = normalizeNotebookPath(notebookPath);
     const lock = this.agentLocks.get(normalizedPath);
     return lock !== undefined && lock.expiresAt > Date.now();
   }
@@ -212,7 +222,7 @@ export class OperationRouter {
    * Get the agent ID holding the lock, if any.
    */
   getAgentLock(notebookPath: string): AgentLock | null {
-    const normalizedPath = path.resolve(notebookPath);
+    const normalizedPath = normalizeNotebookPath(notebookPath);
     const lock = this.agentLocks.get(normalizedPath);
     if (lock && lock.expiresAt > Date.now()) {
       return lock;
@@ -224,7 +234,7 @@ export class OperationRouter {
    * Refresh lock timeout for an agent operation.
    */
   refreshAgentLock(notebookPath: string, agentId: string): boolean {
-    const normalizedPath = path.resolve(notebookPath);
+    const normalizedPath = normalizeNotebookPath(notebookPath);
     const lock = this.agentLocks.get(normalizedPath);
     if (lock && lock.agentId === agentId) {
       lock.expiresAt = Date.now() + AGENT_LOCK_TIMEOUT_MS;
@@ -263,7 +273,7 @@ export class OperationRouter {
    */
   async applyOperation(operation: Record<string, unknown>): Promise<OperationResult> {
     const notebookPath = (operation.notebookPath as string) || '';
-    const normalizedPath = path.resolve(notebookPath);
+    const normalizedPath = normalizeNotebookPath(notebookPath);
     const opType = operation.type as string;
     const agentId = operation.agentId as string | undefined;
 
@@ -441,7 +451,7 @@ export class OperationRouter {
    * Handle operation response from UI.
    */
   handleUIResponse(notebookPath: string, response: Record<string, unknown>): void {
-    const normalizedPath = path.resolve(notebookPath);
+    const normalizedPath = normalizeNotebookPath(notebookPath);
 
     if (!this.uiConnections.has(normalizedPath)) {
       console.log(`[OperationRouter] Received response for unknown notebook: ${notebookPath}`);
@@ -483,7 +493,7 @@ export class OperationRouter {
     maxLinesError?: number,
     maxCharsError?: number
   ): Promise<OperationResult> {
-    const normalizedPath = path.resolve(notebookPath);
+    const normalizedPath = normalizeNotebookPath(notebookPath);
 
     if (this.uiConnections.has(normalizedPath)) {
       const result = await this.readFromUI(normalizedPath);
