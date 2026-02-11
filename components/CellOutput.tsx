@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMe
 import { CellOutput as ICellOutput } from '../types';
 import { ChevronDown, ChevronRight, GripHorizontal, WrapText, ArrowRightLeft, ExternalLink } from 'lucide-react';
 import { encodeHtmlParam, wrapHtmlDocument, MAX_HTML_PARAM_LENGTH } from '../utils/htmlPreview';
+import AnsiToHtml from 'ansi-to-html';
 import {
   MAX_OUTPUT_LINES,
   MAX_OUTPUT_CHARS,
@@ -10,6 +11,8 @@ import {
   OUTPUT_MIN_HEIGHT_PX,
   OUTPUT_DEFAULT_HEIGHT_PX,
 } from '../config';
+
+const ansiConverter = new AnsiToHtml({ escapeXML: true });
 
 // Strip autoplay from audio/video elements in HTML output.
 // Prevents all media from playing simultaneously when loading a notebook
@@ -54,6 +57,49 @@ const compactOutput = (text: string): string => {
   return text.replace(/\n{3,}/g, '\n\n').trim();
 };
 
+// Process carriage returns (\r) to simulate terminal line overwriting.
+// tqdm and similar libraries use \r to overwrite the current line with progress updates.
+function processCarriageReturns(text: string): string {
+  return text.split('\n').map(line => {
+    if (!line.includes('\r')) return line;
+    const parts = line.split('\r');
+    let result = '';
+    for (const part of parts) {
+      if (part === '') continue;
+      if (part.length >= result.length) {
+        result = part;
+      } else {
+        // Partial overwrite: new text replaces start of old text
+        result = part + result.slice(part.length);
+      }
+    }
+    return result;
+  }).join('\n');
+}
+
+// Merge adjacent same-type text outputs so \r processing works across chunk boundaries.
+// tqdm sends many small stderr chunks; merging them lets processCarriageReturns see the full picture.
+function coalesceOutputs(outputs: ICellOutput[]): ICellOutput[] {
+  const result: ICellOutput[] = [];
+  for (const output of outputs) {
+    const prev = result[result.length - 1];
+    if (prev && prev.type === output.type &&
+        (output.type === 'stdout' || output.type === 'stderr')) {
+      result[result.length - 1] = { ...prev, content: prev.content + output.content };
+    } else {
+      result.push(output);
+    }
+  }
+  return result;
+}
+
+// Convert text with ANSI codes to sanitized HTML.
+// processCarriageReturns collapses \r overwrites first, then ansi-to-html converts color codes to spans.
+function renderAnsiText(text: string): string {
+  const processed = processCarriageReturns(text);
+  return ansiConverter.toHtml(processed);
+}
+
 function estimateDisplayOutputHeight(outputs: ICellOutput[]): number {
   let total = 0;
   for (const output of outputs) {
@@ -89,9 +135,9 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage
 
   switch (output.type) {
     case 'stdout':
-      return <div className={`font-mono text-sm text-slate-700 mb-1 ${textClass}`}>{output.content}</div>;
+      return <div className={`font-mono text-sm text-slate-700 mb-1 ${textClass}`} dangerouslySetInnerHTML={{ __html: renderAnsiText(output.content) }} />;
     case 'stderr':
-      return <div className={`font-mono text-sm text-red-600 bg-red-50 p-2 rounded mb-1 ${textClass}`}>{compactOutput(output.content)}</div>;
+      return <div className={`font-mono text-sm text-red-600 bg-red-50 p-2 rounded mb-1 ${textClass}`} dangerouslySetInnerHTML={{ __html: renderAnsiText(compactOutput(output.content)) }} />;
     case 'error':
       return (
         <div className={`font-mono text-sm text-red-700 bg-red-100 border-l-4 border-red-500 p-2 mb-2 rounded-r ${textClass}`}>
@@ -299,6 +345,10 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
     return truncated;
   }, [outputs]);
 
+  // Coalesce adjacent same-type text outputs so \r processing works across chunk boundaries.
+  // This is done after truncation so limits are applied to raw output count, not coalesced count.
+  const coalescedOutputs = useMemo(() => coalesceOutputs(displayOutputs), [displayOutputs]);
+
   const handleImageMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
     if (!imageViewportRef.current) return;
     panStateRef.current.isPanning = true;
@@ -413,7 +463,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
   }
 
   // Check if any output has long lines that might benefit from scroll toggle
-  const hasTextOutput = displayOutputs.some(o => o.type === 'stdout' || o.type === 'stderr' || o.type === 'error');
+  const hasTextOutput = coalescedOutputs.some(o => o.type === 'stdout' || o.type === 'stderr' || o.type === 'error');
 
   return (
     <>
@@ -499,7 +549,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
           overflowX: wrapText ? 'hidden' : 'auto'
         }}
       >
-        {displayOutputs.map((out) => (
+        {coalescedOutputs.map((out) => (
           <OutputItem key={out.id} output={out} wrapText={wrapText} onOpenImage={setActiveImageSrc} allowAutoplay={out.timestamp >= mountTimeRef.current} />
         ))}
       </div>

@@ -849,11 +849,20 @@ export class FilesystemService {
 
     for (const output of outputs) {
       if (output.type === 'stdout' || output.type === 'stderr') {
-        result.push({
-          output_type: 'stream',
-          name: output.type,
-          text: this.stringToSource(output.content),
-        });
+        // Coalesce consecutive same-name streams into one entry (matches Jupyter behavior).
+        // This prevents tqdm progress bars from creating hundreds of output entries.
+        const prev = result[result.length - 1];
+        if (prev && prev.output_type === 'stream' && prev.name === output.type) {
+          // Append text to existing stream entry
+          const prevText = Array.isArray(prev.text) ? prev.text.join('') : (prev.text as string);
+          prev.text = this.stringToSource(prevText + output.content);
+        } else {
+          result.push({
+            output_type: 'stream',
+            name: output.type,
+            text: this.stringToSource(output.content),
+          });
+        }
       } else if (output.type === 'image') {
         result.push({
           output_type: 'display_data',

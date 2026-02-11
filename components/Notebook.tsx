@@ -1585,13 +1585,9 @@ export const Notebook: React.FC = () => {
         return;
       }
 
-      // Ctrl+C: Interrupt kernel when busy (global override)
-      // When kernel is idle, Ctrl+C works as normal copy
-      if ((e.metaKey || e.ctrlKey) && key === 'c' && kernelStatusRef.current === 'busy') {
-        e.preventDefault();
-        interruptKernelRef.current?.();
-        return;
-      }
+      // Note: Cmd/Ctrl+C is intentionally NOT used for kernel interrupt.
+      // It conflicts with copy and causes accidental interrupts.
+      // Use the toolbar Interrupt button or kernel menu instead.
 
       // Ctrl+F: Search (works everywhere)
       if ((e.metaKey || e.ctrlKey) && key === 'f') {
@@ -3471,15 +3467,15 @@ export const Notebook: React.FC = () => {
 
         <header className="flex-none bg-slate-50/90 backdrop-blur py-3 border-b border-slate-200 px-4 z-20">
             <div className="flex justify-between items-center max-w-5xl mx-auto w-full">
-               <div className="flex items-center gap-3">
+               <div className="flex items-center gap-3 min-w-0">
                  <button
                     onClick={() => setIsFileBrowserOpen(!isFileBrowserOpen)}
-                    className="p-2 hover:bg-white hover:shadow-sm rounded-md text-slate-600 transition-all"
+                    className="p-2 hover:bg-white hover:shadow-sm rounded-md text-slate-600 transition-all flex-shrink-0"
                  >
                    <Menu className="w-5 h-5" />
                  </button>
-                 <div>
-                    <h1 className="text-lg font-bold text-slate-800 flex items-center gap-2 truncate max-w-[18rem] sm:max-w-2xl">
+                 <div className="min-w-0">
+                    <h1 className="text-lg font-bold text-slate-800 flex items-center gap-2 truncate">
                       {isRenamingNotebook ? (
                         <input
                           type="text"
@@ -3936,7 +3932,7 @@ export const Notebook: React.FC = () => {
                  </div>
                </div>
 
-               <div className="flex gap-2 items-center">
+               <div className="flex gap-2 items-center flex-shrink-0 whitespace-nowrap">
                   {/* Undo / Redo Controls */}
                   <div className="flex items-center gap-1 mr-2 border-r border-slate-200 pr-2">
                     <button
@@ -4327,7 +4323,6 @@ export const Notebook: React.FC = () => {
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Run and advance (preserves mode)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Shift + Enter</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Run cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Ctrl/Cmd + Enter</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Interrupt (when busy)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Ctrl/Cmd + C</kbd></div>
                 </div>
               </div>
               <div>
