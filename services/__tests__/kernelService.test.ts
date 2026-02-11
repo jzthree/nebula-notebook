@@ -173,7 +173,7 @@ describe('KernelService', () => {
       // Complete initial sync handshake so executeCode won't block.
       const ws = MockWebSocket.instances.find(w => w.url.includes('exec-session'));
       expect(ws).toBeDefined();
-      ws?.simulateMessage({ type: 'sync_outputs', outputs: [], latest_seq: 0 });
+      ws?.simulateMessage({ type: 'sync_outputs', cells: {} });
 
       const outputs: any[] = [];
       const executePromise = kernelService.executeCode(
@@ -186,7 +186,7 @@ describe('KernelService', () => {
       await new Promise(resolve => setTimeout(resolve, 0));
 
       // Simulate output and result
-      ws?.simulateMessage({ type: 'output', output: { type: 'stdout', content: 'hello\n' }, seq: 1, cell_id: null });
+      ws?.simulateMessage({ type: 'output', output: { type: 'stdout', content: 'hello\n' }, cell_id: null });
       ws?.simulateMessage({ type: 'result', result: { status: 'ok' } });
 
       await executePromise;
@@ -196,98 +196,134 @@ describe('KernelService', () => {
     });
   });
 
-  describe('output replay routing', () => {
-    it('should route sync_outputs for active cell through the executeCode handler', async () => {
+  describe('sync replace protocol', () => {
+    it('should fire onSyncReplace callbacks with cell-indexed outputs', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ session_id: 'replay-session', kernel_name: 'python3' })
+        json: () => Promise.resolve({ session_id: 'sync-replace-session', kernel_name: 'python3' })
       });
-      const sessionId = await kernelService.startKernel('python3');
+      await kernelService.startKernel('python3');
 
       // Wait for WebSocket
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      // Complete initial sync handshake so executeCode will enqueue its handler immediately.
-      const ws = MockWebSocket.instances.find(w => w.url.includes('replay-session'));
+      const ws = MockWebSocket.instances.find(w => w.url.includes('sync-replace-session'));
       expect(ws).toBeDefined();
-      ws?.simulateMessage({ type: 'sync_outputs', outputs: [], latest_seq: 0 });
 
-      const onOutput = vi.fn();
-      const onBuffered = vi.fn();
-      const unsubscribe = kernelService.onBufferedOutput((sid, output, cellId) => {
-        onBuffered(sid, output, cellId);
-      });
+      const onSyncReplace = vi.fn();
+      const unsubscribe = kernelService.onSyncReplace(onSyncReplace);
 
-      const executePromise = kernelService.executeCode(
-        sessionId,
-        'print("replay")',
-        (output) => onOutput(output),
-        'cell-1'
-      );
-
-      // Allow the async executeCode() call to enqueue its handler before we simulate replay.
-      await new Promise(resolve => setTimeout(resolve, 0));
-
+      // Simulate sync_outputs with cell-indexed format
       ws?.simulateMessage({
         type: 'sync_outputs',
-        outputs: [{ seq: 1, cell_id: 'cell-1', output: { type: 'stdout', content: 'replayed\n' } }],
-        latest_seq: 1,
+        cells: {
+          'cell-1': [
+            { type: 'stdout', content: 'hello\n' },
+            { type: 'stdout', content: 'world\n' },
+          ],
+          'cell-2': [
+            { type: 'stderr', content: 'warning\n' },
+          ],
+        },
       });
-      ws?.simulateMessage({ type: 'result', result: { status: 'ok' } });
 
-      await executePromise;
       unsubscribe();
 
-      expect(onOutput).toHaveBeenCalledTimes(1);
-      expect(onOutput.mock.calls[0][0].content).toBe('replayed\n');
-      expect(onBuffered).not.toHaveBeenCalled();
+      expect(onSyncReplace).toHaveBeenCalledTimes(1);
+      const [sessionId, cellOutputs] = onSyncReplace.mock.calls[0];
+      expect(sessionId).toBe('sync-replace-session');
+      expect(cellOutputs).toBeInstanceOf(Map);
+      expect(cellOutputs.size).toBe(2);
+
+      const cell1Outputs = cellOutputs.get('cell-1');
+      expect(cell1Outputs).toHaveLength(2);
+      expect(cell1Outputs[0].content).toBe('hello\n');
+      expect(cell1Outputs[1].content).toBe('world\n');
+
+      const cell2Outputs = cellOutputs.get('cell-2');
+      expect(cell2Outputs).toHaveLength(1);
+      expect(cell2Outputs[0].content).toBe('warning\n');
     });
 
-    it('should route sync_outputs for other cells to buffered output subscribers', async () => {
+    it('should replace outputs entirely on reconnect (no dedup needed)', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ session_id: 'replay-other-session', kernel_name: 'python3' })
+        json: () => Promise.resolve({ session_id: 'replace-session', kernel_name: 'python3' })
       });
-      const sessionId = await kernelService.startKernel('python3');
+      await kernelService.startKernel('python3');
 
-      // Wait for WebSocket
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      // Complete initial sync handshake so executeCode will enqueue its handler immediately.
-      const ws = MockWebSocket.instances.find(w => w.url.includes('replay-other-session'));
+      const ws = MockWebSocket.instances.find(w => w.url.includes('replace-session'));
       expect(ws).toBeDefined();
-      ws?.simulateMessage({ type: 'sync_outputs', outputs: [], latest_seq: 0 });
 
-      const onOutput = vi.fn();
-      const onBuffered = vi.fn();
-      const unsubscribe = kernelService.onBufferedOutput((sid, output, cellId) => {
-        onBuffered(sid, output, cellId);
-      });
+      const onSyncReplace = vi.fn();
+      const unsubscribe = kernelService.onSyncReplace(onSyncReplace);
 
-      const executePromise = kernelService.executeCode(
-        sessionId,
-        'print("replay")',
-        (output) => onOutput(output),
-        'cell-1'
-      );
-
-      // Allow the async executeCode() call to enqueue its handler before we simulate replay.
-      await new Promise(resolve => setTimeout(resolve, 0));
-
+      // First sync
       ws?.simulateMessage({
         type: 'sync_outputs',
-        outputs: [{ seq: 1, cell_id: 'cell-2', output: { type: 'stdout', content: 'buffered\n' } }],
-        latest_seq: 1,
+        cells: {
+          'cell-1': [{ type: 'stdout', content: 'first\n' }],
+        },
       });
-      ws?.simulateMessage({ type: 'result', result: { status: 'ok' } });
 
-      await executePromise;
+      // Second sync (simulates reconnect) - should replace, not merge
+      ws?.simulateMessage({
+        type: 'sync_outputs',
+        cells: {
+          'cell-1': [
+            { type: 'stdout', content: 'first\n' },
+            { type: 'stdout', content: 'second\n' },
+          ],
+        },
+      });
+
       unsubscribe();
 
-      expect(onOutput).not.toHaveBeenCalled();
+      // Both syncs should fire callbacks - the client replaces outputs each time
+      expect(onSyncReplace).toHaveBeenCalledTimes(2);
+
+      // Second call should have the complete output array
+      const [, cellOutputs] = onSyncReplace.mock.calls[1];
+      const cell1Outputs = cellOutputs.get('cell-1');
+      expect(cell1Outputs).toHaveLength(2);
+      expect(cell1Outputs[0].content).toBe('first\n');
+      expect(cell1Outputs[1].content).toBe('second\n');
+    });
+
+    it('should route live outputs to buffered callbacks without seq', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ session_id: 'live-output-session', kernel_name: 'python3' })
+      });
+      await kernelService.startKernel('python3');
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const ws = MockWebSocket.instances.find(w => w.url.includes('live-output-session'));
+      expect(ws).toBeDefined();
+
+      // Complete initial sync
+      ws?.simulateMessage({ type: 'sync_outputs', cells: {} });
+
+      const onBuffered = vi.fn();
+      const unsubscribe = kernelService.onBufferedOutput(onBuffered);
+
+      // Simulate live output (no seq field)
+      ws?.simulateMessage({
+        type: 'output',
+        output: { type: 'stdout', content: 'hello\n' },
+        cell_id: 'cell-B',
+      });
+
+      unsubscribe();
+
       expect(onBuffered).toHaveBeenCalledTimes(1);
-      expect(onBuffered.mock.calls[0][1].content).toBe('buffered\n');
-      expect(onBuffered.mock.calls[0][2]).toBe('cell-2');
+      expect(onBuffered.mock.calls[0][1].content).toBe('hello\n');
+      // Output should have a UUID id (not kseq:*)
+      expect(onBuffered.mock.calls[0][1].id).toBeDefined();
+      expect(onBuffered.mock.calls[0][1].id).not.toMatch(/^kseq:/);
     });
   });
 });

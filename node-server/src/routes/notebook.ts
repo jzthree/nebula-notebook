@@ -8,8 +8,6 @@ import { NebulaCell } from '../fs/types';
 import { operationRouter } from '../notebook/operation-router';
 import { HeadlessOperationHandler } from '../notebook/headless-handler';
 import { kernelService } from './kernel';
-import { pruneOutputSpoolUpTo } from '../kernel/output-spool';
-import { withKernelOutputLock } from '../kernel/output-lock';
 
 const router = Router();
 // Initialize headless handler with kernel service for cell execution
@@ -78,7 +76,7 @@ router.get('/notebook/cells', async (req: Request, res: Response) => {
  */
 router.post('/notebook/save', async (req: Request, res: Response) => {
   try {
-    const { path: filePath, cells, kernel_name, history, session_id, kernel_output_seq } = req.body;
+    const { path: filePath, cells, kernel_name, history } = req.body;
     if (!filePath) {
       res.status(400).json({ detail: 'path is required' });
       return;
@@ -94,21 +92,6 @@ router.post('/notebook/save', async (req: Request, res: Response) => {
       kernel_name,
       history
     );
-
-    // Prune kernel output buffer only after a successful atomic save.
-    // This prevents losing output on UI refresh/disconnect before persistence.
-    const sessionId = typeof session_id === 'string'
-      ? session_id
-      : kernelService.getSessionIdForFile(filePath);
-    const seq = Number(kernel_output_seq);
-    if (sessionId && Number.isFinite(seq) && seq > 0) {
-      await withKernelOutputLock(sessionId, async () => {
-        const { latestSeq } = kernelService.getBufferedOutputs(sessionId, 0);
-        const upTo = Math.min(seq, latestSeq);
-        kernelService.ackOutputs(sessionId, upTo);
-        await pruneOutputSpoolUpTo(sessionId, upTo);
-      });
-    }
 
     res.json({ status: 'ok', path: filePath, mtime: result.mtime });
   } catch (err) {

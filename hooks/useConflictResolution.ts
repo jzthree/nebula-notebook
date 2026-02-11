@@ -22,7 +22,6 @@ export interface ConflictDialogState {
   localCells: Cell[];
   kernelName?: string;
   history?: any[];
-  saveOptions?: { sessionId?: string | null; kernelOutputSeq?: number | null };
 }
 
 export interface UseConflictResolutionResult {
@@ -40,7 +39,6 @@ export interface UseConflictResolutionResult {
     lastKnownMtime: number | null,
     kernelName?: string,
     history?: any[],
-    options?: { sessionId?: string | null; kernelOutputSeq?: number | null }
   ) => Promise<{
     success: boolean;
     needsResolution: boolean;
@@ -82,7 +80,6 @@ export function useConflictResolution(
     lastKnownMtime: number | null,
     kernelName?: string,
     history?: any[],
-    options?: { sessionId?: string | null; kernelOutputSeq?: number | null }
   ): Promise<{
     success: boolean;
     needsResolution: boolean;
@@ -95,7 +92,6 @@ export function useConflictResolution(
       lastKnownMtime,
       kernelName,
       history,
-      options
     );
 
     if (result.conflict) {
@@ -107,7 +103,6 @@ export function useConflictResolution(
         localCells: cells,
         kernelName,
         history,
-        saveOptions: options,
       });
 
       return {
@@ -139,9 +134,9 @@ export function useConflictResolution(
       return { success: false, newMtime: null };
     }
 
-    const { fileId, localCells, kernelName, history, saveOptions } = conflictDialog;
+    const { fileId, localCells, kernelName, history } = conflictDialog;
 
-    const result = await forceSaveLocal(fileId, localCells, kernelName, history, saveOptions);
+    const result = await forceSaveLocal(fileId, localCells, kernelName, history);
 
     if (result.success && result.newMtime !== null) {
       onMtimeUpdate(result.newMtime);

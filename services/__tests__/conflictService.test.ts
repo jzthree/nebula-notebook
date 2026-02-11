@@ -221,7 +221,6 @@ describe('conflictService', () => {
         mockCells,
         'python3',
         mockHistory,
-        undefined
       );
     });
   });
@@ -272,7 +271,6 @@ describe('conflictService', () => {
         mockCells,
         'python3',
         mockHistory,
-        undefined
       );
     });
   });

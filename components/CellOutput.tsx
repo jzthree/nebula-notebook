@@ -11,6 +11,13 @@ import {
   OUTPUT_DEFAULT_HEIGHT_PX,
 } from '../config';
 
+// Strip autoplay from audio/video elements in HTML output.
+// Prevents all media from playing simultaneously when loading a notebook
+// or when React re-mounts elements during virtualized scrolling.
+function stripAutoplay(html: string): string {
+  return html.replace(/(<(?:audio|video)\b[^>]*?)\s+autoplay(?:=["'][^"']*["'])?/gi, '$1');
+}
+
 // Display limits to prevent UI freeze from huge outputs
 // Note: Full data is preserved in state for saving - only display is truncated
 // Separate limits for regular output and error output (tracebacks need more context)
@@ -47,7 +54,24 @@ const compactOutput = (text: string): string => {
   return text.replace(/\n{3,}/g, '\n\n').trim();
 };
 
-const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage: (src: string) => void }> = ({ output, wrapText, onOpenImage }) => {
+function estimateDisplayOutputHeight(outputs: ICellOutput[]): number {
+  let total = 0;
+  for (const output of outputs) {
+    if (output.type === 'image') {
+      total += 300;
+      continue;
+    }
+    if (output.type === 'html') {
+      total += 240;
+      continue;
+    }
+    const lineCount = (output.content?.match(/\n/g) || []).length + 1;
+    total += lineCount * 16;
+  }
+  return total;
+}
+
+const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage: (src: string) => void; allowAutoplay?: boolean }> = ({ output, wrapText, onOpenImage, allowAutoplay }) => {
   const textClass = wrapText ? 'whitespace-pre-wrap break-words' : 'whitespace-pre overflow-x-auto';
   const openHtmlInNewTab = useCallback((html: string) => {
       const encoded = encodeHtmlParam(html);
@@ -104,7 +128,7 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage
               <span>Open in new tab</span>
             </button>
           </div>
-          <div dangerouslySetInnerHTML={{ __html: output.content }} className="overflow-x-auto" />
+          <div dangerouslySetInnerHTML={{ __html: allowAutoplay ? output.content : stripAutoplay(output.content) }} className="overflow-x-auto" />
         </div>
       );
     default:
@@ -127,6 +151,8 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
   const contentRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeImageSrc, setActiveImageSrc] = useState<string | null>(null);
+  // Track mount time: outputs created after mount are from fresh execution and may autoplay
+  const mountTimeRef = useRef(Date.now());
   const imageViewportRef = useRef<HTMLDivElement>(null);
   const panStateRef = useRef<{ isPanning: boolean; startX: number; startY: number; scrollLeft: number; scrollTop: number }>({
     isPanning: false,
@@ -294,14 +320,24 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
     panStateRef.current.isPanning = false;
   };
 
-  // Check if output is tall enough to warrant collapse option
-  const [showCollapseOption, setShowCollapseOption] = useState(false);
+  // Check if output is tall enough to warrant collapse option.
+  // Seed this from an estimate so tall outputs don't render once as "short"
+  // and then expand controls in a second pass (which can cause scroll jumps).
+  const [showCollapseOption, setShowCollapseOption] = useState(() =>
+    estimateDisplayOutputHeight(outputs) > DEFAULT_COLLAPSED_HEIGHT
+  );
 
   // Use useLayoutEffect to measure before paint, avoiding flicker
   useLayoutEffect(() => {
     if (contentRef.current) {
       const contentHeight = contentRef.current.scrollHeight;
-      const shouldShow = contentHeight > DEFAULT_COLLAPSED_HEIGHT;
+      // Small hysteresis to avoid toggling around the threshold due to minor
+      // layout jitter while virtualized items mount/measure.
+      const upperThreshold = DEFAULT_COLLAPSED_HEIGHT + 8;
+      const lowerThreshold = DEFAULT_COLLAPSED_HEIGHT - 8;
+      const shouldShow = showCollapseOption
+        ? contentHeight > lowerThreshold
+        : contentHeight > upperThreshold;
 
       // Only update if changed to avoid unnecessary re-renders
       if (shouldShow !== showCollapseOption) {
@@ -314,7 +350,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
         initialRenderRef.current = false;
       }
     }
-  }, [outputs, showCollapseOption]);
+  }, [displayOutputs, wrapText, showCollapseOption]);
 
   // Handle collapse toggle
   // Calls onScrolledChange to persist the collapsed state (Jupyter standard)
@@ -454,7 +490,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
       {/* Output content */}
       <div
         ref={contentRef}
-        className={`p-4 transition-all ${showCollapseOption ? 'pl-8' : ''} ${hasTextOutput ? 'pr-8' : ''}`}
+        className={`p-4 ${showCollapseOption ? 'pl-8' : ''} ${hasTextOutput ? 'pr-8' : ''}`}
         style={isCollapsed ? {
           maxHeight: collapsedHeight,
           overflowY: 'auto',
@@ -464,7 +500,7 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
         }}
       >
         {displayOutputs.map((out) => (
-          <OutputItem key={out.id} output={out} wrapText={wrapText} onOpenImage={setActiveImageSrc} />
+          <OutputItem key={out.id} output={out} wrapText={wrapText} onOpenImage={setActiveImageSrc} allowAutoplay={out.timestamp >= mountTimeRef.current} />
         ))}
       </div>
 

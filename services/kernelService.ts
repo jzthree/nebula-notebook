@@ -68,11 +68,8 @@ interface SessionState {
     onOutput: (output: CellOutput) => void;
     cellId?: string | null;
   }>;
-  lastAckedSeq?: number;
-  lastSeenSeq?: number;
-  // WebSocket output replay handshake. We require an initial `sync_outputs` round-trip
-  // before sending execute/complete requests to avoid races on refresh/reconnect where
-  // live outputs arrive before replay and advance the seq watermark.
+  // WebSocket output sync handshake. We require an initial `sync_outputs` round-trip
+  // before sending execute/complete requests so the client has current cell outputs.
   initialSyncDone?: boolean;
   initialSyncPromise?: Promise<void>;
   initialSyncResolve?: (() => void) | null;
@@ -102,6 +99,7 @@ class KernelService {
   private onDisconnectCallbacks: ((sessionId: string) => void)[] = [];
   private onStatusCallbacks: StatusCallback[] = [];
   private onBufferedOutputCallbacks: Array<(sessionId: string, output: CellOutput, cellId?: string | null) => void> = [];
+  private onSyncReplaceCallbacks: Array<(sessionId: string, cellOutputs: Map<string, CellOutput[]>) => void> = [];
 
   /**
    * Get list of available kernels on the system
@@ -160,8 +158,6 @@ class KernelService {
       sessionId,
       ws: null,
       messageQueue: [],
-      lastAckedSeq: 0,
-      lastSeenSeq: 0,
       filePath,
       kernelName: kernelName,
       serverId: resolvedServerId,
@@ -184,7 +180,7 @@ class KernelService {
   async getOrCreateKernelForFile(
     filePath: string,
     kernelName: string = 'python3',
-    serverId?: string | null
+    serverId?: string | null,
   ): Promise<{ sessionId: string; created?: boolean; createdAt?: number; serverId?: string | null }> {
     const body: { file_path: string; kernel_name: string; server_id?: string } = {
       file_path: filePath,
@@ -215,11 +211,9 @@ class KernelService {
     if (!this.sessions.has(sessionId)) {
       this.sessions.set(sessionId, {
         sessionId,
-      ws: null,
-      messageQueue: [],
-      lastAckedSeq: 0,
-      lastSeenSeq: 0,
-      filePath,
+        ws: null,
+        messageQueue: [],
+        filePath,
         kernelName,
         serverId: resolvedServerId,
       });
@@ -348,44 +342,32 @@ class KernelService {
     }
 
     if (data.type === 'sync_outputs') {
-      const outputs = Array.isArray(data.outputs) ? data.outputs : [];
-      for (const entry of outputs) {
-        if (!entry || !entry.output) continue;
-        const seq = typeof entry.seq === 'number' ? entry.seq : undefined;
-        if (seq !== undefined) {
-          const lastSeen = session.lastSeenSeq ?? 0;
-          if (seq <= lastSeen) {
-            continue;
-          }
-          session.lastSeenSeq = Math.max(lastSeen, seq);
+      // Cell-level replace protocol: server sends complete cell output arrays
+      const cellsData = data.cells as Record<string, Array<{ type: string; content: string }>> | undefined;
+      if (cellsData && typeof cellsData === 'object') {
+        const cellOutputMap = new Map<string, CellOutput[]>();
+        const now = Date.now();
+        for (const [cellId, outputs] of Object.entries(cellsData)) {
+          if (!Array.isArray(outputs)) continue;
+          const cellOutputs: CellOutput[] = outputs.map((o, i) => ({
+            id: `sync-${cellId}-${i}`,
+            type: o.type as CellOutput['type'],
+            content: o.content,
+            timestamp: now,
+          }));
+          cellOutputMap.set(cellId, cellOutputs);
         }
-        const entryCellId = entry.cell_id ?? entry.cellId ?? null;
-        const cellOutput: CellOutput = {
-          // Deterministic per-session output ID. Useful for correlating what was
-          // actually applied to the UI with what we tell the server is durable.
-          id: seq !== undefined ? `kseq:${seq}` : crypto.randomUUID(),
-          type: entry.output.type,
-          content: entry.output.content,
-          timestamp: Date.now(),
-        };
-
-        // If there's an active execution handler for this cell, route replayed outputs
-        // through it so the UI's in-flight output accumulator doesn't overwrite them.
-        const handler = session.messageQueue[0];
-        if (handler && handler.cellId && entryCellId && handler.cellId === entryCellId) {
-          handler.onOutput(cellOutput);
-        } else {
-          for (const callback of this.onBufferedOutputCallbacks) {
-            try {
-              callback(sessionId, cellOutput, entryCellId);
-            } catch (e) {
-              console.error('Buffered output callback error:', e);
-            }
+        // Fire sync replace callbacks (Notebook.tsx replaces cell outputs)
+        for (const callback of this.onSyncReplaceCallbacks) {
+          try {
+            callback(sessionId, cellOutputMap);
+          } catch (e) {
+            console.error('Sync replace callback error:', e);
           }
         }
       }
 
-      // Mark initial sync complete after we've applied the replay.
+      // Mark initial sync complete
       if (!session.initialSyncDone) {
         session.initialSyncDone = true;
         if (session.initialSyncTimeout) {
@@ -416,19 +398,9 @@ class KernelService {
 
     if (data.type === 'output') {
       const output = data.output;
-      const seq = typeof data.seq === 'number' ? data.seq : undefined;
       const cellId = data.cell_id ?? data.cellId ?? null;
-      if (seq !== undefined) {
-        const lastSeen = session.lastSeenSeq ?? 0;
-        if (seq <= lastSeen) {
-          return;
-        }
-        session.lastSeenSeq = Math.max(lastSeen, seq);
-      }
       const cellOutput: CellOutput = {
-        // Deterministic per-session output ID. Useful for correlating what was
-        // actually applied to the UI with what we tell the server is durable.
-        id: seq !== undefined ? `kseq:${seq}` : crypto.randomUUID(),
+        id: crypto.randomUUID(),
         type: output.type,
         content: output.content,
         timestamp: Date.now(),
@@ -472,17 +444,6 @@ class KernelService {
         session.messageQueue.shift();
         handler.reject(new Error(data.error));
         break;
-    }
-  }
-
-  private sendAck(sessionId: string, upToSeq: number): void {
-    const session = this.sessions.get(sessionId);
-    if (!session || !session.ws || session.ws.readyState !== WebSocket.OPEN) return;
-    session.lastAckedSeq = Math.max(session.lastAckedSeq ?? 0, upToSeq);
-    try {
-      session.ws.send(JSON.stringify({ type: 'ack_outputs', up_to: upToSeq }));
-    } catch (e) {
-      console.error('Failed to send output ack:', e);
     }
   }
 
@@ -650,12 +611,13 @@ class KernelService {
   }
 
   /**
-   * Get the highest output sequence we've seen for this session.
-   * Used to inform the server what output has been persisted to disk.
+   * Subscribe to sync replace events (cell-level output replacement on reconnect)
    */
-  getLastSeenSeq(sessionId: string): number {
-    const session = this.sessions.get(sessionId);
-    return session?.lastSeenSeq ?? 0;
+  onSyncReplace(callback: (sessionId: string, cellOutputs: Map<string, CellOutput[]>) => void): () => void {
+    this.onSyncReplaceCallbacks.push(callback);
+    return () => {
+      this.onSyncReplaceCallbacks = this.onSyncReplaceCallbacks.filter(cb => cb !== callback);
+    };
   }
 
   /**
@@ -910,10 +872,9 @@ class KernelService {
       session.initialSyncResolve = resolve;
     });
 
-    // Replay anything we haven't seen yet (dedupe by seq in handleMessage).
-    const since = session.lastSeenSeq ?? 0;
+    // Request complete cell outputs from server for replace semantics.
     try {
-      session.ws.send(JSON.stringify({ type: 'sync_outputs', since }));
+      session.ws.send(JSON.stringify({ type: 'sync_outputs' }));
     } catch (err) {
       console.error('Failed to request output sync:', err);
       // Don't block execution forever if we couldn't send the message.

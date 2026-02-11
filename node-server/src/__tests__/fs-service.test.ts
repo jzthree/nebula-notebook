@@ -446,6 +446,7 @@ describe('FilesystemService', () => {
       expect(codeCell.outputs.length).toBe(1);
       expect(codeCell.outputs[0].type).toBe('stdout');
       expect(codeCell.outputs[0].content).toBe('hello\nworld\n');
+      expect(codeCell.outputs[0].id).toBe('output-0-0');
 
       // Check markdown cell
       const mdCell = result.cells[1];
@@ -499,6 +500,7 @@ describe('FilesystemService', () => {
       expect(codeCell.metadata.nebula_id).toBe('cell-1');
       expect(codeCell.metadata.scrolled).toBe(true);
       expect(codeCell.execution_count).toBe(1);
+      expect(codeCell.outputs[0].nebula_seq).toBeUndefined();
 
       // Check markdown cell
       const mdCell = saved.cells[1];
@@ -526,6 +528,24 @@ describe('FilesystemService', () => {
 
       expect(saved.metadata.custom).toBe('value');
       expect(saved.metadata.nebula.agent_created).toBe(true);
+    });
+
+    it('should save output without nebula_seq', () => {
+      const seqCells = [
+        {
+          id: 'cell-1',
+          type: 'code' as const,
+          content: 'print("hello")',
+          outputs: [{ id: 'out-1', type: 'stdout' as const, content: 'hello\n', timestamp: Date.now() }],
+          isExecuting: false,
+          executionCount: 1,
+        },
+      ];
+
+      service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), seqCells, 'python3');
+      const saved = JSON.parse(fs.readFileSync(path.join(testDir, 'save-cells.ipynb'), 'utf-8'));
+
+      expect(saved.cells[0].outputs[0].nebula_seq).toBeUndefined();
     });
   });
 

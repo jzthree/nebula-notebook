@@ -67,11 +67,10 @@ export class KernelService {
   private serverId: string;
   private serverInstanceId: string;
   private legacyCleanupWarned: Set<string> = new Set();
-  private outputSeq: Map<string, number> = new Map();
-  private outputBuffers: Map<string, { seq: number; output: KernelOutput; cellId?: string | null }[]> = new Map();
-  private outputLineCounts: Map<string, { regular: number; error: number }> = new Map();
-  private outputCharCounts: Map<string, { regular: number; error: number }> = new Map();
-  private outputTruncation: Map<string, { regular: boolean; error: boolean }> = new Map();
+  // Cell-indexed output buffer: sessionId -> cellId -> outputs
+  private cellOutputBuffers: Map<string, Map<string, KernelOutput[]>> = new Map();
+  // Per-cell truncation tracking: sessionId -> cellId -> tracking state
+  private cellOutputTracking: Map<string, Map<string, { lines: number; chars: number; truncated: boolean }>> = new Map();
   private executingCellIds: Map<string, string | null> = new Map();
 
   constructor(config?: KernelServiceConfig, sessionStore?: SessionStore) {
@@ -745,7 +744,7 @@ export class KernelService {
   async executeCode(
     sessionId: string,
     code: string,
-    onOutput: (entry: { seq: number; output: KernelOutput; cellId?: string | null }) => Promise<void>,
+    onOutput: (output: KernelOutput, cellId?: string | null) => Promise<void>,
     onQueueInfo?: (info: ExecutionQueueInfo) => void,
     cellId?: string | null
   ): Promise<ExecutionResult> {
@@ -754,20 +753,24 @@ export class KernelService {
       onQueueInfo(queueInfo);
     }
     return this.enqueueExecution(sessionId, async () => {
+      // Clear previous outputs for this cell before starting new execution
+      if (cellId) {
+        this.clearCellOutputs(sessionId, cellId);
+      }
       this.executingCellIds.set(sessionId, cellId ?? null);
       try {
         const result = await this.executeCodeInternal(sessionId, code, async (output) => {
-          const entries = this.bufferOutput(sessionId, output, cellId);
-          for (const entry of entries) {
-            await onOutput(entry);
+          const stored = this.bufferOutput(sessionId, output, cellId);
+          for (const o of stored) {
+            await onOutput(o, cellId);
           }
         });
         return { ...result, ...queueInfo };
       } catch (err) {
         const errorMsg = this.formatExecutionError(err);
-        const entries = this.bufferOutput(sessionId, { type: 'error', content: errorMsg }, cellId);
-        for (const entry of entries) {
-          await onOutput(entry);
+        const stored = this.bufferOutput(sessionId, { type: 'error', content: errorMsg }, cellId);
+        for (const o of stored) {
+          await onOutput(o, cellId);
         }
         return { status: 'error', executionCount: null, error: errorMsg, ...queueInfo };
       } finally {
@@ -1098,118 +1101,86 @@ export class KernelService {
     return { lines, chars, isError };
   }
 
-  private ensureOutputTracking(sessionId: string): void {
-    if (!this.outputLineCounts.has(sessionId)) {
-      this.outputLineCounts.set(sessionId, { regular: 0, error: 0 });
+  private ensureCellBuffers(sessionId: string): Map<string, KernelOutput[]> {
+    let buffers = this.cellOutputBuffers.get(sessionId);
+    if (!buffers) {
+      buffers = new Map();
+      this.cellOutputBuffers.set(sessionId, buffers);
     }
-    if (!this.outputCharCounts.has(sessionId)) {
-      this.outputCharCounts.set(sessionId, { regular: 0, error: 0 });
-    }
-    if (!this.outputTruncation.has(sessionId)) {
-      this.outputTruncation.set(sessionId, { regular: false, error: false });
-    }
-    if (!this.outputSeq.has(sessionId)) {
-      this.outputSeq.set(sessionId, 0);
-    }
-    if (!this.outputBuffers.has(sessionId)) {
-      this.outputBuffers.set(sessionId, []);
-    }
+    return buffers;
   }
 
-  private appendBufferedOutput(sessionId: string, output: KernelOutput, cellId?: string | null): { seq: number; output: KernelOutput; cellId?: string | null } {
-    this.ensureOutputTracking(sessionId);
-    const nextSeq = (this.outputSeq.get(sessionId) ?? 0) + 1;
-    this.outputSeq.set(sessionId, nextSeq);
-    const entry = { seq: nextSeq, output, cellId };
-    const buffer = this.outputBuffers.get(sessionId)!;
-    buffer.push(entry);
-    return entry;
+  private ensureCellTracking(sessionId: string, cellId: string): { lines: number; chars: number; truncated: boolean } {
+    let tracking = this.cellOutputTracking.get(sessionId);
+    if (!tracking) {
+      tracking = new Map();
+      this.cellOutputTracking.set(sessionId, tracking);
+    }
+    let cellTrack = tracking.get(cellId);
+    if (!cellTrack) {
+      cellTrack = { lines: 0, chars: 0, truncated: false };
+      tracking.set(cellId, cellTrack);
+    }
+    return cellTrack;
   }
 
-  private bufferOutput(
+  /**
+   * Buffer an output for a cell. Returns the outputs actually stored (0 if truncated, 1 normally).
+   */
+  bufferOutput(
     sessionId: string,
     output: KernelOutput,
     cellId?: string | null
-  ): { seq: number; output: KernelOutput; cellId?: string | null }[] {
-    this.ensureOutputTracking(sessionId);
+  ): KernelOutput[] {
+    const effectiveCellId = cellId ?? '__unknown__';
+    const buffers = this.ensureCellBuffers(sessionId);
+    const cellTrack = this.ensureCellTracking(sessionId, effectiveCellId);
 
     const stats = this.getOutputStats(output);
-    const lineCounts = this.outputLineCounts.get(sessionId)!;
-    const charCounts = this.outputCharCounts.get(sessionId)!;
-    const truncation = this.outputTruncation.get(sessionId)!;
 
-    const maxLines = stats.isError ? MAX_OUTPUT_LINES_ERROR : MAX_OUTPUT_LINES;
-    const maxChars = stats.isError ? MAX_OUTPUT_CHARS_ERROR : MAX_OUTPUT_CHARS;
-    const currentLines = stats.isError ? lineCounts.error : lineCounts.regular;
-    const currentChars = stats.isError ? charCounts.error : charCounts.regular;
-
-    if (currentLines + stats.lines > maxLines || currentChars + stats.chars > maxChars) {
-      const bucket = stats.isError ? 'error' : 'regular';
-      if (!truncation[bucket]) {
-        truncation[bucket] = true;
+    if (cellTrack.lines + stats.lines > MAX_OUTPUT_LINES || cellTrack.chars + stats.chars > MAX_OUTPUT_CHARS) {
+      if (!cellTrack.truncated) {
+        cellTrack.truncated = true;
         const warning: KernelOutput = {
           type: 'stderr',
           content: `\n⚠️ Output limit reached. Additional output not displayed.`,
         };
-        const warningStats = this.getOutputStats(warning);
-        lineCounts.regular += warningStats.lines;
-        charCounts.regular += warningStats.chars;
-        return [this.appendBufferedOutput(sessionId, warning, cellId)];
+        let arr = buffers.get(effectiveCellId);
+        if (!arr) { arr = []; buffers.set(effectiveCellId, arr); }
+        arr.push(warning);
+        return [warning];
       }
       return [];
     }
 
-    if (stats.isError) {
-      lineCounts.error += stats.lines;
-      charCounts.error += stats.chars;
-    } else {
-      lineCounts.regular += stats.lines;
-      charCounts.regular += stats.chars;
-    }
+    cellTrack.lines += stats.lines;
+    cellTrack.chars += stats.chars;
 
-    return [this.appendBufferedOutput(sessionId, output, cellId)];
+    let arr = buffers.get(effectiveCellId);
+    if (!arr) { arr = []; buffers.set(effectiveCellId, arr); }
+    arr.push(output);
+    return [output];
+  }
+
+  /**
+   * Clear outputs for a specific cell (called on re-execute).
+   */
+  clearCellOutputs(sessionId: string, cellId: string): void {
+    this.cellOutputBuffers.get(sessionId)?.delete(cellId);
+    this.cellOutputTracking.get(sessionId)?.delete(cellId);
+  }
+
+  /**
+   * Get all cell outputs for a session, grouped by cellId.
+   */
+  getAllCellOutputs(sessionId: string): Map<string, KernelOutput[]> {
+    return this.cellOutputBuffers.get(sessionId) || new Map();
   }
 
   getExecutingCellId(sessionId: string): string | null {
     return this.executingCellIds.get(sessionId) ?? null;
   }
 
-  getBufferedOutputs(sessionId: string, sinceSeq: number = 0): { outputs: { seq: number; output: KernelOutput; cellId?: string | null }[]; latestSeq: number } {
-    this.ensureOutputTracking(sessionId);
-    const buffer = this.outputBuffers.get(sessionId)!;
-    const outputs = buffer.filter(entry => entry.seq > sinceSeq);
-    const latestSeq = this.outputSeq.get(sessionId) ?? 0;
-    return { outputs, latestSeq };
-  }
-
-  ackOutputs(sessionId: string, upToSeq: number): void {
-    if (!this.outputBuffers.has(sessionId)) return;
-    const buffer = this.outputBuffers.get(sessionId)!;
-    if (buffer.length === 0) return;
-    const remaining = buffer.filter(entry => entry.seq > upToSeq);
-    this.outputBuffers.set(sessionId, remaining);
-
-    // Recompute counts to allow output to resume after acknowledgements.
-    const lineCounts = { regular: 0, error: 0 };
-    const charCounts = { regular: 0, error: 0 };
-    for (const entry of remaining) {
-      const stats = this.getOutputStats(entry.output);
-      if (stats.isError) {
-        lineCounts.error += stats.lines;
-        charCounts.error += stats.chars;
-      } else {
-        lineCounts.regular += stats.lines;
-        charCounts.regular += stats.chars;
-      }
-    }
-    this.outputLineCounts.set(sessionId, lineCounts);
-    this.outputCharCounts.set(sessionId, charCounts);
-
-    const truncation = this.outputTruncation.get(sessionId) || { regular: false, error: false };
-    truncation.regular = lineCounts.regular >= MAX_OUTPUT_LINES || charCounts.regular >= MAX_OUTPUT_CHARS;
-    truncation.error = lineCounts.error >= MAX_OUTPUT_LINES_ERROR || charCounts.error >= MAX_OUTPUT_CHARS_ERROR;
-    this.outputTruncation.set(sessionId, truncation);
-  }
 
   /**
    * Stop a kernel session
@@ -1396,11 +1367,8 @@ export class KernelService {
     this.executionQueues.delete(sessionId);
     this.executionQueueSizes.delete(sessionId);
     this.shellRequestQueues.delete(sessionId);
-    this.outputSeq.delete(sessionId);
-    this.outputBuffers.delete(sessionId);
-    this.outputLineCounts.delete(sessionId);
-    this.outputCharCounts.delete(sessionId);
-    this.outputTruncation.delete(sessionId);
+    this.cellOutputBuffers.delete(sessionId);
+    this.cellOutputTracking.delete(sessionId);
     this.executingCellIds.delete(sessionId);
   }
 

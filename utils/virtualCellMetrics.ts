@@ -16,6 +16,9 @@ export function estimateCellHeight(cell: Cell): number {
       if (output.type === 'image') {
         // Images are typically ~300px
         height += 300;
+      } else if (output.type === 'html') {
+        // Embedded HTML outputs tend to be medium/tall even with little source text.
+        height += 240;
       } else if (output.content) {
         // Text output: ~16px per line
         const outputLines = output.content.split('\n').length;
@@ -23,7 +26,14 @@ export function estimateCellHeight(cell: Cell): number {
         if (cell.scrolled) {
           height += Math.min(outputLines * 16, cell.scrolledHeight || 200);
         } else {
-          height += Math.min(outputLines * 16, 600); // Cap for wrap mode
+          // Long tracebacks are much taller than regular stdout/stderr.
+          // A higher cap reduces underestimation-driven jumps while keeping
+          // defaults bounded for extremely large outputs.
+          const maxTextHeight =
+            output.type === 'error' ? 2400 :
+            output.type === 'stderr' ? 1800 :
+            1200;
+          height += Math.min(outputLines * 16, maxTextHeight);
         }
       }
     }

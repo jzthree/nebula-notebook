@@ -103,32 +103,6 @@ function escapeForAttributeSelector(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-function parseKernelOutputSeqFromId(outputId: string | null | undefined): number | null {
-  if (!outputId) return null;
-  if (!outputId.startsWith('kseq:')) return null;
-  const seq = Number(outputId.slice('kseq:'.length));
-  return Number.isFinite(seq) && seq > 0 ? seq : null;
-}
-
-function getLatestKernelOutputSeq(outputs: Array<{ id: string }>): number {
-  for (let i = outputs.length - 1; i >= 0; i -= 1) {
-    const seq = parseKernelOutputSeqFromId(outputs[i]?.id);
-    if (seq != null) return seq;
-  }
-  return 0;
-}
-
-function getLatestKernelOutputSeqInCells(cells: Array<{ outputs?: Array<{ id: string }> }>): number {
-  let max = 0;
-  for (const cell of cells) {
-    const outputs = cell.outputs;
-    if (!outputs || outputs.length === 0) continue;
-    const seq = getLatestKernelOutputSeq(outputs);
-    if (seq > max) max = seq;
-  }
-  return max;
-}
-
 // Get initial file ID synchronously to avoid "Untitled" flash
 function getInitialFileId(): string | null {
   // Check URL parameter first
@@ -331,13 +305,6 @@ export const Notebook: React.FC = () => {
   const [kernelCreatedAt, setKernelCreatedAt] = useState<number | null>(null);
   const [isDiscoveringPythons, setIsDiscoveringPythons] = useState(false);
   const [isInstallingKernel, setIsInstallingKernel] = useState<string | null>(null);
-
-  // Highest kernel output seq that we've applied to local cell state.
-  // Used as the durability watermark when pruning server-side output buffers.
-  const kernelOutputSeqRef = useRef<number>(0);
-  useEffect(() => {
-    kernelOutputSeqRef.current = 0;
-  }, [currentFileId, kernelSessionId]);
 
   // Cluster State
   const [clusterInfo, setClusterInfo] = useState<ClusterInfo | null>(null);
@@ -1205,15 +1172,6 @@ export const Notebook: React.FC = () => {
       // History is ready after loadHistory() or initializeNewHistory() completes
       const history = historyReady ? getFullHistory() : undefined;
 
-      // IMPORTANT: The kernel output seq we send to the server must reflect what is
-      // actually included in this save payload. Using a ref that can get ahead of
-      // React state (due to async setState) can cause premature server-side pruning
-      // and output loss on refresh/reconnect.
-      const kernelOutputSeqRaw = (kernelSessionId && fileId === currentFileId)
-        ? getLatestKernelOutputSeqInCells(cellsToSave)
-        : 0;
-      const kernelOutputSeq = kernelOutputSeqRaw > 0 ? kernelOutputSeqRaw : null;
-
       // Use ref for mtime to avoid stale closures causing false conflicts
       const result = await saveWithCheck(
         fileId,
@@ -1221,7 +1179,6 @@ export const Notebook: React.FC = () => {
         lastKnownMtimeRef.current,
         currentKernel,
         history,
-        kernelSessionId ? { sessionId: kernelSessionId, kernelOutputSeq } : undefined
       );
 
       if (result.needsResolution) {
@@ -1545,14 +1502,23 @@ export const Notebook: React.FC = () => {
     const unsubscribe = kernelService.onBufferedOutput((sessionId, output, cellId) => {
       if (kernelSessionId && sessionId !== kernelSessionId) return;
       if (!cellId) return;
-      const seq = parseKernelOutputSeqFromId(output.id);
-      if (seq != null) {
-        kernelOutputSeqRef.current = Math.max(kernelOutputSeqRef.current, seq);
-      }
       setCells(prev => prev.map(c => {
         if (c.id !== cellId) return c;
-        const existingOutputs = c.outputs || [];
-        return { ...c, outputs: [...existingOutputs, output] };
+        return { ...c, outputs: [...(c.outputs || []), output] };
+      }));
+    });
+    return unsubscribe;
+  }, [kernelSessionId, setCells]);
+
+  // Sync replace effect: on reconnect, server sends complete cell output arrays.
+  // We replace cell outputs entirely instead of merging -- eliminates all dedup logic.
+  useEffect(() => {
+    const unsubscribe = kernelService.onSyncReplace((sessionId, cellOutputs) => {
+      if (kernelSessionId && sessionId !== kernelSessionId) return;
+      setCells(prev => prev.map(c => {
+        const syncedOutputs = cellOutputs.get(c.id);
+        if (syncedOutputs === undefined) return c;
+        return { ...c, outputs: syncedOutputs };
       }));
     });
     return unsubscribe;
@@ -1905,7 +1871,12 @@ export const Notebook: React.FC = () => {
     }
   };
 
-  const loadFileAsync = async (id: string, content: Cell[], notebookKernel?: string) => {
+  const loadFileAsync = async (
+    id: string,
+    content: Cell[],
+    notebookKernel?: string,
+  ) => {
+
     if (currentFileId && currentFileId !== id) {
       // Keyframe: flush active cell before switching files
       flushActiveCell();
@@ -2063,7 +2034,7 @@ export const Notebook: React.FC = () => {
       const { sessionId, created, createdAt, serverId: resolvedServerId } = await kernelService.getOrCreateKernelForFile(
         id,
         kernelToUse,
-        preferredServerId
+        preferredServerId,
       );
       setKernelSessionId(sessionId);
       if (createdAt) setKernelCreatedAt(createdAt);
@@ -2110,7 +2081,11 @@ export const Notebook: React.FC = () => {
       if (result) {
         setLastKnownMtime(result.mtime);
         setPendingSave(false);
-        loadFileAsync(id, result.cells, result.kernelspec);
+        loadFileAsync(
+          id,
+          result.cells,
+          result.kernelspec,
+        );
       } else {
         // File doesn't exist or is empty
         setIsLoadingFile(false);
@@ -3000,10 +2975,6 @@ export const Notebook: React.FC = () => {
           if (allOutputs.length === 0) return;
           // Copy current accumulated outputs - don't clear, keep accumulating
           const snapshot = [...allOutputs];
-          const snapshotSeq = getLatestKernelOutputSeq(snapshot);
-          if (snapshotSeq > 0) {
-            kernelOutputSeqRef.current = Math.max(kernelOutputSeqRef.current, snapshotSeq);
-          }
           lastFlushTime = Date.now();
 
           // Replace entire outputs array - this is idempotent and race-condition-free
@@ -3046,7 +3017,6 @@ export const Notebook: React.FC = () => {
               collectedOutputs.push(output.content);
             }
 
-            // Add to accumulated outputs
             allOutputs.push(output);
 
             // Check if we've hit any limit (lines or size)

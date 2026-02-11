@@ -83,7 +83,6 @@ export async function saveWithConflictCheck(
   lastKnownMtime: number | null,
   kernelName?: string,
   history?: any[],
-  options?: { sessionId?: string | null; kernelOutputSeq?: number | null }
 ): Promise<SaveWithConflictCheckResult> {
   // Check for conflict first
   const conflictCheck = await checkForConflict(fileId, lastKnownMtime);
@@ -100,7 +99,7 @@ export async function saveWithConflictCheck(
 
   // No conflict - proceed with save
   try {
-    const result = await saveFileContentWithMtime(fileId, cells, kernelName, history, options);
+    const result = await saveFileContentWithMtime(fileId, cells, kernelName, history);
     if (result) {
       return {
         success: true,
@@ -130,10 +129,9 @@ export async function forceSaveLocal(
   cells: Cell[],
   kernelName?: string,
   history?: any[],
-  options?: { sessionId?: string | null; kernelOutputSeq?: number | null }
 ): Promise<{ success: boolean; newMtime: number | null; error?: string }> {
   try {
-    const result = await saveFileContentWithMtime(fileId, cells, kernelName, history, options);
+    const result = await saveFileContentWithMtime(fileId, cells, kernelName, history);
     if (result) {
       return { success: true, newMtime: result.mtime };
     }

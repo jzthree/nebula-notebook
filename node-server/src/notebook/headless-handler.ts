@@ -1404,9 +1404,8 @@ export class HeadlessOperationHandler {
     let executionComplete = false;
     let queueInfo: { queuePosition: number; queueLength: number } | null = null;
 
-    const outputCallback = async (entry: { seq: number; output: { type: string; content: string } }) => {
-      outputs.push(createCellOutput(entry.output.type as CellOutput['type'], entry.output.content));
-      this.kernelService?.ackOutputs(sessionId, entry.seq);
+    const outputCallback = async (output: { type: string; content: string }) => {
+      outputs.push(createCellOutput(output.type as CellOutput['type'], output.content));
       // Save outputs periodically (every 5 outputs) like Python
       if (saveOutputs && outputs.length % 5 === 0) {
         cell.outputs = [...outputs];

@@ -90,7 +90,10 @@ describe('Notebook Routes', () => {
             execution_count: null,
           },
         ],
-        metadata: { kernelspec: { name: 'python3', display_name: 'Python 3' } },
+        metadata: {
+          kernelspec: { name: 'python3', display_name: 'Python 3' },
+          nebula: {},
+        },
         nbformat: 4,
         nbformat_minor: 5,
       };
@@ -171,6 +174,30 @@ describe('Notebook Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('detail');
+    });
+
+    it('should save without kernel output seq metadata', async () => {
+      const notebookPath = path.join(testDir, 'save-seq.ipynb');
+      fs.writeFileSync(notebookPath, JSON.stringify({
+        cells: [],
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 5,
+      }));
+
+      const response = await request(server)
+        .post('/api/notebook/save')
+        .send({
+          path: notebookPath,
+          cells: [],
+          kernel_name: 'python3',
+        });
+
+      expect(response.status).toBe(200);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      // No kernel_output_seq metadata should be written
+      expect(saved.metadata?.nebula?.kernel_output_seq).toBeUndefined();
+      expect(saved.metadata?.nebula?.kernel_output_session_id).toBeUndefined();
     });
   });
 

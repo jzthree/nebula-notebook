@@ -87,8 +87,6 @@ const buildShadowPayload = (
   cells: Cell[],
   kernelName?: string,
   history?: TimestampedOperation[],
-  sessionId?: string | null,
-  kernelOutputSeq?: number | null
 ) => {
   let reused = 0;
   let updated = 0;
@@ -114,12 +112,6 @@ const buildShadowPayload = (
   }
   if (history !== undefined) {
     payload += `,\"history\":${JSON.stringify(history)}`;
-  }
-  if (sessionId !== undefined && sessionId !== null) {
-    payload += `,\"session_id\":${JSON.stringify(sessionId)}`;
-  }
-  if (kernelOutputSeq !== undefined && kernelOutputSeq !== null) {
-    payload += `,\"kernel_output_seq\":${JSON.stringify(kernelOutputSeq)}`;
   }
   payload += '}';
 
@@ -387,7 +379,7 @@ export const getNotebookData = async (path: string): Promise<NotebookData> => {
   return {
     cells: data.cells,
     kernelspec: data.kernelspec || 'python3',
-    mtime: data.mtime
+    mtime: data.mtime,
   };
 };
 
@@ -403,7 +395,6 @@ export const saveNotebookCells = async (
   cells: Cell[],
   kernelName?: string,
   history?: any[],
-  options?: { sessionId?: string | null; kernelOutputSeq?: number | null }
 ): Promise<SaveResult> => {
   const shadowConfig = getShadowSerializeConfig();
   const payload = {
@@ -411,13 +402,11 @@ export const saveNotebookCells = async (
     cells,
     kernel_name: kernelName,
     history,
-    session_id: options?.sessionId ?? undefined,
-    kernel_output_seq: options?.kernelOutputSeq ?? undefined,
   };
   const body = JSON.stringify(payload);
 
   if (shadowConfig.enabled && shouldRunShadowSerialize(shadowConfig.sample)) {
-    const shadow = buildShadowPayload(path, cells, kernelName, history, options?.sessionId ?? null, options?.kernelOutputSeq ?? null);
+    const shadow = buildShadowPayload(path, cells, kernelName, history);
     if (shadow.payload !== body) {
       console.warn('[Autosave] Shadow serialization mismatch', {
         path,
@@ -506,10 +495,9 @@ export const saveFileContentWithMtime = async (
   cells: Cell[],
   kernelName?: string,
   history?: any[],
-  options?: { sessionId?: string | null; kernelOutputSeq?: number | null }
 ): Promise<SaveResult | null> => {
   try {
-    return await saveNotebookCells(id, cells, kernelName, history, options);
+    return await saveNotebookCells(id, cells, kernelName, history);
   } catch (e) {
     console.error('Failed to save file content:', e);
     return null;

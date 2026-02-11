@@ -11,8 +11,6 @@ import { KernelService } from '../kernel/kernel-service';
 import { getKernelSearchPaths } from '../kernel/kernelspec';
 import { fsService } from '../fs/fs-service';
 import { operationRouter } from '../notebook/operation-router';
-import { appendOutputSpool, readOutputSpoolSince } from '../kernel/output-spool';
-import { withKernelOutputLock } from '../kernel/output-lock';
 import {
   isProxiedSession,
   parseSessionId,
@@ -39,30 +37,6 @@ const sessionWebSockets: Map<string, Set<WebSocket>> = new Map();
 // the frontend to advance its seq watermark and skip replayed outputs on refresh/reconnect.
 const outputSubscribedSockets: WeakSet<WebSocket> = new WeakSet();
 
-type OutputDrainState = { timer: NodeJS.Timeout | null; running: boolean };
-const outputDrain: Map<string, OutputDrainState> = new Map();
-
-// Delay before starting persistence after UI disappears (prevents thrash on quick refresh/reconnect).
-// NOTE: This is intentionally long because a browser refresh can easily take a few seconds
-// to reload JS + reconnect websockets. We persist to a sidecar spool (not the notebook file)
-// so we avoid spurious notebook mtime conflicts during transient disconnects.
-const OUTPUT_DRAIN_GRACE_MS = 15000;
-// While running, persist at most once per interval.
-const OUTPUT_DRAIN_INTERVAL_MS = 1000;
-// Cap outputs per persistence batch to avoid huge writes for very chatty cells.
-const OUTPUT_DRAIN_MAX_BATCH = 200;
-
-const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-
-function hasKernelClients(sessionId: string): boolean {
-  const sockets = sessionWebSockets.get(sessionId);
-  if (!sockets || sockets.size === 0) return false;
-  for (const socket of sockets) {
-    if (socket.readyState === WebSocket.OPEN) return true;
-  }
-  return false;
-}
-
 // Shared kernel service instance - exported for use by headless handler
 const kernelService = new KernelService();
 
@@ -70,85 +44,6 @@ const kernelService = new KernelService();
 kernelService.initialize().catch(err => {
   console.error('Failed to initialize kernel service:', err);
 });
-
-async function persistBufferedOutputsIfNoUI(sessionId: string): Promise<number> {
-  const notebookPath = kernelService.getSessionFilePath(sessionId);
-  if (!notebookPath) return 0;
-  if (operationRouter.hasUI(notebookPath)) return 0;
-  if (hasKernelClients(sessionId)) return 0;
-
-  return withKernelOutputLock(sessionId, async () => {
-    const { outputs } = kernelService.getBufferedOutputs(sessionId, 0);
-    if (outputs.length === 0) return 0;
-
-    // Persist to a sidecar spool (not the notebook file) so we don't bump notebook mtime
-    // during transient disconnects. The UI will replay from this spool on reconnect and
-    // autosave will prune both the in-memory buffer and this spool after atomic save.
-    const batch = outputs.slice(0, OUTPUT_DRAIN_MAX_BATCH);
-    const ackSeq = await appendOutputSpool(sessionId, batch.map(entry => ({
-      seq: entry.seq,
-      output: { type: entry.output.type, content: entry.output.content },
-      cellId: entry.cellId ?? null,
-    })));
-
-    if (ackSeq > 0) {
-      kernelService.ackOutputs(sessionId, ackSeq);
-    }
-
-    return ackSeq;
-  });
-}
-
-async function runOutputDrain(sessionId: string): Promise<void> {
-  const state = outputDrain.get(sessionId);
-  if (!state || state.running) return;
-
-  state.running = true;
-  try {
-    while (true) {
-      const notebookPath = kernelService.getSessionFilePath(sessionId);
-      if (!notebookPath) break;
-      if (operationRouter.hasUI(notebookPath)) break;
-      if (hasKernelClients(sessionId)) break;
-
-      let ackSeq = 0;
-      try {
-        ackSeq = await persistBufferedOutputsIfNoUI(sessionId);
-      } catch (err) {
-        console.warn(`[Kernel WS] Output drain persist failed for ${sessionId}:`, err);
-      }
-
-      const executingCellId = kernelService.getExecutingCellId(sessionId);
-      const { outputs } = kernelService.getBufferedOutputs(sessionId, 0);
-      if (outputs.length === 0 && executingCellId == null) {
-        break;
-      }
-
-      await sleep(OUTPUT_DRAIN_INTERVAL_MS);
-    }
-  } finally {
-    state.running = false;
-    if (!state.timer) {
-      outputDrain.delete(sessionId);
-    }
-  }
-}
-
-function scheduleOutputDrain(sessionId: string): void {
-  const state = outputDrain.get(sessionId) || { timer: null, running: false };
-
-  if (state.timer || state.running) {
-    outputDrain.set(sessionId, state);
-    return;
-  }
-
-  state.timer = setTimeout(() => {
-    state.timer = null;
-    void runOutputDrain(sessionId);
-  }, OUTPUT_DRAIN_GRACE_MS);
-
-  outputDrain.set(sessionId, state);
-}
 
 /**
  * List available kernelspecs
@@ -658,18 +553,12 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
           const result = await kernelService.executeCode(
             sessionId,
             code,
-            async (entry) => {
+            async (output, outputCellId) => {
               broadcast(JSON.stringify({
                 type: 'output',
-                output: entry.output,
-                seq: entry.seq,
-                cell_id: entry.cellId ?? null,
+                output,
+                cell_id: outputCellId ?? null,
               }), { outputsOnly: true });
-
-              const notebookPath = kernelService.getSessionFilePath(sessionId);
-              if (notebookPath && !operationRouter.hasUI(notebookPath)) {
-                scheduleOutputDrain(sessionId);
-              }
             },
             undefined,
             cellId
@@ -679,43 +568,17 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
           broadcast(JSON.stringify({ type: 'result', result }));
           broadcast(JSON.stringify({ type: 'status', status: 'idle' }));
         } else if (message.type === 'sync_outputs') {
-          const since = Number(message.since ?? 0);
-          const snapshot = await withKernelOutputLock(sessionId, async () => {
-            const spooled = await readOutputSpoolSince(sessionId, since);
-            const { outputs: buffered, latestSeq } = kernelService.getBufferedOutputs(sessionId, since);
+          // Send complete cell output arrays for all buffered cells (replace semantics)
+          const cellOutputs = kernelService.getAllCellOutputs(sessionId);
+          const cells: Record<string, { type: string; content: string }[]> = {};
+          for (const [cId, outputs] of cellOutputs) {
+            cells[cId] = outputs.map(o => ({ type: o.type, content: o.content }));
+          }
 
-            // Merge + sort by seq to ensure deterministic replay order.
-            const merged = [...spooled, ...buffered]
-              .sort((a, b) => a.seq - b.seq)
-              .map(entry => ({
-                seq: entry.seq,
-                output: entry.output,
-                cell_id: entry.cellId ?? null,
-              }));
-
-            return { merged, latestSeq };
-          });
-
-          ws.send(JSON.stringify({ type: 'sync_outputs', outputs: snapshot.merged, latest_seq: snapshot.latestSeq }));
+          ws.send(JSON.stringify({ type: 'sync_outputs', cells }));
 
           // Only start streaming outputs after the client has performed an initial sync.
           outputSubscribedSockets.add(ws);
-
-          // Defensive catch-up: if new outputs arrived after we took the snapshot but before
-          // the socket was marked subscribed, push them as streaming output now.
-          const { outputs: tail } = kernelService.getBufferedOutputs(sessionId, snapshot.latestSeq);
-          for (const entry of tail) {
-            if (ws.readyState !== WebSocket.OPEN) break;
-            ws.send(JSON.stringify({
-              type: 'output',
-              output: entry.output,
-              seq: entry.seq,
-              cell_id: entry.cellId ?? null,
-            }));
-          }
-        } else if (message.type === 'ack_outputs') {
-          const upToSeq = Number(message.up_to ?? message.seq ?? 0);
-          kernelService.ackOutputs(sessionId, upToSeq);
         } else if (message.type === 'complete') {
           const code = message.code || '';
           const cursorPos = message.cursor_pos ?? code.length;
@@ -741,10 +604,6 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
         sockets.delete(ws);
         if (sockets.size === 0) {
           sessionWebSockets.delete(sessionId);
-          const notebookPath = kernelService.getSessionFilePath(sessionId);
-          if (notebookPath && !operationRouter.hasUI(notebookPath)) {
-            scheduleOutputDrain(sessionId);
-          }
         }
       }
     });
