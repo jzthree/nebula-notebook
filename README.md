@@ -1,6 +1,6 @@
 # Nebula Notebook
 
-Nebula is what notebooks should feel like in 2025 — built for what's coming next.
+Nebula is an AI-native notebook computing environment built for what's coming next. It also comes with an optimized user experience even if you use no AI features at all.
 
 ## Quick Start
 
