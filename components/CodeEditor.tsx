@@ -30,13 +30,12 @@ interface Props {
   value: string;
   onChange: (value: string) => void;
   language: 'python' | 'markdown';
+  enableInteractiveFeatures?: boolean; // Enable expensive editor features only when focused
   // Direct callbacks for keyboard shortcuts (simpler than synthetic events)
   onShiftEnter?: () => void;  // Run and advance
   onModEnter?: () => void;    // Run current cell (Cmd/Ctrl+Enter)
-  onEscape?: () => void;      // Exit edit mode
+  onEscape?: () => boolean | void; // Return true to keep focus, false/void to blur
   onSave?: () => void;        // Save notebook (Cmd/Ctrl+S)
-  isSearchOpen?: boolean;     // When true, Escape closes search instead of exiting edit mode
-  onCloseSearch?: () => void; // Close search bar (called when Escape pressed with search open)
   onFocus?: () => void;
   onBlur?: () => void;
   placeholder?: string;
@@ -101,8 +100,11 @@ const lightTheme = EditorView.theme({
   '.cm-meta': { color: '#d97706' },              // amber-600 (decorators)
   '.cm-builtin': { color: '#2563eb' },           // blue-600
   // Selection
-  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
+  '&.cm-focused .cm-selectionBackground': {
     backgroundColor: '#dbeafe', // blue-100
+  },
+  '&:not(.cm-focused) .cm-selectionBackground': {
+    backgroundColor: 'transparent',
   },
   '.cm-cursor': {
     borderLeftColor: '#1e293b',
@@ -565,12 +567,11 @@ export const CodeEditor: React.FC<Props> = ({
   value,
   onChange,
   language,
+  enableInteractiveFeatures = true,
   onShiftEnter,
   onModEnter,
   onEscape,
   onSave,
-  isSearchOpen = false,
-  onCloseSearch,
   onFocus,
   onBlur,
   placeholder,
@@ -670,7 +671,6 @@ export const CodeEditor: React.FC<Props> = ({
 
   // Scroll current search match into view (without changing selection)
   useEffect(() => {
-    if (!isSearchOpen) return;
     if (currentMatchStart === undefined || currentMatchEnd === undefined) return;
 
     let cancelled = false;
@@ -694,25 +694,9 @@ export const CodeEditor: React.FC<Props> = ({
       view.dispatch({
         effects: [
           setCurrentMatch.of({ start: currentMatchStart, end: currentMatchEnd }),
-          EditorView.scrollIntoView(pos, { y: 'center' }),
+          EditorView.scrollIntoView(pos, { y: 'nearest' }),
         ],
       });
-
-      // The mark span may not exist until after the scroll+render tick.
-      const tryScrollDom = (tries: number) => {
-        if (cancelled) return;
-
-        const matchEl = view.dom.querySelector('.cm-searchMatch-current') as HTMLElement | null;
-        if (matchEl) {
-          matchEl.scrollIntoView({ block: 'center', inline: 'nearest' });
-          return;
-        }
-
-        if (tries < 10) {
-          requestAnimationFrame(() => tryScrollDom(tries + 1));
-        }
-      };
-      requestAnimationFrame(() => tryScrollDom(0));
     };
 
     scrollWhenReady(0);
@@ -720,7 +704,7 @@ export const CodeEditor: React.FC<Props> = ({
       cancelled = true;
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
-  }, [isSearchOpen, currentMatchStart, currentMatchEnd]);
+  }, [currentMatchStart, currentMatchEnd]);
 
   // ⚠️ PERFORMANCE CRITICAL: Extensions rebuild when dependencies change.
   // All callbacks (onKeyDown, onFocus, onBlur) MUST be stable - use refs in Cell.tsx
@@ -751,7 +735,6 @@ export const CodeEditor: React.FC<Props> = ({
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       bracketMatching(),
       closeBrackets(),
-      highlightSelectionMatches(),
       // Keymaps
       keymap.of([
         ...closeBracketsKeymap,
@@ -760,6 +743,11 @@ export const CodeEditor: React.FC<Props> = ({
       ]),
     ];
 
+    // Expensive interaction-only features should only run for focused editors.
+    if (enableInteractiveFeatures) {
+      exts.push(highlightSelectionMatches());
+    }
+
     // Optional line numbers
     if (showLineNumbers) {
       exts.push(lineNumbers());
@@ -767,7 +755,7 @@ export const CodeEditor: React.FC<Props> = ({
 
     // Add autocompletion for Python - uses refs so no rebuild on content changes
     // Combined source: static for variables, kernel for paths/attributes/imports
-    if (language === 'python') {
+    if (language === 'python' && enableInteractiveFeatures) {
       exts.push(
         autocompletion({
           override: [createCombinedCompletionSource(effectiveAllCellsRef, kernelSessionIdRef)],
@@ -807,16 +795,17 @@ export const CodeEditor: React.FC<Props> = ({
       });
     }
 
-    // Escape: close search if open, otherwise exit edit mode
-    if (isSearchOpen && onCloseSearch) {
+    // Escape handling: callback decides whether focus should remain in editor.
+    if (onEscape) {
       keymapEntries.push({
         key: 'Escape',
-        run: () => { onCloseSearch(); return true; },
-      });
-    } else if (onEscape && !isSearchOpen) {
-      keymapEntries.push({
-        key: 'Escape',
-        run: (view) => { onEscape(); view.contentDOM.blur(); return true; },
+        run: (view) => {
+          const keepFocus = onEscape();
+          if (!keepFocus) {
+            view.contentDOM.blur();
+          }
+          return true;
+        },
       });
     }
 
@@ -864,7 +853,7 @@ export const CodeEditor: React.FC<Props> = ({
 
     return exts;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language, onShiftEnter, onModEnter, onEscape, onSave, isSearchOpen, onCloseSearch, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, indentConfig, showLineNumbers]);
+  }, [language, enableInteractiveFeatures, onShiftEnter, onModEnter, onEscape, onSave, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, indentConfig, showLineNumbers]);
 
   const handleChange = useCallback(
     (val: string) => {

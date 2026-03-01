@@ -99,7 +99,7 @@ class KernelService {
   private onDisconnectCallbacks: ((sessionId: string) => void)[] = [];
   private onStatusCallbacks: StatusCallback[] = [];
   private onBufferedOutputCallbacks: Array<(sessionId: string, output: CellOutput, cellId?: string | null) => void> = [];
-  private onSyncReplaceCallbacks: Array<(sessionId: string, cellOutputs: Map<string, CellOutput[]>) => void> = [];
+  private onSyncReplaceCallbacks: Array<(sessionId: string, cellOutputs: Map<string, CellOutput[]>, executingCellId?: string | null) => void> = [];
 
   /**
    * Get list of available kernels on the system
@@ -357,10 +357,11 @@ class KernelService {
           }));
           cellOutputMap.set(cellId, cellOutputs);
         }
-        // Fire sync replace callbacks (Notebook.tsx replaces cell outputs)
+        const executingCellId = (data.executing_cell as string | null) ?? null;
+        // Fire sync replace callbacks (Notebook.tsx replaces cell outputs + executing state)
         for (const callback of this.onSyncReplaceCallbacks) {
           try {
-            callback(sessionId, cellOutputMap);
+            callback(sessionId, cellOutputMap, executingCellId);
           } catch (e) {
             console.error('Sync replace callback error:', e);
           }
@@ -613,7 +614,7 @@ class KernelService {
   /**
    * Subscribe to sync replace events (cell-level output replacement on reconnect)
    */
-  onSyncReplace(callback: (sessionId: string, cellOutputs: Map<string, CellOutput[]>) => void): () => void {
+  onSyncReplace(callback: (sessionId: string, cellOutputs: Map<string, CellOutput[]>, executingCellId?: string | null) => void): () => void {
     this.onSyncReplaceCallbacks.push(callback);
     return () => {
       this.onSyncReplaceCallbacks = this.onSyncReplaceCallbacks.filter(cb => cb !== callback);

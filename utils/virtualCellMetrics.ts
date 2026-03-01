@@ -24,7 +24,7 @@ export function estimateCellHeight(cell: Cell): number {
         const outputLines = output.content.split('\n').length;
         // If cell is in scroll mode, cap at the scrolled height
         if (cell.scrolled) {
-          height += Math.min(outputLines * 16, cell.scrolledHeight || 200);
+          height += Math.min(outputLines * 20, cell.scrolledHeight || 200);
         } else {
           // Long tracebacks are much taller than regular stdout/stderr.
           // A higher cap reduces underestimation-driven jumps while keeping
@@ -33,7 +33,7 @@ export function estimateCellHeight(cell: Cell): number {
             output.type === 'error' ? 2400 :
             output.type === 'stderr' ? 1800 :
             1200;
-          height += Math.min(outputLines * 16, maxTextHeight);
+          height += Math.min(outputLines * 20, maxTextHeight);
         }
       }
     }

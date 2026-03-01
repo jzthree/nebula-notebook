@@ -64,14 +64,12 @@ export const NotebookSearch: React.FC<Props> = ({
     }
   }, [isOpen]);
 
-  // Seed search query from selection when opening
-  const lastInitialQueryRef = useRef<string | null>(null);
+  // Seed search query from selection when opening (or when Ctrl/Cmd+F is pressed again
+  // with a new selection while search is already open).
   useEffect(() => {
-    if (!isOpen || !initialQuery) return;
-    if (initialQuery === lastInitialQueryRef.current) return;
+    if (!isOpen || initialQuery === undefined) return;
     setQuery(initialQuery);
     setCurrentMatchIndex(0);
-    lastInitialQueryRef.current = initialQuery;
   }, [isOpen, initialQuery]);
 
   // Close replace all menu when clicking outside

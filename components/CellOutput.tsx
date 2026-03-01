@@ -112,7 +112,7 @@ function estimateDisplayOutputHeight(outputs: ICellOutput[]): number {
       continue;
     }
     const lineCount = (output.content?.match(/\n/g) || []).length + 1;
-    total += lineCount * 16;
+    total += lineCount * 20;
   }
   return total;
 }

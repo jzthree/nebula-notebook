@@ -7,6 +7,7 @@ import { getClusterInfo, ClusterServer, ClusterInfo } from '../services/clusterS
 import { getSettings, saveSettings, IndentationPreference } from '../services/llmService';
 import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server, Clock } from 'lucide-react';
 import { VirtuosoHandle } from 'react-virtuoso';
+import { EditorView } from '@codemirror/view';
 import {
   getFiles,
   getFileContentWithMtime,
@@ -745,7 +746,7 @@ export const Notebook: React.FC = () => {
   }, []);
 
   // Operation handler - receives operations routed from backend OperationRouter
-  const { isConnected: isAgentConnected, activeOperation: agentOperation, agentSession } = useOperationHandler({
+  const { isConnected: isAgentConnected, activeOperation: agentOperation, agentSession, forceEndAgentSession } = useOperationHandler({
     filePath: currentFileId,
     cells,
     insertCell: undoableInsertCell,
@@ -1510,15 +1511,20 @@ export const Notebook: React.FC = () => {
     return unsubscribe;
   }, [kernelSessionId, setCells]);
 
-  // Sync replace effect: on reconnect, server sends complete cell output arrays.
-  // We replace cell outputs entirely instead of merging -- eliminates all dedup logic.
+  // Sync replace effect: on reconnect, server sends complete cell output arrays
+  // and which cell is currently executing. We replace outputs and restore isExecuting.
   useEffect(() => {
-    const unsubscribe = kernelService.onSyncReplace((sessionId, cellOutputs) => {
+    const unsubscribe = kernelService.onSyncReplace((sessionId, cellOutputs, executingCellId) => {
       if (kernelSessionId && sessionId !== kernelSessionId) return;
       setCells(prev => prev.map(c => {
         const syncedOutputs = cellOutputs.get(c.id);
-        if (syncedOutputs === undefined) return c;
-        return { ...c, outputs: syncedOutputs };
+        const isExecuting = c.id === executingCellId;
+        if (syncedOutputs === undefined && c.isExecuting === isExecuting) return c;
+        return {
+          ...c,
+          outputs: syncedOutputs ?? c.outputs,
+          isExecuting,
+        };
       }));
     });
     return unsubscribe;
@@ -1593,16 +1599,42 @@ export const Notebook: React.FC = () => {
       if ((e.metaKey || e.ctrlKey) && key === 'f') {
         e.preventDefault();
         let selectedText = '';
-        const selection = window.getSelection();
-        if (selection && selection.toString().trim()) {
-          selectedText = selection.toString().trim();
-        } else if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
-          const input = target as HTMLInputElement | HTMLTextAreaElement;
-          if (input.selectionStart != null && input.selectionEnd != null && input.selectionStart !== input.selectionEnd) {
-            selectedText = input.value.slice(input.selectionStart, input.selectionEnd).trim();
+        let anchorFromSelection: { cellId: string; pos: number } | null = null;
+
+        // Prefer CodeMirror state when available so we can preserve exact text and
+        // anchor initial search at the selected occurrence.
+        const editorHost = target.closest?.('.cm-editor');
+        if (editorHost instanceof HTMLElement) {
+          const view = EditorView.findFromDOM(editorHost);
+          const selectedCellId = target.closest?.('[data-cell-id]')?.getAttribute('data-cell-id') ?? null;
+
+          if (view) {
+            const sel = view.state.selection.main;
+            if (!sel.empty) {
+              selectedText = view.state.sliceDoc(sel.from, sel.to);
+            }
+            if (selectedCellId) {
+              anchorFromSelection = { cellId: selectedCellId, pos: sel.from };
+            }
           }
         }
-        setSearchSeed(selectedText || null);
+
+        if (!selectedText && target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+          const input = target as HTMLInputElement | HTMLTextAreaElement;
+          if (input.selectionStart != null && input.selectionEnd != null && input.selectionStart !== input.selectionEnd) {
+            const inputSelection = input.value.slice(input.selectionStart, input.selectionEnd);
+            if (inputSelection.trim().length > 0) {
+              selectedText = inputSelection;
+            }
+          }
+        }
+
+        if (anchorFromSelection) {
+          cursorAnchorRef.current = { ...anchorFromSelection, ts: Date.now() };
+        }
+
+        // Empty string intentionally clears any previous seeded query.
+        setSearchSeed(selectedText.trim().length > 0 ? selectedText : '');
         setIsSearchOpen(true);
         return;
       }
@@ -2701,8 +2733,17 @@ export const Notebook: React.FC = () => {
   };
 
   // Handle cell click - set as active cell
-  const handleCellClick = useCallback((id: string, _event: React.MouseEvent) => {
+  const handleCellClick = useCallback((id: string, event: React.MouseEvent) => {
     setActiveCellId(id);
+
+    // Clicking outside an editor should clear old DOM text ranges from other cells.
+    const clickTarget = event.target as HTMLElement | null;
+    if (clickTarget?.closest('.cm-editor')) return;
+
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0 && selection.toString().length > 0) {
+      selection.removeAllRanges();
+    }
   }, [setActiveCellId]);
 
   const handleDeleteCellByIndex = async (index: number) => {
@@ -2893,6 +2934,14 @@ export const Notebook: React.FC = () => {
   const handleSearchClose = useCallback(() => {
     setIsSearchOpen(false);
     setSearchQuery(null);
+  }, []);
+
+  // Stable escape path used by editors: close search if open and keep editor focus.
+  const handleEditorEscapeWhenSearchOpen = useCallback(() => {
+    if (!isSearchOpenRef.current) return false;
+    setIsSearchOpen(false);
+    setSearchQuery(null);
+    return true;
   }, []);
 
   // Replace a single match in a cell
@@ -3733,9 +3782,10 @@ export const Notebook: React.FC = () => {
                           `Duration: ${durationStr}`,
                         ];
                         return (
-                          <span
-                            className="flex items-center gap-1 text-xs mr-2 px-1.5 py-0.5 rounded text-purple-800 bg-purple-200 border border-purple-300 cursor-help max-w-[15rem]"
-                            title={tooltipLines.join('\n')}
+                          <button
+                            onClick={forceEndAgentSession}
+                            className="flex items-center gap-1 text-xs mr-2 px-1.5 py-0.5 rounded text-purple-800 bg-purple-200 border border-purple-300 hover:bg-red-100 hover:text-red-700 hover:border-red-300 transition-colors max-w-[15rem]"
+                            title={tooltipLines.join('\n') + '\n\nClick to force end session'}
                           >
                             <Bot className="w-3 h-3 animate-pulse flex-shrink-0" />
                             <span className="min-w-0 truncate">
@@ -3743,7 +3793,7 @@ export const Notebook: React.FC = () => {
                                 ? agentOperation.type.replace(/([A-Z])/g, ' $1').trim()
                                 : fullLabel}
                             </span>
-                          </span>
+                          </button>
                         );
                       })()}
 
@@ -4128,8 +4178,7 @@ export const Notebook: React.FC = () => {
                   indentConfig={indentConfig}
                   requestedFocusMode={pendingFocus?.cellId === cell.id ? pendingFocus.mode : null}
                   onFocusModeApplied={clearPendingFocus}
-                  isSearchOpen={isSearchOpen}
-                  onCloseSearch={handleSearchClose}
+                  onSearchEscape={handleEditorEscapeWhenSearchOpen}
                   showLineNumbers={showLineNumbers}
                   showCellIds={showCellIds}
                   previewDiffStatus={isPreviewMode ? previewDiffMap.get(cell.id) : undefined}
@@ -4293,7 +4342,7 @@ export const Notebook: React.FC = () => {
         onReplaceAllInCell={handleReplaceAllInCell}
         onReplaceAllInNotebook={handleReplaceAllInNotebook}
         activeCellId={activeCellId}
-        initialQuery={searchSeed || undefined}
+        initialQuery={searchSeed !== null ? searchSeed : undefined}
       />
 
       {/* Keyboard Shortcuts Help Modal */}

@@ -20,8 +20,8 @@ describe('virtualCellMetrics', () => {
       ],
     });
 
-    // Base 104 + max(40, 3 * 20 = 60) + output min(3 * 16 = 48, 1200) = 212
-    expect(estimateCellHeight(cell)).toBe(212);
+    // Base 104 + max(40, 3 * 20 = 60) + output min(3 * 20 = 60, 1200) = 224
+    expect(estimateCellHeight(cell)).toBe(224);
   });
 
   it('returns fallback height for empty cell list', () => {

@@ -1692,10 +1692,18 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     return () => clearInterval(interval);
   }, [setAgentSession]);
 
+  const forceEndAgentSession = useCallback(() => {
+    if (agentSessionRef.current) {
+      console.log('[OperationHandler] Force ending agent session from UI');
+      setAgentSession(null);
+    }
+  }, [setAgentSession]);
+
   return {
     isConnected,
     activeOperation,
     agentSession,
+    forceEndAgentSession,
     disconnect,
     reconnect: connect,
   };

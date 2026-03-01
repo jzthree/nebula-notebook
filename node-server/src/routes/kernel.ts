@@ -575,7 +575,8 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
             cells[cId] = outputs.map(o => ({ type: o.type, content: o.content }));
           }
 
-          ws.send(JSON.stringify({ type: 'sync_outputs', cells }));
+          const executingCellId = kernelService.getExecutingCellId(sessionId);
+          ws.send(JSON.stringify({ type: 'sync_outputs', cells, executing_cell: executingCellId }));
 
           // Only start streaming outputs after the client has performed an initial sync.
           outputSubscribedSockets.add(ws);

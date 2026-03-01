@@ -44,8 +44,7 @@ interface Props {
   indentConfig?: IndentationConfig; // Detected indentation configuration
   requestedFocusMode?: 'cell' | 'editor' | null; // Focus mode requested by Notebook
   onFocusModeApplied?: () => void; // Callback when focus mode has been applied
-  isSearchOpen?: boolean; // When true, Escape closes search instead of exiting edit mode
-  onCloseSearch?: () => void; // Close search bar
+  onSearchEscape?: () => boolean; // Close search when open; returns true when handled
   showLineNumbers?: boolean; // Show line numbers in editor
   showCellIds?: boolean; // Show cell IDs in the cell header
   previewDiffStatus?: 'same' | 'modified' | 'deleted'; // For history preview: how this cell differs from current
@@ -80,8 +79,7 @@ const CellComponent: React.FC<Props> = ({
   indentConfig = DEFAULT_INDENTATION,
   requestedFocusMode,
   onFocusModeApplied,
-  isSearchOpen = false,
-  onCloseSearch,
+  onSearchEscape,
   showLineNumbers = false,
   showCellIds = false,
   previewDiffStatus,
@@ -108,6 +106,7 @@ const CellComponent: React.FC<Props> = ({
   const onActivateRef = useRef(onActivate);
   const onUpdateRef = useRef(onUpdate);
   const onCursorActivityRef = useRef(onCursorActivity);
+  const onSearchEscapeRef = useRef(onSearchEscape);
   const cellIdRef = useRef(cell.id);
   const cellContentRef = useRef(cell.content);
 
@@ -120,6 +119,7 @@ const CellComponent: React.FC<Props> = ({
     onActivateRef.current = onActivate;
     onUpdateRef.current = onUpdate;
     onCursorActivityRef.current = onCursorActivity;
+    onSearchEscapeRef.current = onSearchEscape;
     cellIdRef.current = cell.id;
     cellContentRef.current = cell.content;
   });
@@ -161,7 +161,12 @@ const CellComponent: React.FC<Props> = ({
   }, []);
 
   const handleEditorEscape = useCallback(() => {
+    const searchClosed = onSearchEscapeRef.current?.() ?? false;
+    if (searchClosed) {
+      return true; // Keep editor focus after closing search.
+    }
     focusCellAfterBlurRef.current = true;
+    return false; // Allow editor to blur into command mode.
   }, []);
 
   const handleEditorSave = useCallback(() => {
@@ -523,12 +528,11 @@ const CellComponent: React.FC<Props> = ({
           value={cell.content}
           onChange={handleEditorChange}
           language={cell.type === 'code' ? 'python' : 'markdown'}
+          enableInteractiveFeatures={focusState === 'editor'}
           onShiftEnter={handleShiftEnter}
           onModEnter={handleModEnter}
           onEscape={handleEditorEscape}
           onSave={handleEditorSave}
-          isSearchOpen={isSearchOpen}
-          onCloseSearch={onCloseSearch}
           onFocus={handleEditorFocus}
           onBlur={handleEditorBlur}
           placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
@@ -578,7 +582,6 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     prevProps.queuePosition === nextProps.queuePosition &&
     prevProps.indentConfig === nextProps.indentConfig &&
     prevProps.requestedFocusMode === nextProps.requestedFocusMode &&
-    prevProps.isSearchOpen === nextProps.isSearchOpen &&
     prevProps.previewDiffStatus === nextProps.previewDiffStatus
   );
 });
