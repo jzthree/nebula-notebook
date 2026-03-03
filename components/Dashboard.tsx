@@ -8,6 +8,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Terminal,
   Play,
+  ExternalLink,
   ChevronRight,
   ChevronLeft,
   Plus,
@@ -256,6 +257,9 @@ export const Dashboard: React.FC = () => {
 
   // Open notebook in new tab
   const handleOpenNotebookNewTab = (path: string) => {
+    const name = getFilename(path).replace('.ipynb', '');
+    addRecentNotebook(path, name);
+    setRecentNotebooks(getRecentNotebooks());
     window.open(`/?file=${encodeURIComponent(path)}`, '_blank');
   };
 
@@ -441,14 +445,26 @@ export const Dashboard: React.FC = () => {
                 </div>
                 <div className="divide-y divide-slate-100 max-h-[9.375rem] overflow-y-auto">
                   {recentNotebooks.map((notebook) => (
-                    <button
+                    <div
                       key={notebook.path}
-                      onClick={() => handleOpenNotebook(notebook.path)}
-                      className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-slate-50 text-left"
+                      className="group w-full px-4 py-2.5 flex items-center gap-2 hover:bg-slate-50"
                     >
-                      <Book className="w-4 h-4 text-orange-500 flex-shrink-0" />
-                      <span className="text-sm text-slate-700 truncate">{notebook.name}</span>
-                    </button>
+                      <button
+                        onClick={() => handleOpenNotebook(notebook.path)}
+                        className="min-w-0 flex-1 flex items-center gap-3 text-left"
+                      >
+                        <Book className="w-4 h-4 text-orange-500 flex-shrink-0" />
+                        <span className="text-sm text-slate-700 truncate">{notebook.name}</span>
+                      </button>
+                      <button
+                        onClick={() => handleOpenNotebookNewTab(notebook.path)}
+                        title="Open in new tab"
+                        aria-label={`Open ${notebook.name} in new tab`}
+                        className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 rounded hover:bg-slate-200 text-slate-500 transition-opacity"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
