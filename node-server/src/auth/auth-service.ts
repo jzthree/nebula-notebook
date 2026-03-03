@@ -50,6 +50,8 @@ export interface VerifyResult {
 // Rate limiting: max 5 attempts per 30 seconds
 const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 30000;
+// Accept one TOTP step before and after current time to tolerate small clock drift.
+const TOTP_WINDOW_STEPS = 1;
 
 class AuthService {
   private config: AuthConfig | null = null;
@@ -195,6 +197,7 @@ class AuthService {
     const isValid = authenticator.verify({
       token: code,
       secret: this.config.totpSecret,
+      window: [TOTP_WINDOW_STEPS, TOTP_WINDOW_STEPS],
     });
 
     if (!isValid) {
