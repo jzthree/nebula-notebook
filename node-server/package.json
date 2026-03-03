@@ -7,6 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
+    "auth:qr": "tsx src/scripts/show-auth-qr.ts",
     "test": "vitest",
     "test:run": "vitest run"
   },

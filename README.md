@@ -90,6 +90,12 @@ Nebula uses TOTP-based two-factor authentication:
 
 Config stored in `~/.nebula/auth.json`. Multiple servers sharing the same home directory share the same 2FA.
 
+To print the QR code again later (for re-enroll/recovery), run:
+
+```bash
+npm run auth:qr
+```
+
 ### Disable 2FA (local/dev)
 
 Run the server with auth disabled:

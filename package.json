@@ -7,6 +7,7 @@
     "dev": "concurrently --kill-others --kill-signal SIGTERM --raw \"cd node-server && PORT=${VITE_API_PORT:-8000} npm run dev\" \"VITE_API_PORT=${VITE_API_PORT:-8000} vite\"",
     "start": "npm run dev",
     "prod": "cd node-server && PORT=3000 npm run dev",
+    "auth:qr": "cd node-server && npm run auth:qr",
     "build": "vite build",
     "preview": "vite preview",
     "node-server": "cd node-server && npm run dev",
