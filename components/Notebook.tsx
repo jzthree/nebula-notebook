@@ -921,12 +921,14 @@ export const Notebook: React.FC = () => {
   isSearchOpenRef.current = isSearchOpen;
   showLineNumbersRef.current = showLineNumbers;
 
-  // Track visible cell range for smart scrolling
-  const [visibleRange, setVisibleRange] = useState<{ startIndex: number; endIndex: number }>({ startIndex: 0, endIndex: 10 });
-  
-  // Memoize range change handler to prevent Virtuoso from resetting scroll
+  // Track visible cell range for smart scrolling.
+  // Keep this in a ref so high-frequency scroll updates don't re-render Notebook.
+  const visibleRangeRef = useRef<{ startIndex: number; endIndex: number }>({ startIndex: 0, endIndex: 10 });
+
+  // Memoize range change handler to prevent Virtuoso from resetting scroll.
+  // Avoid setState here: this callback can fire on every scroll frame.
   const handleRangeChange = useCallback((range: { startIndex: number; endIndex: number }) => {
-    setVisibleRange(range);
+    visibleRangeRef.current = range;
   }, []);
 
   // Virtuoso Handle for programmatic scrolling
@@ -1019,11 +1021,12 @@ export const Notebook: React.FC = () => {
   // Helper to check if ANY part of a cell is currently visible
   // If any part of the cell (code or output) can be seen, it's considered visible
   const isCellVisible = useCallback((cellIndex: number): boolean => {
+    const visibleRange = visibleRangeRef.current;
     // Virtuoso's rangeChanged gives us the indices of cells that are rendered/visible
     // A cell is visible if its index falls within the visible range (inclusive)
     // No buffer needed - if ANY part of the cell is visible, we don't scroll
     return cellIndex >= visibleRange.startIndex && cellIndex <= visibleRange.endIndex;
-  }, [visibleRange]);
+  }, []);
 
   const isCellVisibleInViewport = useCallback((cellId: string, cellIndex: number): boolean => {
     const cellEl = document.querySelector(`[data-cell-id="${escapeForAttributeSelector(cellId)}"]`) as HTMLElement | null;

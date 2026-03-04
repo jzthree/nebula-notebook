@@ -11,6 +11,7 @@ import { autocompletion, closeBrackets, closeBracketsKeymap, CompletionContext, 
 import { history, defaultKeymap, historyKeymap } from '@codemirror/commands';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
+import { isEditorPerfTrackingEnabled, recordEditorExtensionBuild } from '../utils/editorPerf';
 import { kernelService, CompletionResult as KernelCompletionResult } from '../services/kernelService';
 
 interface CurrentMatch {
@@ -711,6 +712,8 @@ export const CodeEditor: React.FC<Props> = ({
   // to avoid recreating them on every keystroke. If you see typing lag, check if
   // any callback dependency is changing on each render (e.g., cell.content).
   const extensions = useMemo(() => {
+    const shouldMeasure = isEditorPerfTrackingEnabled();
+    const buildStartMs = shouldMeasure ? performance.now() : 0;
     // Create indent string based on config
     const indentStr = indentConfig.useTabs ? '\t' : ' '.repeat(indentConfig.indentSize);
 
@@ -849,6 +852,14 @@ export const CodeEditor: React.FC<Props> = ({
     // Track cursor position for search navigation (use refs to avoid rebuilds)
     if (onCursorActivityRef.current) {
       exts.push(createCursorActivityExtension(onCursorActivityRef));
+    }
+
+    if (shouldMeasure) {
+      recordEditorExtensionBuild(
+        enableInteractiveFeatures ? 'interactive' : 'minimal',
+        performance.now() - buildStartMs,
+        language
+      );
     }
 
     return exts;

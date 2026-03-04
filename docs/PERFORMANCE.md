@@ -293,6 +293,39 @@ When investigating typing lag:
    }, []);
    ```
 
+## Quantifying Minimal-Extensions Impact
+
+To compare the focused-only editor extensions optimization against the old behavior:
+
+1. Open the app with `?editorPerf=1` once, or run:
+   ```js
+   window.__nebulaEditorPerf.enableTracking();
+   ```
+2. Keep optimization enabled (default), clear old samples:
+   ```js
+   window.__nebulaEditorPerf.setMinimalExtensionsEnabled(true);
+   window.__nebulaEditorPerf.reset();
+   ```
+3. Run a repeatable scenario (for example: hold PageDown / drag scrollbar quickly for 10-15s, then edit 3-5 cells).
+4. Capture stats:
+   ```js
+   window.__nebulaEditorPerf.snapshot();
+   ```
+5. Switch to baseline mode (all editors use interactive extensions), reload, repeat steps 2-4:
+   ```js
+   window.__nebulaEditorPerf.setMinimalExtensionsEnabled(false);
+   window.location.reload();
+   ```
+
+Use `snapshot().byMode` to compare extension build cost:
+- `minimal`: non-focused editors
+- `interactive`: focused editor
+
+Key numbers:
+- `avgMs`: mean extension-build time
+- `p95Ms`: tail latency (best proxy for visible jank)
+- `count`: number of extension builds observed in your run
+
 ## Performance Checklist for PRs
 
 Before merging code that touches the typing path:

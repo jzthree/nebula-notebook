@@ -38,7 +38,32 @@ const ListContainer = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivEle
 // Footer component to add bottom padding so last cell isn't cut off
 const Footer = () => <div className="h-32" />;
 
+// Lightweight placeholder shown only during very high-velocity scroll seeking.
+const ScrollSeekPlaceholder: React.FC<{ height: number }> = ({ height }) => (
+  <div
+    style={{ height }}
+    className="rounded-lg border border-slate-100 bg-slate-50/80"
+    aria-hidden="true"
+  />
+);
+
 export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRef, className, onRangeChange, renderKey }) => {
+  const fastScrollAssistEnabled = useMemo(() => {
+    if (typeof window === 'undefined') return true;
+
+    const params = new URLSearchParams(window.location.search);
+    const queryValue = params.get('fastScrollAssist');
+    if (queryValue) {
+      const normalized = queryValue.toLowerCase();
+      return normalized !== '0' && normalized !== 'off' && normalized !== 'false';
+    }
+
+    const stored = window.localStorage.getItem('nebula-fast-scroll-assist');
+    if (stored === '0') return false;
+    if (stored === '1') return true;
+    return true;
+  }, []);
+
   // Track window height to dynamically size the viewport extension
   // Using 1x window height as a balance between smooth scrolling and memory usage
   // Too large (3x) causes too many cells to stay mounted, increasing lag over time
@@ -90,12 +115,18 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cells.length, renderKey]);
 
+  // Overscan chunks rendering work during rapid scroll and helps avoid brief blank gaps.
+  const overscanPx = useMemo(() => {
+    return Math.max(400, Math.round(viewportExtension * 0.5));
+  }, [viewportExtension]);
+
   // Cache measured heights when Virtuoso measures items
   const itemSize = useCallback((el: HTMLElement) => {
     // Virtuoso's wrapper contains our div with data-cell-id as first child
     const wrapper = el.firstElementChild as HTMLElement | null;
     const cellId = wrapper?.getAttribute('data-cell-id') || el.getAttribute('data-cell-id');
-    const height = el.getBoundingClientRect().height;
+    // offsetHeight is cheaper than getBoundingClientRect for frequent measurements.
+    const height = el.offsetHeight;
 
     if (cellId && height > 0) {
       cellHeightCache.set(cellId, height);
@@ -115,6 +146,17 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
 
   const itemContent = useCallback((index: number, cell: Cell) => wrappedRenderCell(cell, index), [wrappedRenderCell]);
 
+  const overscan = fastScrollAssistEnabled
+    ? { main: overscanPx, reverse: overscanPx }
+    : 0;
+  const minOverscanItemCount = fastScrollAssistEnabled ? 6 : 3;
+  const scrollSeekConfiguration = fastScrollAssistEnabled
+    ? {
+        enter: (velocity: number) => Math.abs(velocity) > 5000,
+        exit: (velocity: number) => Math.abs(velocity) < 1200,
+      }
+    : false;
+
   return (
     <Virtuoso
       key={renderKey} // Force full re-render when settings like line numbers change
@@ -132,18 +174,24 @@ export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRe
       // Extend viewport by 1x window height in each direction
       // Balance between smooth scrolling and memory usage (too large = too many mounted cells)
       increaseViewportBy={{ top: viewportExtension, bottom: viewportExtension }}
+      // Chunk rendering during fast scroll to reduce empty viewport flashes.
+      overscan={overscan}
       // Ensure at least 3 items rendered above/below viewport
       // This helps with tall cells where pixel-based overscan is insufficient
-      minOverscanItemCount={3}
+      minOverscanItemCount={minOverscanItemCount}
       components={{
         List: ListContainer,
-        Footer
+        Footer,
+        ScrollSeekPlaceholder
       }}
       followOutput={false}
       alignToBottom={false}
       rangeChanged={onRangeChange}
       // itemSize measures AFTER render (caches actual heights)
       itemSize={itemSize}
+      // Activate scroll-seek placeholders only for extreme velocities (e.g., scrollbar flings).
+      // This avoids expensive editor mounts for items users fly past.
+      scrollSeekConfiguration={scrollSeekConfiguration}
     />
   );
 };

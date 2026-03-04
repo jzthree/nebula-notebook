@@ -6,6 +6,7 @@ import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeI
 import { generateCellContentStructured, fixCellError, getSettings, CellGenerationResponse } from '../services/llmService';
 import { useNotification } from './NotificationSystem';
 import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
+import { shouldForceInteractiveFeatures } from '../utils/editorPerf';
 
 interface SearchHighlight {
   query: string;
@@ -266,6 +267,7 @@ const CellComponent: React.FC<Props> = ({
   };
 
   const hasError = cell.outputs.some(o => o.type === 'error');
+  const enableInteractiveFeatures = shouldForceInteractiveFeatures() || focusState === 'editor';
 
   // Border colors based on focus state:
   // - editor (blue): CodeMirror has focus, handles keyboard
@@ -528,7 +530,7 @@ const CellComponent: React.FC<Props> = ({
           value={cell.content}
           onChange={handleEditorChange}
           language={cell.type === 'code' ? 'python' : 'markdown'}
-          enableInteractiveFeatures={focusState === 'editor'}
+          enableInteractiveFeatures={enableInteractiveFeatures}
           onShiftEnter={handleShiftEnter}
           onModEnter={handleModEnter}
           onEscape={handleEditorEscape}
