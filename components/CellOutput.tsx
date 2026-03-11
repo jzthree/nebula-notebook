@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
+import React, { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { CellOutput as ICellOutput } from '../types';
 import { ChevronDown, ChevronRight, GripHorizontal, WrapText, ArrowRightLeft, ExternalLink } from 'lucide-react';
 import { encodeHtmlParam, wrapHtmlDocument, MAX_HTML_PARAM_LENGTH } from '../utils/htmlPreview';
@@ -36,6 +36,38 @@ interface Props {
   onScrolledChange?: (scrolled: boolean) => void; // Called when user toggles collapse/expand
   scrolledHeight?: number; // Persisted height of output area in scroll mode
   onScrolledHeightChange?: (height: number) => void; // Called when user resizes the output area
+}
+
+function areOutputsEqual(prevOutputs: ICellOutput[], nextOutputs: ICellOutput[]): boolean {
+  if (prevOutputs === nextOutputs) {
+    return true;
+  }
+
+  if (prevOutputs.length !== nextOutputs.length) {
+    return false;
+  }
+
+  for (let i = 0; i < prevOutputs.length; i += 1) {
+    const prev = prevOutputs[i];
+    const next = nextOutputs[i];
+
+    if (
+      prev === next
+    ) {
+      continue;
+    }
+
+    if (
+      prev.id !== next.id ||
+      prev.type !== next.type ||
+      prev.content !== next.content ||
+      prev.timestamp !== next.timestamp
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 // Format execution time compactly
@@ -185,7 +217,7 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage
 const MIN_HEIGHT = OUTPUT_MIN_HEIGHT_PX;
 const DEFAULT_COLLAPSED_HEIGHT = OUTPUT_DEFAULT_HEIGHT_PX;
 
-export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, onScrolledChange, scrolledHeight, onScrolledHeightChange }) => {
+const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, onScrolledChange, scrolledHeight, onScrolledHeightChange }) => {
   // scrolled prop controls collapse state (Jupyter standard: true = collapsed with scrollbar)
   // Use prop if provided, otherwise default to false (expanded)
   const isCollapsed = scrolled === true;
@@ -574,3 +606,14 @@ export const CellOutput: React.FC<Props> = ({ outputs, executionMs, scrolled, on
     </>
   );
 };
+
+export const CellOutput = memo(CellOutputComponent, (prevProps, nextProps) => {
+  return (
+    prevProps.executionMs === nextProps.executionMs &&
+    prevProps.scrolled === nextProps.scrolled &&
+    prevProps.scrolledHeight === nextProps.scrolledHeight &&
+    areOutputsEqual(prevProps.outputs, nextProps.outputs)
+  );
+});
+
+CellOutput.displayName = 'CellOutput';
