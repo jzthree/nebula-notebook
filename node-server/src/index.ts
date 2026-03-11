@@ -57,6 +57,33 @@ const CLIENT_MODE =
   process.env.NEBULA_CLIENT_MODE === 'true' ||
   process.env.npm_config_client === 'true' ||
   process.env.npm_config_client === '1';
+const hasCliFlag = (names: string[]): boolean => names.some(name => process.argv.includes(name));
+const parseOptionalBoolean = (value: string | undefined): boolean | null => {
+  if (value === undefined) return null;
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  return null;
+};
+const resolveBooleanFlag = (
+  enabledCliFlags: string[],
+  disabledCliFlags: string[],
+  envNames: string[],
+  npmConfigNames: string[],
+  defaultValue: boolean
+): boolean => {
+  if (hasCliFlag(disabledCliFlags)) return false;
+  if (hasCliFlag(enabledCliFlags)) return true;
+
+  for (const envName of [...envNames, ...npmConfigNames]) {
+    const resolved = parseOptionalBoolean(process.env[envName]);
+    if (resolved !== null) {
+      return resolved;
+    }
+  }
+
+  return defaultValue;
+};
 const getArgValue = (name: string): string | null => {
   const idx = process.argv.findIndex(arg => arg === name);
   if (idx !== -1 && process.argv[idx + 1]) {
@@ -70,18 +97,20 @@ const getArgValue = (name: string): string | null => {
   return null;
 };
 const WORKDIR = getArgValue('--workdir') || process.env.NEBULA_WORKDIR || process.env.npm_config_workdir;
-const PRESERVE_KERNELS =
-  process.argv.includes('--preserve-kernels') ||
-  process.argv.includes('--preserve-kernel') ||
-  process.env.NEBULA_PRESERVE_KERNELS === 'true' ||
-  process.env.npm_config_preserve_kernels === 'true' ||
-  process.env.npm_config_preserve_kernels === '1';
-const REATTACH_KERNELS =
-  process.argv.includes('--reattach-kernels') ||
-  process.argv.includes('--reattach-kernel') ||
-  process.env.NEBULA_REATTACH_KERNELS === 'true' ||
-  process.env.npm_config_reattach_kernels === 'true' ||
-  process.env.npm_config_reattach_kernels === '1';
+const PRESERVE_KERNELS = resolveBooleanFlag(
+  ['--preserve-kernels', '--preserve-kernel'],
+  ['--no-preserve-kernels', '--no-preserve-kernel'],
+  ['NEBULA_PRESERVE_KERNELS'],
+  ['npm_config_preserve_kernels'],
+  DEV_MODE
+);
+const REATTACH_KERNELS = resolveBooleanFlag(
+  ['--reattach-kernels', '--reattach-kernel'],
+  ['--no-reattach-kernels', '--no-reattach-kernel'],
+  ['NEBULA_REATTACH_KERNELS'],
+  ['npm_config_reattach_kernels'],
+  DEV_MODE
+);
 
 // Log kernel preservation settings
 if (PRESERVE_KERNELS) console.log('[Server] Kernel preservation ENABLED');
