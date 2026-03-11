@@ -515,6 +515,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const intentionalCloseRef = useRef(false); // Track if we closed intentionally
+  const connectionAttemptRef = useRef(0);
 
   // Use refs for callbacks to avoid reconnecting when callbacks change
   const cellsRef = useRef(cells);
@@ -1562,6 +1563,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
    */
   const connect = useCallback(() => {
     if (!filePath) return;
+    const connectionAttempt = ++connectionAttemptRef.current;
 
     // Clear any pending reconnect before connecting
     if (reconnectTimeoutRef.current) {
@@ -1588,6 +1590,10 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (wsRef.current !== ws || connectionAttempt !== connectionAttemptRef.current) {
+        return;
+      }
+
       console.log('[OperationHandler] Connected');
       setIsConnected(true);
       intentionalCloseRef.current = false; // Reset flag on successful connect
@@ -1601,6 +1607,10 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     };
 
     ws.onmessage = (event) => {
+      if (wsRef.current !== ws || connectionAttempt !== connectionAttemptRef.current) {
+        return;
+      }
+
       try {
         const data = JSON.parse(event.data);
         handleMessageRef.current(data);
@@ -1610,12 +1620,21 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     };
 
     ws.onerror = (error) => {
+      if (wsRef.current !== ws || connectionAttempt !== connectionAttemptRef.current) {
+        return;
+      }
+
       console.error('[OperationHandler] WebSocket error:', error);
     };
 
     ws.onclose = () => {
+      if (wsRef.current !== ws || connectionAttempt !== connectionAttemptRef.current) {
+        return;
+      }
+
       console.log('[OperationHandler] Disconnected');
       setIsConnected(false);
+      wsRef.current = null;
 
       // Clear ping interval
       if (pingIntervalRef.current) {

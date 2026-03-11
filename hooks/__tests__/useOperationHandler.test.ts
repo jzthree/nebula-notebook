@@ -155,6 +155,47 @@ describe('useOperationHandler', () => {
 
       expect(ws.readyState).toBe(3); // CLOSED
     });
+
+    it('should ignore stale socket closes after a newer socket connects', async () => {
+      const { result, rerender } = renderHook(
+        ({ filePath }) =>
+          useOperationHandler({
+            filePath,
+            cells: initialCells,
+            insertCell: mockInsertCell as any,
+            deleteCell: mockDeleteCell as any,
+            moveCell: mockMoveCell as any,
+            updateContent: mockUpdateContent as any,
+            updateContentAI: mockUpdateContentAI as any,
+            updateMetadata: mockUpdateMetadata as any,
+            setCellOutputs: mockSetCellOutputs as (cellId: string, outputs: CellOutput[], executionCount?: number) => void,
+            createNotebook: mockCreateNotebook as any,
+          }),
+        {
+          initialProps: {
+            filePath: '/test/notebook-a.ipynb',
+          },
+        }
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(result.current.isConnected).toBe(true);
+
+      const staleSocket = MockWebSocket.instances[0];
+
+      rerender({ filePath: '/test/notebook-b.ipynb' });
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(MockWebSocket.instances.length).toBe(2);
+      expect(result.current.isConnected).toBe(true);
+
+      act(() => {
+        staleSocket.onclose?.({});
+      });
+
+      expect(result.current.isConnected).toBe(true);
+      expect(MockWebSocket.instances.length).toBe(2);
+    });
   });
 
   describe('Insert Cell Operation', () => {
