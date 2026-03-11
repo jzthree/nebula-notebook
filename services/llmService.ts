@@ -445,6 +445,7 @@ export interface NebulaSettings {
   showLineNumbers?: boolean; // Show line numbers in code cells
   showCellIds?: boolean; // Show cell IDs in the cell header
   showResourceMonitor?: boolean; // Show RAM/GPU usage in notebook status bar (disabled by default for typing perf)
+  smoothAutoScroll?: boolean; // Animate notebook-driven auto-scroll actions
   // API Keys (stored in localStorage - use with caution on shared machines)
   apiKeys?: {
     google?: string;    // Gemini API key
@@ -473,7 +474,8 @@ export const getSettings = (): NebulaSettings => {
     notifySoundEnabled: true,
     notifyThresholdSeconds: 60,
     indentation: 'auto',
-    showCellIds: false
+    showCellIds: false,
+    smoothAutoScroll: true
   };
 };
 

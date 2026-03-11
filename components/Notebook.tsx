@@ -445,6 +445,7 @@ export const Notebook: React.FC = () => {
   const [showLineNumbers, setShowLineNumbers] = useState<boolean>(() => getSettings().showLineNumbers ?? false);
   const [showCellIds, setShowCellIds] = useState<boolean>(() => getSettings().showCellIds ?? false);
   const [showResourceMonitor, setShowResourceMonitor] = useState<boolean>(() => getSettings().showResourceMonitor ?? false);
+  const [smoothAutoScroll, setSmoothAutoScroll] = useState<boolean>(() => getSettings().smoothAutoScroll ?? true);
 
   // Conflict resolution hook
   // Note: When loading remote version during conflict, we initialize fresh history
@@ -865,6 +866,7 @@ export const Notebook: React.FC = () => {
   const isSearchOpenRef = useRef(false);
   const queuePositionMapRef = useRef<Map<string, number>>(new Map());
   const showLineNumbersRef = useRef(showLineNumbers);
+  const smoothAutoScrollRef = useRef(smoothAutoScroll);
 
   cellsRef.current = cells;
   activeCellIdRef.current = activeCellId;
@@ -920,6 +922,7 @@ export const Notebook: React.FC = () => {
   indentConfigRef.current = indentConfig;
   isSearchOpenRef.current = isSearchOpen;
   showLineNumbersRef.current = showLineNumbers;
+  smoothAutoScrollRef.current = smoothAutoScroll;
 
   // Track visible cell range for smart scrolling.
   // Keep this in a ref so high-frequency scroll updates don't re-render Notebook.
@@ -946,6 +949,9 @@ export const Notebook: React.FC = () => {
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingScrollRef = useRef<{ index: number; attempts: number; id: number } | null>(null);
   const scrollIdRef = useRef(0); // Unique ID to prevent double-scrolling in Strict Mode
+  const getDefaultScrollBehavior = useCallback((): 'smooth' | 'auto' => {
+    return smoothAutoScrollRef.current ? 'smooth' : 'auto';
+  }, []);
 
   // Unified scroll function - ALL scroll operations should use this
   const scrollToCell = useCallback((
@@ -956,7 +962,7 @@ export const Notebook: React.FC = () => {
       retryOnce?: boolean; // Retry after heights settle (for dynamic content)
     }
   ) => {
-    const { behavior = 'smooth', delay = 0, retryOnce = false } = options || {};
+    const { behavior = getDefaultScrollBehavior(), delay = 0, retryOnce = false } = options || {};
     
     // Cancel any pending scroll
     if (scrollTimeoutRef.current) {
@@ -1007,7 +1013,7 @@ export const Notebook: React.FC = () => {
     } else {
       performScroll();
     }
-  }, []);
+  }, [getDefaultScrollBehavior]);
 
   // Cleanup scroll timeout on unmount
   useEffect(() => {
@@ -1850,6 +1856,7 @@ export const Notebook: React.FC = () => {
     setShowLineNumbers(settings.showLineNumbers ?? false);
     setShowCellIds(settings.showCellIds ?? false);
     setShowResourceMonitor(settings.showResourceMonitor ?? false);
+    setSmoothAutoScroll(settings.smoothAutoScroll ?? true);
   }, []);
 
   // Get current notebook filename (without extension)
@@ -3274,7 +3281,7 @@ export const Notebook: React.FC = () => {
     const attemptScroll = (attempt: number) => {
       const anchor = document.getElementById(`cell-output-${cellId}`);
       if (anchor) {
-        anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        anchor.scrollIntoView({ behavior: getDefaultScrollBehavior(), block: 'start' });
         return;
       }
       if (attempt < 5) {
@@ -3282,7 +3289,7 @@ export const Notebook: React.FC = () => {
       }
     };
     attemptScroll(0);
-  }, [scrollToCell]);
+  }, [getDefaultScrollBehavior, scrollToCell]);
 
   const navigatorItems = useMemo(() => {
     return cells.map((cell, index) => {

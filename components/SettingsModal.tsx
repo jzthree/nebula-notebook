@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Folder, Bot, Check, Palette, Bell, Volume2, AlignLeft, Hash, Key, Eye, EyeOff, AlertTriangle, Settings, Sparkles, Cpu } from 'lucide-react';
+import { X, Folder, Bot, Check, Palette, Bell, Volume2, AlignLeft, Hash, Key, Eye, EyeOff, AlertTriangle, Settings, Sparkles, Cpu, MousePointerClick } from 'lucide-react';
 import {
   getSettings,
   saveSettings,
@@ -330,6 +330,34 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                       <span
                         className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
                           settings.showResourceMonitor ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Auto-Scroll Animation */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                    <MousePointerClick className="w-4 h-4" />
+                    Auto-Scroll Animation
+                  </label>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                    <div className="flex-1">
+                      <p className="text-sm text-slate-700">Smooth Notebook Auto-Scroll</p>
+                      <p className="text-xs text-slate-500">
+                        Animate jumps triggered by notebook actions like run-and-advance
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setSettings({ ...settings, smoothAutoScroll: !(settings.smoothAutoScroll ?? true) })}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        (settings.smoothAutoScroll ?? true) ? 'bg-blue-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          (settings.smoothAutoScroll ?? true) ? 'translate-x-5' : 'translate-x-0'
                         }`}
                       />
                     </button>
