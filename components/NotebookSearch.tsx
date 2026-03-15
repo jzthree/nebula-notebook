@@ -255,19 +255,18 @@ export const NotebookSearch: React.FC<Props> = ({
     });
   }, [matches, onNavigateToCell]);
 
+  // VSCode-style navigation: simply increment/decrement and wrap around.
+  // Anchor-based positioning is only used when the query CHANGES (in the
+  // useEffect above) to pick the starting match nearest the cursor.
   const goToNextMatch = useCallback(() => {
     if (matches.length === 0) return;
-    const anchor = getEffectiveAnchor();
-    const nextIndex = anchor ? findNextMatchIndexFromAnchor(matches, anchor) : ((currentMatchIndex + 1) % matches.length);
-    goToMatch(nextIndex);
-  }, [currentMatchIndex, goToMatch, matches, findNextMatchIndexFromAnchor, getEffectiveAnchor]);
+    goToMatch((currentMatchIndex + 1) % matches.length);
+  }, [currentMatchIndex, goToMatch, matches]);
 
   const goToPrevMatch = useCallback(() => {
     if (matches.length === 0) return;
-    const anchor = getEffectiveAnchor();
-    const prevIndex = anchor ? findPrevMatchIndexFromAnchor(matches, anchor) : ((currentMatchIndex - 1 + matches.length) % matches.length);
-    goToMatch(prevIndex);
-  }, [currentMatchIndex, goToMatch, matches, findPrevMatchIndexFromAnchor, getEffectiveAnchor]);
+    goToMatch((currentMatchIndex - 1 + matches.length) % matches.length);
+  }, [currentMatchIndex, goToMatch, matches]);
 
   // Replace current match
   const handleReplace = useCallback(() => {
@@ -333,7 +332,7 @@ export const NotebookSearch: React.FC<Props> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed top-16 right-4 z-50 bg-white rounded-lg shadow-xl border border-slate-200 p-2 flex flex-col gap-2">
+    <div data-notebook-search className="fixed top-16 right-4 z-50 bg-white rounded-lg shadow-xl border border-slate-200 p-2 flex flex-col gap-2">
       {/* Search row */}
       <div className="flex items-center gap-2">
         <Search className="w-4 h-4 text-slate-400 flex-shrink-0" />

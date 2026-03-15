@@ -987,14 +987,36 @@ export class FilesystemService {
   ): SaveNotebookResult {
     const normalizedPath = this.normalizePath(notebookPath);
 
-    // Load existing notebook metadata if file exists
+    // Load existing notebook metadata if file exists.
+    // Only read the metadata section — avoid parsing the entire file
+    // which for large notebooks (500 MB+) would allocate ~1 GB in the
+    // Node process just to extract a few kilobytes of metadata.
     let existingMetadata: JupyterNotebook['metadata'] = {};
     if (fs.existsSync(normalizedPath)) {
       try {
-        const existing: JupyterNotebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8'));
-        existingMetadata = existing.metadata || {};
+        // Read only the first 64 KB — metadata is always at the top of .ipynb files
+        const fd = fs.openSync(normalizedPath, 'r');
+        const buf = Buffer.alloc(65536);
+        const bytesRead = fs.readSync(fd, buf, 0, 65536, 0);
+        fs.closeSync(fd);
+        const head = buf.toString('utf-8', 0, bytesRead);
+        // Extract the "metadata" key from the top-level JSON object
+        const metaMatch = head.match(/"metadata"\s*:\s*(\{)/);
+        if (metaMatch) {
+          // Find the matching closing brace (handles nested objects)
+          const startIdx = metaMatch.index! + metaMatch[0].length - 1;
+          let depth = 0;
+          let endIdx = -1;
+          for (let i = startIdx; i < head.length; i++) {
+            if (head[i] === '{') depth++;
+            else if (head[i] === '}') { depth--; if (depth === 0) { endIdx = i; break; } }
+          }
+          if (endIdx > 0) {
+            existingMetadata = JSON.parse(head.slice(startIdx, endIdx + 1));
+          }
+        }
       } catch {
-        // Start fresh
+        // Start fresh — metadata extraction failed
       }
     }
 

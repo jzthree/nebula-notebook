@@ -789,7 +789,7 @@ export class UndoRedoManager {
 
     this.fullHistory = [{
       type: 'snapshot',
-      cells: newCells.map(cloneCell),
+      cells: newCells.map(stripCellOutputs),
       timestamp: Date.now()
     }];
   }

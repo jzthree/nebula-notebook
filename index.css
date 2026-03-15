@@ -1,5 +1,6 @@
+@import "tailwindcss";
+
 /* Custom styles for Nebula Notebook */
-/* Tailwind is loaded via CDN in index.html */
 
 /* Global UI scale (1 = 100%) */
 :root {

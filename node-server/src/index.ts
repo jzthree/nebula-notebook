@@ -49,7 +49,7 @@ const DEV_MODE = process.env.DEV_MODE === 'true' || process.argv.includes('--dev
 const BODY_LIMIT =
   process.env.NEBULA_BODY_LIMIT ||
   process.env.NEBULA_MAX_BODY_SIZE ||
-  '200mb';
+  '1gb';
 const CLIENT_MODE =
   process.argv.includes('--client') ||
   process.argv.includes('--client-mode') ||

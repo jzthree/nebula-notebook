@@ -1,197 +1,321 @@
-import React, { forwardRef, useCallback, useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Cell } from '../types';
-import { Virtuoso, VirtuosoHandle, ListRange } from 'react-virtuoso';
-import { computeDefaultCellHeight } from '../utils/virtualCellMetrics';
+import { estimateCellHeight } from '../utils/virtualCellMetrics';
 
-// Cache measured cell heights globally to persist across re-renders
-// Key: cell ID, Value: measured height in pixels
-const cellHeightCache = new Map<string, number>();
-
-// ⚠️ MEMORY MANAGEMENT: Clean up stale entries periodically
-// This prevents memory leaks when cells are deleted
-function cleanupCacheForCells(currentCellIds: Set<string>): void {
-  for (const cachedId of cellHeightCache.keys()) {
-    if (!currentCellIds.has(cachedId)) {
-      cellHeightCache.delete(cachedId);
-    }
-  }
+// ─── Public handle exposed via virtuosoRef ───────────────────────────────────
+export interface CellListHandle {
+  scrollToIndex: (options: {
+    index: number;
+    align?: 'start' | 'center' | 'end';
+    behavior?: ScrollBehavior;
+    offset?: number;
+  }) => void;
 }
 
 interface Props {
   cells: Cell[];
   renderCell: (cell: Cell, index: number) => React.ReactNode;
-  virtuosoRef?: React.RefObject<VirtuosoHandle>;
+  virtuosoRef?: React.RefObject<CellListHandle | null>;
   className?: string;
-  onRangeChange?: (range: ListRange) => void;
+  onRangeChange?: (range: { startIndex: number; endIndex: number }) => void;
   renderKey?: string | number;
 }
 
-// Custom Scroller to ensure layout matches previous design (Max width centered)
-const ListContainer = forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>((props, ref) => (
-  <div
-    {...props}
-    ref={ref}
-    className="max-w-5xl mx-auto px-4"
-  />
-));
+/**
+ * Lightweight virtual list that replaces react-virtuoso.
+ *
+ * Key design difference: scroll tracking uses a **passive** listener with
+ * `requestAnimationFrame` → `setState`.  This means React mounts/unmounts
+ * cells **asynchronously** in a normal render pass.  react-virtuoso instead
+ * called `flushSync()` inside the scroll handler, forcing a synchronous
+ * React commit on every scroll event and blocking the main thread for
+ * hundreds of ms (~4 000 ms total in a representative trace).
+ *
+ * Rendered cells also get `content-visibility: auto` so the browser can
+ * skip layout/paint for cells that are mounted but outside the viewport
+ * (within the overscan zone).
+ */
 
-// Footer component to add bottom padding so last cell isn't cut off
-const Footer = () => <div className="h-32" />;
+// ─── Height cache (global, persists across re-renders) ──────────────────────
+const heightCache = new Map<string, number>();
 
-// Lightweight placeholder shown only during very high-velocity scroll seeking.
-const ScrollSeekPlaceholder: React.FC<{ height: number }> = ({ height }) => (
-  <div
-    style={{ height }}
-    className="rounded-lg border border-slate-100 bg-slate-50/80"
-    aria-hidden="true"
-  />
-);
+function getCellHeight(cell: Cell): number {
+  return heightCache.get(cell.id) ?? estimateCellHeight(cell);
+}
 
-export const VirtualCellList: React.FC<Props> = ({ cells, renderCell, virtuosoRef, className, onRangeChange, renderKey }) => {
-  const fastScrollAssistEnabled = useMemo(() => {
-    if (typeof window === 'undefined') return true;
+// Pixels of overscan above and below the viewport.
+const OVERSCAN_PX = 3000;
 
-    const params = new URLSearchParams(window.location.search);
-    const queryValue = params.get('fastScrollAssist');
-    if (queryValue) {
-      const normalized = queryValue.toLowerCase();
-      return normalized !== '0' && normalized !== 'off' && normalized !== 'false';
+// Minimum ms between height-triggered re-renders. Prevents cascade:
+// mount → measure → rerender → mount new → measure → rerender …
+const HEIGHT_DEBOUNCE_MS = 150;
+
+export const VirtualCellList: React.FC<Props> = ({
+  cells,
+  renderCell,
+  virtuosoRef,
+  className,
+  onRangeChange,
+  renderKey,
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // ── Scroll position (updated async via RAF) ───────────────────────────────
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(800);
+
+  // ── Height measurement version counter ────────────────────────────────────
+  const [heightVersion, setHeightVersion] = useState(0);
+  const heightVersionRef = useRef(0);
+
+  // Stable ref for onRangeChange
+  const onRangeChangeRef = useRef(onRangeChange);
+  onRangeChangeRef.current = onRangeChange;
+
+  // ── Cumulative offsets ────────────────────────────────────────────────────
+  const offsets = useMemo(() => {
+    const result = new Float64Array(cells.length);
+    let cumulative = 0;
+    for (let i = 0; i < cells.length; i++) {
+      result[i] = cumulative;
+      cumulative += getCellHeight(cells[i]);
     }
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cells, heightVersion]);
 
-    const stored = window.localStorage.getItem('nebula-fast-scroll-assist');
-    if (stored === '0') return false;
-    if (stored === '1') return true;
-    return true;
+  const totalHeight = useMemo(() => {
+    if (cells.length === 0) return 0;
+    const last = cells.length - 1;
+    return offsets[last] + getCellHeight(cells[last]);
+  }, [cells, offsets]);
+
+  // ── Visible range (binary search) ────────────────────────────────────────
+  const startIdx = useMemo(() => {
+    if (cells.length === 0) return 0;
+    const target = Math.max(0, scrollTop - OVERSCAN_PX);
+    let lo = 0;
+    let hi = cells.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (offsets[mid] + getCellHeight(cells[mid]) <= target) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cells, offsets, scrollTop]);
+
+  const endIdx = useMemo(() => {
+    const target = scrollTop + viewportHeight + OVERSCAN_PX;
+    let end = startIdx;
+    while (end < cells.length && offsets[end] < target) {
+      end++;
+    }
+    return end;
+  }, [cells, offsets, startIdx, scrollTop, viewportHeight]);
+
+  // ── Passive scroll listener (RAF-batched, never blocks scroll) ────────────
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    let rafId: number | null = null;
+    const onScroll = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        setScrollTop(container.scrollTop);
+      });
+    };
+
+    container.addEventListener('scroll', onScroll, { passive: true });
+
+    // Track viewport resize
+    const ro = new ResizeObserver(() => {
+      setViewportHeight(container.clientHeight);
+    });
+    ro.observe(container);
+
+    // Initial values
+    setScrollTop(container.scrollTop);
+    setViewportHeight(container.clientHeight);
+
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+      ro.disconnect();
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
   }, []);
 
-  // Track window height to dynamically size the viewport extension
-  // Using 1x window height as a balance between smooth scrolling and memory usage
-  // Too large (3x) causes too many cells to stay mounted, increasing lag over time
-  const [viewportExtension, setViewportExtension] = useState(() =>
-    typeof window !== 'undefined' ? window.innerHeight : 1000
-  );
+  // ── Single stable ResizeObserver for cell measurement ─────────────────────
+  // Created once on mount. Individual cells are observed/unobserved via
+  // MutationObserver on the list container — this avoids re-creating the
+  // ResizeObserver when the visible range changes (which was causing an
+  // infinite measure → rerender → measure cascade).
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
 
-  // ⚠️ PERFORMANCE CRITICAL: Use ref for renderCell to keep itemContent stable
-  // This prevents Virtuoso from re-calling itemContent for all visible cells
-  // when the parent re-renders with a new function reference.
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      let anyChanged = false;
+      for (const entry of entries) {
+        const el = entry.target as HTMLElement;
+        const cellId = el.dataset.cellId;
+        if (!cellId) continue;
+        const h = Math.round(
+          entry.borderBoxSize?.[0]?.blockSize ?? el.offsetHeight,
+        );
+        if (h > 0) {
+          const prev = heightCache.get(cellId);
+          if (prev === undefined || Math.abs(prev - h) > 2) {
+            heightCache.set(cellId, h);
+            anyChanged = true;
+          }
+        }
+      }
+      if (anyChanged) {
+        // Debounce: batch rapid height changes (e.g. many cells mounting at
+        // once after scroll) into a single state update. Without this, the
+        // cycle measure→rerender→mount→measure can run away and freeze the tab.
+        if (debounceTimer !== null) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          debounceTimer = null;
+          heightVersionRef.current++;
+          setHeightVersion(heightVersionRef.current);
+        }, HEIGHT_DEBOUNCE_MS);
+      }
+    });
+
+    // Observe all current cell wrappers
+    list
+      .querySelectorAll<HTMLElement>('[data-cell-id]')
+      .forEach((el) => resizeObserver.observe(el));
+
+    // Use MutationObserver to auto-observe newly added cell wrappers
+    // (when the visible range shifts and new cells mount).
+    const mutationObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node instanceof HTMLElement && node.dataset.cellId) {
+            resizeObserver.observe(node);
+          }
+        }
+        // No need to unobserve removed nodes — ResizeObserver does that
+        // automatically when elements are removed from the DOM.
+      }
+    });
+    mutationObserver.observe(list, { childList: true });
+
+    return () => {
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
+    };
+  }, []); // ← stable: created once, never re-created
+
+  // ── Report visible range to parent ────────────────────────────────────────
+  useEffect(() => {
+    if (endIdx > startIdx && onRangeChangeRef.current) {
+      onRangeChangeRef.current({
+        startIndex: startIdx,
+        endIndex: endIdx - 1,
+      });
+    }
+  }, [startIdx, endIdx]);
+
+  // ── scrollToIndex (works for any cell, even unmounted, via offsets) ───────
+  const cellsRef = useRef(cells);
+  cellsRef.current = cells;
+  const offsetsRef = useRef(offsets);
+  offsetsRef.current = offsets;
+
+  useEffect(() => {
+    if (!virtuosoRef) return;
+
+    const handle: CellListHandle = {
+      scrollToIndex({ index, align = 'start', behavior = 'auto', offset = 0 }) {
+        const container = containerRef.current;
+        const currentCells = cellsRef.current;
+        const currentOffsets = offsetsRef.current;
+        if (!container || index < 0 || index >= currentCells.length) return;
+
+        const cellTop = currentOffsets[index];
+        const cellHeight = getCellHeight(currentCells[index]);
+        const vh = container.clientHeight;
+
+        let target: number;
+        switch (align) {
+          case 'center':
+            target = cellTop - vh / 2 + cellHeight / 2;
+            break;
+          case 'end':
+            target = cellTop - vh + cellHeight;
+            break;
+          default:
+            target = cellTop;
+        }
+
+        container.scrollTo({ top: target + offset, behavior });
+      },
+    };
+
+    (virtuosoRef as React.MutableRefObject<CellListHandle | null>).current =
+      handle;
+
+    return () => {
+      (virtuosoRef as React.MutableRefObject<CellListHandle | null>).current =
+        null;
+    };
+  }, [virtuosoRef]);
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  const topPadding = offsets[startIdx] ?? 0;
+  const lastIdx = endIdx - 1;
+  const bottomStart =
+    lastIdx >= 0 ? offsets[lastIdx] + getCellHeight(cells[lastIdx]) : 0;
+  const bottomPadding = Math.max(0, totalHeight - bottomStart);
+
+  // Stable renderCell ref to avoid re-creating the map callback
   const renderCellRef = useRef(renderCell);
   renderCellRef.current = renderCell;
 
-  // Keep cells ref for height estimation
-  const cellsRef = useRef(cells);
-  cellsRef.current = cells;
-
-  // ⚠️ MEMORY LEAK FIX: Clean up stale cache entries when cells are deleted
-  // Avoid O(N) work on every keystroke by only running when cell count changes.
-  const prevCellCountRef = useRef(cells.length);
-  useEffect(() => {
-    const prevCount = prevCellCountRef.current;
-    prevCellCountRef.current = cells.length;
-
-    const cacheTooLarge = cellHeightCache.size > cells.length + 10;
-    const cellsRemoved = cells.length < prevCount;
-    if (!cacheTooLarge && !cellsRemoved) {
-      return;
-    }
-
-    const currentCellIds = new Set<string>(cellsRef.current.map(c => c.id));
-    cleanupCacheForCells(currentCellIds);
-  }, [cells.length]);
-
-  useEffect(() => {
-    const updateExtension = () => {
-      // Extend by 1x window height - enough for smooth scrolling without excess memory
-      setViewportExtension(window.innerHeight);
-    };
-    window.addEventListener('resize', updateExtension);
-    return () => window.removeEventListener('resize', updateExtension);
-  }, []);
-
-  // Calculate smart default height based on cells content
-  // This reduces scroll jumps when scrolling up to unmeasured cells.
-  // ⚠️ PERFORMANCE: Only recompute when cell count changes (not on every keystroke).
-  const defaultHeight = useMemo(() => {
-    return computeDefaultCellHeight(cellsRef.current, cellHeightCache);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cells.length, renderKey]);
-
-  // Overscan chunks rendering work during rapid scroll and helps avoid brief blank gaps.
-  const overscanPx = useMemo(() => {
-    return Math.max(400, Math.round(viewportExtension * 0.5));
-  }, [viewportExtension]);
-
-  // Cache measured heights when Virtuoso measures items
-  const itemSize = useCallback((el: HTMLElement) => {
-    // Virtuoso's wrapper contains our div with data-cell-id as first child
-    const wrapper = el.firstElementChild as HTMLElement | null;
-    const cellId = wrapper?.getAttribute('data-cell-id') || el.getAttribute('data-cell-id');
-    // offsetHeight is cheaper than getBoundingClientRect for frequent measurements.
-    const height = el.offsetHeight;
-
-    if (cellId && height > 0) {
-      cellHeightCache.set(cellId, height);
-    }
-    return height;
-  }, []);
-
-  // Wrapper that adds data-cell-id for height tracking.
-  // renderKey forces a re-render when settings affect rendering (e.g., line numbers).
-  const wrappedRenderCell = useCallback((cell: Cell, index: number) => {
-    return (
-      <div data-cell-id={cell.id} data-render-key={renderKey ?? 0}>
-        {renderCellRef.current(cell, index)}
-      </div>
-    );
-  }, [renderKey]);
-
-  const itemContent = useCallback((index: number, cell: Cell) => wrappedRenderCell(cell, index), [wrappedRenderCell]);
-
-  const overscan = fastScrollAssistEnabled
-    ? { main: overscanPx, reverse: overscanPx }
-    : 0;
-  const minOverscanItemCount = fastScrollAssistEnabled ? 6 : 3;
-  const scrollSeekConfiguration = fastScrollAssistEnabled
-    ? {
-        enter: (velocity: number) => Math.abs(velocity) > 5000,
-        exit: (velocity: number) => Math.abs(velocity) < 1200,
-      }
-    : false;
-
   return (
-    <Virtuoso
-      key={renderKey} // Force full re-render when settings like line numbers change
-      ref={virtuosoRef}
-      className={className}
-      data={cells}
-      useWindowScroll={false}
-      totalCount={cells.length}
-      itemContent={itemContent}
-      // Use stable cell IDs as keys to prevent scroll jumps when cells update
-      computeItemKey={(index, cell) => cell.id}
-      // Dynamic default height based on average cell size in this notebook
-      // Reduces scroll jumps when scrolling up to unmeasured cells
-      defaultItemHeight={defaultHeight}
-      // Extend viewport by 1x window height in each direction
-      // Balance between smooth scrolling and memory usage (too large = too many mounted cells)
-      increaseViewportBy={{ top: viewportExtension, bottom: viewportExtension }}
-      // Chunk rendering during fast scroll to reduce empty viewport flashes.
-      overscan={overscan}
-      // Ensure at least 3 items rendered above/below viewport
-      // This helps with tall cells where pixel-based overscan is insufficient
-      minOverscanItemCount={minOverscanItemCount}
-      components={{
-        List: ListContainer,
-        Footer,
-        ScrollSeekPlaceholder
-      }}
-      followOutput={false}
-      alignToBottom={false}
-      rangeChanged={onRangeChange}
-      // itemSize measures AFTER render (caches actual heights)
-      itemSize={itemSize}
-      // Activate scroll-seek placeholders only for extreme velocities (e.g., scrollbar flings).
-      // This avoids expensive editor mounts for items users fly past.
-      scrollSeekConfiguration={scrollSeekConfiguration}
-    />
+    <div ref={containerRef} className={`${className || ''} overflow-y-auto`}>
+      <div className="max-w-5xl mx-auto px-4">
+        {/* Top spacer — represents cells above the rendered window */}
+        {topPadding > 0 && <div style={{ height: topPadding }} aria-hidden />}
+
+        {/* Rendered cells */}
+        <div ref={listRef}>
+          {cells.slice(startIdx, endIdx).map((cell, i) => (
+            <div
+              key={cell.id}
+              data-cell-id={cell.id}
+              data-cell-index={startIdx + i}
+              style={{
+                contentVisibility: 'auto',
+                containIntrinsicSize: `auto ${getCellHeight(cell)}px`,
+              }}
+            >
+              {renderCellRef.current(cell, startIdx + i)}
+            </div>
+          ))}
+        </div>
+
+        {/* Bottom spacer — represents cells below the rendered window */}
+        {bottomPadding > 0 && (
+          <div style={{ height: bottomPadding }} aria-hidden />
+        )}
+
+        {/* Footer padding */}
+        <div className="h-32" />
+      </div>
+    </div>
   );
 };

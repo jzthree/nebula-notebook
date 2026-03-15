@@ -86,8 +86,9 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
         size += output.content.length;
       }
     }
-    // Approximate UTF-16 bytes without allocating large strings
-    return size * 2;
+    // String.length gives character count. V8 uses 1-byte Latin-1 encoding
+    // for ASCII-only content (code, base64), so length ≈ byte size.
+    return size;
   }, []);
 
   const refreshDirtyState = useCallback((currentCells: Cell[]): boolean => {
@@ -196,6 +197,20 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
       return;
     }
 
+    // Guard: For very large notebooks, skip automatic saves to avoid OOM.
+    // JSON.stringify + fetch body + server parsing can easily 3-4x the notebook size.
+    // Manual saves (Cmd+S) still work — only the 1-second debounce autosave is blocked.
+    if (!isManualSaveRef.current) {
+      // Compute size from live cells — lastSavedSizeRef may be 0 if the
+      // fileId-init effect hasn't run yet.
+      const liveSize = estimateCellsSize(cells);
+      if (liveSize > 100 * 1024 * 1024) {
+        console.info(`[Autosave] Skipping auto-save for large notebook (~${Math.round(liveSize / 1024 / 1024)} MB). Use Cmd+S to save manually.`);
+        dispatch({ type: 'SAVE_SUCCESS' });
+        return;
+      }
+    }
+
     // Only show "Saving..." for manual saves - autosave is silent
     if (isManualSaveRef.current) {
       setUiStatus(prev => ({ status: 'saving', lastSaved: prev.lastSaved }));
@@ -203,6 +218,7 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
 
     saveInProgressRef.current = true;
     try {
+      console.info(`[Autosave] Saving notebook (~${Math.round(estimatedBytes / 1024 / 1024)} MB, manual=${isManualSaveRef.current})`);
       await onSave(fileId, cells);
       updateSavedState(cells);
       const savedAt = Date.now();
@@ -270,9 +286,22 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
   // Keep executeEffect ref in sync to avoid stale closures
   executeEffectRef.current = executeEffect;
 
+  // Track which fileId has had its saved-state initialized.
+  // The cells-change effect fires BEFORE the fileId-init effect (React runs
+  // effects in definition order).  Without this guard, loading a new file
+  // makes every cell appear "dirty" (no snapshot yet) and triggers an
+  // immediate autosave of the entire notebook — for a 500 MB file this
+  // allocates ~1.5 GB of temporary strings and freezes the main thread.
+  const initializedFileIdRef = useRef<string | null>(null);
+
   // React to cells changes
   useEffect(() => {
     if (!fileId || !enabled) return;
+
+    // Skip when fileId just changed — the fileId-init effect below will
+    // set the snapshot.  We detect this by comparing against the last
+    // fileId we initialized.
+    if (fileId !== initializedFileIdRef.current) return;
 
     // Quick reference check - if cells array reference hasn't changed, skip
     if (cells === cellsRef.current) return;
@@ -321,6 +350,8 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
   useEffect(() => {
     if (fileId) {
       updateSavedState(cells);
+      initializedFileIdRef.current = fileId;
+      cellsRef.current = cells;
       setUiStatus({ status: 'saved', lastSaved: Date.now() });
       setMachineState(getInitialState());
     }

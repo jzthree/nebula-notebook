@@ -584,6 +584,8 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     prevProps.queuePosition === nextProps.queuePosition &&
     prevProps.indentConfig === nextProps.indentConfig &&
     prevProps.requestedFocusMode === nextProps.requestedFocusMode &&
-    prevProps.previewDiffStatus === nextProps.previewDiffStatus
+    prevProps.previewDiffStatus === nextProps.previewDiffStatus &&
+    prevProps.showLineNumbers === nextProps.showLineNumbers &&
+    prevProps.showCellIds === nextProps.showCellIds
   );
 });

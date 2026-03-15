@@ -69,7 +69,7 @@ const getShadowSerializeConfig = () => {
     __NEBULA_SERIALIZE_SHADOW_SAMPLE__?: number;
   };
   return {
-    enabled: globals.__NEBULA_SERIALIZE_SHADOW__ ?? true,
+    enabled: globals.__NEBULA_SERIALIZE_SHADOW__ ?? false,
     logMatches: globals.__NEBULA_SERIALIZE_SHADOW_LOG__ ?? true,
     sample: globals.__NEBULA_SERIALIZE_SHADOW_SAMPLE__ ?? 1,
   };
@@ -396,31 +396,12 @@ export const saveNotebookCells = async (
   kernelName?: string,
   history?: any[],
 ): Promise<SaveResult> => {
-  const shadowConfig = getShadowSerializeConfig();
-  const payload = {
-    path,
-    cells,
-    kernel_name: kernelName,
-    history,
-  };
-  const body = JSON.stringify(payload);
-
-  if (shadowConfig.enabled && shouldRunShadowSerialize(shadowConfig.sample)) {
-    const shadow = buildShadowPayload(path, cells, kernelName, history);
-    if (shadow.payload !== body) {
-      console.warn('[Autosave] Shadow serialization mismatch', {
-        path,
-        reused: shadow.reused,
-        updated: shadow.updated
-      });
-    } else if (shadowConfig.logMatches) {
-      console.info('[Autosave] Shadow serialization match', {
-        path,
-        reused: shadow.reused,
-        updated: shadow.updated
-      });
-    }
-  }
+  // Use the incremental shadow builder as the primary serialization path.
+  // It caches per-cell JSON by reference equality, so unchanged cells
+  // (the common case during autosave) reuse their previous string.
+  // This avoids a single monolithic JSON.stringify that allocates the
+  // entire notebook as one contiguous string (~500 MB for large files).
+  const { payload: body } = buildShadowPayload(path, cells, kernelName, history);
 
   const response = await fetch(`${API_BASE}/notebook/save`, {
     method: 'POST',

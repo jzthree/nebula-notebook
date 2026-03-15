@@ -6,7 +6,7 @@ import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernel
 import { getClusterInfo, ClusterServer, ClusterInfo } from '../services/clusterService';
 import { getSettings, saveSettings, IndentationPreference } from '../services/llmService';
 import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server, Clock } from 'lucide-react';
-import { VirtuosoHandle } from 'react-virtuoso';
+import { CellListHandle } from './VirtualCellList';
 import { EditorView } from '@codemirror/view';
 import {
   getFiles,
@@ -899,6 +899,14 @@ export const Notebook: React.FC = () => {
   // Track last-known cursor position so search next/prev can be relative to cursor.
   const cursorAnchorRef = useRef<{ cellId: string; pos: number; ts: number } | null>(null);
   const recordCursorAnchor = useCallback((cellId: string, pos: number) => {
+    // Ignore cursor activity triggered by editor mounts while search has focus.
+    // Without this, navigating to a search match mounts a cell whose CodeMirror
+    // fires cursor-activity at position 0, overriding the search's nav anchor
+    // and causing next/prev to loop over the same few matches.
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement && active.closest('[data-notebook-search]')) {
+      return;
+    }
     cursorAnchorRef.current = { cellId, pos, ts: Date.now() };
   }, []);
   const getCursorAnchor = useCallback(() => cursorAnchorRef.current, []);
@@ -935,7 +943,7 @@ export const Notebook: React.FC = () => {
   }, []);
 
   // Virtuoso Handle for programmatic scrolling
-  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const virtuosoRef = useRef<CellListHandle>(null);
 
   // Pending scroll after cell changes (for undo/redo of insert/delete)
   const pendingScrollCellIdRef = useRef<string | null>(null);
@@ -1041,11 +1049,8 @@ export const Notebook: React.FC = () => {
       return isCellVisible(cellIndex);
     }
 
-    const scrollerEl = (
-      (cellEl.closest('[data-virtuoso-scroller]') as HTMLElement | null) ||
-      (document.querySelector('[data-virtuoso-scroller]') as HTMLElement | null) ||
-      (document.querySelector('.virtuoso-scroller') as HTMLElement | null)
-    );
+    // Find the scroll container: the nearest ancestor with overflow-y: auto/scroll.
+    const scrollerEl = cellEl.closest('.overflow-y-auto') as HTMLElement | null;
 
     const cellRect = cellEl.getBoundingClientRect();
     const viewportRect = scrollerEl
@@ -2910,7 +2915,9 @@ export const Notebook: React.FC = () => {
       // Avoid snapping to the top of a cell when it's already on-screen. The
       // match-level scroll happens inside CodeEditor (and is much less jarring).
       if (!isCellVisibleInViewport(cellId, currentIndex)) {
-        scrollToCell(currentIndex, { behavior: 'auto' });
+        // retryOnce: after the cell mounts, its measured height may differ from
+        // the estimate, shifting the scroll position. The retry corrects this.
+        scrollToCell(currentIndex, { behavior: 'auto', retryOnce: true });
       }
     }
   }, [cells, isCellVisibleInViewport, scrollToCell]);

@@ -98,18 +98,6 @@ vi.mock('../../hooks/useAutosave', () => ({
   formatLastSaved: vi.fn().mockReturnValue('just now'),
 }));
 
-// Mock react-virtuoso since it needs window measurements
-vi.mock('react-virtuoso', () => ({
-  Virtuoso: ({ data, itemContent }: any) => (
-    <div data-testid="virtuoso">
-      {data?.map((item: any, index: number) => (
-        <div key={item.id || index}>{itemContent(index, item)}</div>
-      ))}
-    </div>
-  ),
-  VirtuosoHandle: {},
-}));
-
 // Mock VirtualCellList
 vi.mock('../VirtualCellList', () => ({
   VirtualCellList: ({ cells, renderCell }: any) => (

@@ -602,10 +602,13 @@ export const useUndoRedo = (initialCells: Cell[]): UseUndoRedoResult => {
     // Initialize content tracking
     newCells.forEach(c => lastContentRef.current.set(c.id, c.content));
 
-    // Start fresh history with a snapshot (required for trajectory reconstruction)
+    // Start fresh history with a snapshot (required for trajectory reconstruction).
+    // Strip outputs from the snapshot — they are large (base64 images) and not
+    // needed for history replay.  convertToCompactFormat already strips them
+    // when persisting, so keeping them here just wastes memory.
     fullHistoryRef.current = [{
       type: 'snapshot',
-      cells: newCells.map(cloneCell), // Deep copy
+      cells: newCells.map(stripCellOutputs),
       timestamp: Date.now()
     }];
   }, []);
