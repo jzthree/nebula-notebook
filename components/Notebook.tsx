@@ -97,6 +97,92 @@ function getDirectoryFromPath(filePath: string | null): string | undefined {
   return filePath.slice(0, idx);
 }
 
+// ─── Cell Navigator (self-contained to avoid Notebook re-renders on typing) ──
+interface NavigatorItem { cellId: string; index: number; type: string; preview: string }
+const CellNavigator: React.FC<{
+  items: NavigatorItem[];
+  onSelect: (cellId: string, index: number) => void;
+  onClose: () => void;
+}> = ({ items, onSelect, onClose }) => {
+  const [query, setQuery] = useState('');
+  const [selection, setSelection] = useState(0);
+
+  const results = useMemo(() => {
+    if (!query.trim()) return items;
+    const q = query.toLowerCase();
+    return items.filter(item => (
+      item.cellId.toLowerCase().includes(q) ||
+      item.preview.toLowerCase().includes(q) ||
+      String(item.index + 1).includes(q)
+    ));
+  }, [items, query]);
+
+  useEffect(() => { setSelection(0); }, [query]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-slate-900/30 backdrop-blur-sm flex items-start justify-center pt-24 px-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-3xl bg-white rounded-lg shadow-2xl border border-slate-200 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); setSelection(s => Math.min(s + 1, results.length - 1)); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); setSelection(s => Math.max(s - 1, 0)); }
+          else if (e.key === 'Enter') {
+            e.preventDefault();
+            const target = results[selection];
+            if (target) { onSelect(target.cellId, target.index); onClose(); }
+          }
+        }}
+      >
+        <div className="px-3 py-2 border-b border-slate-200 flex items-center gap-2">
+          <input
+            autoFocus
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search cells by index, id, or content..."
+            className="w-full text-sm bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+          />
+          <span className="text-[0.625rem] text-slate-400 whitespace-nowrap tabular-nums">
+            {results.length} / {items.length}
+          </span>
+        </div>
+        <div className="max-h-[75vh] overflow-y-auto">
+          {results.length === 0 ? (
+            <div className="px-3 py-5 text-sm text-slate-400 text-center">No matching cells</div>
+          ) : query.trim() ? (
+            <div className="px-3 py-1 text-xs text-blue-600 bg-blue-50 border-b border-blue-100">
+              Showing {results.length} matching cells
+            </div>
+          ) : null}
+          {results.map((item, idx) => (
+            <button
+              key={`${item.index}-${item.cellId}`}
+              className={`w-full text-left px-3 py-1 border-b border-slate-100 transition-colors ${idx === selection ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'}`}
+              onClick={() => { onSelect(item.cellId, item.index); onClose(); }}
+            >
+              <div className="flex items-center justify-between text-[0.6875rem] text-slate-500 leading-tight">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-semibold flex-shrink-0">#{item.index + 1}</span>
+                  <span className="text-[0.625rem] text-slate-500 font-medium truncate">{item.cellId}</span>
+                </div>
+                <span className="text-[0.625rem] uppercase tracking-wide text-slate-400 flex-shrink-0">{item.type}</span>
+              </div>
+              <div className="mt-0.5 text-[0.8125rem] text-slate-700 font-mono truncate leading-tight">
+                {item.preview || <span className="text-slate-400 italic">Empty cell</span>}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 function escapeForAttributeSelector(value: string): string {
   // Prefer the platform escape when available. This is only used in the browser.
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
@@ -162,8 +248,6 @@ export const Notebook: React.FC = () => {
   const [textEditorPath, setTextEditorPath] = useState<string | null>(null);
   const [imageViewerPath, setImageViewerPath] = useState<string | null>(null);
   const [isNavigatorOpen, setIsNavigatorOpen] = useState(false);
-  const [navigatorQuery, setNavigatorQuery] = useState('');
-  const [navigatorSelection, setNavigatorSelection] = useState(0);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -244,8 +328,6 @@ export const Notebook: React.FC = () => {
   }, [isNavigatorOpen]);
 
   const openNavigator = useCallback(() => {
-    setNavigatorQuery('');
-    setNavigatorSelection(0);
     setIsNavigatorOpen(true);
   }, []);
 
@@ -3381,7 +3463,7 @@ export const Notebook: React.FC = () => {
 
   const navigatorItems = useMemo(() => {
     return cells.map((cell, index) => {
-      const lines = cell.content.split('\n');
+      const lines = (cell.content || '').split('\n');
       let preview = '';
       for (const line of lines) {
         const trimmed = line.trim();
@@ -3399,22 +3481,6 @@ export const Notebook: React.FC = () => {
     });
   }, [cells]);
 
-  const navigatorResults = useMemo(() => {
-    if (!navigatorQuery.trim()) {
-      return navigatorItems;
-    }
-    const q = navigatorQuery.toLowerCase();
-    return navigatorItems.filter(item => (
-      item.cellId.toLowerCase().includes(q) ||
-      item.preview.toLowerCase().includes(q) ||
-      String(item.index + 1).includes(q)
-    ));
-  }, [navigatorItems, navigatorQuery]);
-
-  useEffect(() => {
-    if (!isNavigatorOpen) return;
-    setNavigatorSelection(0);
-  }, [isNavigatorOpen, navigatorQuery]);
 
   const handleFileBrowserSelect = useCallback((id: string) => {
     loadFileRef.current(id);
@@ -3490,80 +3556,14 @@ export const Notebook: React.FC = () => {
         )}
 
         {isNavigatorOpen && (
-          <div
-            className="fixed inset-0 z-50 bg-slate-900/30 backdrop-blur-sm flex items-start justify-center pt-24 px-4"
-            onClick={closeNavigator}
-          >
-            <div
-              className="w-full max-w-3xl bg-white rounded-lg shadow-2xl border border-slate-200 overflow-hidden"
-              onClick={(event) => event.stopPropagation()}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') {
-                  event.preventDefault();
-                  closeNavigator();
-                } else if (event.key === 'ArrowDown') {
-                  event.preventDefault();
-                  if (navigatorResults.length === 0) return;
-                  setNavigatorSelection(prev => Math.min(prev + 1, navigatorResults.length - 1));
-                } else if (event.key === 'ArrowUp') {
-                  event.preventDefault();
-                  if (navigatorResults.length === 0) return;
-                  setNavigatorSelection(prev => Math.max(prev - 1, 0));
-                } else if (event.key === 'Enter') {
-                  event.preventDefault();
-                  const target = navigatorResults[navigatorSelection];
-                  if (target) {
-                    setActiveCellId(target.cellId);
-                    scrollToCell(target.index, { behavior: 'auto', retryOnce: true });
-                    closeNavigator();
-                  }
-                }
-              }}
-            >
-              <div className="px-3 py-2 border-b border-slate-200 flex items-center gap-2">
-                <input
-                  autoFocus
-                  type="text"
-                  value={navigatorQuery}
-                  onChange={(event) => setNavigatorQuery(event.target.value)}
-                  placeholder="Search cells by index, id, or content..."
-                  className="w-full text-sm bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                />
-                <span className="text-[0.625rem] text-slate-400 whitespace-nowrap">⇧⌘/⌃P</span>
-              </div>
-              <div className="max-h-[75vh] overflow-y-auto">
-                {navigatorResults.length === 0 && (
-                  <div className="px-3 py-5 text-sm text-slate-400 text-center">No matching cells</div>
-                )}
-                {navigatorResults.map((item, idx) => (
-                  <button
-                    key={item.cellId}
-                    className="w-full text-left px-3 py-1 border-b border-slate-100 transition-colors bg-white"
-                    onClick={() => {
-                      setActiveCellId(item.cellId);
-                      scrollToCell(item.index, { behavior: 'auto', retryOnce: true });
-                      closeNavigator();
-                    }}
-                  >
-                    <div className="flex items-center justify-between text-[0.6875rem] text-slate-500 leading-tight">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-semibold flex-shrink-0">#{item.index + 1}</span>
-                        <span className="text-[0.625rem] text-slate-500 font-medium truncate">
-                          {item.cellId}
-                        </span>
-                      </div>
-                      <span className="text-[0.625rem] uppercase tracking-wide text-slate-400 flex-shrink-0">
-                        {item.type}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 text-[0.8125rem] text-slate-700 font-mono truncate leading-tight">
-                      {item.preview || <span className="text-slate-400 italic">Empty cell</span>}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          <CellNavigator
+            items={navigatorItems}
+            onSelect={(cellId, index) => {
+              setActiveCellId(cellId);
+              scrollToCell(index, { behavior: 'auto', retryOnce: true });
+            }}
+            onClose={closeNavigator}
+          />
         )}
 
         {textEditorPath && (
@@ -3990,7 +3990,7 @@ export const Notebook: React.FC = () => {
                                   {executionQueue.map((cellId, queueIndex) => {
                                     const cellIndex = cellsRef.current.findIndex(c => c.id === cellId);
                                     const isExecuting = queueIndex === 0;
-                                    const cellContent = cellsRef.current[cellIndex]?.content.split('\n')[0].slice(0, 20) || 'Empty';
+                                    const cellContent = (cellsRef.current[cellIndex]?.content || '').split('\n')[0].slice(0, 20) || 'Empty';
                                     return (
                                       <div
                                         key={`${cellId}-${queueIndex}`}
