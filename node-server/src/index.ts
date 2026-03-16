@@ -199,8 +199,10 @@ function getOrCreateTlsCert(): { key: Buffer; cert: Buffer } | null {
 async function createApp(): Promise<FastifyInstance> {
   const bodyLimitBytes = parseBodyLimit(BODY_LIMIT);
 
-  // Try to get TLS certs for HTTP/2
-  const tlsCert = getOrCreateTlsCert();
+  // Use HTTP/2 with TLS only when explicitly enabled via NEBULA_HTTP2=true.
+  // Default is HTTP/1.1 which works without cert warnings.
+  const useHttp2 = process.env.NEBULA_HTTP2 === 'true' || process.argv.includes('--http2');
+  const tlsCert = useHttp2 ? getOrCreateTlsCert() : null;
 
   let fastify: FastifyInstance;
 
