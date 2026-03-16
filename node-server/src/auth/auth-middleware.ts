@@ -46,12 +46,14 @@ function extractToken(req: FastifyRequest | IncomingMessage): string | undefined
     return authHeader.slice(7);
   }
 
-  // Check query parameter (for WebSocket connections)
-  const url = 'url' in req ? (req as IncomingMessage).url : undefined;
-  // For FastifyRequest, check query directly
-  if ('query' in req && (req as any).query?.token) {
+  // Check query parameter (for WebSocket and MCP connections)
+  // FastifyRequest has parsed query, IncomingMessage needs URL parsing
+  if ('query' in req && typeof (req as any).query === 'object' && (req as any).query?.token) {
     return (req as any).query.token as string;
   }
+
+  // Fallback: parse URL manually (for IncomingMessage / WebSocket upgrade)
+  const url = (req as IncomingMessage).url;
   if (url) {
     const parsed = parseUrl(url, true);
     const token = parsed.query.token;
