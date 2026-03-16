@@ -75,71 +75,25 @@ const shouldRunShadowSerialize = (sample: number) => {
   return Math.random() < 1 / sample;
 };
 
-// WeakMap cache: cell object → JSON string. Entries are automatically GC'd
-// when the cell object is collected (e.g., after edit creates a new cell).
-// This avoids the permanent memory doubling of the old Map cache while still
-// skipping re-stringify for unchanged cells.
-const cellJsonWeakCache = new WeakMap<Cell, string>();
-
 /**
- * Pre-warm the JSON cache for cells during idle time.
- * Called after loading a notebook so the first save doesn't need to
- * stringify all cells at once (which spikes memory by ~500MB for large notebooks).
- * Cells are stringified in small batches during idle callbacks.
+ * Build save payload as a Blob. Each cell is stringified individually and
+ * the Blob holds references to those strings — no single massive joined
+ * string is ever created. The browser reads Blob parts sequentially when
+ * sending via fetch.
+ *
+ * Note: true pull-based streaming (ReadableStream body) requires HTTP/2.
+ * The Express server uses HTTP/1.1, so we use Blob which works everywhere.
  */
-export const prewarmCellJsonCache = (cells: Cell[]): void => {
-  let idx = 0;
-  const BATCH = 5;
-  const processNext = () => {
-    if (idx >= cells.length) return;
-    const end = Math.min(idx + BATCH, cells.length);
-    for (let i = idx; i < end; i++) {
-      if (!cellJsonWeakCache.has(cells[i])) {
-        cellJsonWeakCache.set(cells[i], JSON.stringify(cells[i]));
-      }
-    }
-    idx = end;
-    if (typeof requestIdleCallback !== 'undefined') {
-      requestIdleCallback(processNext);
-    } else {
-      setTimeout(processNext, 0);
-    }
-  };
-  if (typeof requestIdleCallback !== 'undefined') {
-    requestIdleCallback(processNext);
-  } else {
-    setTimeout(processNext, 0);
-  }
-};
-
-const buildShadowPayload = (
+const buildSavePayload = (
   path: string,
   cells: Cell[],
   kernelName?: string,
   history?: TimestampedOperation[],
-) => {
-  let reused = 0;
-  let updated = 0;
-
-  const cellJson = cells.map(cell => {
-    const cached = cellJsonWeakCache.get(cell);
-    if (cached) {
-      reused += 1;
-      return cached;
-    }
-    updated += 1;
-    const json = JSON.stringify(cell);
-    cellJsonWeakCache.set(cell, json);
-    return json;
-  });
-
-  // Build payload as a Blob instead of a single joined string.
-  // Blob holds REFERENCES to the existing cached strings — no copying.
-  // This avoids a ~500MB memory spike from string concatenation for large notebooks.
+): Blob => {
   const parts: string[] = [`{"path":${JSON.stringify(path)},"cells":[`];
-  for (let i = 0; i < cellJson.length; i++) {
+  for (let i = 0; i < cells.length; i++) {
     if (i > 0) parts.push(',');
-    parts.push(cellJson[i]);
+    parts.push(JSON.stringify(cells[i]));
   }
   parts.push(']');
   if (kernelName !== undefined) {
@@ -149,9 +103,7 @@ const buildShadowPayload = (
     parts.push(`,"history":${JSON.stringify(history)}`);
   }
   parts.push('}');
-  const payload = new Blob(parts, { type: 'application/json' });
-
-  return { payload, reused, updated };
+  return new Blob(parts, { type: 'application/json' });
 };
 
 /**
@@ -432,17 +384,12 @@ export const saveNotebookCells = async (
   kernelName?: string,
   history?: any[],
 ): Promise<SaveResult> => {
-  // Use the incremental shadow builder as the primary serialization path.
-  // It caches per-cell JSON by reference equality, so unchanged cells
-  // (the common case during autosave) reuse their previous string.
-  // This avoids a single monolithic JSON.stringify that allocates the
-  // entire notebook as one contiguous string (~500 MB for large files).
-  const { payload: body } = buildShadowPayload(path, cells, kernelName, history);
+  const body = buildSavePayload(path, cells, kernelName, history);
 
   const response = await fetch(`${API_BASE}/notebook/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body
+    body,
   });
 
   if (!response.ok) {

@@ -25,8 +25,7 @@ import {
   AgentPermissionStatus,
   getNotebookSettings,
   updateNotebookSettings,
-  OutputLoggingMode,
-  prewarmCellJsonCache
+  OutputLoggingMode
 } from '../services/fileService';
 import { FileBrowser } from './FileBrowser';
 import { TextFileEditor } from './TextFileEditor';
@@ -2034,10 +2033,6 @@ export const Notebook: React.FC = () => {
     setHistoryReady(false);
     loadCells(content);
 
-    // Pre-warm the JSON cache for save: stringify cells in idle callbacks
-    // so the first Cmd+S doesn't spike memory by stringifying all at once.
-    prewarmCellJsonCache(content);
-
     // Set UI state immediately - don't block on history loading
     setCurrentFileId(id);
     saveActiveFileId(id);
@@ -3920,9 +3915,9 @@ export const Notebook: React.FC = () => {
                           </span>
                         )}
                         {pendingSave && isOnline && (
-                          <span className="flex items-center gap-1 text-orange-600 mr-2" title="Syncing changes...">
+                          <span className="flex items-center gap-1 text-orange-600 mr-2" title="Saving...">
                             <RefreshCw className="w-3 h-3 animate-spin" />
-                            <span>Syncing</span>
+                            <span>Saving</span>
                           </span>
                         )}
                         {autosaveStatus.status === 'saving' && (
