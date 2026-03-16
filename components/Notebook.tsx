@@ -4286,7 +4286,7 @@ export const Notebook: React.FC = () => {
                   searchCurrentMatch={searchCurrentMatch?.cellId === cell.id ? searchCurrentMatch : null}
                   queuePosition={queuePositionMap.get(cell.id) ?? -1}
                   indentConfig={indentConfig}
-                  requestedFocusMode={pendingFocus?.cellId === cell.id ? pendingFocus.mode : null}
+                  requestedFocusMode={pendingFocus?.cellId === cell.id ? pendingFocus?.mode : null}
                   onFocusModeApplied={clearPendingFocus}
                   onSearchEscape={handleEditorEscapeWhenSearchOpen}
                   showLineNumbers={showLineNumbers}
