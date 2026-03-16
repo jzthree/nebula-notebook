@@ -197,19 +197,8 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
       return;
     }
 
-    // Guard: For very large notebooks, skip automatic saves to avoid OOM.
-    // JSON.stringify + fetch body + server parsing can easily 3-4x the notebook size.
-    // Manual saves (Cmd+S) still work — only the 1-second debounce autosave is blocked.
-    if (!isManualSaveRef.current) {
-      // Compute size from live cells — lastSavedSizeRef may be 0 if the
-      // fileId-init effect hasn't run yet.
-      const liveSize = estimateCellsSize(cells);
-      if (liveSize > 100 * 1024 * 1024) {
-        console.info(`[Autosave] Skipping auto-save for large notebook (~${Math.round(liveSize / 1024 / 1024)} MB). Use Cmd+S to save manually.`);
-        dispatch({ type: 'SAVE_SUCCESS' });
-        return;
-      }
-    }
+    // For large notebooks, increase debounce to reduce save frequency.
+    // The dirty check above already prevents saves when nothing changed.
 
     // Only show "Saving..." for manual saves - autosave is silent
     if (isManualSaveRef.current) {

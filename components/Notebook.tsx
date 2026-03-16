@@ -25,7 +25,8 @@ import {
   AgentPermissionStatus,
   getNotebookSettings,
   updateNotebookSettings,
-  OutputLoggingMode
+  OutputLoggingMode,
+  prewarmCellJsonCache
 } from '../services/fileService';
 import { FileBrowser } from './FileBrowser';
 import { TextFileEditor } from './TextFileEditor';
@@ -509,6 +510,14 @@ export const Notebook: React.FC = () => {
   // Cell components read from this ref instead of receiving allCells as a prop.
   const displayCellsRef = useRef<Cell[]>(displayCells);
   displayCellsRef.current = displayCells;
+
+  // Index map: cellId → position. Updated on every render (O(N) but no
+  // re-renders). Cells read this ref for the "#N" label and index-dependent
+  // operations without needing `index` as a prop.
+  const cellIndexMapRef = useRef(new Map<string, number>());
+  const nextMap = cellIndexMapRef.current;
+  nextMap.clear();
+  displayCells.forEach((c, i) => nextMap.set(c.id, i));
 
   // Compute diff between preview and current for highlighting
   // 'same' = unchanged, 'modified' = content differs, 'deleted' = exists in preview but not current
@@ -2025,6 +2034,10 @@ export const Notebook: React.FC = () => {
     setHistoryReady(false);
     loadCells(content);
 
+    // Pre-warm the JSON cache for save: stringify cells in idle callbacks
+    // so the first Cmd+S doesn't spike memory by stringifying all at once.
+    prewarmCellJsonCache(content);
+
     // Set UI state immediately - don't block on history loading
     setCurrentFileId(id);
     saveActiveFileId(id);
@@ -2914,10 +2927,13 @@ export const Notebook: React.FC = () => {
     // Keyframe: flush active cell before move
     flushActiveCell();
 
-    const idx = cells.findIndex(c => c.id === id);
+    // Use ref to avoid stale closure — Cell memo doesn't re-render on
+    // callback changes, so this function may run with an old cells array.
+    const currentCells = cellsRef.current;
+    const idx = currentCells.findIndex(c => c.id === id);
     if (idx === -1) return;
     if (direction === 'up' && idx === 0) return;
-    if (direction === 'down' && idx === cells.length - 1) return;
+    if (direction === 'down' && idx === currentCells.length - 1) return;
 
     const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
     undoableMoveCell(idx, targetIdx);
@@ -4249,6 +4265,7 @@ export const Notebook: React.FC = () => {
                   isHighlighted={highlightedCellIds.has(cell.id)}
                   isLocked={agentSession !== null || isPreviewMode}
                   allCellsRef={displayCellsRef}
+                  cellIndexMapRef={cellIndexMapRef}
                   onUpdate={handleUpdateCell}
                   onAIUpdate={handleAIUpdateCell}
                   onFlush={flushCell}

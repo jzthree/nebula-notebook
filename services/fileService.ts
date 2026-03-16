@@ -49,15 +49,8 @@ export interface RootDirectoryResponse {
   root: string;
 }
 
-interface CellJsonCacheEntry {
-  ref: Cell;
-  json: string;
-}
-
 // Storage keys for local state
 const STORAGE_ACTIVE_PATH = 'nebula-active-path';
-
-let cellJsonCache = new Map<string, CellJsonCacheEntry>();
 
 const getShadowSerializeConfig = () => {
   if (typeof window === 'undefined') {
@@ -82,6 +75,43 @@ const shouldRunShadowSerialize = (sample: number) => {
   return Math.random() < 1 / sample;
 };
 
+// WeakMap cache: cell object → JSON string. Entries are automatically GC'd
+// when the cell object is collected (e.g., after edit creates a new cell).
+// This avoids the permanent memory doubling of the old Map cache while still
+// skipping re-stringify for unchanged cells.
+const cellJsonWeakCache = new WeakMap<Cell, string>();
+
+/**
+ * Pre-warm the JSON cache for cells during idle time.
+ * Called after loading a notebook so the first save doesn't need to
+ * stringify all cells at once (which spikes memory by ~500MB for large notebooks).
+ * Cells are stringified in small batches during idle callbacks.
+ */
+export const prewarmCellJsonCache = (cells: Cell[]): void => {
+  let idx = 0;
+  const BATCH = 5;
+  const processNext = () => {
+    if (idx >= cells.length) return;
+    const end = Math.min(idx + BATCH, cells.length);
+    for (let i = idx; i < end; i++) {
+      if (!cellJsonWeakCache.has(cells[i])) {
+        cellJsonWeakCache.set(cells[i], JSON.stringify(cells[i]));
+      }
+    }
+    idx = end;
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(processNext);
+    } else {
+      setTimeout(processNext, 0);
+    }
+  };
+  if (typeof requestIdleCallback !== 'undefined') {
+    requestIdleCallback(processNext);
+  } else {
+    setTimeout(processNext, 0);
+  }
+};
+
 const buildShadowPayload = (
   path: string,
   cells: Cell[],
@@ -90,39 +120,36 @@ const buildShadowPayload = (
 ) => {
   let reused = 0;
   let updated = 0;
-  const nextCache = new Map<string, CellJsonCacheEntry>();
-  // Max size to cache per cell: 100KB. Caching cells with large outputs
-  // (e.g., 44MB audio base64) doubles their memory footprint since both
-  // the live cell.outputs[0].content AND the cached JSON string exist.
-  const MAX_CACHE_CELL_SIZE = 100 * 1024;
 
   const cellJson = cells.map(cell => {
-    const cached = cellJsonCache.get(cell.id);
-    if (cached && cached.ref === cell) {
+    const cached = cellJsonWeakCache.get(cell);
+    if (cached) {
       reused += 1;
-      nextCache.set(cell.id, cached);
-      return cached.json;
+      return cached;
     }
     updated += 1;
     const json = JSON.stringify(cell);
-    // Only cache small cells. Large cells (images, audio) are re-stringified
-    // on save but don't waste memory holding a duplicate string permanently.
-    if (json.length <= MAX_CACHE_CELL_SIZE) {
-      nextCache.set(cell.id, { ref: cell, json });
-    }
+    cellJsonWeakCache.set(cell, json);
     return json;
   });
 
-  cellJsonCache = nextCache;
-
-  let payload = `{\"path\":${JSON.stringify(path)},\"cells\":[${cellJson.join(',')}]`;
+  // Build payload as a Blob instead of a single joined string.
+  // Blob holds REFERENCES to the existing cached strings — no copying.
+  // This avoids a ~500MB memory spike from string concatenation for large notebooks.
+  const parts: string[] = [`{"path":${JSON.stringify(path)},"cells":[`];
+  for (let i = 0; i < cellJson.length; i++) {
+    if (i > 0) parts.push(',');
+    parts.push(cellJson[i]);
+  }
+  parts.push(']');
   if (kernelName !== undefined) {
-    payload += `,\"kernel_name\":${JSON.stringify(kernelName)}`;
+    parts.push(`,"kernel_name":${JSON.stringify(kernelName)}`);
   }
   if (history !== undefined) {
-    payload += `,\"history\":${JSON.stringify(history)}`;
+    parts.push(`,"history":${JSON.stringify(history)}`);
   }
-  payload += '}';
+  parts.push('}');
+  const payload = new Blob(parts, { type: 'application/json' });
 
   return { payload, reused, updated };
 };

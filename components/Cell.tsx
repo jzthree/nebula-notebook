@@ -24,6 +24,7 @@ interface Props {
   isHighlighted?: boolean; // Visual feedback for undo/redo
   isLocked?: boolean; // When true, cell is read-only (e.g., during agent session)
   allCellsRef: React.RefObject<ICell[]>; // Ref to avoid holding the entire cells array in fiber props
+  cellIndexMapRef: React.RefObject<Map<string, number>>; // cellId → index, updated each render
   onUpdate: (id: string, content: string) => void;
   onAIUpdate?: (id: string, content: string) => void; // For AI edits (tracked in undo history)
   onFlush?: (id: string, content: string) => void; // Flush pending content on blur
@@ -60,6 +61,7 @@ const CellComponent: React.FC<Props> = ({
   isHighlighted = false,
   isLocked = false,
   allCellsRef,
+  cellIndexMapRef,
   onUpdate,
   onAIUpdate,
   onFlush,
@@ -338,15 +340,17 @@ const CellComponent: React.FC<Props> = ({
     // Arrow up/down: navigate between cells (handled by Notebook for virtualization)
     if (e.key === 'ArrowUp' && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
       e.preventDefault();
-      if (index > 0) {
+      const cellIdx = cellIndexMapRef.current?.get(cellIdRef.current) ?? -1;
+      if (cellIdx > 0) {
         onNavigateCell('up');
       }
       return;
     }
     if (e.key === 'ArrowDown' && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
       e.preventDefault();
-      const cells = allCellsRef.current;
-      if (index < cells.length - 1) {
+      const currentCells = allCellsRef.current;
+      const cellIdx = cellIndexMapRef.current?.get(cellIdRef.current) ?? -1;
+      if (cellIdx >= 0 && cellIdx < currentCells.length - 1) {
         onNavigateCell('down');
       }
       return;
@@ -381,7 +385,7 @@ const CellComponent: React.FC<Props> = ({
       onRunRef.current(cell.id);
       return;
     }
-  }, [cell.id, index, onMove, onDelete, focusState, isLocked]);
+  }, [cell.id, onMove, onDelete, focusState, isLocked]);
 
   return (
     <div
@@ -402,7 +406,7 @@ const CellComponent: React.FC<Props> = ({
         {/* Left: Cell info, Run button, and action buttons */}
         <div className="flex items-center gap-0.5">
           <span className="text-[0.625rem] font-mono font-bold text-slate-400 min-w-[1.5rem]">
-            #{index + 1}
+            #{(cellIndexMapRef.current?.get(cell.id) ?? index) + 1}
           </span>
           {showCellIds && (
             <span
@@ -469,7 +473,7 @@ const CellComponent: React.FC<Props> = ({
             <Trash2 className="w-3.5 h-3.5" />
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); if (!isLocked) onAddCell(index); }}
+            onClick={(e) => { e.stopPropagation(); if (!isLocked) { const idx = cellIndexMapRef.current?.get(cell.id) ?? -1; if (idx >= 0) onAddCell(idx); } }}
             disabled={isLocked}
             className={`p-1 text-slate-400 rounded opacity-0 group-hover:opacity-100 transition-opacity ${isLocked ? 'cursor-not-allowed opacity-50' : 'hover:text-blue-600 hover:bg-blue-50'}`}
             title={isLocked ? 'Locked during agent session' : 'Add Cell Below'}
@@ -611,9 +615,7 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
   // Only check visual state - not callbacks which change frequently
   return (
     prevProps.cell === nextProps.cell &&
-    // Note: index intentionally excluded — it changes for all cells after a
-    // delete/insert, which would re-render 1500 cells just to update the "#N"
-    // label. The label updates on the next render when cell reference changes.
+    // index excluded — CSS counter handles "#N" label, no re-render needed
     prevProps.isActive === nextProps.isActive &&
     prevProps.isHighlighted === nextProps.isHighlighted &&
     prevProps.isLocked === nextProps.isLocked &&
