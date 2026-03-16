@@ -154,7 +154,6 @@ export async function authMiddleware(request: FastifyRequest, reply: FastifyRepl
 
   // Extract and validate token
   const token = extractToken(request);
-  console.log(`[Auth-Debug] ${request.method} ${pathname} token=${token ? token.slice(0, 10) + '...' : 'NONE'} auth-header=${request.headers.authorization ? 'present' : 'missing'}`);
   if (!token) {
     return reply.code(401).send({
       error: 'auth_required',
@@ -164,13 +163,11 @@ export async function authMiddleware(request: FastifyRequest, reply: FastifyRepl
 
   const payload = authService.validateToken(token);
   if (!payload) {
-    console.log(`[Auth-Debug] Token validation FAILED for ${pathname}`);
     return reply.code(401).send({
       error: 'invalid_token',
       message: 'Invalid or expired token. Please log in again.',
     });
   }
-  console.log(`[Auth-Debug] Token valid for ${pathname}`);
 
   // Token is valid, continue (simply return)
 }

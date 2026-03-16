@@ -75,46 +75,11 @@ const shouldRunShadowSerialize = (sample: number) => {
 };
 
 /**
- * Build a pull-based streaming save payload. Stringifies one cell at a time,
- * so browser memory stays flat during save (~one cell instead of entire notebook).
- * Requires HTTP/2 (server uses self-signed TLS cert for localhost).
+ * Build save payload as a Blob. Each cell stringified individually,
+ * Blob holds references — no single joined string. Temporary ~800MB spike
+ * for 500MB notebooks, GC'd immediately after send.
  */
-const buildStreamingPayload = (
-  path: string,
-  cells: Cell[],
-  kernelName?: string,
-  history?: TimestampedOperation[],
-): ReadableStream<Uint8Array> => {
-  const encoder = new TextEncoder();
-  let cellIndex = -1;
-
-  return new ReadableStream({
-    pull(controller) {
-      if (cellIndex === -1) {
-        controller.enqueue(encoder.encode(`{"path":${JSON.stringify(path)},"cells":[`));
-        cellIndex = 0;
-      } else if (cellIndex < cells.length) {
-        const prefix = cellIndex > 0 ? ',' : '';
-        controller.enqueue(encoder.encode(prefix + JSON.stringify(cells[cellIndex])));
-        cellIndex++;
-      } else {
-        let suffix = ']';
-        if (kernelName !== undefined) suffix += `,"kernel_name":${JSON.stringify(kernelName)}`;
-        if (history !== undefined) suffix += `,"history":${JSON.stringify(history)}`;
-        suffix += '}';
-        controller.enqueue(encoder.encode(suffix));
-        controller.close();
-      }
-    },
-  });
-};
-
-/**
- * Blob fallback for HTTP/1.1 (no streaming). Each cell stringified individually,
- * Blob holds references — no single joined string. ~800MB temporary spike for
- * 500MB notebooks, GC'd immediately after send.
- */
-const buildBlobPayload = (
+const buildSavePayload = (
   path: string,
   cells: Cell[],
   kernelName?: string,
@@ -131,9 +96,6 @@ const buildBlobPayload = (
   parts.push('}');
   return new Blob(parts, { type: 'application/json' });
 };
-
-// Track whether streaming saves work (detected on first save attempt)
-let streamingSaveSupported: boolean | null = null;
 
 /**
  * List contents of a directory
@@ -413,46 +375,12 @@ export const saveNotebookCells = async (
   kernelName?: string,
   history?: any[],
 ): Promise<SaveResult> => {
-  // Try streaming save via HTTPS/HTTP2 port (port+1), fall back to HTTP Blob.
-  // Streaming sends one cell at a time (~44MB peak), Blob holds all cells (~800MB peak).
-  let response: globalThis.Response;
-  if (streamingSaveSupported !== false) {
-    try {
-      // HTTPS port is main port + 1
-      const httpsPort = Number(window.location.port) + 1;
-      const httpsUrl = `https://${window.location.hostname}:${httpsPort}/api/notebook/save`;
-      const stream = buildStreamingPayload(path, cells, kernelName, history);
-      response = await fetch(httpsUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: stream,
-        // @ts-expect-error duplex required for streaming body
-        duplex: 'half',
-      });
-      if (streamingSaveSupported === null) {
-        streamingSaveSupported = true;
-        console.info(`[Save] Streaming save (HTTP/2 on port ${httpsPort}) active — minimal memory spike`);
-      }
-    } catch {
-      if (streamingSaveSupported === null) {
-        streamingSaveSupported = false;
-        console.info('[Save] Streaming not available — using Blob fallback (accept cert at https://localhost:' + (Number(window.location.port) + 1) + ' to enable)');
-      }
-      const blob = buildBlobPayload(path, cells, kernelName, history);
-      response = await fetch(`${API_BASE}/notebook/save`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: blob,
-      });
-    }
-  } else {
-    const blob = buildBlobPayload(path, cells, kernelName, history);
-    response = await fetch(`${API_BASE}/notebook/save`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: blob,
-    });
-  }
+  const body = buildSavePayload(path, cells, kernelName, history);
+  const response = await fetch(`${API_BASE}/notebook/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  });
 
   if (!response.ok) {
     const error = await response.json();

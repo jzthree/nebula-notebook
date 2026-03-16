@@ -199,10 +199,7 @@ function getOrCreateTlsCert(): { key: Buffer; cert: Buffer } | null {
 async function createApp(): Promise<FastifyInstance> {
   const bodyLimitBytes = parseBodyLimit(BODY_LIMIT);
 
-  // Use HTTP/2 with TLS only when explicitly enabled via NEBULA_HTTP2=true.
-  // Default is HTTP/1.1 which works without cert warnings.
-  const useHttp2 = process.env.NEBULA_HTTP2 === 'true' || process.argv.includes('--http2');
-  const tlsCert = useHttp2 ? getOrCreateTlsCert() : null;
+  const tlsCert = null; // HTTP/1.1 only — HTTP/2 streaming requires separate HTTPS server
 
   let fastify: FastifyInstance;
 
@@ -484,75 +481,6 @@ async function main(): Promise<void> {
 
   // Setup notebook operations WebSocket
   setupNotebookWebSocket(server);
-
-  // Start HTTPS/HTTP2 server on port+1 for streaming saves.
-  // Streaming fetch (ReadableStream body) requires HTTP/2 which needs TLS.
-  // The frontend tries this port for saves, falls back to HTTP if unavailable.
-  const tlsCert = getOrCreateTlsCert();
-  if (tlsCert) {
-    try {
-      const httpsPort = Number(PORT) + 1;
-      const https = await import('https');
-      const httpsServer = https.createServer(
-        { ...tlsCert },
-        // Forward all requests to Fastify's request handler
-        (req, res) => { fastify.server.emit('request', req, res); }
-      );
-
-      // Fastify can't share its handler easily with a separate https server.
-      // Instead, create a second Fastify instance for the HTTPS port.
-      const fastifyHttps = Fastify({
-        http2: true,
-        https: {
-          key: tlsCert.key,
-          cert: tlsCert.cert,
-          allowHTTP1: true,
-        },
-        bodyLimit: parseBodyLimit(BODY_LIMIT),
-      }) as unknown as FastifyInstance;
-
-      // Register the same CORS and routes on the HTTPS instance
-      await fastifyHttps.register(fastifyCors, {
-        origin: '*',
-        credentials: true,
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-API-Provider'],
-      });
-      await fastifyHttps.register(fastifyMultipart, { limits: { fileSize: parseBodyLimit(BODY_LIMIT) } });
-
-      // Only need the save endpoint on HTTPS (that's the only reason for HTTP/2)
-      fastifyHttps.post('/api/notebook/save', async (request, reply) => {
-        // Forward to the same handler as the HTTP instance
-        const { fsService: fsSvc } = await import('./fs/fs-service');
-        const { path: filePath, cells, kernel_name, history } = request.body as any;
-        if (!filePath || !cells) {
-          return reply.code(400).send({ detail: 'path and cells required' });
-        }
-        let saveCells = cells;
-        const hasStubs = saveCells.some((c: any) => c.outputStub && c.outputs.length === 0);
-        if (hasStubs) {
-          try {
-            const onDisk = fsSvc.getNotebookCells(filePath);
-            const diskOutputMap = new Map(onDisk.cells.map((c: any) => [c.id, c.outputs]));
-            saveCells = saveCells.map((cell: any) => {
-              if (cell.outputs.length === 0 && cell.outputStub) {
-                const diskOutputs = diskOutputMap.get(cell.id);
-                if (diskOutputs) return { ...cell, outputs: diskOutputs, outputStub: undefined };
-              }
-              return cell;
-            });
-          } catch { /* on-disk not found */ }
-        }
-        const result = await fsSvc.saveNotebookBundle(filePath, saveCells, kernel_name, history);
-        return reply.send({ status: 'ok', path: filePath, mtime: result.mtime });
-      });
-
-      await fastifyHttps.listen({ port: httpsPort, host: '0.0.0.0' });
-      console.log(`[Server] HTTPS/HTTP2 streaming save available on https://localhost:${httpsPort}`);
-    } catch (err) {
-      console.warn('[Server] Could not start HTTPS server for streaming saves:', err instanceof Error ? err.message : err);
-    }
-  }
 
   if (REATTACH_KERNELS) {
     try {
