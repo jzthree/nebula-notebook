@@ -98,7 +98,7 @@ function getDirectoryFromPath(filePath: string | null): string | undefined {
 }
 
 // ─── Cell Navigator (self-contained to avoid Notebook re-renders on typing) ──
-interface NavigatorItem { cellId: string; index: number; type: string; preview: string }
+interface NavigatorItem { cellId: string; index: number; type: string; preview: string; content: string }
 const CellNavigator: React.FC<{
   items: NavigatorItem[];
   onSelect: (cellId: string, index: number) => void;
@@ -111,8 +111,8 @@ const CellNavigator: React.FC<{
     if (!query.trim()) return items;
     const q = query.toLowerCase();
     return items.filter(item => (
+      item.content.includes(q) ||
       item.cellId.toLowerCase().includes(q) ||
-      item.preview.toLowerCase().includes(q) ||
       String(item.index + 1).includes(q)
     ));
   }, [items, query]);
@@ -3463,7 +3463,8 @@ export const Notebook: React.FC = () => {
 
   const navigatorItems = useMemo(() => {
     return cells.map((cell, index) => {
-      const lines = (cell.content || '').split('\n');
+      const content = cell.content || '';
+      const lines = content.split('\n');
       let preview = '';
       for (const line of lines) {
         const trimmed = line.trim();
@@ -3477,6 +3478,7 @@ export const Notebook: React.FC = () => {
         index,
         type: cell.type,
         preview,
+        content: content.toLowerCase(), // full content for search (pre-lowercased)
       };
     });
   }, [cells]);
