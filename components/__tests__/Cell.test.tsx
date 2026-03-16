@@ -36,7 +36,7 @@ describe('Cell', () => {
     cell: mockCell,
     index: 0,
     isActive: false,
-    allCells: [mockCell],
+    allCellsRef: { current: [mockCell] },
     onUpdate: vi.fn(),
     onRun: vi.fn(),
     onRunAndAdvance: vi.fn(),

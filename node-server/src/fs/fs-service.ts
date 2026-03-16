@@ -813,10 +813,15 @@ export class FilesystemService {
             timestamp,
           });
         } else if (data['text/html']) {
+          // Strip autoplay from audio/video at parse time so the frontend
+          // never holds both the original and a stripped copy in memory.
+          // For a 44 MB audio WAV base64, this avoids a ~44 MB string duplication.
+          let html = this.sourceToString(data['text/html']);
+          html = html.replace(/(<(?:audio|video)\b[^>]*?)\s+autoplay(?:=["'][^"']*["'])?/gi, '$1');
           result.push({
             id: `output-${cellIndex}-${result.length}`,
             type: 'html',
-            content: this.sourceToString(data['text/html']),
+            content: html,
             timestamp,
           });
         } else if (data['text/plain']) {

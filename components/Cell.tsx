@@ -23,7 +23,7 @@ interface Props {
   isActive: boolean;
   isHighlighted?: boolean; // Visual feedback for undo/redo
   isLocked?: boolean; // When true, cell is read-only (e.g., during agent session)
-  allCells: ICell[];
+  allCellsRef: React.RefObject<ICell[]>; // Ref to avoid holding the entire cells array in fiber props
   onUpdate: (id: string, content: string) => void;
   onAIUpdate?: (id: string, content: string) => void; // For AI edits (tracked in undo history)
   onFlush?: (id: string, content: string) => void; // Flush pending content on blur
@@ -41,6 +41,7 @@ interface Props {
   onSetCellScrolledHeight?: (id: string, height: number) => void; // Set output area height in scroll mode
   onCursorActivity?: (cellId: string, pos: number) => void; // For search navigation relative to cursor
   searchHighlight?: SearchHighlight | null;
+  searchCurrentMatch?: { cellId: string; startIndex: number; endIndex: number } | null;
   queuePosition?: number; // Position in execution queue (-1 or undefined = not queued)
   indentConfig?: IndentationConfig; // Detected indentation configuration
   requestedFocusMode?: 'cell' | 'editor' | null; // Focus mode requested by Notebook
@@ -58,7 +59,7 @@ const CellComponent: React.FC<Props> = ({
   isActive,
   isHighlighted = false,
   isLocked = false,
-  allCells,
+  allCellsRef,
   onUpdate,
   onAIUpdate,
   onFlush,
@@ -76,6 +77,7 @@ const CellComponent: React.FC<Props> = ({
   onSetCellScrolledHeight,
   onCursorActivity,
   searchHighlight,
+  searchCurrentMatch,
   queuePosition,
   indentConfig = DEFAULT_INDENTATION,
   requestedFocusMode,
@@ -99,7 +101,6 @@ const CellComponent: React.FC<Props> = ({
   // CodeEditor rebuilds extensions when onKeyDown/onFocus/onBlur change.
   // Use refs for any value that changes frequently (cell.content, callbacks).
   // If typing becomes laggy, check if any handler dependency changes per-keystroke.
-  const allCellsRef = useRef(allCells);
   const onRunRef = useRef(onRun);
   const onRunAndAdvanceRef = useRef(onRunAndAdvance);
   const onSaveRef = useRef(onSave);
@@ -112,7 +113,6 @@ const CellComponent: React.FC<Props> = ({
   const cellContentRef = useRef(cell.content);
 
   useEffect(() => {
-    allCellsRef.current = allCells;
     onRunRef.current = onRun;
     onRunAndAdvanceRef.current = onRunAndAdvance;
     onSaveRef.current = onSave;
@@ -538,7 +538,7 @@ const CellComponent: React.FC<Props> = ({
           onFocus={handleEditorFocus}
           onBlur={handleEditorBlur}
           placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
-          searchHighlight={searchHighlight}
+          searchHighlight={searchHighlight ? { ...searchHighlight, currentMatch: searchCurrentMatch } : null}
           cellId={cell.id}
           shouldFocus={focusState === 'editor'}
           onCursorActivity={onCursorActivity ? handleCursorActivity : undefined}
@@ -581,6 +581,7 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     prevProps.isHighlighted === nextProps.isHighlighted &&
     prevProps.isLocked === nextProps.isLocked &&
     prevProps.searchHighlight === nextProps.searchHighlight &&
+    prevProps.searchCurrentMatch === nextProps.searchCurrentMatch &&
     prevProps.queuePosition === nextProps.queuePosition &&
     prevProps.indentConfig === nextProps.indentConfig &&
     prevProps.requestedFocusMode === nextProps.requestedFocusMode &&

@@ -1,5 +1,5 @@
 
-import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo, startTransition } from 'react';
 import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
@@ -181,7 +181,6 @@ export const Notebook: React.FC = () => {
     query: string;
     caseSensitive: boolean;
     useRegex: boolean;
-    currentMatch?: { cellId: string; startIndex: number; endIndex: number } | null;
   } | null>(null);
 
   // Notebook rename state
@@ -416,6 +415,11 @@ export const Notebook: React.FC = () => {
       return previewCell;
     });
   }, [previewCells, cells, currentCellMap, cellsExecutedAfterPreview]);
+
+  // Ref for displayCells — avoids holding the entire cells array in Cell fiber props.
+  // Cell components read from this ref instead of receiving allCells as a prop.
+  const displayCellsRef = useRef<Cell[]>(displayCells);
+  displayCellsRef.current = displayCells;
 
   // Compute diff between preview and current for highlighting
   // 'same' = unchanged, 'modified' = content differs, 'deleted' = exists in preview but not current
@@ -938,8 +942,22 @@ export const Notebook: React.FC = () => {
 
   // Memoize range change handler to prevent Virtuoso from resetting scroll.
   // Avoid setState here: this callback can fire on every scroll frame.
+  const searchRenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleRangeChange = useCallback((range: { startIndex: number; endIndex: number }) => {
+    const prev = visibleRangeRef.current;
     visibleRangeRef.current = range;
+
+    // When search is active and visible range changed, trigger a lightweight
+    // re-render so newly visible cells pick up search decorations.
+    // Only the ~5 newly visible cells will actually re-render (memo check).
+    if (searchQueryRef.current && (range.startIndex !== prev.startIndex || range.endIndex !== prev.endIndex)) {
+      if (searchRenderTimerRef.current) clearTimeout(searchRenderTimerRef.current);
+      searchRenderTimerRef.current = setTimeout(() => {
+        startTransition(() => {
+          setSearchQuery(prev => prev ? { ...prev } : null);
+        });
+      }, 150);
+    }
   }, []);
 
   // Virtuoso Handle for programmatic scrolling
@@ -1067,14 +1085,15 @@ export const Notebook: React.FC = () => {
     if (cellId) {
       // Clear immediately to prevent double-invocation in Strict Mode
       pendingScrollCellIdRef.current = null;
-      const index = cells.findIndex(c => c.id === cellId);
+      const index = cellsRef.current.findIndex(c => c.id === cellId);
       if (index >= 0) {
         if (!isCellVisibleInViewport(cellId, index)) {
           scrollToCell(index);
         }
       }
     }
-  }, [cells, scrollToCell, isCellVisibleInViewport]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cells, scrollToCell, isCellVisibleInViewport]); // cells dep triggers the effect; body uses ref to avoid capturing
 
   // Helper to show visual feedback for undo/redo (highlight only, no scrolling)
   const showUndoRedoFeedback = useCallback((affectedCellIds: string[]) => {
@@ -1358,9 +1377,10 @@ export const Notebook: React.FC = () => {
   const executionIndicator = useMemo(() => {
     if (executionQueue.length === 0) return null;
     const executingCellId = executionQueue[0];
-    const executingCellIndex = cells.findIndex(c => c.id === executingCellId);
+    const executingCellIndex = cellsRef.current.findIndex(c => c.id === executingCellId);
     return { cellId: executingCellId, cellIndex: executingCellIndex, queueLength: executionQueue.length };
-  }, [executionQueue, cells]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [executionQueue, cells]); // cells dep triggers recompute; body uses ref
 
   // Memoize queue position lookup to avoid O(N) indexOf for each cell during render
   const queuePositionMap = useMemo(() => {
@@ -1545,7 +1565,12 @@ export const Notebook: React.FC = () => {
   }, [kernelSessionId, setCells]);
 
   // Load the initial file (currentFileId is already set synchronously from URL/localStorage)
+  // Guard against React Strict Mode double-invocation which would fetch the
+  // entire notebook twice, doubling memory usage during development.
+  const initialLoadDoneRef = useRef(false);
   useEffect(() => {
+    if (initialLoadDoneRef.current) return;
+    initialLoadDoneRef.current = true;
     if (currentFileId) {
       loadFile(currentFileId);
     } else {
@@ -2204,7 +2229,8 @@ export const Notebook: React.FC = () => {
     commitHistoryBeforeKeyframe();
 
     // Build maps for efficient lookup
-    const currentMap = new Map(cells.map((c, i) => [c.id, { cell: c, index: i }]));
+    const currentCells = cellsRef.current;
+    const currentMap = new Map(currentCells.map((c, i) => [c.id, { cell: c, index: i }]));
     const previewMap = new Map(previewCells.map((c, i) => [c.id, { cell: c, index: i }]));
 
     // Compute operations needed to transform current → preview
@@ -2225,7 +2251,7 @@ export const Notebook: React.FC = () => {
 
     // 2. Update content for cells that exist in both but have different content
     // Need to re-compute current indices after deletions
-    const remainingCells = cells.filter(c => previewMap.has(c.id));
+    const remainingCells = cellsRef.current.filter(c => previewMap.has(c.id));
     for (const currentCell of remainingCells) {
       const previewData = previewMap.get(currentCell.id);
       if (previewData && (currentCell.content !== previewData.cell.content || currentCell.type !== previewData.cell.type)) {
@@ -2240,7 +2266,7 @@ export const Notebook: React.FC = () => {
 
     // 3. Insert cells that exist in preview but not in current
     // We need to insert them at the correct positions according to preview order
-    const currentCellIds = new Set(cells.map(c => c.id));
+    const currentCellIds = new Set(cellsRef.current.map(c => c.id));
     const cellsToInsert: { cell: Cell; targetIndex: number }[] = [];
     previewCells.forEach((previewCell, targetIndex) => {
       if (!currentCellIds.has(previewCell.id)) {
@@ -2267,7 +2293,8 @@ export const Notebook: React.FC = () => {
     setRestoreDialogTimestamp(null);
 
     toast('Notebook restored to previous state', 'success', 2000);
-  }, [restoreDialogTimestamp, previewCells, cells, flushActiveCell, commitHistoryBeforeKeyframe, undoableDeleteCell, updateContent, changeType, undoableInsertCell, toast]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoreDialogTimestamp, previewCells, flushActiveCell, commitHistoryBeforeKeyframe, undoableDeleteCell, updateContent, changeType, undoableInsertCell, toast]); // uses cellsRef
 
   // Handle "Save as New File" - creates new file with truncated history
   const handleSaveAsNew = useCallback(async () => {
@@ -2909,70 +2936,122 @@ export const Notebook: React.FC = () => {
   // Navigate to a specific cell (used by search)
   const navigateToCell = useCallback((_cellIndex: number, cellId: string) => {
     setActiveCellId(cellId);
-    // Find current index by ID in case cells have been modified since search
-    const currentIndex = cells.findIndex(c => c.id === cellId);
+    // Always scroll to the target cell. Checking isCellVisibleInViewport
+    // calls getBoundingClientRect which forces synchronous layout on
+    // content-visibility-skipped cells. scrollIntoView is cheap and
+    // no-ops if the cell is already visible.
+    const currentIndex = cellsRef.current.findIndex(c => c.id === cellId);
     if (currentIndex !== -1) {
-      // Avoid snapping to the top of a cell when it's already on-screen. The
-      // match-level scroll happens inside CodeEditor (and is much less jarring).
-      if (!isCellVisibleInViewport(cellId, currentIndex)) {
-        // retryOnce: after the cell mounts, its measured height may differ from
-        // the estimate, shifting the scroll position. The retry corrects this.
-        scrollToCell(currentIndex, { behavior: 'auto', retryOnce: true });
-      }
+      scrollToCell(currentIndex, { behavior: 'auto' });
     }
-  }, [cells, isCellVisibleInViewport, scrollToCell]);
+  }, [scrollToCell]);
 
   // Navigate to adjacent cell with virtualization support (used by arrow keys in cell mode)
   const navigateCellRelative = useCallback((fromCellId: string, direction: 'up' | 'down') => {
-    const currentIndex = cells.findIndex(c => c.id === fromCellId);
+    const currentCells = cellsRef.current;
+    const currentIndex = currentCells.findIndex(c => c.id === fromCellId);
     if (currentIndex === -1) return;
 
     const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= cells.length) return;
+    if (targetIndex < 0 || targetIndex >= currentCells.length) return;
 
-    const targetCellId = cells[targetIndex].id;
+    const targetCellId = currentCells[targetIndex].id;
     setActiveCellId(targetCellId);
     scrollToCell(targetIndex, { delay: 50, retryOnce: true });
-    // Use polling to wait for virtualization to render the target cell
     setPendingFocus({ cellId: targetCellId, mode: 'cell' });
-  }, [cells, scrollToCell]);
+  }, [scrollToCell]);
 
   // Handle search query changes for highlighting
+  // ⚠️ PERFORMANCE: Split search state to avoid re-rendering all 700+ cells
+  // when navigating between matches (prev/next).
+  //
+  // searchQuery (query/caseSensitive/useRegex) → changes rarely (typing) → triggers Cell re-render
+  // searchCurrentMatch → changes often (next/prev) → only the affected cell re-renders
+  //
+  // Cell memo compares searchHighlight by reference. By keeping the same
+  // searchQuery object when only the current match changes, most cells skip re-render.
+  const [searchCurrentMatch, setSearchCurrentMatch] = useState<{
+    cellId: string; startIndex: number; endIndex: number;
+  } | null>(null);
+
+  // Debounce search query updates to cells. Navigating matches is instant
+  // (only 2 cells re-render), but changing the query text triggers a
+  // re-render of ALL cells (to rebuild search decorations). Debouncing
+  // avoids 700-cell re-renders on every keystroke.
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleSearchChange = useCallback((
     query: string,
     caseSensitive: boolean,
     useRegex: boolean,
     currentMatch: { cellId: string; startIndex: number; endIndex: number } | null
   ) => {
-    setSearchQuery(query ? { query, caseSensitive, useRegex, currentMatch } : null);
+    // Always update current match instantly (only 2 cells re-render)
+    setSearchCurrentMatch(currentMatch);
+
+    // Clear pending debounce
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+
+    if (!query) {
+      setSearchQuery(null);
+      return;
+    }
+
+    // Check if query/options actually changed
+    setSearchQuery(prev => {
+      if (prev && prev.query === query && prev.caseSensitive === caseSensitive && prev.useRegex === useRegex) {
+        return prev; // same reference — Cell memo skips re-render
+      }
+      // Query changed — debounce the update so typing doesn't re-render 700 cells per keystroke
+      return prev; // return prev for now, debounced update below
+    });
+
+    // Debounced + transition: update query after typing stops.
+    // startTransition lets React yield between cell renders so the UI stays responsive.
+    searchDebounceRef.current = setTimeout(() => {
+      startTransition(() => {
+        setSearchQuery(prev => {
+          if (prev && prev.query === query && prev.caseSensitive === caseSensitive && prev.useRegex === useRegex) {
+            return prev;
+          }
+          return { query, caseSensitive, useRegex };
+        });
+      });
+    }, 150);
   }, []);
 
-  // Handle search close
+  // Handle search close — clear all search state so highlights disappear
   const handleSearchClose = useCallback(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    if (searchRenderTimerRef.current) clearTimeout(searchRenderTimerRef.current);
     setIsSearchOpen(false);
     setSearchQuery(null);
+    setSearchCurrentMatch(null);
   }, []);
 
   // Stable escape path used by editors: close search if open and keep editor focus.
   const handleEditorEscapeWhenSearchOpen = useCallback(() => {
     if (!isSearchOpenRef.current) return false;
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    if (searchRenderTimerRef.current) clearTimeout(searchRenderTimerRef.current);
     setIsSearchOpen(false);
     setSearchQuery(null);
+    setSearchCurrentMatch(null);
     return true;
   }, []);
 
   // Replace a single match in a cell
   const handleReplace = useCallback((cellId: string, startIndex: number, endIndex: number, replacement: string) => {
-    const cell = cells.find(c => c.id === cellId);
+    const cell = cellsRef.current.find(c => c.id === cellId);
     if (!cell) return;
 
     const newContent = cell.content.slice(0, startIndex) + replacement + cell.content.slice(endIndex);
     updateContent(cellId, newContent);
-  }, [cells, updateContent]);
+  }, [updateContent]);
 
   // Replace all matches in a specific cell
   const handleReplaceAllInCell = useCallback((cellId: string, query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => {
-    const cell = cells.find(c => c.id === cellId);
+    const cell = cellsRef.current.find(c => c.id === cellId);
     if (!cell) return;
 
     const flags = caseSensitive ? 'g' : 'gi';
@@ -2983,7 +3062,7 @@ export const Notebook: React.FC = () => {
     if (newContent !== cell.content) {
       updateContent(cellId, newContent);
     }
-  }, [cells, updateContent]);
+  }, [updateContent]);
 
   // Replace all matches in the entire notebook
   const handleReplaceAllInNotebook = useCallback((query: string, replacement: string, caseSensitive: boolean, useRegex: boolean) => {
@@ -3007,8 +3086,9 @@ export const Notebook: React.FC = () => {
       setIsProcessingQueue(true);
       setKernelStatus('busy');
       const cellId = executionQueue[0];
-      const cellIndex = cells.findIndex(c => c.id === cellId);
-      const cell = cellIndex >= 0 ? cells[cellIndex] : null;
+      const currentCells = cellsRef.current;
+      const cellIndex = currentCells.findIndex(c => c.id === cellId);
+      const cell = cellIndex >= 0 ? currentCells[cellIndex] : null;
 
       // Start timing for this cell
       const cellStartTime = Date.now();
@@ -3198,7 +3278,8 @@ export const Notebook: React.FC = () => {
     };
 
     processNext();
-  }, [executionQueue, isProcessingQueue, isKernelReady, kernelSessionId, cells, setCells, logOperation]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [executionQueue, isProcessingQueue, isKernelReady, kernelSessionId, setCells, logOperation]); // removed cells dep — uses cellsRef
 
   // Track execution timing for notifications
   const prevQueueLengthRef = useRef(0);
@@ -4164,7 +4245,7 @@ export const Notebook: React.FC = () => {
               virtuosoRef={virtuosoRef}
               className="h-full"
               onRangeChange={handleRangeChange}
-              renderKey={`${showLineNumbers ? 'line-numbers-on' : 'line-numbers-off'}-${showCellIds ? 'cell-ids-on' : 'cell-ids-off'}-${isPreviewMode ? 'preview' : 'live'}`}
+              renderKey={`${showLineNumbers ? 'ln' : ''}-${showCellIds ? 'ci' : ''}-${isPreviewMode ? 'pv' : ''}`}
               renderCell={(cell, idx) => (
               <CellComponent
                   key={cell.id}
@@ -4173,7 +4254,7 @@ export const Notebook: React.FC = () => {
                   isActive={!isPreviewMode && activeCellId === cell.id}
                   isHighlighted={highlightedCellIds.has(cell.id)}
                   isLocked={agentSession !== null || isPreviewMode}
-                  allCells={displayCells}
+                  allCellsRef={displayCellsRef}
                   onUpdate={handleUpdateCell}
                   onAIUpdate={handleAIUpdateCell}
                   onFlush={flushCell}
@@ -4190,7 +4271,13 @@ export const Notebook: React.FC = () => {
                   onSetCellScrolled={setCellScrolled}
                   onSetCellScrolledHeight={setCellScrolledHeight}
                   onCursorActivity={recordCursorAnchor}
-                  searchHighlight={searchQuery}
+                  searchHighlight={
+                    // Only pass search to the cell containing the current match.
+                    // All other cells get null → Cell memo skips re-render.
+                    searchQuery && searchCurrentMatch?.cellId === cell.id
+                      ? searchQuery : null
+                  }
+                  searchCurrentMatch={searchCurrentMatch?.cellId === cell.id ? searchCurrentMatch : null}
                   queuePosition={queuePositionMap.get(cell.id) ?? -1}
                   indentConfig={indentConfig}
                   requestedFocusMode={pendingFocus?.cellId === cell.id ? pendingFocus.mode : null}

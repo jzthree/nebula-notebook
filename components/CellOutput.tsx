@@ -151,6 +151,118 @@ function estimateDisplayOutputHeight(outputs: ICellOutput[]): number {
   return total;
 }
 
+// Convert a base64 data URI to a blob URL. Returns the blob URL and a revoke function.
+// Blob URLs allow the browser to release decoded media buffers when revoked,
+// preventing unbounded memory growth as cells scroll in/out of the virtual list.
+function useDataUriBlobUrl(dataUri: string | null): string | null {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!dataUri) { setBlobUrl(null); return; }
+    // Parse "data:<mime>;base64,<data>"
+    const match = dataUri.match(/^data:([^;]+);base64,(.+)$/s);
+    if (!match) { setBlobUrl(dataUri); return; } // fallback: use data URI directly
+    try {
+      const byteChars = atob(match[2]);
+      const bytes = new Uint8Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+      const blob = new Blob([bytes], { type: match[1] });
+      const url = URL.createObjectURL(blob);
+      setBlobUrl(url);
+      return () => URL.revokeObjectURL(url);
+    } catch {
+      setBlobUrl(dataUri); // fallback on decode error
+    }
+  }, [dataUri]);
+  return blobUrl;
+}
+
+// Replace data: URIs inside HTML content with blob URLs.
+// Returns the processed HTML and a cleanup function to revoke all blob URLs.
+function useHtmlBlobUrls(html: string | null): string | null {
+  const [processed, setProcessed] = useState<string | null>(null);
+  const blobUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    // Revoke previous blob URLs
+    for (const url of blobUrlsRef.current) URL.revokeObjectURL(url);
+    blobUrlsRef.current = [];
+
+    if (!html) { setProcessed(null); return; }
+
+    // Only process if there are data URIs worth converting (>100KB)
+    if (!html.includes('data:audio/') && !html.includes('data:image/')) {
+      setProcessed(html);
+      return;
+    }
+
+    try {
+      const newUrls: string[] = [];
+      const result = html.replace(
+        /data:(audio\/wav|image\/png);base64,([A-Za-z0-9+/=\s]{100,})/g,
+        (_, mime, b64data) => {
+          try {
+            const clean = b64data.replace(/\s/g, '');
+            const byteChars = atob(clean);
+            const bytes = new Uint8Array(byteChars.length);
+            for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+            const blob = new Blob([bytes], { type: mime });
+            const url = URL.createObjectURL(blob);
+            newUrls.push(url);
+            return url;
+          } catch {
+            return `data:${mime};base64,${b64data}`;
+          }
+        }
+      );
+      blobUrlsRef.current = newUrls;
+      setProcessed(result);
+    } catch {
+      setProcessed(html);
+    }
+
+    return () => {
+      for (const url of blobUrlsRef.current) URL.revokeObjectURL(url);
+      blobUrlsRef.current = [];
+    };
+  }, [html]);
+
+  return processed;
+}
+
+// Image output using blob URL — browser releases decoded bitmap when cell unmounts
+const ImageOutput: React.FC<{ content: string; onOpenImage: (src: string) => void }> = memo(({ content, onOpenImage }) => {
+  const blobUrl = useDataUriBlobUrl(`data:image/png;base64,${content}`);
+  if (!blobUrl) return null;
+  return (
+    <div className="my-4 flex justify-start">
+      <button type="button" onClick={() => onOpenImage(blobUrl)} className="text-left" title="Open image viewer">
+        <img src={blobUrl} alt="Plot Output" className="max-w-full h-auto bg-white rounded shadow-sm border border-slate-200" />
+      </button>
+    </div>
+  );
+});
+
+// HTML output with data URIs replaced by blob URLs
+const HtmlOutput: React.FC<{ content: string; renderedHtml: string; openHtmlInNewTab: (html: string) => void }> = memo(({ content, renderedHtml, openHtmlInNewTab }) => {
+  const processedHtml = useHtmlBlobUrls(renderedHtml);
+  if (processedHtml === null) return null;
+  return (
+    <div className="my-2">
+      <div className="flex justify-end mb-1">
+        <button
+          onClick={() => openHtmlInNewTab(content)}
+          className="inline-flex items-center gap-1 text-[0.625rem] text-slate-500 hover:text-slate-700 hover:bg-slate-100 px-2 py-1 rounded transition-colors"
+          title="Open HTML output in new tab"
+        >
+          <ExternalLink className="w-3 h-3" />
+          <span>Open in new tab</span>
+        </button>
+      </div>
+      <div dangerouslySetInnerHTML={{ __html: processedHtml }} className="overflow-x-auto" />
+    </div>
+  );
+});
+
 const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage: (src: string) => void; allowAutoplay?: boolean }> = memo(({ output, wrapText, onOpenImage, allowAutoplay }) => {
   const textClass = wrapText ? 'whitespace-pre-wrap break-words' : 'whitespace-pre overflow-x-auto';
   const openHtmlInNewTab = useCallback((html: string) => {
@@ -177,7 +289,9 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage
       case 'stderr':
         return renderAnsiText(compactOutput(output.content));
       case 'html':
-        return allowAutoplay ? output.content : stripAutoplay(output.content);
+        // Autoplay is stripped on the backend at parse time to avoid
+        // duplicating huge base64 audio strings on the frontend.
+        return output.content;
       default:
         return '';
     }
@@ -195,38 +309,9 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage
         </div>
       );
     case 'image':
-      return (
-        <div className="my-4 flex justify-start">
-          <button
-            type="button"
-            onClick={() => onOpenImage(`data:image/png;base64,${output.content}`)}
-            className="text-left"
-            title="Open image viewer"
-          >
-            <img
-              src={`data:image/png;base64,${output.content}`}
-              alt="Plot Output"
-              className="max-w-full h-auto bg-white rounded shadow-sm border border-slate-200"
-            />
-          </button>
-        </div>
-      );
+      return <ImageOutput content={output.content} onOpenImage={onOpenImage} />;
     case 'html':
-      return (
-        <div className="my-2">
-          <div className="flex justify-end mb-1">
-            <button
-              onClick={() => openHtmlInNewTab(output.content)}
-              className="inline-flex items-center gap-1 text-[0.625rem] text-slate-500 hover:text-slate-700 hover:bg-slate-100 px-2 py-1 rounded transition-colors"
-              title="Open HTML output in new tab"
-            >
-              <ExternalLink className="w-3 h-3" />
-              <span>Open in new tab</span>
-            </button>
-          </div>
-          <div dangerouslySetInnerHTML={{ __html: renderedHtml }} className="overflow-x-auto" />
-        </div>
-      );
+      return <HtmlOutput content={output.content} renderedHtml={renderedHtml} openHtmlInNewTab={openHtmlInNewTab} />;
     default:
       return null;
   }

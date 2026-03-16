@@ -218,7 +218,7 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
 
     saveInProgressRef.current = true;
     try {
-      console.info(`[Autosave] Saving notebook (~${Math.round(estimatedBytes / 1024 / 1024)} MB, manual=${isManualSaveRef.current})`);
+      console.info(`[Autosave] Saving notebook (manual=${isManualSaveRef.current})`);
       await onSave(fileId, cells);
       updateSavedState(cells);
       const savedAt = Date.now();

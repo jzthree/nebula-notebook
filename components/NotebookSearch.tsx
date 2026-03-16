@@ -209,8 +209,17 @@ export const NotebookSearch: React.FC<Props> = ({
                          caseSensitive !== prevCaseSensitiveRef.current ||
                          useRegex !== prevUseRegexRef.current;
     if (queryChanged && newMatches.length > 0) {
-      // Prefer starting from the cursor if available, otherwise from the active cell.
-      const anchor = getEffectiveAnchor();
+      // VS Code behavior: when the query changes, find the first match at or
+      // after the CURRENT position. This means:
+      // - First search: start from cursor/active cell
+      // - Editing query (e.g., "forward" → "for"): stay near the current match
+      //
+      // We use the current match position if available (user was already
+      // navigating matches), otherwise fall back to cursor/active cell.
+      const currentMatch = matches[currentMatchIndex];
+      const anchor = currentMatch
+        ? { cellId: currentMatch.cellId, pos: currentMatch.startIndex }
+        : getEffectiveAnchor();
       let startIndex: number;
 
       if (anchor) {
@@ -226,7 +235,6 @@ export const NotebookSearch: React.FC<Props> = ({
       setCurrentMatchIndex(startIndex);
       onNavigateToCell(newMatches[startIndex].cellIndex, newMatches[startIndex].cellId);
       navAnchorRef.current = { cellId: newMatches[startIndex].cellId, pos: newMatches[startIndex].endIndex, ts: Date.now() };
-      // Re-focus search input after navigation to prevent cell from stealing focus
       requestAnimationFrame(() => {
         searchInputRef.current?.focus();
       });

@@ -91,6 +91,11 @@ const buildShadowPayload = (
   let reused = 0;
   let updated = 0;
   const nextCache = new Map<string, CellJsonCacheEntry>();
+  // Max size to cache per cell: 100KB. Caching cells with large outputs
+  // (e.g., 44MB audio base64) doubles their memory footprint since both
+  // the live cell.outputs[0].content AND the cached JSON string exist.
+  const MAX_CACHE_CELL_SIZE = 100 * 1024;
+
   const cellJson = cells.map(cell => {
     const cached = cellJsonCache.get(cell.id);
     if (cached && cached.ref === cell) {
@@ -100,7 +105,11 @@ const buildShadowPayload = (
     }
     updated += 1;
     const json = JSON.stringify(cell);
-    nextCache.set(cell.id, { ref: cell, json });
+    // Only cache small cells. Large cells (images, audio) are re-stringified
+    // on save but don't waste memory holding a duplicate string permanently.
+    if (json.length <= MAX_CACHE_CELL_SIZE) {
+      nextCache.set(cell.id, { ref: cell, json });
+    }
     return json;
   });
 
