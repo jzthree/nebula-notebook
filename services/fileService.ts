@@ -76,15 +76,46 @@ const shouldRunShadowSerialize = (sample: number) => {
 };
 
 /**
- * Build save payload as a Blob. Each cell is stringified individually and
- * the Blob holds references to those strings — no single massive joined
- * string is ever created. The browser reads Blob parts sequentially when
- * sending via fetch.
- *
- * Note: true pull-based streaming (ReadableStream body) requires HTTP/2.
- * The Express server uses HTTP/1.1, so we use Blob which works everywhere.
+ * Build a pull-based streaming save payload. Stringifies one cell at a time,
+ * so browser memory stays flat during save (~one cell instead of entire notebook).
+ * Requires HTTP/2 (server uses self-signed TLS cert for localhost).
  */
-const buildSavePayload = (
+const buildStreamingPayload = (
+  path: string,
+  cells: Cell[],
+  kernelName?: string,
+  history?: TimestampedOperation[],
+): ReadableStream<Uint8Array> => {
+  const encoder = new TextEncoder();
+  let cellIndex = -1;
+
+  return new ReadableStream({
+    pull(controller) {
+      if (cellIndex === -1) {
+        controller.enqueue(encoder.encode(`{"path":${JSON.stringify(path)},"cells":[`));
+        cellIndex = 0;
+      } else if (cellIndex < cells.length) {
+        const prefix = cellIndex > 0 ? ',' : '';
+        controller.enqueue(encoder.encode(prefix + JSON.stringify(cells[cellIndex])));
+        cellIndex++;
+      } else {
+        let suffix = ']';
+        if (kernelName !== undefined) suffix += `,"kernel_name":${JSON.stringify(kernelName)}`;
+        if (history !== undefined) suffix += `,"history":${JSON.stringify(history)}`;
+        suffix += '}';
+        controller.enqueue(encoder.encode(suffix));
+        controller.close();
+      }
+    },
+  });
+};
+
+/**
+ * Blob fallback for HTTP/1.1 (no streaming). Each cell stringified individually,
+ * Blob holds references — no single joined string. ~800MB temporary spike for
+ * 500MB notebooks, GC'd immediately after send.
+ */
+const buildBlobPayload = (
   path: string,
   cells: Cell[],
   kernelName?: string,
@@ -96,15 +127,14 @@ const buildSavePayload = (
     parts.push(JSON.stringify(cells[i]));
   }
   parts.push(']');
-  if (kernelName !== undefined) {
-    parts.push(`,"kernel_name":${JSON.stringify(kernelName)}`);
-  }
-  if (history !== undefined) {
-    parts.push(`,"history":${JSON.stringify(history)}`);
-  }
+  if (kernelName !== undefined) parts.push(`,"kernel_name":${JSON.stringify(kernelName)}`);
+  if (history !== undefined) parts.push(`,"history":${JSON.stringify(history)}`);
   parts.push('}');
   return new Blob(parts, { type: 'application/json' });
 };
+
+// Track whether streaming saves work (detected on first save attempt)
+let streamingSaveSupported: boolean | null = null;
 
 /**
  * List contents of a directory
@@ -384,13 +414,43 @@ export const saveNotebookCells = async (
   kernelName?: string,
   history?: any[],
 ): Promise<SaveResult> => {
-  const body = buildSavePayload(path, cells, kernelName, history);
-
-  const response = await fetch(`${API_BASE}/notebook/save`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
-  });
+  // Try streaming save (HTTP/2, ~0 memory spike), fall back to Blob (HTTP/1.1, ~800MB spike)
+  let response: globalThis.Response;
+  if (streamingSaveSupported !== false) {
+    try {
+      const stream = buildStreamingPayload(path, cells, kernelName, history);
+      response = await fetch(`${API_BASE}/notebook/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: stream,
+        // @ts-expect-error duplex required for streaming body
+        duplex: 'half',
+      });
+      if (streamingSaveSupported === null) {
+        streamingSaveSupported = true;
+        console.info('[Save] Streaming save (HTTP/2) active — minimal memory spike');
+      }
+    } catch {
+      // Streaming failed (HTTP/1.1 server) — fall back to Blob
+      if (streamingSaveSupported === null) {
+        streamingSaveSupported = false;
+        console.info('[Save] Streaming not supported — using Blob fallback');
+      }
+      const blob = buildBlobPayload(path, cells, kernelName, history);
+      response = await fetch(`${API_BASE}/notebook/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: blob,
+      });
+    }
+  } else {
+    const blob = buildBlobPayload(path, cells, kernelName, history);
+    response = await fetch(`${API_BASE}/notebook/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: blob,
+    });
+  }
 
   if (!response.ok) {
     const error = await response.json();

@@ -340,6 +340,10 @@ async function main(): Promise<void> {
   // Create Express app
   const app = createApp();
 
+  // Create HTTPS server with HTTP/2 support (self-signed cert for localhost).
+  // This enables streaming fetch (ReadableStream body with duplex: 'half')
+  // which eliminates the ~800MB memory spike during save of large notebooks.
+  // Falls back to HTTP/1.1 if cert generation fails.
   // Create HTTP server
   const server = createServer(app);
 
