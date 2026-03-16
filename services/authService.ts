@@ -141,3 +141,25 @@ class AuthService {
 
 // Export singleton instance
 export const authService = new AuthService();
+
+// ── Global fetch interceptor ────────────────────────────────────────────────
+// Automatically adds Authorization header to all /api/* requests.
+// This ensures all services (fileService, terminalService, llmService, etc.)
+// send auth tokens without needing to individually patch each fetch call.
+if (typeof window !== 'undefined') {
+  const _originalFetch = window.fetch;
+  window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.startsWith('/api/') || url.includes('/api/')) {
+      const token = authService.getToken();
+      if (token) {
+        const headers = new Headers(init?.headers);
+        if (!headers.has('Authorization')) {
+          headers.set('Authorization', `Bearer ${token}`);
+        }
+        return _originalFetch.call(window, input, { ...init, headers });
+      }
+    }
+    return _originalFetch.call(window, input, init);
+  };
+}

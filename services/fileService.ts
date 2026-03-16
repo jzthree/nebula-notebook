@@ -3,7 +3,6 @@
  */
 import { Cell, NotebookMetadata } from '../types';
 import { TimestampedOperation } from '../hooks/useUndoRedo';
-
 const API_BASE = '/api';
 
 export interface FileItem {
@@ -414,12 +413,16 @@ export const saveNotebookCells = async (
   kernelName?: string,
   history?: any[],
 ): Promise<SaveResult> => {
-  // Try streaming save (HTTP/2, ~0 memory spike), fall back to Blob (HTTP/1.1, ~800MB spike)
+  // Try streaming save via HTTPS/HTTP2 port (port+1), fall back to HTTP Blob.
+  // Streaming sends one cell at a time (~44MB peak), Blob holds all cells (~800MB peak).
   let response: globalThis.Response;
   if (streamingSaveSupported !== false) {
     try {
+      // HTTPS port is main port + 1
+      const httpsPort = Number(window.location.port) + 1;
+      const httpsUrl = `https://${window.location.hostname}:${httpsPort}/api/notebook/save`;
       const stream = buildStreamingPayload(path, cells, kernelName, history);
-      response = await fetch(`${API_BASE}/notebook/save`, {
+      response = await fetch(httpsUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: stream,
@@ -428,13 +431,12 @@ export const saveNotebookCells = async (
       });
       if (streamingSaveSupported === null) {
         streamingSaveSupported = true;
-        console.info('[Save] Streaming save (HTTP/2) active — minimal memory spike');
+        console.info(`[Save] Streaming save (HTTP/2 on port ${httpsPort}) active — minimal memory spike`);
       }
     } catch {
-      // Streaming failed (HTTP/1.1 server) — fall back to Blob
       if (streamingSaveSupported === null) {
         streamingSaveSupported = false;
-        console.info('[Save] Streaming not supported — using Blob fallback');
+        console.info('[Save] Streaming not available — using Blob fallback (accept cert at https://localhost:' + (Number(window.location.port) + 1) + ' to enable)');
       }
       const blob = buildBlobPayload(path, cells, kernelName, history);
       response = await fetch(`${API_BASE}/notebook/save`, {
