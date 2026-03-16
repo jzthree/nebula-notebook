@@ -211,6 +211,16 @@ export async function authMiddleware(request: FastifyRequest, reply: FastifyRepl
     });
   }
 
+  // Persist valid tokens from request headers so MCP/CLI can piggyback.
+  // Only write once (when file doesn't exist or token differs).
+  const requestToken = extractToken(request);
+  if (requestToken) {
+    const existing = readSessionToken();
+    if (existing !== requestToken) {
+      persistSessionToken(requestToken);
+    }
+  }
+
   // Token is valid, continue (simply return)
 }
 
