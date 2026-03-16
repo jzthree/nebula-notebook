@@ -249,6 +249,21 @@ async function createApp(): Promise<FastifyInstance> {
     },
   });
 
+  // Allow empty body with Content-Type: application/json.
+  // MCP clients and some tools send DELETE/GET with an empty JSON body.
+  // Fastify rejects this by default (FST_ERR_CTP_EMPTY_JSON_BODY).
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    if (!body || (typeof body === 'string' && body.trim() === '')) {
+      done(null, undefined);
+      return;
+    }
+    try {
+      done(null, JSON.parse(body as string));
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  });
+
   // Health check endpoints (public - no auth required)
   fastify.get('/api/health', async (_request: FastifyRequest, reply: FastifyReply) => {
     // Use configured root directory (from .nebula-config.json or fallback to cwd)

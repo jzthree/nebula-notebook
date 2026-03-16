@@ -81,9 +81,9 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
   const estimateCellsSize = useCallback((cellsToMeasure: Cell[]): number => {
     let size = 0;
     for (const cell of cellsToMeasure) {
-      size += cell.content.length;
+      size += (cell.content || '').length;
       for (const output of cell.outputs) {
-        size += output.content.length;
+        size += (output.content || '').length;
       }
     }
     // String.length gives character count. V8 uses 1-byte Latin-1 encoding

@@ -63,7 +63,11 @@ describe('Cell', () => {
   });
 
   it('renders cell index', () => {
-    renderCell({ ...defaultProps, index: 2 });
+    renderCell({
+      ...defaultProps,
+      index: 2,
+      cellIndexMapRef: { current: new Map([[mockCell.id, 2]]) },
+    });
     expect(screen.getByText('#3')).toBeInTheDocument();
   });
 
