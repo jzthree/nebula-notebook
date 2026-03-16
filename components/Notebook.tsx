@@ -4332,9 +4332,9 @@ export const Notebook: React.FC = () => {
         )}
 
         {/* Status Bar */}
-        <div className="h-6 flex items-center justify-between px-2 bg-slate-100 dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-400 select-none shrink-0">
+        <div className="h-6 flex items-center justify-between px-2 bg-slate-100 dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-400 select-none shrink-0 overflow-hidden">
           {/* Left side */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-shrink-0">
             <button
               onClick={() => setIsTerminalOpen(!isTerminalOpen)}
               className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-colors ${
@@ -4361,17 +4361,17 @@ export const Notebook: React.FC = () => {
             </button>
           </div>
 
-          {/* Right side */}
-          <div className="flex items-center gap-3">
+          {/* Right side — overflow hidden, never wraps */}
+          <div className="flex items-center gap-3 overflow-hidden flex-nowrap min-w-0">
             {/* Cell count */}
-            <span className="flex items-center gap-1" title={`${cellStats.codeCount} code, ${cellStats.markdownCount} markdown`}>
+            <span className="flex items-center gap-1 flex-shrink-0" title={`${cellStats.codeCount} code, ${cellStats.markdownCount} markdown`}>
               <Layers className="w-3 h-3" />
               {cellStats.count} cells
             </span>
 
             {/* Kernel memory usage */}
             {memoryUsage && (
-              <span className="flex items-center gap-1 tabular-nums" title="Kernel memory (RSS)">
+              <span className="flex items-center gap-1 tabular-nums flex-shrink-0" title="Kernel memory (RSS)">
                 <MemoryStick className="w-3 h-3" />
                 {(memoryUsage.used / 1024 / 1024).toFixed(0)} MB
               </span>

@@ -91,8 +91,8 @@ export const ResourceStatusBar: React.FC<Props> = ({ serverId, className = '' })
   }
 
   return (
-    <div className={`flex items-center gap-3 text-xs overflow-hidden flex-nowrap min-w-0 ${className}`}>
-      {/* RAM */}
+    <div className={`flex items-center gap-3 text-xs flex-nowrap min-w-0 ${className}`}>
+      {/* RAM — always visible */}
       <div className="flex items-center gap-1.5 flex-shrink-0">
         <Cpu className="w-3.5 h-3.5 text-slate-500" />
         <span className="text-slate-600 font-medium tabular-nums">
@@ -101,7 +101,7 @@ export const ResourceStatusBar: React.FC<Props> = ({ serverId, className = '' })
         <span className="text-slate-400">RAM</span>
       </div>
 
-      {/* GPU(s) — overflow hidden, never wraps */}
+      {/* GPU(s) — clips when not enough space, never wraps */}
       {resources.gpus && resources.gpus.devices.length > 0 && (
         <div className="flex items-center gap-2 overflow-hidden flex-nowrap min-w-0">
           {resources.gpus.devices.map((gpu) => (
@@ -118,7 +118,7 @@ export const ResourceStatusBar: React.FC<Props> = ({ serverId, className = '' })
         </div>
       )}
 
-      {/* Refresh button */}
+      {/* Refresh — always visible */}
       <button
         onClick={handleRefresh}
         disabled={isRefreshing}
