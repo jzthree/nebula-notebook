@@ -10,8 +10,40 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { IncomingMessage } from 'http';
 import { parse as parseUrl } from 'url';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { authService } from './auth-service';
 import { readClusterSecret } from '../cluster/cluster-secret';
+
+const SESSION_TOKEN_PATH = path.join(os.homedir(), '.nebula', 'session-token');
+
+/**
+ * Persist a session token to disk so MCP servers and CLI tools
+ * can piggyback on the browser's authentication.
+ */
+export function persistSessionToken(token: string): void {
+  try {
+    const dir = path.dirname(SESSION_TOKEN_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(SESSION_TOKEN_PATH, token, { mode: 0o600 });
+  } catch {
+    // Non-critical — MCP just won't be able to auto-auth
+  }
+}
+
+/**
+ * Read the persisted session token (written when browser authenticates).
+ */
+function readSessionToken(): string | undefined {
+  try {
+    if (!fs.existsSync(SESSION_TOKEN_PATH)) return undefined;
+    const token = fs.readFileSync(SESSION_TOKEN_PATH, 'utf-8').trim();
+    return token || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 // Routes that don't require authentication
 const PUBLIC_ROUTES = [
@@ -155,7 +187,15 @@ export async function authMiddleware(request: FastifyRequest, reply: FastifyRepl
   }
 
   // Extract and validate token
-  const token = extractToken(request);
+  let token = extractToken(request);
+
+  // Fallback: if no token in request, check the persisted session token file.
+  // This allows MCP servers and CLI tools to piggyback on the browser's auth
+  // without needing their own TOTP flow.
+  if (!token) {
+    token = readSessionToken();
+  }
+
   if (!token) {
     return reply.code(401).send({
       error: 'auth_required',

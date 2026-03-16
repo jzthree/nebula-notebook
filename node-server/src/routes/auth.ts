@@ -4,6 +4,7 @@
 
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { authService } from '../auth/auth-service';
+import { persistSessionToken } from '../auth/auth-middleware';
 
 export default async function authRoutes(fastify: FastifyInstance) {
   /**
@@ -50,6 +51,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
     const result = authService.verifyCode(cleanCode, !!trustBrowser);
 
     if (result.success) {
+      // Persist token so MCP servers and CLI tools can auto-authenticate
+      if (result.token) persistSessionToken(result.token);
       return reply.send({
         success: true,
         token: result.token,
