@@ -91,9 +91,9 @@ export const ResourceStatusBar: React.FC<Props> = ({ serverId, className = '' })
   }
 
   return (
-    <div className={`flex items-center gap-3 text-xs ${className}`}>
+    <div className={`flex items-center gap-3 text-xs overflow-hidden flex-nowrap min-w-0 ${className}`}>
       {/* RAM */}
-      <div className="flex items-center gap-1.5 group">
+      <div className="flex items-center gap-1.5 flex-shrink-0">
         <Cpu className="w-3.5 h-3.5 text-slate-500" />
         <span className="text-slate-600 font-medium tabular-nums">
           {resourceService.formatMemory(resources.ram.used)} / {resourceService.formatMemory(resources.ram.total)}
@@ -101,9 +101,9 @@ export const ResourceStatusBar: React.FC<Props> = ({ serverId, className = '' })
         <span className="text-slate-400">RAM</span>
       </div>
 
-      {/* GPU(s) */}
+      {/* GPU(s) — overflow hidden, never wraps */}
       {resources.gpus && resources.gpus.devices.length > 0 && (
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 overflow-hidden flex-nowrap min-w-0">
           {resources.gpus.devices.map((gpu) => (
             <GPUIndicator key={gpu.index} gpu={gpu} vendor={resources.gpus!.vendor} />
           ))}
@@ -112,7 +112,7 @@ export const ResourceStatusBar: React.FC<Props> = ({ serverId, className = '' })
 
       {/* GPU Error */}
       {resources.gpuError && (
-        <div className="flex items-center gap-1.5 text-slate-400" title={`GPU: ${resources.gpuError}`}>
+        <div className="flex items-center gap-1.5 text-slate-400 flex-shrink-0" title={`GPU: ${resources.gpuError}`}>
           <GpuIcon className="w-3.5 h-3.5" />
           <span>--</span>
         </div>
@@ -122,7 +122,7 @@ export const ResourceStatusBar: React.FC<Props> = ({ serverId, className = '' })
       <button
         onClick={handleRefresh}
         disabled={isRefreshing}
-        className="p-0.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+        className="p-0.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors flex-shrink-0"
         title="Refresh resources"
       >
         <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -130,7 +130,7 @@ export const ResourceStatusBar: React.FC<Props> = ({ serverId, className = '' })
 
       {/* Stale indicator */}
       {resources.isStale && (
-        <span className="text-amber-500" title="Data may be outdated">*</span>
+        <span className="text-amber-500 flex-shrink-0" title="Data may be outdated">*</span>
       )}
     </div>
   );
@@ -147,7 +147,7 @@ const GPUIndicator: React.FC<{ gpu: GPUDevice; vendor: 'nvidia' | 'amd' }> = ({ 
   ].filter(Boolean).join(' • ');
 
   return (
-    <div className="flex items-center gap-1.5 group" title={tooltip}>
+    <div className="flex items-center gap-1.5 flex-shrink-0" title={tooltip}>
       <GpuIcon className="w-3.5 h-3.5 text-emerald-600" />
       <span className="text-slate-400 text-[0.625rem]">GPU {gpu.index}</span>
       <div className="h-1.5 w-16 rounded-full bg-slate-200 overflow-hidden">
