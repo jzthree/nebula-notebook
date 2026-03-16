@@ -60,10 +60,23 @@ export const VirtualCellList: React.FC<Props> = ({
   const renderedCountRef = useRef(renderedCount);
   renderedCountRef.current = renderedCount;
 
-  // Reset when cells array changes (new notebook loaded)
+  // Only reset progressive rendering when a NEW notebook is loaded (cell count
+  // jumps dramatically), not on every cell edit (delete/move/add).
+  const prevCellCountRef = useRef(cells.length);
   useEffect(() => {
-    setRenderedCount(Math.min(cells.length, BATCH_SIZE));
-  }, [cells]);
+    const prev = prevCellCountRef.current;
+    prevCellCountRef.current = cells.length;
+    // A big jump in cell count means a new notebook was loaded.
+    // Small changes (±1-5) are edits — just grow renderedCount if needed.
+    const delta = Math.abs(cells.length - prev);
+    if (delta > 10 || prev === 0) {
+      setRenderedCount(Math.min(cells.length, BATCH_SIZE));
+    } else if (cells.length > renderedCount) {
+      // Cell was added — render it immediately
+      setRenderedCount(cells.length);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cells.length]);
 
   // Pause batching while the user is scrolling so scroll gets full frame budget.
   const isScrollingRef = useRef(false);

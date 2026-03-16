@@ -108,13 +108,20 @@ const CellNavigator: React.FC<{
   const [selection, setSelection] = useState(0);
 
   const results = useMemo(() => {
-    if (!query.trim()) return items;
+    if (!query.trim()) return items.map(item => ({ ...item, matchedLine: '' }));
     const q = query.toLowerCase();
-    return items.filter(item => (
-      item.content.includes(q) ||
-      item.cellId.toLowerCase().includes(q) ||
-      String(item.index + 1).includes(q)
-    ));
+    return items
+      .filter(item => (
+        item.content.includes(q) ||
+        item.cellId.toLowerCase().includes(q) ||
+        String(item.index + 1).includes(q)
+      ))
+      .map(item => {
+        // Find the first line containing the match to show as context
+        const lines = item.content.split('\n');
+        const matchedLine = lines.find(line => line.includes(q))?.trim() || '';
+        return { ...item, matchedLine };
+      });
   }, [items, query]);
 
   useEffect(() => { setSelection(0); }, [query]);
@@ -173,7 +180,7 @@ const CellNavigator: React.FC<{
                 <span className="text-[0.625rem] uppercase tracking-wide text-slate-400 flex-shrink-0">{item.type}</span>
               </div>
               <div className="mt-0.5 text-[0.8125rem] text-slate-700 font-mono truncate leading-tight">
-                {item.preview || <span className="text-slate-400 italic">Empty cell</span>}
+                {query.trim() && item.matchedLine ? item.matchedLine : (item.preview || <span className="text-slate-400 italic">Empty cell</span>)}
               </div>
             </button>
           ))}
@@ -1055,110 +1062,52 @@ export const Notebook: React.FC = () => {
   // All scroll operations should use this to work properly with Virtuoso
   // ═══════════════════════════════════════════════════════════════════════════
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const pendingScrollRef = useRef<{ index: number; attempts: number; id: number } | null>(null);
-  const scrollIdRef = useRef(0); // Unique ID to prevent double-scrolling in Strict Mode
   const getDefaultScrollBehavior = useCallback((): 'smooth' | 'auto' => {
     return smoothAutoScrollRef.current ? 'smooth' : 'auto';
   }, []);
 
   // Unified scroll function - ALL scroll operations should use this
+  // ── Simplified scroll (all cells in DOM via content-visibility) ───────────
+  // No virtual list tricks needed — just scrollIntoView on the target element.
   const scrollToCell = useCallback((
-    index: number, 
-    options?: { 
+    index: number,
+    options?: {
       behavior?: 'smooth' | 'auto';
-      delay?: number;      // Delay before scrolling (for debouncing)
-      retryOnce?: boolean; // Retry after heights settle (for dynamic content)
+      delay?: number;
+      retryOnce?: boolean; // unused, kept for API compat
     }
   ) => {
-    const { behavior = getDefaultScrollBehavior(), delay = 0, retryOnce = false } = options || {};
-    
-    // Cancel any pending scroll
-    if (scrollTimeoutRef.current) {
-      clearTimeout(scrollTimeoutRef.current);
-    }
+    const { behavior = getDefaultScrollBehavior(), delay = 0 } = options || {};
 
-    // Generate unique ID for this scroll request (prevents double-scroll in Strict Mode)
-    const scrollId = ++scrollIdRef.current;
-    pendingScrollRef.current = { index, attempts: 0, id: scrollId };
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
 
-    const performScroll = () => {
-      // Abort if a newer scroll was requested or this scroll was cancelled
-      if (!pendingScrollRef.current || 
-          pendingScrollRef.current.index !== index ||
-          pendingScrollRef.current.id !== scrollId) {
-        return;
-      }
-
-      virtuosoRef.current?.scrollToIndex({
-        index,
-        align: 'start',
-        behavior,
-        offset: -80 // Account for header
-      });
-
-      // Optionally retry after heights settle (for dynamic content)
-      if (retryOnce && pendingScrollRef.current.attempts === 0) {
-        pendingScrollRef.current.attempts = 1;
-        scrollTimeoutRef.current = setTimeout(() => {
-          if (pendingScrollRef.current?.index === index && 
-              pendingScrollRef.current?.id === scrollId) {
-            virtuosoRef.current?.scrollToIndex({
-              index,
-              align: 'start',
-              behavior: 'auto', // Instant adjustment
-              offset: -80
-            });
-            pendingScrollRef.current = null;
-          }
-        }, 150);
-      } else {
-        pendingScrollRef.current = null;
-      }
+    const doScroll = () => {
+      // Force progressive rendering up to this cell if needed
+      virtuosoRef.current?.scrollToIndex({ index, align: 'start', behavior, offset: -80 });
     };
 
     if (delay > 0) {
-      scrollTimeoutRef.current = setTimeout(performScroll, delay);
+      scrollTimeoutRef.current = setTimeout(doScroll, delay);
     } else {
-      performScroll();
+      doScroll();
     }
   }, [getDefaultScrollBehavior]);
 
-  // Cleanup scroll timeout on unmount
   useEffect(() => {
-    return () => {
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current);
-      }
-    };
+    return () => { if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current); };
   }, []);
 
-  // Helper to check if ANY part of a cell is currently visible
-  // If any part of the cell (code or output) can be seen, it's considered visible
-  const isCellVisible = useCallback((cellIndex: number): boolean => {
-    const visibleRange = visibleRangeRef.current;
-    // Virtuoso's rangeChanged gives us the indices of cells that are rendered/visible
-    // A cell is visible if its index falls within the visible range (inclusive)
-    // No buffer needed - if ANY part of the cell is visible, we don't scroll
-    return cellIndex >= visibleRange.startIndex && cellIndex <= visibleRange.endIndex;
-  }, []);
-
-  const isCellVisibleInViewport = useCallback((cellId: string, cellIndex: number): boolean => {
+  // Check if a cell is visible in the viewport (simple DOM check)
+  const isCellVisibleInViewport = useCallback((cellId: string, _cellIndex: number): boolean => {
     const cellEl = document.querySelector(`[data-cell-id="${escapeForAttributeSelector(cellId)}"]`) as HTMLElement | null;
-    if (!cellEl) {
-      // If the cell isn't mounted (virtualized out), fall back to the index-based check.
-      return isCellVisible(cellIndex);
-    }
-
-    // Find the scroll container: the nearest ancestor with overflow-y: auto/scroll.
+    if (!cellEl) return false;
     const scrollerEl = cellEl.closest('.overflow-y-auto') as HTMLElement | null;
-
     const cellRect = cellEl.getBoundingClientRect();
     const viewportRect = scrollerEl
       ? scrollerEl.getBoundingClientRect()
       : { top: 0, bottom: window.innerHeight } as DOMRect;
-
     return cellRect.bottom > viewportRect.top && cellRect.top < viewportRect.bottom;
-  }, [isCellVisible]);
+  }, []);
 
   // Effect to handle pending scroll after cells change (for undo/redo of insert/delete)
   // Clear the ref BEFORE scrolling to prevent double-scroll in Strict Mode
@@ -3445,21 +3394,29 @@ export const Notebook: React.FC = () => {
     }
   };
 
-  const scrollToCellOutput = useCallback((cellId: string, cellIndex: number) => {
+  const scrollToCellOutput = useCallback((cellId: string, _cellIndex: number) => {
     setActiveCellId(cellId);
-    scrollToCell(cellIndex);
+    // Scroll directly to the output section. Use the cell wrapper as fallback
+    // if the output element doesn't exist yet (content-visibility may need to
+    // activate first). Retry a few times to handle lazy rendering.
     const attemptScroll = (attempt: number) => {
-      const anchor = document.getElementById(`cell-output-${cellId}`);
-      if (anchor) {
-        anchor.scrollIntoView({ behavior: getDefaultScrollBehavior(), block: 'start' });
+      const outputEl = document.getElementById(`cell-output-${cellId}`);
+      if (outputEl) {
+        outputEl.scrollIntoView({ behavior: getDefaultScrollBehavior(), block: 'nearest' });
         return;
       }
-      if (attempt < 5) {
-        setTimeout(() => attemptScroll(attempt + 1), 60);
+      // Fall back to the cell wrapper
+      const cellEl = document.querySelector(`[data-cell-id="${cellId}"]`);
+      if (cellEl) {
+        cellEl.scrollIntoView({ behavior: getDefaultScrollBehavior(), block: 'start' });
+        return;
+      }
+      if (attempt < 8) {
+        setTimeout(() => attemptScroll(attempt + 1), 100);
       }
     };
     attemptScroll(0);
-  }, [getDefaultScrollBehavior, scrollToCell]);
+  }, [getDefaultScrollBehavior]);
 
   const navigatorItems = useMemo(() => {
     return cells.map((cell, index) => {
