@@ -37,6 +37,7 @@ describe('Cell', () => {
     index: 0,
     isActive: false,
     allCellsRef: { current: [mockCell] },
+    cellIndexMapRef: { current: new Map([[mockCell.id, 0]]) },
     onUpdate: vi.fn(),
     onRun: vi.fn(),
     onRunAndAdvance: vi.fn(),
