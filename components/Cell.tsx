@@ -269,6 +269,29 @@ const CellComponent: React.FC<Props> = ({
   const hasError = cell.outputs.some(o => o.type === 'error');
   const enableInteractiveFeatures = shouldForceInteractiveFeatures() || focusState === 'editor';
 
+  // ⚠️ PERFORMANCE: Lazy CodeMirror — render a lightweight <pre> until the
+  // cell scrolls into view. Destroy CodeMirror when the cell scrolls far away
+  // (>2000px) to bound editor memory to O(visible cells).
+  // The Cell component itself stays mounted (outputs, DOM stable).
+  const [editorMounted, setEditorMounted] = useState(false);
+  useEffect(() => {
+    const el = cellRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setEditorMounted(true);
+        } else if (editorMounted && focusState === 'none') {
+          // Only unmount if the cell isn't focused (user isn't editing)
+          setEditorMounted(false);
+        }
+      },
+      { rootMargin: '2000px 0px' }, // generous margin to avoid flicker
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [editorMounted, focusState]);
+
   // Border colors based on focus state:
   // - editor (blue): CodeMirror has focus, handles keyboard
   // - cell (green): cell div has focus, cell-level commands
@@ -524,30 +547,42 @@ const CellComponent: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Editor Area - clicking focuses editor naturally via CodeMirror */}
-      <div onClick={(e) => { e.stopPropagation(); onClick(cell.id, e); }}>
-        <CodeEditor
-          value={cell.content}
-          onChange={handleEditorChange}
-          language={cell.type === 'code' ? 'python' : 'markdown'}
-          enableInteractiveFeatures={enableInteractiveFeatures}
-          onShiftEnter={handleShiftEnter}
-          onModEnter={handleModEnter}
-          onEscape={handleEditorEscape}
-          onSave={handleEditorSave}
-          onFocus={handleEditorFocus}
-          onBlur={handleEditorBlur}
-          placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
-          searchHighlight={searchHighlight ? { ...searchHighlight, currentMatch: searchCurrentMatch } : null}
-          cellId={cell.id}
-          shouldFocus={focusState === 'editor'}
-          onCursorActivity={onCursorActivity ? handleCursorActivity : undefined}
-          indentConfig={indentConfig}
-          allCellsRef={allCellsRef}
-          showLineNumbers={cell.type === 'code' && showLineNumbers}
-          readOnly={isLocked}
-          kernelSessionId={kernelSessionId}
-        />
+      {/* Editor Area */}
+      <div onClick={(e) => {
+        e.stopPropagation();
+        // Clicking the pre fallback should mount CodeMirror and focus it
+        if (!editorMounted) setEditorMounted(true);
+        onClick(cell.id, e);
+      }}>
+        {editorMounted ? (
+          <CodeEditor
+            value={cell.content}
+            onChange={handleEditorChange}
+            language={cell.type === 'code' ? 'python' : 'markdown'}
+            enableInteractiveFeatures={enableInteractiveFeatures}
+            onShiftEnter={handleShiftEnter}
+            onModEnter={handleModEnter}
+            onEscape={handleEditorEscape}
+            onSave={handleEditorSave}
+            onFocus={handleEditorFocus}
+            onBlur={handleEditorBlur}
+            placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
+            searchHighlight={searchHighlight ? { ...searchHighlight, currentMatch: searchCurrentMatch } : null}
+            cellId={cell.id}
+            shouldFocus={focusState === 'editor'}
+            onCursorActivity={onCursorActivity ? handleCursorActivity : undefined}
+            indentConfig={indentConfig}
+            allCellsRef={allCellsRef}
+            showLineNumbers={cell.type === 'code' && showLineNumbers}
+            readOnly={isLocked}
+            kernelSessionId={kernelSessionId}
+          />
+        ) : (
+          /* Lightweight fallback until cell scrolls into view */
+          <pre className="font-mono text-sm px-3 py-2 text-slate-700 whitespace-pre-wrap min-h-[1.5rem]">
+            {cell.content || (cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title')}
+          </pre>
+        )}
       </div>
 
       {/* Output Area - show if has outputs, is executing, or has execution time */}
