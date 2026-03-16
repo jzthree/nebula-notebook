@@ -7,30 +7,26 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import express, { Express } from 'express';
-import request from 'supertest';
+import Fastify, { FastifyInstance } from 'fastify';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import type { Server } from 'http';
 
 // Import routes
 import notebookRoutes from '../routes/notebook';
 
 describe('Notebook Routes', () => {
-  let app: Express;
-  let server: Server;
+  let app: FastifyInstance;
   let testDir: string;
 
-  beforeAll(() => {
-    app = express();
-    app.use(express.json());
-    app.use('/api', notebookRoutes);
-    server = app.listen(0);
+  beforeAll(async () => {
+    app = Fastify();
+    await app.register(notebookRoutes, { prefix: '/api' });
+    await app.ready();
   });
 
   afterAll(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await app.close();
   });
 
   beforeEach(() => {
@@ -47,32 +43,35 @@ describe('Notebook Routes', () => {
 
   describe('GET /api/cell/metadata-schema', () => {
     it('should return cell metadata schema', async () => {
-      const response = await request(server).get('/api/cell/metadata-schema');
+      const response = await app.inject({ method: 'GET', url: '/api/cell/metadata-schema' });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('id');
-      expect(response.body).toHaveProperty('type');
-      expect(response.body).toHaveProperty('scrolled');
-      expect(response.body).toHaveProperty('scrolledHeight');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('id');
+      expect(body).toHaveProperty('type');
+      expect(body).toHaveProperty('scrolled');
+      expect(body).toHaveProperty('scrolledHeight');
     });
 
     it('should have agentMutable property on all fields', async () => {
-      const response = await request(server).get('/api/cell/metadata-schema');
+      const response = await app.inject({ method: 'GET', url: '/api/cell/metadata-schema' });
+      const body = JSON.parse(response.body);
 
-      expect(response.body.id.agentMutable).toBe(true);
-      expect(response.body.type.agentMutable).toBe(true);
-      expect(response.body.scrolled.agentMutable).toBe(true);
-      expect(response.body.scrolledHeight.agentMutable).toBe(true);
+      expect(body.id.agentMutable).toBe(true);
+      expect(body.type.agentMutable).toBe(true);
+      expect(body.scrolled.agentMutable).toBe(true);
+      expect(body.scrolledHeight.agentMutable).toBe(true);
     });
 
     it('should have correct type definitions', async () => {
-      const response = await request(server).get('/api/cell/metadata-schema');
+      const response = await app.inject({ method: 'GET', url: '/api/cell/metadata-schema' });
+      const body = JSON.parse(response.body);
 
-      expect(response.body.id.type).toBe('string');
-      expect(response.body.type.type).toBe('enum');
-      expect(response.body.type.values).toEqual(['code', 'markdown']);
-      expect(response.body.scrolled.type).toBe('boolean');
-      expect(response.body.scrolledHeight.type).toBe('number');
+      expect(body.id.type).toBe('string');
+      expect(body.type.type).toBe('enum');
+      expect(body.type.values).toEqual(['code', 'markdown']);
+      expect(body.scrolled.type).toBe('boolean');
+      expect(body.scrolledHeight.type).toBe('number');
     });
   });
 
@@ -99,32 +98,37 @@ describe('Notebook Routes', () => {
       };
       fs.writeFileSync(notebookPath, JSON.stringify(notebook));
 
-      const response = await request(server)
-        .get('/api/notebook/cells')
-        .query({ path: notebookPath });
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/notebook/cells?path=${encodeURIComponent(notebookPath)}`,
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('path');
-      expect(response.body).toHaveProperty('cells');
-      expect(response.body).toHaveProperty('kernelspec');
-      expect(response.body).toHaveProperty('mtime');
-      expect(Array.isArray(response.body.cells)).toBe(true);
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('path');
+      expect(body).toHaveProperty('cells');
+      expect(body).toHaveProperty('kernelspec');
+      expect(body).toHaveProperty('mtime');
+      expect(Array.isArray(body.cells)).toBe(true);
     });
 
     it('should return 400 if path is missing', async () => {
-      const response = await request(server).get('/api/notebook/cells');
+      const response = await app.inject({ method: 'GET', url: '/api/notebook/cells' });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
 
     it('should return 404 for non-existent notebook', async () => {
-      const response = await request(server)
-        .get('/api/notebook/cells')
-        .query({ path: '/nonexistent/path.ipynb' });
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/notebook/cells?path=/nonexistent/path.ipynb',
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(404);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(404);
+      expect(body).toHaveProperty('detail');
     });
   });
 
@@ -148,32 +152,41 @@ describe('Notebook Routes', () => {
         },
       ];
 
-      const response = await request(server)
-        .post('/api/notebook/save')
-        .send({ path: notebookPath, cells, kernel_name: 'python3' });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/save',
+        payload: { path: notebookPath, cells, kernel_name: 'python3' },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('status', 'ok');
-      expect(response.body).toHaveProperty('path');
-      expect(response.body).toHaveProperty('mtime');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('status', 'ok');
+      expect(body).toHaveProperty('path');
+      expect(body).toHaveProperty('mtime');
     });
 
     it('should return 400 if path is missing', async () => {
-      const response = await request(server)
-        .post('/api/notebook/save')
-        .send({ cells: [] });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/save',
+        payload: { cells: [] },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
 
     it('should return 400 if cells is missing', async () => {
-      const response = await request(server)
-        .post('/api/notebook/save')
-        .send({ path: '/some/path.ipynb' });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/save',
+        payload: { path: '/some/path.ipynb' },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
 
     it('should save without kernel output seq metadata', async () => {
@@ -185,15 +198,17 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(server)
-        .post('/api/notebook/save')
-        .send({
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/save',
+        payload: {
           path: notebookPath,
           cells: [],
           kernel_name: 'python3',
-        });
+        },
+      });
 
-      expect(response.status).toBe(200);
+      expect(response.statusCode).toBe(200);
       const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
       // No kernel_output_seq metadata should be written
       expect(saved.metadata?.nebula?.kernel_output_seq).toBeUndefined();
@@ -211,20 +226,23 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(server)
-        .get('/api/notebook/history')
-        .query({ notebook_path: notebookPath });
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/notebook/history?notebook_path=${encodeURIComponent(notebookPath)}`,
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('notebook_path');
-      expect(response.body).toHaveProperty('history');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('notebook_path');
+      expect(body).toHaveProperty('history');
     });
 
     it('should return 400 if notebook_path is missing', async () => {
-      const response = await request(server).get('/api/notebook/history');
+      const response = await app.inject({ method: 'GET', url: '/api/notebook/history' });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
   });
 
@@ -240,22 +258,28 @@ describe('Notebook Routes', () => {
 
       const history = [{ type: 'insertCell', index: 0 }];
 
-      const response = await request(server)
-        .post('/api/notebook/history')
-        .send({ notebook_path: notebookPath, history });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/history',
+        payload: { notebook_path: notebookPath, history },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('status', 'ok');
-      expect(response.body).toHaveProperty('notebook_path');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('status', 'ok');
+      expect(body).toHaveProperty('notebook_path');
     });
 
     it('should return 400 if notebook_path is missing', async () => {
-      const response = await request(server)
-        .post('/api/notebook/history')
-        .send({ history: [] });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/history',
+        payload: { history: [] },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
   });
 
@@ -269,20 +293,23 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(server)
-        .get('/api/notebook/session')
-        .query({ notebook_path: notebookPath });
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/notebook/session?notebook_path=${encodeURIComponent(notebookPath)}`,
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('notebook_path');
-      expect(response.body).toHaveProperty('session');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('notebook_path');
+      expect(body).toHaveProperty('session');
     });
 
     it('should return 400 if notebook_path is missing', async () => {
-      const response = await request(server).get('/api/notebook/session');
+      const response = await app.inject({ method: 'GET', url: '/api/notebook/session' });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
   });
 
@@ -298,22 +325,28 @@ describe('Notebook Routes', () => {
 
       const session = { lastKernel: 'python3' };
 
-      const response = await request(server)
-        .post('/api/notebook/session')
-        .send({ notebook_path: notebookPath, session });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/session',
+        payload: { notebook_path: notebookPath, session },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('status', 'ok');
-      expect(response.body).toHaveProperty('notebook_path');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('status', 'ok');
+      expect(body).toHaveProperty('notebook_path');
     });
 
     it('should return 400 if notebook_path is missing', async () => {
-      const response = await request(server)
-        .post('/api/notebook/session')
-        .send({ session: {} });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/session',
+        payload: { session: {} },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
   });
 
@@ -327,26 +360,32 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(server)
-        .post('/api/notebook/permit-agent')
-        .send({ notebook_path: notebookPath, permitted: true });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/permit-agent',
+        payload: { notebook_path: notebookPath, permitted: true },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('status', 'ok');
-      expect(response.body).toHaveProperty('notebook_path');
-      expect(response.body).toHaveProperty('agent_permitted');
-      expect(response.body).toHaveProperty('agent_created');
-      expect(response.body).toHaveProperty('has_history');
-      expect(response.body).toHaveProperty('can_agent_modify');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('status', 'ok');
+      expect(body).toHaveProperty('notebook_path');
+      expect(body).toHaveProperty('agent_permitted');
+      expect(body).toHaveProperty('agent_created');
+      expect(body).toHaveProperty('has_history');
+      expect(body).toHaveProperty('can_agent_modify');
     });
 
     it('should return 400 if notebook_path is missing', async () => {
-      const response = await request(server)
-        .post('/api/notebook/permit-agent')
-        .send({ permitted: true });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/permit-agent',
+        payload: { permitted: true },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
   });
 
@@ -360,24 +399,27 @@ describe('Notebook Routes', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(server)
-        .get('/api/notebook/agent-status')
-        .query({ path: notebookPath });
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/notebook/agent-status?path=${encodeURIComponent(notebookPath)}`,
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('notebook_path');
-      expect(response.body).toHaveProperty('agent_created');
-      expect(response.body).toHaveProperty('agent_permitted');
-      expect(response.body).toHaveProperty('has_history');
-      expect(response.body).toHaveProperty('can_agent_modify');
-      expect(response.body).toHaveProperty('reason');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('notebook_path');
+      expect(body).toHaveProperty('agent_created');
+      expect(body).toHaveProperty('agent_permitted');
+      expect(body).toHaveProperty('has_history');
+      expect(body).toHaveProperty('can_agent_modify');
+      expect(body).toHaveProperty('reason');
     });
 
     it('should return 400 if path is missing', async () => {
-      const response = await request(server).get('/api/notebook/agent-status');
+      const response = await app.inject({ method: 'GET', url: '/api/notebook/agent-status' });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
   });
 
@@ -400,15 +442,17 @@ describe('Notebook Routes', () => {
       };
       fs.writeFileSync(notebookPath, JSON.stringify(notebook));
 
-      const response = await request(server)
-        .get('/api/notebook/read')
-        .query({ path: notebookPath });
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/notebook/read?path=${encodeURIComponent(notebookPath)}`,
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('success', true);
-      expect(response.body).toHaveProperty('data');
-      expect(response.body.data).toHaveProperty('cells');
-      expect(response.body.data).toHaveProperty('path');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('success', true);
+      expect(body).toHaveProperty('data');
+      expect(body.data).toHaveProperty('cells');
+      expect(body.data).toHaveProperty('path');
     });
 
     it('should support include_outputs=false', async () => {
@@ -429,20 +473,23 @@ describe('Notebook Routes', () => {
       };
       fs.writeFileSync(notebookPath, JSON.stringify(notebook));
 
-      const response = await request(server)
-        .get('/api/notebook/read')
-        .query({ path: notebookPath, include_outputs: 'false' });
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/notebook/read?path=${encodeURIComponent(notebookPath)}&include_outputs=false`,
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(response.body.data.cells[0].outputs).toEqual([]);
+      expect(response.statusCode).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.data.cells[0].outputs).toEqual([]);
     });
 
     it('should return 400 if path is missing', async () => {
-      const response = await request(server).get('/api/notebook/read');
+      const response = await app.inject({ method: 'GET', url: '/api/notebook/read' });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
   });
 
@@ -450,32 +497,38 @@ describe('Notebook Routes', () => {
     it('should return hasUI status', async () => {
       const notebookPath = path.join(testDir, 'has-ui.ipynb');
 
-      const response = await request(server)
-        .get('/api/notebook/has-ui')
-        .query({ path: notebookPath });
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/notebook/has-ui?path=${encodeURIComponent(notebookPath)}`,
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('hasUI');
-      expect(response.body).toHaveProperty('path');
-      expect(response.body.hasUI).toBe(false); // No UI connected in tests
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('hasUI');
+      expect(body).toHaveProperty('path');
+      expect(body.hasUI).toBe(false); // No UI connected in tests
     });
 
     it('should return 400 if path is missing', async () => {
-      const response = await request(server).get('/api/notebook/has-ui');
+      const response = await app.inject({ method: 'GET', url: '/api/notebook/has-ui' });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
   });
 
   describe('POST /api/notebook/operation', () => {
     it('should return 400 if operation type is missing', async () => {
-      const response = await request(server)
-        .post('/api/notebook/operation')
-        .send({ notebookPath: '/some/path.ipynb' });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/operation',
+        payload: { notebookPath: '/some/path.ipynb' },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(400);
-      expect(response.body).toHaveProperty('detail');
+      expect(response.statusCode).toBe(400);
+      expect(body).toHaveProperty('detail');
     });
 
     it('should handle insertCell operation (headless mode)', async () => {
@@ -490,26 +543,31 @@ describe('Notebook Routes', () => {
       const agentId = 'test-agent-insert';
 
       // Start agent session first
-      await request(server)
-        .post('/api/notebook/operation')
-        .send({
+      await app.inject({
+        method: 'POST',
+        url: '/api/notebook/operation',
+        payload: {
           type: 'startAgentSession',
           notebookPath,
           agentId,
-        });
+        },
+      });
 
-      const response = await request(server)
-        .post('/api/notebook/operation')
-        .send({
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/operation',
+        payload: {
           type: 'insertCell',
           notebookPath,
           agentId,
           index: 0,
           cell: { id: 'new-cell', type: 'code', content: 'print("hello")' },
-        });
+        },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('success', true);
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('success', true);
     });
 
     it('should handle deleteCell operation (headless mode)', async () => {
@@ -526,25 +584,30 @@ describe('Notebook Routes', () => {
       const agentId = 'test-agent-delete';
 
       // Start agent session first
-      await request(server)
-        .post('/api/notebook/operation')
-        .send({
+      await app.inject({
+        method: 'POST',
+        url: '/api/notebook/operation',
+        payload: {
           type: 'startAgentSession',
           notebookPath,
           agentId,
-        });
+        },
+      });
 
-      const response = await request(server)
-        .post('/api/notebook/operation')
-        .send({
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/operation',
+        payload: {
           type: 'deleteCell',
           notebookPath,
           agentId,
           cellId: 'cell-to-delete',
-        });
+        },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('success', true);
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('success', true);
     });
 
     it('should handle updateContent operation (headless mode)', async () => {
@@ -561,44 +624,47 @@ describe('Notebook Routes', () => {
       const agentId = 'test-agent-update';
 
       // Start agent session first
-      await request(server)
-        .post('/api/notebook/operation')
-        .send({
+      await app.inject({
+        method: 'POST',
+        url: '/api/notebook/operation',
+        payload: {
           type: 'startAgentSession',
           notebookPath,
           agentId,
-        });
+        },
+      });
 
-      const response = await request(server)
-        .post('/api/notebook/operation')
-        .send({
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/operation',
+        payload: {
           type: 'updateContent',
           notebookPath,
           agentId,
           cellId: 'cell-1',
           content: 'new content',
-        });
+        },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('success', true);
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('success', true);
     });
   });
 });
 
 describe('Notebook Routes - Response Format Parity', () => {
-  let app: Express;
-  let server: Server;
+  let app: FastifyInstance;
   let testDir: string;
 
-  beforeAll(() => {
-    app = express();
-    app.use(express.json());
-    app.use('/api', notebookRoutes);
-    server = app.listen(0);
+  beforeAll(async () => {
+    app = Fastify();
+    await app.register(notebookRoutes, { prefix: '/api' });
+    await app.ready();
   });
 
   afterAll(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await app.close();
   });
 
   beforeEach(() => {
@@ -621,23 +687,25 @@ describe('Notebook Routes - Response Format Parity', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(server)
-        .get('/api/notebook/agent-status')
-        .query({ path: notebookPath });
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/notebook/agent-status?path=${encodeURIComponent(notebookPath)}`,
+      });
+      const body = JSON.parse(response.body);
 
       // Verify snake_case
-      expect(response.body).toHaveProperty('notebook_path');
-      expect(response.body).toHaveProperty('agent_created');
-      expect(response.body).toHaveProperty('agent_permitted');
-      expect(response.body).toHaveProperty('has_history');
-      expect(response.body).toHaveProperty('can_agent_modify');
+      expect(body).toHaveProperty('notebook_path');
+      expect(body).toHaveProperty('agent_created');
+      expect(body).toHaveProperty('agent_permitted');
+      expect(body).toHaveProperty('has_history');
+      expect(body).toHaveProperty('can_agent_modify');
 
       // Verify NO camelCase
-      expect(response.body).not.toHaveProperty('notebookPath');
-      expect(response.body).not.toHaveProperty('agentCreated');
-      expect(response.body).not.toHaveProperty('agentPermitted');
-      expect(response.body).not.toHaveProperty('hasHistory');
-      expect(response.body).not.toHaveProperty('canAgentModify');
+      expect(body).not.toHaveProperty('notebookPath');
+      expect(body).not.toHaveProperty('agentCreated');
+      expect(body).not.toHaveProperty('agentPermitted');
+      expect(body).not.toHaveProperty('hasHistory');
+      expect(body).not.toHaveProperty('canAgentModify');
     });
   });
 
@@ -651,15 +719,18 @@ describe('Notebook Routes - Response Format Parity', () => {
         nbformat_minor: 5,
       }));
 
-      const response = await request(server)
-        .post('/api/notebook/permit-agent')
-        .send({ notebook_path: notebookPath, permitted: true });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/permit-agent',
+        payload: { notebook_path: notebookPath, permitted: true },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.body).toHaveProperty('notebook_path');
-      expect(response.body).toHaveProperty('agent_permitted');
-      expect(response.body).toHaveProperty('agent_created');
-      expect(response.body).toHaveProperty('has_history');
-      expect(response.body).toHaveProperty('can_agent_modify');
+      expect(body).toHaveProperty('notebook_path');
+      expect(body).toHaveProperty('agent_permitted');
+      expect(body).toHaveProperty('agent_created');
+      expect(body).toHaveProperty('has_history');
+      expect(body).toHaveProperty('can_agent_modify');
     });
   });
 });

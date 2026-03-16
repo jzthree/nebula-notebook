@@ -7,16 +7,21 @@
  * - Filesystem operations
  * - Python environment discovery
  * - Terminal PTY management
+ *
+ * Uses Fastify with HTTP/2 support.
  */
 
-import { createServer, IncomingMessage } from 'http';
-import { parse as parseUrl } from 'url';
+import Fastify, { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import fastifyCors from '@fastify/cors';
+import fastifyMultipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
 import { WebSocket, WebSocketServer } from 'ws';
-import express, { Request, Response, NextFunction, Express } from 'express';
-import cors from 'cors';
+import { IncomingMessage } from 'http';
+import { parse as parseUrl } from 'url';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import { randomUUID } from 'crypto';
 
 // Import routes
@@ -117,40 +122,139 @@ if (PRESERVE_KERNELS) console.log('[Server] Kernel preservation ENABLED');
 if (REATTACH_KERNELS) console.log('[Server] Kernel reattachment ENABLED');
 
 /**
- * Create and configure Express app
+ * Parse a human-readable body limit string (e.g., '200mb', '1gb') to bytes.
  */
-function createApp(): Express {
-  const app = express();
+function parseBodyLimit(limit: string): number {
+  const match = limit.match(/^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb)?$/i);
+  if (!match) {
+    return 1024 * 1024 * 1024; // default 1gb
+  }
+  const value = parseFloat(match[1]);
+  const unit = (match[2] || 'b').toLowerCase();
+  const multipliers: Record<string, number> = {
+    b: 1,
+    kb: 1024,
+    mb: 1024 * 1024,
+    gb: 1024 * 1024 * 1024,
+    tb: 1024 * 1024 * 1024 * 1024,
+  };
+  return Math.floor(value * (multipliers[unit] || 1));
+}
 
-  // Request timing middleware
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    const start = Date.now();
-    res.on('finish', () => {
-      const duration = Date.now() - start;
-      if (duration > 1000) {
-        console.log(`[Slow Request] ${req.method} ${req.path} - ${duration}ms`);
-      }
+/**
+ * Generate or load self-signed TLS certificate for HTTP/2
+ */
+function getOrCreateTlsCert(): { key: Buffer; cert: Buffer } | null {
+  const tlsDir = path.join(os.homedir(), '.nebula', 'tls');
+  const keyPath = path.join(tlsDir, 'server.key');
+  const certPath = path.join(tlsDir, 'server.cert');
+
+  try {
+    // Check if cert already exists and is still valid
+    if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+      const key = fs.readFileSync(keyPath);
+      const cert = fs.readFileSync(certPath);
+      return { key, cert };
+    }
+
+    // Generate self-signed certificate using Node.js crypto
+    // Only available in Node.js 15+
+    if (!('generateKeyPairSync' in crypto)) {
+      console.log('[TLS] crypto.generateKeyPairSync not available, falling back to HTTP/1.1');
+      return null;
+    }
+
+    console.log('[TLS] Generating self-signed certificate for HTTP/2...');
+
+    // Create TLS directory
+    fs.mkdirSync(tlsDir, { recursive: true, mode: 0o700 });
+
+    // Use child_process to generate cert with openssl (most portable approach)
+    const { execSync } = require('child_process');
+    try {
+      execSync(
+        `openssl req -x509 -newkey rsa:2048 -keyout "${keyPath}" -out "${certPath}" -days 365 -nodes -subj "/CN=localhost"`,
+        { stdio: 'pipe' }
+      );
+      fs.chmodSync(keyPath, 0o600);
+      fs.chmodSync(certPath, 0o600);
+
+      const key = fs.readFileSync(keyPath);
+      const cert = fs.readFileSync(certPath);
+      console.log('[TLS] Self-signed certificate generated and cached at ~/.nebula/tls/');
+      return { key, cert };
+    } catch (err) {
+      console.log('[TLS] openssl not available, falling back to HTTP/1.1');
+      return null;
+    }
+  } catch (err) {
+    console.log('[TLS] Failed to generate certificate, falling back to HTTP/1.1');
+    return null;
+  }
+}
+
+/**
+ * Create and configure Fastify app
+ */
+async function createApp(): Promise<FastifyInstance> {
+  const bodyLimitBytes = parseBodyLimit(BODY_LIMIT);
+
+  // Try to get TLS certs for HTTP/2
+  const tlsCert = getOrCreateTlsCert();
+
+  let fastify: FastifyInstance;
+
+  if (tlsCert) {
+    // Cast to FastifyInstance to unify the type with the HTTP/1 branch.
+    // The HTTP/2 Fastify instance is a superset but TypeScript infers a
+    // different generic specialisation; the cast is safe because we only
+    // use the common API surface.
+    fastify = Fastify({
+      http2: true,
+      https: {
+        key: tlsCert.key,
+        cert: tlsCert.cert,
+        allowHTTP1: true,
+      },
+      bodyLimit: bodyLimitBytes,
+    }) as unknown as FastifyInstance;
+    console.log('[Server] HTTP/2 with TLS enabled');
+  } else {
+    fastify = Fastify({
+      bodyLimit: bodyLimitBytes,
     });
-    next();
+    console.log('[Server] HTTP/1.1 mode (no TLS)');
+  }
+
+  // Request timing hook
+  fastify.addHook('onResponse', (request, reply, done) => {
+    const duration = reply.elapsedTime;
+    if (duration > 1000) {
+      console.log(`[Slow Request] ${request.method} ${request.url} - ${Math.round(duration)}ms`);
+    }
+    done();
   });
 
-  // CORS
-  app.use(cors({
+  // Register CORS
+  await fastify.register(fastifyCors, {
     origin: '*',
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-API-Provider'],
-  }));
+  });
 
-  // JSON body parser with larger limit for notebook data
-  app.use(express.json({ limit: BODY_LIMIT }));
-  app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
+  // Register multipart support (replaces multer)
+  await fastify.register(fastifyMultipart, {
+    limits: {
+      fileSize: bodyLimitBytes,
+    },
+  });
 
-  // Health check endpoints
-  app.get('/api/health', (_req: Request, res: Response) => {
+  // Health check endpoints (public - no auth required)
+  fastify.get('/api/health', async (_request: FastifyRequest, reply: FastifyReply) => {
     // Use configured root directory (from .nebula-config.json or fallback to cwd)
     const rootDir = fsService.normalizePath('~');
-    res.json({
+    return reply.send({
       status: 'ok',
       version: '1.0.0',
       ready: kernelService.isReady,
@@ -159,41 +263,58 @@ function createApp(): Express {
     });
   });
 
-  app.get('/api/ready', (_req: Request, res: Response) => {
+  fastify.get('/api/ready', async (_request: FastifyRequest, reply: FastifyReply) => {
     if (!kernelService.isReady) {
-      res.status(503).json({
+      return reply.code(503).send({
         detail: 'Service initializing, kernel discovery in progress',
       });
-      return;
     }
-    res.json({ status: 'ready' });
+    return reply.send({ status: 'ready' });
   });
 
   // Auth routes (public - no auth required)
-  app.use('/api', authRoutes);
+  await fastify.register(authRoutes, { prefix: '/api' });
 
   // Auth middleware - protect all other API routes
-  app.use('/api', authMiddleware);
+  // Applied as an onRequest hook for /api/* routes (excluding public ones)
+  fastify.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
+    const pathname = request.url.split('?')[0];
+    // Skip health, ready, and auth routes (they are public)
+    if (
+      pathname === '/api/health' ||
+      pathname === '/api/ready' ||
+      pathname.startsWith('/api/auth/')
+    ) {
+      return;
+    }
+    // Skip non-API routes (static files etc)
+    if (!pathname.startsWith('/api/')) {
+      return;
+    }
+    // Apply auth middleware
+    await authMiddleware(request, reply);
+  });
 
   // API routes (protected)
-  app.use('/api', kernelRoutes);
-  app.use('/api', llmRoutes);
-  app.use('/api', fsRoutes);
-  app.use('/api', notebookRoutes);
-  app.use('/api', pythonRoutes);
-  app.use('/api', clusterRoutes);
-  app.use('/api/resources', resourceRoutes);
+  await fastify.register(kernelRoutes, { prefix: '/api' });
+  await fastify.register(llmRoutes, { prefix: '/api' });
+  await fastify.register(fsRoutes, { prefix: '/api' });
+  await fastify.register(notebookRoutes, { prefix: '/api' });
+  await fastify.register(pythonRoutes, { prefix: '/api' });
+  await fastify.register(clusterRoutes, { prefix: '/api' });
+  await fastify.register(resourceRoutes, { prefix: '/api/resources' });
 
-  // Terminal routes
-  setupTerminalRoutes(app);
+  // Terminal routes (registered directly on the app, not under /api prefix)
+  await fastify.register(setupTerminalRoutes);
 
-  return app;
+  return fastify;
 }
 
 /**
- * Setup WebSocket routing
+ * Setup WebSocket routing (kernel, terminal, notebook)
+ * Uses the raw Node.js HTTP(S) server from Fastify for upgrade handling
  */
-function setupWebSockets(server: ReturnType<typeof createServer>): void {
+function setupWebSockets(server: FastifyInstance['server']): void {
   // Create WebSocket server with noServer mode for path-based routing
   // Disable per-message deflate to avoid compression issues with proxies/browsers
   const wss = new WebSocketServer({
@@ -202,7 +323,7 @@ function setupWebSockets(server: ReturnType<typeof createServer>): void {
   });
 
   // Handle upgrade requests
-  server.on('upgrade', (request: IncomingMessage, socket, head) => {
+  server.on('upgrade', (request: IncomingMessage, socket: any, head: Buffer) => {
     const pathname = parseUrl(request.url || '').pathname || '';
 
     // Route to kernel WebSocket
@@ -229,7 +350,7 @@ function setupWebSockets(server: ReturnType<typeof createServer>): void {
 /**
  * Setup static file serving for frontend
  */
-function setupStaticServing(app: Express): void {
+async function setupStaticServing(fastify: FastifyInstance): Promise<void> {
   const distDir = path.join(__dirname, '../../dist');
 
   if (DEV_MODE) {
@@ -240,15 +361,19 @@ function setupStaticServing(app: Express): void {
   // Production mode: serve from dist
   if (fs.existsSync(distDir)) {
     // Serve static files
-    app.use(express.static(distDir));
+    await fastify.register(fastifyStatic, {
+      root: distDir,
+      prefix: '/',
+      wildcard: false,
+    });
 
     // SPA fallback - serve index.html for all non-API routes
-    app.get('*', (req: Request, res: Response) => {
-      if (req.path.startsWith('/api/')) {
-        res.status(404).json({ detail: 'Not found' });
-        return;
+    fastify.setNotFoundHandler(async (request: FastifyRequest, reply: FastifyReply) => {
+      const pathname = request.url.split('?')[0];
+      if (pathname.startsWith('/api/')) {
+        return reply.code(404).send({ detail: 'Not found' });
       }
-      res.sendFile(path.join(distDir, 'index.html'));
+      return reply.sendFile('index.html');
     });
 
     console.log(`[Server] Serving frontend from ${distDir}`);
@@ -337,17 +462,19 @@ async function main(): Promise<void> {
   process.env.NEBULA_SERVER_INSTANCE_ID = serverInstanceId;
   kernelService.setServerIdentity(localServerId, serverInstanceId);
 
-  // Create Express app
-  const app = createApp();
+  // Create Fastify app
+  const fastify = await createApp();
 
-  // Create HTTPS server with HTTP/2 support (self-signed cert for localhost).
-  // This enables streaming fetch (ReadableStream body with duplex: 'half')
-  // which eliminates the ~800MB memory spike during save of large notebooks.
-  // Falls back to HTTP/1.1 if cert generation fails.
-  // Create HTTP server
-  const server = createServer(app);
+  // Setup static file serving
+  await setupStaticServing(fastify);
 
-  // Setup WebSocket routing
+  // Start Fastify and get the underlying HTTP(S) server
+  await fastify.listen({ port: Number(PORT), host: '0.0.0.0' });
+
+  // Get the raw Node.js server for WebSocket handling
+  const server = fastify.server;
+
+  // Setup WebSocket routing (kernel)
   setupWebSockets(server);
 
   // Setup terminal WebSocket (now using noServer mode)
@@ -355,9 +482,6 @@ async function main(): Promise<void> {
 
   // Setup notebook operations WebSocket
   setupNotebookWebSocket(server);
-
-  // Setup static file serving
-  setupStaticServing(app);
 
   if (REATTACH_KERNELS) {
     try {
@@ -394,36 +518,28 @@ async function main(): Promise<void> {
       console.error('[Server] Error during cluster cleanup:', err);
     }
 
-    server.close(() => {
-      console.log('[Server] Server closed');
-      process.exit(0);
-    });
-
-    // Force exit after timeout
-    setTimeout(() => {
-      console.log('[Server] Forcing exit after timeout');
-      process.exit(1);
-    }, 10000);
+    await fastify.close();
+    console.log('[Server] Server closed');
+    process.exit(0);
   };
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  // Start server
-  server.listen(PORT, () => {
-    const mode = DEV_MODE ? 'development' : 'production';
-    console.log(`[Server] Nebula running on http://localhost:${PORT} (${mode} mode)`);
-    console.log(`[Server] API endpoints: http://localhost:${PORT}/api/*`);
-    console.log(`[Server] Kernel WebSocket: ws://localhost:${PORT}/api/kernels/{session_id}/ws`);
-    console.log(`[Server] Notebook WebSocket: ws://localhost:${PORT}/api/notebook/{path}/ws`);
-    console.log(`[Server] Terminal WebSocket: ws://localhost:${PORT}/ws?id={terminal_id}`);
-    console.log(`[Server] Root directory: ${fsService.getRootDirectory()} (change with --workdir)`);
+  const protocol = fastify.server.constructor.name.includes('Secure') ? 'https' : 'http';
+  const wsProtocol = protocol === 'https' ? 'wss' : 'ws';
+  const mode = DEV_MODE ? 'development' : 'production';
+  console.log(`[Server] Nebula running on ${protocol}://localhost:${PORT} (${mode} mode)`);
+  console.log(`[Server] API endpoints: ${protocol}://localhost:${PORT}/api/*`);
+  console.log(`[Server] Kernel WebSocket: ${wsProtocol}://localhost:${PORT}/api/kernels/{session_id}/ws`);
+  console.log(`[Server] Notebook WebSocket: ${wsProtocol}://localhost:${PORT}/api/notebook/{path}/ws`);
+  console.log(`[Server] Terminal WebSocket: ${wsProtocol}://localhost:${PORT}/ws?id={terminal_id}`);
+  console.log(`[Server] Root directory: ${fsService.getRootDirectory()} (change with --workdir)`);
 
   // Initialize client registration (explicit client mode only)
   if (CLIENT_MODE) {
     clientRegistration.initFromEnv(Number(PORT));
   }
-  });
 }
 
 // Run

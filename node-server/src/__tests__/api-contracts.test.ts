@@ -11,9 +11,7 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import express, { Express } from 'express';
-import request from 'supertest';
-import type { Server } from 'http';
+import Fastify, { FastifyInstance } from 'fastify';
 
 import kernelRoutes, { kernelService } from '../routes/kernel';
 import pythonRoutes, { discoveryService } from '../routes/python';
@@ -21,19 +19,17 @@ import { serverRegistry } from '../cluster/server-registry';
 import * as kernelspec from '../kernel/kernelspec';
 
 describe('API Contract Tests - Snake Case Response Format', () => {
-  let app: Express;
-  let server: Server;
+  let app: FastifyInstance;
 
-  beforeAll(() => {
-    app = express();
-    app.use(express.json());
-    app.use('/api', kernelRoutes);
-    app.use('/api', pythonRoutes);
-    server = app.listen(0);
+  beforeAll(async () => {
+    app = Fastify();
+    await app.register(kernelRoutes, { prefix: '/api' });
+    await app.register(pythonRoutes, { prefix: '/api' });
+    await app.ready();
   });
 
   afterAll(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await app.close();
   });
 
   beforeEach(() => {
@@ -123,13 +119,14 @@ describe('API Contract Tests - Snake Case Response Format', () => {
 
   describe('GET /api/kernels', () => {
     it('should return kernels with snake_case field names', async () => {
-      const response = await request(server).get('/api/kernels');
+      const response = await app.inject({ method: 'GET', url: '/api/kernels' });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('kernels');
-      expect(Array.isArray(response.body.kernels)).toBe(true);
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('kernels');
+      expect(Array.isArray(body.kernels)).toBe(true);
 
-      const kernel = response.body.kernels[0];
+      const kernel = body.kernels[0];
 
       // Verify snake_case fields exist
       expect(kernel).toHaveProperty('name');
@@ -145,23 +142,25 @@ describe('API Contract Tests - Snake Case Response Format', () => {
     });
 
     it('should return all discovered kernels', async () => {
-      const response = await request(server).get('/api/kernels');
+      const response = await app.inject({ method: 'GET', url: '/api/kernels' });
+      const body = JSON.parse(response.body);
 
-      expect(response.body.kernels).toHaveLength(2);
-      expect(response.body.kernels[0].name).toBe('python3');
-      expect(response.body.kernels[1].name).toBe('ir');
+      expect(body.kernels).toHaveLength(2);
+      expect(body.kernels[0].name).toBe('python3');
+      expect(body.kernels[1].name).toBe('ir');
     });
   });
 
   describe('GET /api/kernels/sessions', () => {
     it('should return sessions with snake_case field names', async () => {
-      const response = await request(server).get('/api/kernels/sessions');
+      const response = await app.inject({ method: 'GET', url: '/api/kernels/sessions' });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('sessions');
-      expect(Array.isArray(response.body.sessions)).toBe(true);
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('sessions');
+      expect(Array.isArray(body.sessions)).toBe(true);
 
-      const session = response.body.sessions[0];
+      const session = body.sessions[0];
 
       // Verify snake_case fields exist
       expect(session).toHaveProperty('id');
@@ -188,14 +187,15 @@ describe('API Contract Tests - Snake Case Response Format', () => {
 
   describe('GET /api/python/environments', () => {
     it('should return environments with snake_case field names', async () => {
-      const response = await request(server).get('/api/python/environments');
+      const response = await app.inject({ method: 'GET', url: '/api/python/environments' });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('environments');
-      expect(response.body).toHaveProperty('kernelspecs');
-      expect(response.body).toHaveProperty('cache_info');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('environments');
+      expect(body).toHaveProperty('kernelspecs');
+      expect(body).toHaveProperty('cache_info');
 
-      const env = response.body.environments[0];
+      const env = body.environments[0];
 
       // Verify snake_case fields exist
       expect(env).toHaveProperty('path');
@@ -215,77 +215,83 @@ describe('API Contract Tests - Snake Case Response Format', () => {
     });
 
     it('should return kernelspecs with snake_case field names', async () => {
-      const response = await request(server).get('/api/python/environments');
-      const kernelspec = response.body.kernelspecs[0];
+      const response = await app.inject({ method: 'GET', url: '/api/python/environments' });
+      const body = JSON.parse(response.body);
+      const ks = body.kernelspecs[0];
 
-      expect(kernelspec).toHaveProperty('name');
-      expect(kernelspec).toHaveProperty('display_name');
-      expect(kernelspec).toHaveProperty('language');
-      expect(kernelspec).toHaveProperty('path');
+      expect(ks).toHaveProperty('name');
+      expect(ks).toHaveProperty('display_name');
+      expect(ks).toHaveProperty('language');
+      expect(ks).toHaveProperty('path');
 
       // Verify camelCase does NOT exist
-      expect(kernelspec).not.toHaveProperty('displayName');
+      expect(ks).not.toHaveProperty('displayName');
     });
 
     it('should return cache_info with snake_case field name', async () => {
-      const response = await request(server).get('/api/python/environments');
+      const response = await app.inject({ method: 'GET', url: '/api/python/environments' });
+      const body = JSON.parse(response.body);
 
-      expect(response.body).toHaveProperty('cache_info');
-      expect(response.body.cache_info).toHaveProperty('lastRefresh');
-      expect(response.body.cache_info).toHaveProperty('environmentCount');
+      expect(body).toHaveProperty('cache_info');
+      expect(body.cache_info).toHaveProperty('lastRefresh');
+      expect(body.cache_info).toHaveProperty('environmentCount');
     });
   });
 
   describe('POST /api/kernels/start response', () => {
     it('should return session_id with snake_case', async () => {
-      const response = await request(server)
-        .post('/api/kernels/start')
-        .send({ kernel_name: 'python3' });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/kernels/start',
+        payload: { kernel_name: 'python3' },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('session_id');
-      expect(response.body).toHaveProperty('kernel_name');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('session_id');
+      expect(body).toHaveProperty('kernel_name');
 
       // Verify camelCase does NOT exist
-      expect(response.body).not.toHaveProperty('sessionId');
-      expect(response.body).not.toHaveProperty('kernelName');
+      expect(body).not.toHaveProperty('sessionId');
+      expect(body).not.toHaveProperty('kernelName');
     });
   });
 
   describe('POST /api/kernels/for-file response', () => {
     it('should return response with snake_case field names', async () => {
-      const response = await request(server)
-        .post('/api/kernels/for-file')
-        .send({ file_path: '/path/to/notebook.ipynb', kernel_name: 'python3' });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/kernels/for-file',
+        payload: { file_path: '/path/to/notebook.ipynb', kernel_name: 'python3' },
+      });
+      const body = JSON.parse(response.body);
 
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('session_id');
-      expect(response.body).toHaveProperty('kernel_name');
-      expect(response.body).toHaveProperty('file_path');
-      expect(response.body).toHaveProperty('created');
+      expect(response.statusCode).toBe(200);
+      expect(body).toHaveProperty('session_id');
+      expect(body).toHaveProperty('kernel_name');
+      expect(body).toHaveProperty('file_path');
+      expect(body).toHaveProperty('created');
 
       // Verify camelCase does NOT exist
-      expect(response.body).not.toHaveProperty('sessionId');
-      expect(response.body).not.toHaveProperty('kernelName');
-      expect(response.body).not.toHaveProperty('filePath');
+      expect(body).not.toHaveProperty('sessionId');
+      expect(body).not.toHaveProperty('kernelName');
+      expect(body).not.toHaveProperty('filePath');
     });
   });
 });
 
 describe('API Contract Tests - Field Types', () => {
-  let app: Express;
-  let server: Server;
+  let app: FastifyInstance;
 
-  beforeAll(() => {
-    app = express();
-    app.use(express.json());
-    app.use('/api', kernelRoutes);
-    app.use('/api', pythonRoutes);
-    server = app.listen(0);
+  beforeAll(async () => {
+    app = Fastify();
+    await app.register(kernelRoutes, { prefix: '/api' });
+    await app.register(pythonRoutes, { prefix: '/api' });
+    await app.ready();
   });
 
   afterAll(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await app.close();
   });
 
   beforeEach(() => {
@@ -310,8 +316,9 @@ describe('API Contract Tests - Field Types', () => {
 
   describe('GET /api/kernels', () => {
     it('should have correct field types', async () => {
-      const response = await request(server).get('/api/kernels');
-      const kernel = response.body.kernels[0];
+      const response = await app.inject({ method: 'GET', url: '/api/kernels' });
+      const body = JSON.parse(response.body);
+      const kernel = body.kernels[0];
 
       expect(typeof kernel.name).toBe('string');
       expect(typeof kernel.display_name).toBe('string');
@@ -322,8 +329,9 @@ describe('API Contract Tests - Field Types', () => {
 
   describe('GET /api/kernels/sessions', () => {
     it('should have correct field types', async () => {
-      const response = await request(server).get('/api/kernels/sessions');
-      const session = response.body.sessions[0];
+      const response = await app.inject({ method: 'GET', url: '/api/kernels/sessions' });
+      const body = JSON.parse(response.body);
+      const session = body.sessions[0];
 
       expect(typeof session.id).toBe('string');
       expect(typeof session.kernel_name).toBe('string');
@@ -337,8 +345,9 @@ describe('API Contract Tests - Field Types', () => {
 
   describe('GET /api/python/environments', () => {
     it('should have correct field types for environments', async () => {
-      const response = await request(server).get('/api/python/environments');
-      const env = response.body.environments[0];
+      const response = await app.inject({ method: 'GET', url: '/api/python/environments' });
+      const body = JSON.parse(response.body);
+      const env = body.environments[0];
 
       expect(typeof env.path).toBe('string');
       expect(typeof env.version).toBe('string');

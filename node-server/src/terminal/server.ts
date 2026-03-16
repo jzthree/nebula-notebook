@@ -2,7 +2,7 @@
  * Terminal Server - Routes and WebSocket setup for PTY management
  */
 
-import { Express, Request, Response } from 'express';
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as HttpServer } from 'http';
 import { ptyManager } from './pty-manager';
@@ -23,32 +23,32 @@ function getDefaultCwd(): string {
 const wsConnections = new Map<string, Set<WebSocket>>();
 
 /**
- * Setup terminal REST routes on the Express app
+ * Setup terminal REST routes as a Fastify plugin
  */
-export function setupTerminalRoutes(app: Express): void {
+export async function setupTerminalRoutes(fastify: FastifyInstance): Promise<void> {
   // Terminal health check (includes terminal count)
-  app.get('/api/terminals/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', terminals: ptyManager.list().length });
+  fastify.get('/api/terminals/health', async (_request: FastifyRequest, reply: FastifyReply) => {
+    return reply.send({ status: 'ok', terminals: ptyManager.list().length });
   });
 
   // List all terminals
-  app.get('/api/terminals', (_req: Request, res: Response) => {
-    res.json(ptyManager.list());
+  fastify.get('/api/terminals', async (_request: FastifyRequest, reply: FastifyReply) => {
+    return reply.send(ptyManager.list());
   });
 
   // Create a new terminal
-  app.post('/api/terminals', (req: Request, res: Response) => {
-    const options: CreateTerminalRequest = req.body || {};
+  fastify.post('/api/terminals', async (request: FastifyRequest, reply: FastifyReply) => {
+    const options: CreateTerminalRequest = (request.body as any) || {};
     // Use configured root directory as default cwd
     const finalOptions = { cwd: getDefaultCwd(), ...options };
 
     try {
       const terminal = ptyManager.create(finalOptions);
       console.log(`[Terminal] Created terminal ${terminal.id} (PID: ${terminal.pid})`);
-      res.status(201).json(terminal);
+      return reply.code(201).send(terminal);
     } catch (error) {
       console.error('[Terminal] Failed to create terminal:', error);
-      res.status(500).json({
+      return reply.code(500).send({
         error: 'Failed to create terminal',
         message: error instanceof Error ? error.message : 'Unknown error',
       });
@@ -56,19 +56,19 @@ export function setupTerminalRoutes(app: Express): void {
   });
 
   // Get or create a named terminal (for persistent terminals via URL)
-  app.post('/api/terminals/named/:name', (req: Request, res: Response) => {
-    const { name } = req.params;
-    const options: CreateTerminalRequest = req.body || {};
+  fastify.post('/api/terminals/named/:name', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { name } = request.params as any;
+    const options: CreateTerminalRequest = (request.body as any) || {};
     // Use configured root directory as default cwd
     const finalOptions = { cwd: getDefaultCwd(), ...options };
 
     try {
       const terminal = ptyManager.getOrCreate(name, finalOptions);
       console.log(`[Terminal] Get/create named terminal '${name}' -> ${terminal.id}`);
-      res.json(terminal);
+      return reply.send(terminal);
     } catch (error) {
       console.error('[Terminal] Failed to get/create named terminal:', error);
-      res.status(500).json({
+      return reply.code(500).send({
         error: 'Failed to get/create terminal',
         message: error instanceof Error ? error.message : 'Unknown error',
       });
@@ -76,47 +76,43 @@ export function setupTerminalRoutes(app: Express): void {
   });
 
   // Get terminal info
-  app.get('/api/terminals/:id', (req: Request, res: Response) => {
-    const terminal = ptyManager.getTerminalInfo(req.params.id);
+  fastify.get('/api/terminals/:id', async (request: FastifyRequest, reply: FastifyReply) => {
+    const terminal = ptyManager.getTerminalInfo((request.params as any).id);
 
     if (!terminal) {
-      res.status(404).json({ error: 'Terminal not found' });
-      return;
+      return reply.code(404).send({ error: 'Terminal not found' });
     }
 
-    res.json(terminal);
+    return reply.send(terminal);
   });
 
   // Delete/close a terminal
-  app.delete('/api/terminals/:id', (req: Request, res: Response) => {
-    const success = ptyManager.kill(req.params.id);
+  fastify.delete('/api/terminals/:id', async (request: FastifyRequest, reply: FastifyReply) => {
+    const success = ptyManager.kill((request.params as any).id);
 
     if (!success) {
-      res.status(404).json({ error: 'Terminal not found' });
-      return;
+      return reply.code(404).send({ error: 'Terminal not found' });
     }
 
-    console.log(`[Terminal] Closed terminal ${req.params.id}`);
-    res.json({ status: 'ok' });
+    console.log(`[Terminal] Closed terminal ${(request.params as any).id}`);
+    return reply.send({ status: 'ok' });
   });
 
   // Resize terminal
-  app.post('/api/terminals/:id/resize', (req: Request, res: Response) => {
-    const { cols, rows }: ResizeTerminalRequest = req.body;
+  fastify.post('/api/terminals/:id/resize', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { cols, rows }: ResizeTerminalRequest = request.body as any;
 
     if (!cols || !rows) {
-      res.status(400).json({ error: 'cols and rows are required' });
-      return;
+      return reply.code(400).send({ error: 'cols and rows are required' });
     }
 
-    const success = ptyManager.resize(req.params.id, cols, rows);
+    const success = ptyManager.resize((request.params as any).id, cols, rows);
 
     if (!success) {
-      res.status(404).json({ error: 'Terminal not found' });
-      return;
+      return reply.code(404).send({ error: 'Terminal not found' });
     }
 
-    res.json({ status: 'ok', cols, rows });
+    return reply.send({ status: 'ok', cols, rows });
   });
 }
 

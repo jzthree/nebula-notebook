@@ -4,117 +4,110 @@
  * Endpoints for server registration and cluster management.
  */
 
-import { Router, Request, Response } from 'express';
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { serverRegistry } from '../cluster/server-registry';
 import { getResourceService } from '../resources/resource-service';
 
-const router = Router();
 const resourceService = getResourceService();
 
-/**
- * GET /api/servers
- * List all servers in the cluster (local + registered peers)
- * Includes resource info for all servers
- */
-router.get('/servers', (_req: Request, res: Response) => {
-  // Get local resources (cached, never blocks)
-  const localResources = resourceService.getResources();
-  const clusterInfo = serverRegistry.getClusterInfo(localResources);
-  res.json(clusterInfo);
-});
-
-/**
- * POST /api/servers/register
- * Register a peer server with this server
- * Body can include { resources } for initial resource info
- */
-router.post('/servers/register', (req: Request, res: Response) => {
-  const { host, port, name, secret, resources } = req.body;
-
-  if (!host || !port) {
-    res.status(400).json({ error: 'host and port are required' });
-    return;
-  }
-
-  const result = serverRegistry.register({ host, port, name, secret, resources });
-
-  if (!result.success) {
-    res.status(403).json({ error: result.error });
-    return;
-  }
-
-  res.json({
-    registered: true,
-    serverId: result.serverId,
+export default async function clusterRoutes(fastify: FastifyInstance) {
+  /**
+   * GET /servers
+   * List all servers in the cluster (local + registered peers)
+   * Includes resource info for all servers
+   */
+  fastify.get('/servers', async (_request: FastifyRequest, reply: FastifyReply) => {
+    // Get local resources (cached, never blocks)
+    const localResources = resourceService.getResources();
+    const clusterInfo = serverRegistry.getClusterInfo(localResources);
+    return reply.send(clusterInfo);
   });
-});
 
-/**
- * DELETE /api/servers/:serverId
- * Unregister a peer server
- */
-router.delete('/servers/:serverId', (req: Request, res: Response) => {
-  const { serverId } = req.params;
-  const { secret } = req.body;
+  /**
+   * POST /servers/register
+   * Register a peer server with this server
+   * Body can include { resources } for initial resource info
+   */
+  fastify.post('/servers/register', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { host, port, name, secret, resources } = request.body as any;
 
-  // Validate secret if configured
-  const clusterSecret = process.env.NEBULA_CLUSTER_SECRET;
-  if (clusterSecret && secret !== clusterSecret) {
-    res.status(403).json({ error: 'Invalid cluster secret' });
-    return;
-  }
+    if (!host || !port) {
+      return reply.code(400).send({ error: 'host and port are required' });
+    }
 
-  const removed = serverRegistry.unregister(serverId);
+    const result = serverRegistry.register({ host, port, name, secret, resources });
 
-  if (!removed) {
-    res.status(404).json({ error: 'Server not found' });
-    return;
-  }
+    if (!result.success) {
+      return reply.code(403).send({ error: result.error });
+    }
 
-  res.json({ unregistered: true });
-});
-
-/**
- * POST /api/servers/:serverId/heartbeat
- * Record heartbeat from a peer server
- * Body can include { resources } for system resource info
- */
-router.post('/servers/:serverId/heartbeat', (req: Request, res: Response) => {
-  const { serverId } = req.params;
-  const { resources } = req.body;
-
-  const success = serverRegistry.heartbeat(serverId, resources);
-
-  if (!success) {
-    res.status(404).json({ error: 'Server not found' });
-    return;
-  }
-
-  res.json({ ok: true });
-});
-
-/**
- * GET /api/servers/:serverId
- * Get info about a specific server
- */
-router.get('/servers/:serverId', (req: Request, res: Response) => {
-  const { serverId } = req.params;
-
-  const server = serverRegistry.getServer(serverId);
-
-  if (!server) {
-    res.status(404).json({ error: 'Server not found' });
-    return;
-  }
-
-  res.json({
-    id: server.id,
-    name: server.name,
-    url: server.url,
-    status: server.status,
-    registeredAt: server.registeredAt,
-    lastHeartbeat: server.lastHeartbeat,
+    return reply.send({
+      registered: true,
+      serverId: result.serverId,
+    });
   });
-});
 
-export default router;
+  /**
+   * DELETE /servers/:serverId
+   * Unregister a peer server
+   */
+  fastify.delete('/servers/:serverId', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { serverId } = request.params as any;
+    const { secret } = request.body as any;
+
+    // Validate secret if configured
+    const clusterSecret = process.env.NEBULA_CLUSTER_SECRET;
+    if (clusterSecret && secret !== clusterSecret) {
+      return reply.code(403).send({ error: 'Invalid cluster secret' });
+    }
+
+    const removed = serverRegistry.unregister(serverId);
+
+    if (!removed) {
+      return reply.code(404).send({ error: 'Server not found' });
+    }
+
+    return reply.send({ unregistered: true });
+  });
+
+  /**
+   * POST /servers/:serverId/heartbeat
+   * Record heartbeat from a peer server
+   * Body can include { resources } for system resource info
+   */
+  fastify.post('/servers/:serverId/heartbeat', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { serverId } = request.params as any;
+    const { resources } = request.body as any;
+
+    const success = serverRegistry.heartbeat(serverId, resources);
+
+    if (!success) {
+      return reply.code(404).send({ error: 'Server not found' });
+    }
+
+    return reply.send({ ok: true });
+  });
+
+  /**
+   * GET /servers/:serverId
+   * Get info about a specific server
+   */
+  fastify.get('/servers/:serverId', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { serverId } = request.params as any;
+
+    const server = serverRegistry.getServer(serverId);
+
+    if (!server) {
+      return reply.code(404).send({ error: 'Server not found' });
+    }
+
+    return reply.send({
+      id: server.id,
+      name: server.name,
+      url: server.url,
+      status: server.status,
+      registeredAt: server.registeredAt,
+      lastHeartbeat: server.lastHeartbeat,
+    });
+  });
+}

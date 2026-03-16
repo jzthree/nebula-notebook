@@ -1,30 +1,38 @@
 /**
- * Express App Setup - Shared middleware and configuration
+ * Fastify App Setup - Shared middleware and configuration
  */
 
-import express, { Express, Request, Response } from 'express';
-import cors from 'cors';
+import Fastify, { FastifyInstance } from 'fastify';
 
-export function createApp(): Express {
-  const app = express();
-
-  // Shared middleware
-  app.use(cors());
+export function createApp(): FastifyInstance {
   const bodyLimit =
     process.env.NEBULA_BODY_LIMIT ||
     process.env.NEBULA_MAX_BODY_SIZE ||
     '200mb';
-  app.use(express.json({ limit: bodyLimit }));
-  app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 
-  // Health check endpoint
-  app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({
-      status: 'ok',
-      service: 'nebula-node-server',
-      timestamp: new Date().toISOString()
-    });
+  const app = Fastify({
+    bodyLimit: parseBodyLimit(bodyLimit),
   });
 
   return app;
+}
+
+/**
+ * Parse a human-readable body limit string (e.g., '200mb', '1gb') to bytes.
+ */
+function parseBodyLimit(limit: string): number {
+  const match = limit.match(/^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb)?$/i);
+  if (!match) {
+    return 200 * 1024 * 1024; // default 200mb
+  }
+  const value = parseFloat(match[1]);
+  const unit = (match[2] || 'b').toLowerCase();
+  const multipliers: Record<string, number> = {
+    b: 1,
+    kb: 1024,
+    mb: 1024 * 1024,
+    gb: 1024 * 1024 * 1024,
+    tb: 1024 * 1024 * 1024 * 1024,
+  };
+  return Math.floor(value * (multipliers[unit] || 1));
 }

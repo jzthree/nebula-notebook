@@ -7,7 +7,7 @@
  * - /api/auth/*
  */
 
-import { Request, Response, NextFunction } from 'express';
+import { FastifyRequest, FastifyReply } from 'fastify';
 import { IncomingMessage } from 'http';
 import { parse as parseUrl } from 'url';
 import { authService } from './auth-service';
@@ -39,7 +39,7 @@ function getClusterSecret(): string | null {
  * Extract auth token from request
  * Checks Authorization header (Bearer token) and query parameter
  */
-function extractToken(req: Request | IncomingMessage): string | undefined {
+function extractToken(req: FastifyRequest | IncomingMessage): string | undefined {
   // Check Authorization header
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
@@ -47,7 +47,11 @@ function extractToken(req: Request | IncomingMessage): string | undefined {
   }
 
   // Check query parameter (for WebSocket connections)
-  const url = 'url' in req ? req.url : (req as IncomingMessage).url;
+  const url = 'url' in req ? (req as IncomingMessage).url : undefined;
+  // For FastifyRequest, check query directly
+  if ('query' in req && (req as any).query?.token) {
+    return (req as any).query.token as string;
+  }
   if (url) {
     const parsed = parseUrl(url, true);
     const token = parsed.query.token;
@@ -59,8 +63,8 @@ function extractToken(req: Request | IncomingMessage): string | undefined {
   return undefined;
 }
 
-function extractClusterSecret(req: Request | IncomingMessage): string | undefined {
-  const headers = 'headers' in req ? req.headers : (req as IncomingMessage).headers;
+function extractClusterSecret(req: FastifyRequest | IncomingMessage): string | undefined {
+  const headers = req.headers;
   const value = headers[CLUSTER_SECRET_HEADER] as string | string[] | undefined;
   if (Array.isArray(value)) {
     return value[0];
@@ -68,7 +72,7 @@ function extractClusterSecret(req: Request | IncomingMessage): string | undefine
   return value;
 }
 
-function hasValidClusterSecret(req: Request | IncomingMessage): boolean {
+function hasValidClusterSecret(req: FastifyRequest | IncomingMessage): boolean {
   const clusterSecret = getClusterSecret();
   if (!clusterSecret) {
     return false;
@@ -99,82 +103,73 @@ function isPublicRoute(pathname: string): boolean {
 }
 
 /**
- * Express middleware for authentication
+ * Fastify onRequest hook for authentication
  */
-export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const pathname = req.path;
+export async function authMiddleware(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  // Reconstruct the full pathname including the prefix
+  // Fastify strips the prefix when registering under /api, so we need the raw URL
+  const pathname = request.url.split('?')[0];
 
   if (isClientMode()) {
     // Allow public routes regardless
     if (isPublicRoute(pathname)) {
-      next();
       return;
     }
     if (!getClusterSecret()) {
-      res.status(503).json({
+      return reply.code(503).send({
         error: 'cluster_secret_required',
         message: 'Cluster secret required for client mode. Set NEBULA_CLUSTER_SECRET.',
       });
-      return;
     }
-    if (!hasValidClusterSecret(req)) {
-      res.status(403).json({
+    if (!hasValidClusterSecret(request)) {
+      return reply.code(403).send({
         error: 'cluster_auth_required',
         message: 'Cluster authentication required.',
       });
-      return;
     }
-    next();
     return;
   }
 
-  if (isClusterRoute(pathname) && hasValidClusterSecret(req)) {
-    next();
+  if (isClusterRoute(pathname) && hasValidClusterSecret(request)) {
     return;
   }
 
   if (authService.isAuthDisabled()) {
-    next();
     return;
   }
 
   // Allow public routes
   if (isPublicRoute(pathname)) {
-    next();
     return;
   }
 
   // Check if auth is configured
   if (!authService.isSetupComplete()) {
     // During setup, only allow auth routes
-    res.status(503).json({
+    return reply.code(503).send({
       error: 'setup_required',
       message: '2FA setup not complete. Check server terminal for QR code.',
     });
-    return;
   }
 
   // Extract and validate token
-  const token = extractToken(req);
+  const token = extractToken(request);
   if (!token) {
-    res.status(401).json({
+    return reply.code(401).send({
       error: 'auth_required',
       message: 'Authentication required. Please log in.',
     });
-    return;
   }
 
   const payload = authService.validateToken(token);
   if (!payload) {
-    res.status(401).json({
+    return reply.code(401).send({
       error: 'invalid_token',
       message: 'Invalid or expired token. Please log in again.',
     });
-    return;
   }
 
-  // Token is valid, continue
-  next();
+  // Token is valid, continue (simply return)
 }
 
 /**
@@ -188,7 +183,7 @@ export function authWebSocketMiddleware(request: IncomingMessage): boolean {
       console.log('[Auth] WebSocket rejected - cluster secret not configured');
       return false;
     }
-    const provided = extractClusterSecret(request);
+    const provided = extractClusterSecret(request as any);
     if (provided !== clusterSecret) {
       console.log('[Auth] WebSocket rejected - invalid cluster secret');
       return false;

@@ -2,358 +2,349 @@
  * Filesystem API Routes
  */
 
-import { Router, Request, Response } from 'express';
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { fsService } from '../fs/fs-service';
-import multer from 'multer';
 import * as path from 'path';
 import * as os from 'os';
+import * as nodeFs from 'fs';
 
-const router = Router();
-
-// Configure multer for file uploads
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: os.tmpdir(),
-    filename: (_req, file, cb) => {
-      cb(null, `upload-${Date.now()}-${file.originalname}`);
-    },
-  }),
-});
-
-/**
- * List directory contents
- */
-router.get('/fs/list', (req: Request, res: Response) => {
-  try {
-    const dirPath = (req.query.path as string) || '~';
-    const result = fsService.listDirectory(dirPath);
-    res.json(result);
-  } catch (err) {
-    if (err instanceof Error) {
-      if (err.message.includes('not found') || err.message.includes('ENOENT')) {
-        res.status(404).json({ detail: err.message });
-      } else if (err.message.includes('permission') || err.message.includes('EACCES')) {
-        res.status(403).json({ detail: err.message });
+export default async function fsRoutes(fastify: FastifyInstance) {
+  /**
+   * List directory contents
+   */
+  fastify.get('/fs/list', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const dirPath = ((request.query as any).path as string) || '~';
+      const result = fsService.listDirectory(dirPath);
+      return reply.send(result);
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.message.includes('not found') || err.message.includes('ENOENT')) {
+          return reply.code(404).send({ detail: err.message });
+        } else if (err.message.includes('permission') || err.message.includes('EACCES')) {
+          return reply.code(403).send({ detail: err.message });
+        } else {
+          return reply.code(500).send({ detail: err.message });
+        }
       } else {
-        res.status(500).json({ detail: err.message });
+        return reply.code(500).send({ detail: 'Unknown error' });
       }
-    } else {
-      res.status(500).json({ detail: 'Unknown error' });
     }
-  }
-});
+  });
 
-/**
- * Get current server root directory
- */
-router.get('/fs/root', (_req: Request, res: Response) => {
-  res.json({ root: fsService.getRootDirectory() });
-});
+  /**
+   * Get current server root directory
+   */
+  fastify.get('/fs/root', async (_request: FastifyRequest, reply: FastifyReply) => {
+    return reply.send({ root: fsService.getRootDirectory() });
+  });
 
-/**
- * Set server root directory
- */
-router.post('/fs/root', (req: Request, res: Response) => {
-  const { root } = req.body || {};
-  if (!root || typeof root !== 'string') {
-    res.status(400).json({ detail: 'root is required' });
-    return;
-  }
+  /**
+   * Set server root directory
+   */
+  fastify.post('/fs/root', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { root } = (request.body as any) || {};
+    if (!root || typeof root !== 'string') {
+      return reply.code(400).send({ detail: 'root is required' });
+    }
 
-  try {
-    const updated = fsService.setRootDirectory(root);
-    res.json({ root: updated });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to set root';
-    res.status(400).json({ detail: message });
-  }
-});
+    try {
+      const updated = fsService.setRootDirectory(root);
+      return reply.send({ root: updated });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to set root';
+      return reply.code(400).send({ detail: message });
+    }
+  });
 
-/**
- * Get directory modification time
- */
-router.get('/fs/mtime', (req: Request, res: Response) => {
-  try {
-    const dirPath = (req.query.path as string) || '~';
-    const result = fsService.getDirectoryMtime(dirPath);
-    res.json(result);
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('not found')) {
-      res.status(404).json({ detail: err.message });
-    } else {
+  /**
+   * Get directory modification time
+   */
+  fastify.get('/fs/mtime', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const dirPath = ((request.query as any).path as string) || '~';
+      const result = fsService.getDirectoryMtime(dirPath);
+      return reply.send(result);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('not found')) {
+        return reply.code(404).send({ detail: err.message });
+      } else {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ detail: message });
+      }
+    }
+  });
+
+  /**
+   * Get file modification time
+   */
+  fastify.get('/fs/file-mtime', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const filePath = (request.query as any).path as string;
+      if (!filePath) {
+        return reply.code(400).send({ detail: 'path query parameter is required' });
+      }
+      const result = fsService.getFileMtime(filePath);
+      return reply.send(result);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('not found')) {
+        return reply.code(404).send({ detail: err.message });
+      } else {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ detail: message });
+      }
+    }
+  });
+
+  /**
+   * Read file contents
+   */
+  fastify.get('/fs/read', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const filePath = (request.query as any).path as string;
+      if (!filePath) {
+        return reply.code(400).send({ detail: 'path query parameter is required' });
+      }
+      const result = fsService.readFile(filePath);
+      return reply.send(result);
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.message.includes('not found') || err.message.includes('ENOENT')) {
+          return reply.code(404).send({ detail: err.message });
+        } else if (err.message.includes('directory') || err.message.includes('EISDIR')) {
+          return reply.code(400).send({ detail: err.message });
+        } else {
+          return reply.code(500).send({ detail: err.message });
+        }
+      } else {
+        return reply.code(500).send({ detail: 'Unknown error' });
+      }
+    }
+  });
+
+  /**
+   * Write content to a file
+   */
+  fastify.post('/fs/write', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { path: filePath, content, file_type = 'text' } = request.body as any;
+      if (!filePath) {
+        return reply.code(400).send({ detail: 'path is required' });
+      }
+      fsService.writeFile(filePath, content, file_type);
+      return reply.send({ status: 'ok', path: filePath });
+    } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ detail: message });
+      return reply.code(500).send({ detail: message });
     }
-  }
-});
+  });
 
-/**
- * Get file modification time
- */
-router.get('/fs/file-mtime', (req: Request, res: Response) => {
-  try {
-    const filePath = req.query.path as string;
-    if (!filePath) {
-      res.status(400).json({ detail: 'path query parameter is required' });
-      return;
-    }
-    const result = fsService.getFileMtime(filePath);
-    res.json(result);
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('not found')) {
-      res.status(404).json({ detail: err.message });
-    } else {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ detail: message });
-    }
-  }
-});
-
-/**
- * Read file contents
- */
-router.get('/fs/read', (req: Request, res: Response) => {
-  try {
-    const filePath = req.query.path as string;
-    if (!filePath) {
-      res.status(400).json({ detail: 'path query parameter is required' });
-      return;
-    }
-    const result = fsService.readFile(filePath);
-    res.json(result);
-  } catch (err) {
-    if (err instanceof Error) {
-      if (err.message.includes('not found') || err.message.includes('ENOENT')) {
-        res.status(404).json({ detail: err.message });
-      } else if (err.message.includes('directory') || err.message.includes('EISDIR')) {
-        res.status(400).json({ detail: err.message });
-      } else {
-        res.status(500).json({ detail: err.message });
+  /**
+   * Create a new file or directory
+   */
+  fastify.post('/fs/create', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { path: filePath, is_directory = false } = request.body as any;
+      if (!filePath) {
+        return reply.code(400).send({ detail: 'path is required' });
       }
-    } else {
-      res.status(500).json({ detail: 'Unknown error' });
-    }
-  }
-});
-
-/**
- * Write content to a file
- */
-router.post('/fs/write', (req: Request, res: Response) => {
-  try {
-    const { path: filePath, content, file_type = 'text' } = req.body;
-    if (!filePath) {
-      res.status(400).json({ detail: 'path is required' });
-      return;
-    }
-    fsService.writeFile(filePath, content, file_type);
-    res.json({ status: 'ok', path: filePath });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ detail: message });
-  }
-});
-
-/**
- * Create a new file or directory
- */
-router.post('/fs/create', (req: Request, res: Response) => {
-  try {
-    const { path: filePath, is_directory = false } = req.body;
-    if (!filePath) {
-      res.status(400).json({ detail: 'path is required' });
-      return;
-    }
-    const info = fsService.createFile(filePath, is_directory);
-    res.json({ status: 'ok', file: info });
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('exists')) {
-      res.status(409).json({ detail: err.message });
-    } else {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ detail: message });
-    }
-  }
-});
-
-/**
- * Delete a file or directory
- */
-router.delete('/fs/delete', (req: Request, res: Response) => {
-  try {
-    const filePath = req.query.path as string;
-    if (!filePath) {
-      res.status(400).json({ detail: 'path query parameter is required' });
-      return;
-    }
-    fsService.deleteFile(filePath);
-    res.json({ status: 'ok' });
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('not found')) {
-      res.status(404).json({ detail: err.message });
-    } else {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ detail: message });
-    }
-  }
-});
-
-/**
- * Rename/move a file or directory
- */
-router.post('/fs/rename', (req: Request, res: Response) => {
-  try {
-    const { old_path, new_path } = req.body;
-    if (!old_path || !new_path) {
-      res.status(400).json({ detail: 'old_path and new_path are required' });
-      return;
-    }
-    const info = fsService.renameFile(old_path, new_path);
-    res.json({ status: 'ok', file: info });
-  } catch (err) {
-    if (err instanceof Error) {
-      if (err.message.includes('not found')) {
-        res.status(404).json({ detail: err.message });
-      } else if (err.message.includes('exists')) {
-        res.status(409).json({ detail: err.message });
+      const info = fsService.createFile(filePath, is_directory);
+      return reply.send({ status: 'ok', file: info });
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('exists')) {
+        return reply.code(409).send({ detail: err.message });
       } else {
-        res.status(500).json({ detail: err.message });
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ detail: message });
       }
-    } else {
-      res.status(500).json({ detail: 'Unknown error' });
     }
-  }
-});
+  });
 
-/**
- * Duplicate a file or directory
- */
-router.post('/fs/duplicate', (req: Request, res: Response) => {
-  try {
-    const { path: filePath } = req.body;
-    if (!filePath) {
-      res.status(400).json({ detail: 'path is required' });
-      return;
-    }
-    const info = fsService.duplicateFile(filePath);
-    res.json({ status: 'ok', file: info });
-  } catch (err) {
-    if (err instanceof Error) {
-      if (err.message.includes('not found')) {
-        res.status(404).json({ detail: err.message });
+  /**
+   * Delete a file or directory
+   */
+  fastify.delete('/fs/delete', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const filePath = (request.query as any).path as string;
+      if (!filePath) {
+        return reply.code(400).send({ detail: 'path query parameter is required' });
+      }
+      fsService.deleteFile(filePath);
+      return reply.send({ status: 'ok' });
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('not found')) {
+        return reply.code(404).send({ detail: err.message });
       } else {
-        res.status(500).json({ detail: err.message });
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ detail: message });
       }
-    } else {
-      res.status(500).json({ detail: 'Unknown error' });
     }
-  }
-});
+  });
 
-/**
- * Download a file (raw stream with proper headers)
- */
-router.get('/fs/download', (req: Request, res: Response) => {
-  try {
-    const filePath = req.query.path as string;
-    if (!filePath) {
-      res.status(400).json({ detail: 'path query parameter is required' });
-      return;
-    }
-
-    const normalizedPath = fsService.normalizePath(filePath);
-    const fs = require('fs');
-    const pathModule = require('path');
-
-    if (!fs.existsSync(normalizedPath)) {
-      res.status(404).json({ detail: `File not found: ${normalizedPath}` });
-      return;
-    }
-
-    const stat = fs.statSync(normalizedPath);
-    if (stat.isDirectory()) {
-      res.status(400).json({ detail: 'Cannot download a directory' });
-      return;
-    }
-
-    const filename = pathModule.basename(normalizedPath);
-    const extension = pathModule.extname(normalizedPath).toLowerCase();
-
-    // Set content type based on extension
-    const mimeTypes: Record<string, string> = {
-      '.txt': 'text/plain',
-      '.json': 'application/json',
-      '.ipynb': 'application/json',
-      '.py': 'text/x-python',
-      '.js': 'application/javascript',
-      '.ts': 'application/typescript',
-      '.html': 'text/html',
-      '.css': 'text/css',
-      '.csv': 'text/csv',
-      '.md': 'text/markdown',
-      '.png': 'image/png',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.gif': 'image/gif',
-      '.svg': 'image/svg+xml',
-      '.pdf': 'application/pdf',
-      '.zip': 'application/zip',
-    };
-
-    const contentType = mimeTypes[extension] || 'application/octet-stream';
-
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Length', stat.size);
-
-    const stream = fs.createReadStream(normalizedPath);
-    stream.pipe(res);
-  } catch (err) {
-    if (err instanceof Error) {
-      if (err.message.includes('not found') || err.message.includes('ENOENT')) {
-        res.status(404).json({ detail: err.message });
+  /**
+   * Rename/move a file or directory
+   */
+  fastify.post('/fs/rename', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { old_path, new_path } = request.body as any;
+      if (!old_path || !new_path) {
+        return reply.code(400).send({ detail: 'old_path and new_path are required' });
+      }
+      const info = fsService.renameFile(old_path, new_path);
+      return reply.send({ status: 'ok', file: info });
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.message.includes('not found')) {
+          return reply.code(404).send({ detail: err.message });
+        } else if (err.message.includes('exists')) {
+          return reply.code(409).send({ detail: err.message });
+        } else {
+          return reply.code(500).send({ detail: err.message });
+        }
       } else {
-        res.status(500).json({ detail: err.message });
+        return reply.code(500).send({ detail: 'Unknown error' });
       }
-    } else {
-      res.status(500).json({ detail: 'Unknown error' });
     }
-  }
-});
+  });
 
-/**
- * Upload a file
- */
-router.post('/fs/upload', upload.single('file'), async (req: Request, res: Response) => {
-  try {
-    const destPath = req.body.path;
-    const file = req.file;
-
-    if (!destPath) {
-      res.status(400).json({ detail: 'path is required' });
-      return;
-    }
-    if (!file) {
-      res.status(400).json({ detail: 'file is required' });
-      return;
-    }
-
-    const info = await fsService.uploadFile(destPath, file.path, file.originalname);
-    res.json({ status: 'ok', file: info });
-  } catch (err) {
-    if (err instanceof Error) {
-      if (err.message.includes('not found')) {
-        res.status(404).json({ detail: err.message });
-      } else if (err.message.includes('permission')) {
-        res.status(403).json({ detail: err.message });
+  /**
+   * Duplicate a file or directory
+   */
+  fastify.post('/fs/duplicate', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { path: filePath } = request.body as any;
+      if (!filePath) {
+        return reply.code(400).send({ detail: 'path is required' });
+      }
+      const info = fsService.duplicateFile(filePath);
+      return reply.send({ status: 'ok', file: info });
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.message.includes('not found')) {
+          return reply.code(404).send({ detail: err.message });
+        } else {
+          return reply.code(500).send({ detail: err.message });
+        }
       } else {
-        res.status(500).json({ detail: err.message });
+        return reply.code(500).send({ detail: 'Unknown error' });
       }
-    } else {
-      res.status(500).json({ detail: 'Unknown error' });
     }
-  }
-});
+  });
+
+  /**
+   * Download a file (raw stream with proper headers)
+   */
+  fastify.get('/fs/download', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const filePath = (request.query as any).path as string;
+      if (!filePath) {
+        return reply.code(400).send({ detail: 'path query parameter is required' });
+      }
+
+      const normalizedPath = fsService.normalizePath(filePath);
+
+      if (!nodeFs.existsSync(normalizedPath)) {
+        return reply.code(404).send({ detail: `File not found: ${normalizedPath}` });
+      }
+
+      const stat = nodeFs.statSync(normalizedPath);
+      if (stat.isDirectory()) {
+        return reply.code(400).send({ detail: 'Cannot download a directory' });
+      }
+
+      const filename = path.basename(normalizedPath);
+      const extension = path.extname(normalizedPath).toLowerCase();
+
+      // Set content type based on extension
+      const mimeTypes: Record<string, string> = {
+        '.txt': 'text/plain',
+        '.json': 'application/json',
+        '.ipynb': 'application/json',
+        '.py': 'text/x-python',
+        '.js': 'application/javascript',
+        '.ts': 'application/typescript',
+        '.html': 'text/html',
+        '.css': 'text/css',
+        '.csv': 'text/csv',
+        '.md': 'text/markdown',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.svg': 'image/svg+xml',
+        '.pdf': 'application/pdf',
+        '.zip': 'application/zip',
+      };
+
+      const contentType = mimeTypes[extension] || 'application/octet-stream';
+
+      const stream = nodeFs.createReadStream(normalizedPath);
+      return reply
+        .header('Content-Type', contentType)
+        .header('Content-Disposition', `attachment; filename="${filename}"`)
+        .header('Content-Length', stat.size)
+        .send(stream);
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.message.includes('not found') || err.message.includes('ENOENT')) {
+          return reply.code(404).send({ detail: err.message });
+        } else {
+          return reply.code(500).send({ detail: err.message });
+        }
+      } else {
+        return reply.code(500).send({ detail: 'Unknown error' });
+      }
+    }
+  });
+
+  /**
+   * Upload a file
+   * Uses @fastify/multipart (registered in index.ts)
+   */
+  fastify.post('/fs/upload', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const data = await request.file();
+      if (!data) {
+        return reply.code(400).send({ detail: 'file is required' });
+      }
+
+      // Read the dest path from the fields
+      const destPathField = data.fields.path;
+      const destPath = destPathField && 'value' in destPathField ? (destPathField as any).value as string : undefined;
+
+      if (!destPath) {
+        return reply.code(400).send({ detail: 'path is required' });
+      }
+
+      // Save the uploaded file to a temp location first
+      const tmpPath = path.join(os.tmpdir(), `upload-${Date.now()}-${data.filename}`);
+      const writeStream = nodeFs.createWriteStream(tmpPath);
+      await new Promise<void>((resolve, reject) => {
+        data.file.pipe(writeStream);
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+      });
+
+      const info = await fsService.uploadFile(destPath, tmpPath, data.filename);
+
+      // Clean up temp file
+      try { nodeFs.unlinkSync(tmpPath); } catch { /* ignore */ }
+
+      return reply.send({ status: 'ok', file: info });
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.message.includes('not found')) {
+          return reply.code(404).send({ detail: err.message });
+        } else if (err.message.includes('permission')) {
+          return reply.code(403).send({ detail: err.message });
+        } else {
+          return reply.code(500).send({ detail: err.message });
+        }
+      } else {
+        return reply.code(500).send({ detail: 'Unknown error' });
+      }
+    }
+  });
+}
 
 export { fsService };
-export default router;

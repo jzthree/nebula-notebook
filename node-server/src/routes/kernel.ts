@@ -2,7 +2,7 @@
  * Kernel API Routes
  */
 
-import { Router, Request, Response } from 'express';
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WebSocket, WebSocketServer } from 'ws';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -28,8 +28,6 @@ import {
 } from '../cluster/kernel-proxy';
 import { serverRegistry } from '../cluster/server-registry';
 
-const router = Router();
-
 // Track all WebSocket connections per kernel session for broadcasting
 const sessionWebSockets: Map<string, Set<WebSocket>> = new Map();
 // Only send streaming outputs to sockets after they've performed an initial output sync.
@@ -43,432 +41,6 @@ const kernelService = new KernelService();
 // Initialize kernel service on module load
 kernelService.initialize().catch(err => {
   console.error('Failed to initialize kernel service:', err);
-});
-
-/**
- * List available kernelspecs
- * Transforms to snake_case to match Python API format expected by frontend
- */
-router.get('/kernels', async (_req: Request, res: Response) => {
-  const serverId = _req.query.server_id as string | undefined;
-  const localServerId = serverRegistry.getLocalServerId();
-  if (serverId && serverId !== localServerId && serverId !== 'local') {
-    try {
-      const data = await getRemoteKernels(serverId);
-      res.json(data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ detail: message });
-    }
-    return;
-  }
-
-  const kernels = kernelService.getAvailableKernels().map(k => ({
-    name: k.name,
-    display_name: k.displayName,
-    language: k.language,
-    path: k.path,
-    python_path: k.argv?.[0] || null, // First element of argv is typically the Python executable
-  }));
-  res.json({ kernels });
-});
-
-/**
- * Debug endpoint to show kernel discovery paths and environment
- */
-router.get('/kernels/debug', (_req: Request, res: Response) => {
-  const searchPaths = getKernelSearchPaths();
-
-  // Check common kernel locations
-  const commonPaths = [
-    path.join(os.homedir(), '.local', 'share', 'jupyter', 'kernels'),
-    '/usr/local/share/jupyter/kernels',
-    '/usr/share/jupyter/kernels',
-  ];
-
-  const condaPrefix = process.env.CONDA_PREFIX;
-  if (condaPrefix) {
-    commonPaths.push(path.join(condaPrefix, 'share', 'jupyter', 'kernels'));
-  }
-
-  const pathStatus: Record<string, { exists: boolean; kernels?: string[]; error?: string }> = {};
-
-  for (const p of commonPaths) {
-    if (fs.existsSync(p)) {
-      try {
-        const entries = fs.readdirSync(p, { withFileTypes: true });
-        const kernels = entries
-          .filter(e => e.isDirectory() && fs.existsSync(path.join(p, e.name, 'kernel.json')))
-          .map(e => e.name);
-        pathStatus[p] = { exists: true, kernels };
-      } catch (err) {
-        pathStatus[p] = { exists: true, error: String(err) };
-      }
-    } else {
-      pathStatus[p] = { exists: false };
-    }
-  }
-
-  res.json({
-    node_executable: process.execPath,
-    jupyter_data_paths: searchPaths,
-    common_paths: pathStatus,
-    env: {
-      JUPYTER_PATH: process.env.JUPYTER_PATH || '(not set)',
-      CONDA_PREFIX: process.env.CONDA_PREFIX || '(not set)',
-      HOME: process.env.HOME || '(not set)',
-    },
-    discovered_kernels: kernelService.getAvailableKernels().map(k => ({
-      name: k.name,
-      display_name: k.displayName,
-      language: k.language,
-      path: k.path,
-    })),
-  });
-});
-
-/**
- * List all active kernel sessions
- * Transforms to snake_case to match Python API format expected by frontend
- */
-router.get('/kernels/sessions', async (_req: Request, res: Response) => {
-  const serverId = _req.query.server_id as string | undefined;
-  const localServerId = serverRegistry.getLocalServerId();
-  if (serverId && serverId !== localServerId && serverId !== 'local') {
-    try {
-      const data = await getRemoteKernelSessions(serverId);
-      const sessions = (data.sessions || []).map((session: any) => ({
-        ...session,
-        id: createProxiedSessionId(serverId, session.id),
-      }));
-      res.json({ sessions });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ detail: message });
-    }
-    return;
-  }
-
-  const allSessions = await kernelService.getAllSessions();
-  const sessions = allSessions.map(s => ({
-    id: s.id,
-    kernel_name: s.kernelName,
-    file_path: s.filePath,
-    status: s.status,
-    execution_count: s.executionCount,
-    memory_mb: s.memoryMb,
-    pid: s.pid,
-    created_at: s.createdAt,
-  }));
-  res.json({ sessions });
-});
-
-/**
- * Get dead (orphaned/terminated) kernel sessions that can be cleaned up
- * These are sessions from previous server runs that failed to reattach
- */
-router.get('/kernels/dead', (_req: Request, res: Response) => {
-  const serverId = _req.query.server_id as string | undefined;
-  const localServerId = serverRegistry.getLocalServerId();
-  if (serverId && serverId !== localServerId && serverId !== 'local') {
-    getRemoteDeadKernelSessions(serverId)
-      .then(data => res.json(data))
-      .catch(err => {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        res.status(500).json({ detail: message });
-      });
-    return;
-  }
-
-  const deadSessions = kernelService.getDeadSessions();
-  const sessions = deadSessions.map(s => ({
-    session_id: s.sessionId,
-    kernel_name: s.kernelName,
-    file_path: s.filePath,
-    status: s.status,
-    last_heartbeat: s.lastHeartbeat,
-  }));
-  res.json({ sessions });
-});
-
-/**
- * Cleanup dead kernel sessions
- * If session_ids provided, only those are cleaned up
- * Otherwise all dead sessions are cleaned up
- */
-router.post('/kernels/dead/cleanup', async (req: Request, res: Response) => {
-  try {
-    const { session_ids, server_id } = req.body;
-    const serverId = server_id as string | undefined;
-    const localServerId = serverRegistry.getLocalServerId();
-    if (serverId && serverId !== localServerId && serverId !== 'local') {
-      const result = await cleanupRemoteDeadKernelSessions(serverId, session_ids);
-      res.json(result);
-      return;
-    }
-
-    const deleted = await kernelService.cleanupDeadSessions(session_ids);
-    res.json({ deleted });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ detail: message });
-  }
-});
-
-/**
- * Start a new kernel session
- * If server_id is provided and not local, starts on remote server
- */
-router.post('/kernels/start', async (req: Request, res: Response) => {
-  try {
-    const { kernel_name = 'python3', cwd, file_path, server_id } = req.body;
-
-    const localServerId = serverRegistry.getLocalServerId();
-    // Check if we should start on a remote server
-    if (server_id && server_id !== localServerId && server_id !== 'local') {
-      // Start on remote server
-      const result = await startRemoteKernel(server_id, kernel_name, file_path);
-      if (file_path) {
-        kernelService.saveNotebookKernelPreference(file_path, kernel_name, server_id);
-      }
-      res.json({ session_id: result.sessionId, kernel_name, server_id });
-      return;
-    }
-
-    // Start locally
-    const sessionId = await kernelService.startKernel({
-      kernelName: kernel_name,
-      cwd,
-      filePath: file_path,
-    });
-    if (file_path) {
-      kernelService.saveNotebookKernelPreference(file_path, kernel_name, localServerId);
-    }
-    res.json({ session_id: sessionId, kernel_name, server_id: localServerId });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ detail: message });
-  }
-});
-
-/**
- * Get stored kernel preference for a notebook file.
- */
-router.get('/kernels/preference', async (req: Request, res: Response) => {
-  const filePath = req.query.file_path as string;
-  if (!filePath) {
-    res.status(400).json({ detail: 'file_path query parameter is required' });
-    return;
-  }
-
-  const preference = kernelService.getNotebookKernelPreference(filePath);
-  if (!preference) {
-    res.json({ kernel_name: null, server_id: null });
-    return;
-  }
-  res.json({
-    kernel_name: preference.kernelName,
-    server_id: preference.serverId,
-    updated_at: preference.updatedAt,
-  });
-});
-
-/**
- * Get or create kernel for a notebook file
- * If server_id is provided and not local, starts on remote server
- */
-router.post('/kernels/for-file', async (req: Request, res: Response) => {
-  try {
-    const { file_path, kernel_name = 'python3', server_id } = req.body;
-    if (!file_path) {
-      res.status(400).json({ detail: 'file_path is required' });
-      return;
-    }
-
-    const normalizedFilePath = kernelService.normalizeNotebookPath(file_path);
-    let effectiveKernelName = kernel_name;
-    let effectiveServerId = server_id as string | undefined;
-    const localServerId = serverRegistry.getLocalServerId();
-
-    if (!effectiveServerId) {
-      const preference = kernelService.getNotebookKernelPreference(normalizedFilePath);
-      if (preference?.kernelName) {
-        effectiveKernelName = preference.kernelName;
-      }
-      if (preference?.serverId) {
-        const preferredServerId = preference.serverId;
-        const isLocalPreference = preferredServerId === localServerId || preferredServerId === 'local';
-        const hasServer = !!serverRegistry.getServer(preferredServerId);
-        if (isLocalPreference || hasServer) {
-          effectiveServerId = preferredServerId;
-        }
-      }
-    }
-
-    // Check if we should start on a remote server
-    if (effectiveServerId && effectiveServerId !== localServerId && effectiveServerId !== 'local') {
-      // Start on remote server
-      const result = await startRemoteKernel(effectiveServerId, effectiveKernelName, file_path);
-      kernelService.saveNotebookKernelPreference(normalizedFilePath, effectiveKernelName, effectiveServerId);
-      res.json({
-        session_id: result.sessionId,
-        kernel_name: effectiveKernelName,
-        file_path,
-        server_id: effectiveServerId,
-        created: result.created ?? false,
-        created_at: result.createdAt,
-      });
-      return;
-    }
-
-    // Start locally
-    const { sessionId, created } = await kernelService.getOrCreateKernel(normalizedFilePath, effectiveKernelName);
-    const sessionInfo = await kernelService.getSessionStatus(sessionId);
-    kernelService.saveNotebookKernelPreference(normalizedFilePath, effectiveKernelName, localServerId);
-    res.json({
-      session_id: sessionId,
-      kernel_name: effectiveKernelName,
-      file_path,
-      server_id: localServerId,
-      created,
-      created_at: sessionInfo?.createdAt,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ detail: message });
-  }
-});
-
-/**
- * Check if a kernel exists for a file
- */
-router.get('/kernels/for-file', async (req: Request, res: Response) => {
-  const filePath = req.query.file_path as string;
-  if (!filePath) {
-    res.status(400).json({ detail: 'file_path query parameter is required' });
-    return;
-  }
-  // We don't have a direct method, so check sessions
-  const sessions = await kernelService.getAllSessions();
-  const session = sessions.find(s => s.filePath === filePath);
-  if (session) {
-    res.json({ session_id: session.id, exists: true });
-  } else {
-    res.json({ session_id: null, exists: false });
-  }
-});
-
-/**
- * Stop a kernel session
- */
-router.delete('/kernels/:sessionId', async (req: Request, res: Response) => {
-  try {
-    const { sessionId } = req.params;
-
-    // Check if this is a proxied session
-    if (isProxiedSession(sessionId)) {
-      await shutdownRemoteKernel(sessionId);
-      res.json({ status: 'ok' });
-      return;
-    }
-
-    const success = await kernelService.stopKernel(sessionId);
-    if (success) {
-      res.json({ status: 'ok' });
-    } else {
-      res.status(404).json({ detail: 'Session not found' });
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ detail: message });
-  }
-});
-
-/**
- * Interrupt kernel execution
- */
-router.post('/kernels/:sessionId/interrupt', async (req: Request, res: Response) => {
-  try {
-    const { sessionId } = req.params;
-
-    // Check if this is a proxied session
-    if (isProxiedSession(sessionId)) {
-      await interruptRemoteKernel(sessionId);
-      res.json({ status: 'ok' });
-      return;
-    }
-
-    const success = await kernelService.interruptKernel(sessionId);
-    if (success) {
-      res.json({ status: 'ok' });
-    } else {
-      res.status(404).json({ detail: 'Session not found' });
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ detail: message });
-  }
-});
-
-/**
- * Restart a kernel
- */
-router.post('/kernels/:sessionId/restart', async (req: Request, res: Response) => {
-  try {
-    const { sessionId } = req.params;
-
-    // Check if this is a proxied session
-    if (isProxiedSession(sessionId)) {
-      await restartRemoteKernel(sessionId);
-      res.json({ status: 'ok' });
-      return;
-    }
-
-    const success = await kernelService.restartKernel(sessionId);
-    if (success) {
-      res.json({ status: 'ok' });
-    } else {
-      res.status(404).json({ detail: 'Session not found' });
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ detail: message });
-  }
-});
-
-/**
- * Get kernel session status
- */
-router.get('/kernels/:sessionId/status', async (req: Request, res: Response) => {
-  const { sessionId } = req.params;
-
-  // Check if this is a proxied session
-  if (isProxiedSession(sessionId)) {
-    try {
-      const remoteStatus = await getRemoteKernelStatus(sessionId);
-      res.json(remoteStatus);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ detail: message });
-    }
-    return;
-  }
-
-  const status = await kernelService.getSessionStatus(sessionId);
-  if (status) {
-    // Convert to snake_case for frontend compatibility
-    res.json({
-      id: status.id,
-      kernel_name: status.kernelName,
-      file_path: status.filePath,
-      status: status.status,
-      execution_count: status.executionCount,
-      memory_mb: status.memoryMb,
-      pid: status.pid,
-    });
-  } else {
-    res.status(404).json({ detail: 'Session not found' });
-  }
 });
 
 /**
@@ -611,5 +183,419 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
   });
 }
 
+export default async function kernelRoutes(fastify: FastifyInstance) {
+  /**
+   * List available kernelspecs
+   * Transforms to snake_case to match Python API format expected by frontend
+   */
+  fastify.get('/kernels', async (request: FastifyRequest, reply: FastifyReply) => {
+    const serverId = (request.query as any).server_id as string | undefined;
+    const localServerId = serverRegistry.getLocalServerId();
+    if (serverId && serverId !== localServerId && serverId !== 'local') {
+      try {
+        const data = await getRemoteKernels(serverId);
+        return reply.send(data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ detail: message });
+      }
+    }
+
+    const kernels = kernelService.getAvailableKernels().map(k => ({
+      name: k.name,
+      display_name: k.displayName,
+      language: k.language,
+      path: k.path,
+      python_path: k.argv?.[0] || null, // First element of argv is typically the Python executable
+    }));
+    return reply.send({ kernels });
+  });
+
+  /**
+   * Debug endpoint to show kernel discovery paths and environment
+   */
+  fastify.get('/kernels/debug', async (_request: FastifyRequest, reply: FastifyReply) => {
+    const searchPaths = getKernelSearchPaths();
+
+    // Check common kernel locations
+    const commonPaths = [
+      path.join(os.homedir(), '.local', 'share', 'jupyter', 'kernels'),
+      '/usr/local/share/jupyter/kernels',
+      '/usr/share/jupyter/kernels',
+    ];
+
+    const condaPrefix = process.env.CONDA_PREFIX;
+    if (condaPrefix) {
+      commonPaths.push(path.join(condaPrefix, 'share', 'jupyter', 'kernels'));
+    }
+
+    const pathStatus: Record<string, { exists: boolean; kernels?: string[]; error?: string }> = {};
+
+    for (const p of commonPaths) {
+      if (fs.existsSync(p)) {
+        try {
+          const entries = fs.readdirSync(p, { withFileTypes: true });
+          const kernels = entries
+            .filter(e => e.isDirectory() && fs.existsSync(path.join(p, e.name, 'kernel.json')))
+            .map(e => e.name);
+          pathStatus[p] = { exists: true, kernels };
+        } catch (err) {
+          pathStatus[p] = { exists: true, error: String(err) };
+        }
+      } else {
+        pathStatus[p] = { exists: false };
+      }
+    }
+
+    return reply.send({
+      node_executable: process.execPath,
+      jupyter_data_paths: searchPaths,
+      common_paths: pathStatus,
+      env: {
+        JUPYTER_PATH: process.env.JUPYTER_PATH || '(not set)',
+        CONDA_PREFIX: process.env.CONDA_PREFIX || '(not set)',
+        HOME: process.env.HOME || '(not set)',
+      },
+      discovered_kernels: kernelService.getAvailableKernels().map(k => ({
+        name: k.name,
+        display_name: k.displayName,
+        language: k.language,
+        path: k.path,
+      })),
+    });
+  });
+
+  /**
+   * List all active kernel sessions
+   * Transforms to snake_case to match Python API format expected by frontend
+   */
+  fastify.get('/kernels/sessions', async (request: FastifyRequest, reply: FastifyReply) => {
+    const serverId = (request.query as any).server_id as string | undefined;
+    const localServerId = serverRegistry.getLocalServerId();
+    if (serverId && serverId !== localServerId && serverId !== 'local') {
+      try {
+        const data = await getRemoteKernelSessions(serverId);
+        const sessions = (data.sessions || []).map((session: any) => ({
+          ...session,
+          id: createProxiedSessionId(serverId, session.id),
+        }));
+        return reply.send({ sessions });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ detail: message });
+      }
+    }
+
+    const allSessions = await kernelService.getAllSessions();
+    const sessions = allSessions.map(s => ({
+      id: s.id,
+      kernel_name: s.kernelName,
+      file_path: s.filePath,
+      status: s.status,
+      execution_count: s.executionCount,
+      memory_mb: s.memoryMb,
+      pid: s.pid,
+      created_at: s.createdAt,
+    }));
+    return reply.send({ sessions });
+  });
+
+  /**
+   * Get dead (orphaned/terminated) kernel sessions that can be cleaned up
+   * These are sessions from previous server runs that failed to reattach
+   */
+  fastify.get('/kernels/dead', async (request: FastifyRequest, reply: FastifyReply) => {
+    const serverId = (request.query as any).server_id as string | undefined;
+    const localServerId = serverRegistry.getLocalServerId();
+    if (serverId && serverId !== localServerId && serverId !== 'local') {
+      try {
+        const data = await getRemoteDeadKernelSessions(serverId);
+        return reply.send(data);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ detail: message });
+      }
+    }
+
+    const deadSessions = kernelService.getDeadSessions();
+    const sessions = deadSessions.map(s => ({
+      session_id: s.sessionId,
+      kernel_name: s.kernelName,
+      file_path: s.filePath,
+      status: s.status,
+      last_heartbeat: s.lastHeartbeat,
+    }));
+    return reply.send({ sessions });
+  });
+
+  /**
+   * Cleanup dead kernel sessions
+   * If session_ids provided, only those are cleaned up
+   * Otherwise all dead sessions are cleaned up
+   */
+  fastify.post('/kernels/dead/cleanup', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { session_ids, server_id } = request.body as any;
+      const serverId = server_id as string | undefined;
+      const localServerId = serverRegistry.getLocalServerId();
+      if (serverId && serverId !== localServerId && serverId !== 'local') {
+        const result = await cleanupRemoteDeadKernelSessions(serverId, session_ids);
+        return reply.send(result);
+      }
+
+      const deleted = await kernelService.cleanupDeadSessions(session_ids);
+      return reply.send({ deleted });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({ detail: message });
+    }
+  });
+
+  /**
+   * Start a new kernel session
+   * If server_id is provided and not local, starts on remote server
+   */
+  fastify.post('/kernels/start', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { kernel_name = 'python3', cwd, file_path, server_id } = request.body as any;
+
+      const localServerId = serverRegistry.getLocalServerId();
+      // Check if we should start on a remote server
+      if (server_id && server_id !== localServerId && server_id !== 'local') {
+        // Start on remote server
+        const result = await startRemoteKernel(server_id, kernel_name, file_path);
+        if (file_path) {
+          kernelService.saveNotebookKernelPreference(file_path, kernel_name, server_id);
+        }
+        return reply.send({ session_id: result.sessionId, kernel_name, server_id });
+      }
+
+      // Start locally
+      const sessionId = await kernelService.startKernel({
+        kernelName: kernel_name,
+        cwd,
+        filePath: file_path,
+      });
+      if (file_path) {
+        kernelService.saveNotebookKernelPreference(file_path, kernel_name, localServerId);
+      }
+      return reply.send({ session_id: sessionId, kernel_name, server_id: localServerId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({ detail: message });
+    }
+  });
+
+  /**
+   * Get stored kernel preference for a notebook file.
+   */
+  fastify.get('/kernels/preference', async (request: FastifyRequest, reply: FastifyReply) => {
+    const filePath = (request.query as any).file_path as string;
+    if (!filePath) {
+      return reply.code(400).send({ detail: 'file_path query parameter is required' });
+    }
+
+    const preference = kernelService.getNotebookKernelPreference(filePath);
+    if (!preference) {
+      return reply.send({ kernel_name: null, server_id: null });
+    }
+    return reply.send({
+      kernel_name: preference.kernelName,
+      server_id: preference.serverId,
+      updated_at: preference.updatedAt,
+    });
+  });
+
+  /**
+   * Get or create kernel for a notebook file
+   * If server_id is provided and not local, starts on remote server
+   */
+  fastify.post('/kernels/for-file', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { file_path, kernel_name = 'python3', server_id } = request.body as any;
+      if (!file_path) {
+        return reply.code(400).send({ detail: 'file_path is required' });
+      }
+
+      const normalizedFilePath = kernelService.normalizeNotebookPath(file_path);
+      let effectiveKernelName = kernel_name;
+      let effectiveServerId = server_id as string | undefined;
+      const localServerId = serverRegistry.getLocalServerId();
+
+      if (!effectiveServerId) {
+        const preference = kernelService.getNotebookKernelPreference(normalizedFilePath);
+        if (preference?.kernelName) {
+          effectiveKernelName = preference.kernelName;
+        }
+        if (preference?.serverId) {
+          const preferredServerId = preference.serverId;
+          const isLocalPreference = preferredServerId === localServerId || preferredServerId === 'local';
+          const hasServer = !!serverRegistry.getServer(preferredServerId);
+          if (isLocalPreference || hasServer) {
+            effectiveServerId = preferredServerId;
+          }
+        }
+      }
+
+      // Check if we should start on a remote server
+      if (effectiveServerId && effectiveServerId !== localServerId && effectiveServerId !== 'local') {
+        // Start on remote server
+        const result = await startRemoteKernel(effectiveServerId, effectiveKernelName, file_path);
+        kernelService.saveNotebookKernelPreference(normalizedFilePath, effectiveKernelName, effectiveServerId);
+        return reply.send({
+          session_id: result.sessionId,
+          kernel_name: effectiveKernelName,
+          file_path,
+          server_id: effectiveServerId,
+          created: result.created ?? false,
+          created_at: result.createdAt,
+        });
+      }
+
+      // Start locally
+      const { sessionId, created } = await kernelService.getOrCreateKernel(normalizedFilePath, effectiveKernelName);
+      const sessionInfo = await kernelService.getSessionStatus(sessionId);
+      kernelService.saveNotebookKernelPreference(normalizedFilePath, effectiveKernelName, localServerId);
+      return reply.send({
+        session_id: sessionId,
+        kernel_name: effectiveKernelName,
+        file_path,
+        server_id: localServerId,
+        created,
+        created_at: sessionInfo?.createdAt,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({ detail: message });
+    }
+  });
+
+  /**
+   * Check if a kernel exists for a file
+   */
+  fastify.get('/kernels/for-file', async (request: FastifyRequest, reply: FastifyReply) => {
+    const filePath = (request.query as any).file_path as string;
+    if (!filePath) {
+      return reply.code(400).send({ detail: 'file_path query parameter is required' });
+    }
+    // We don't have a direct method, so check sessions
+    const sessions = await kernelService.getAllSessions();
+    const session = sessions.find(s => s.filePath === filePath);
+    if (session) {
+      return reply.send({ session_id: session.id, exists: true });
+    } else {
+      return reply.send({ session_id: null, exists: false });
+    }
+  });
+
+  /**
+   * Stop a kernel session
+   */
+  fastify.delete('/kernels/:sessionId', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { sessionId } = request.params as any;
+
+      // Check if this is a proxied session
+      if (isProxiedSession(sessionId)) {
+        await shutdownRemoteKernel(sessionId);
+        return reply.send({ status: 'ok' });
+      }
+
+      const success = await kernelService.stopKernel(sessionId);
+      if (success) {
+        return reply.send({ status: 'ok' });
+      } else {
+        return reply.code(404).send({ detail: 'Session not found' });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({ detail: message });
+    }
+  });
+
+  /**
+   * Interrupt kernel execution
+   */
+  fastify.post('/kernels/:sessionId/interrupt', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { sessionId } = request.params as any;
+
+      // Check if this is a proxied session
+      if (isProxiedSession(sessionId)) {
+        await interruptRemoteKernel(sessionId);
+        return reply.send({ status: 'ok' });
+      }
+
+      const success = await kernelService.interruptKernel(sessionId);
+      if (success) {
+        return reply.send({ status: 'ok' });
+      } else {
+        return reply.code(404).send({ detail: 'Session not found' });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({ detail: message });
+    }
+  });
+
+  /**
+   * Restart a kernel
+   */
+  fastify.post('/kernels/:sessionId/restart', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { sessionId } = request.params as any;
+
+      // Check if this is a proxied session
+      if (isProxiedSession(sessionId)) {
+        await restartRemoteKernel(sessionId);
+        return reply.send({ status: 'ok' });
+      }
+
+      const success = await kernelService.restartKernel(sessionId);
+      if (success) {
+        return reply.send({ status: 'ok' });
+      } else {
+        return reply.code(404).send({ detail: 'Session not found' });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({ detail: message });
+    }
+  });
+
+  /**
+   * Get kernel session status
+   */
+  fastify.get('/kernels/:sessionId/status', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { sessionId } = request.params as any;
+
+    // Check if this is a proxied session
+    if (isProxiedSession(sessionId)) {
+      try {
+        const remoteStatus = await getRemoteKernelStatus(sessionId);
+        return reply.send(remoteStatus);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return reply.code(500).send({ detail: message });
+      }
+    }
+
+    const status = await kernelService.getSessionStatus(sessionId);
+    if (status) {
+      // Convert to snake_case for frontend compatibility
+      return reply.send({
+        id: status.id,
+        kernel_name: status.kernelName,
+        file_path: status.filePath,
+        status: status.status,
+        execution_count: status.executionCount,
+        memory_mb: status.memoryMb,
+        pid: status.pid,
+      });
+    } else {
+      return reply.code(404).send({ detail: 'Session not found' });
+    }
+  });
+}
+
 export { kernelService };
-export default router;
