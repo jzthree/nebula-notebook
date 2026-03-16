@@ -1068,7 +1068,6 @@ export const Notebook: React.FC = () => {
 
   // Unified scroll function - ALL scroll operations should use this
   // ── Simplified scroll (all cells in DOM via content-visibility) ───────────
-  // No virtual list tricks needed — just scrollIntoView on the target element.
   const scrollToCell = useCallback((
     index: number,
     options?: {
@@ -1082,7 +1081,13 @@ export const Notebook: React.FC = () => {
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
 
     const doScroll = () => {
-      // Force progressive rendering up to this cell if needed
+      // All cells are in the DOM (content-visibility) — just find and scroll.
+      const cellEl = document.querySelector(`[data-cell-index="${index}"]`);
+      if (cellEl) {
+        cellEl.scrollIntoView({ block: 'start', behavior });
+        return;
+      }
+      // Cell not rendered yet (progressive rendering) — use handle to force-render
       virtuosoRef.current?.scrollToIndex({ index, align: 'start', behavior, offset: -80 });
     };
 
@@ -1993,6 +1998,24 @@ export const Notebook: React.FC = () => {
       setIndentConfig(detectedIndent);
     }
 
+    // Deduplicate cell IDs — notebooks with repeated cells (or corrupt metadata)
+    // may have non-unique IDs which break React keys, undo/redo, and search.
+    const seenIds = new Set<string>();
+    const renamedIds: Array<{ index: number; oldId: string; newId: string }> = [];
+    for (let i = 0; i < content.length; i++) {
+      if (seenIds.has(content[i].id)) {
+        const oldId = content[i].id;
+        let newId = generateCellId();
+        while (seenIds.has(newId)) newId = generateCellId();
+        content[i] = { ...content[i], id: newId };
+        renamedIds.push({ index: i, oldId, newId });
+      }
+      seenIds.add(content[i].id);
+    }
+    if (renamedIds.length > 0) {
+      console.info(`[Load] Deduplicated ${renamedIds.length} cell IDs`);
+    }
+
     // IMPORTANT: History loading flow to prevent data loss
     // 1. Set cells WITHOUT creating a new snapshot (preserves existing history)
     // 2. Load history from file
@@ -2022,11 +2045,23 @@ export const Notebook: React.FC = () => {
       .then(([savedHistory, savedSession, permissionStatus, notebookSettings]) => {
         // Initialize history appropriately
         if (savedHistory.length > 0) {
-          // Existing history file - restore it (includes snapshot and operations)
           loadHistory(savedHistory);
         } else {
-          // No history file - create initial snapshot for this notebook
           initializeNewHistory(content);
+        }
+
+        // Log ID dedup as metadata changes so they appear in history
+        // and get persisted on next save.
+        if (renamedIds.length > 0) {
+          for (const { newId, oldId } of renamedIds) {
+            logOperation({
+              type: 'event',
+              category: 'system',
+              name: 'deduplicateCellId',
+              data: { oldId, newId },
+              source: 'system',
+            });
+          }
         }
 
         // Set agent permission status

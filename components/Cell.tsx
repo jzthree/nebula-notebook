@@ -611,7 +611,9 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
   // Only check visual state - not callbacks which change frequently
   return (
     prevProps.cell === nextProps.cell &&
-    prevProps.index === nextProps.index &&
+    // Note: index intentionally excluded — it changes for all cells after a
+    // delete/insert, which would re-render 1500 cells just to update the "#N"
+    // label. The label updates on the next render when cell reference changes.
     prevProps.isActive === nextProps.isActive &&
     prevProps.isHighlighted === nextProps.isHighlighted &&
     prevProps.isLocked === nextProps.isLocked &&
