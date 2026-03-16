@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, startTransition } from 'react';
 import { Cell } from '../types';
 
-// ─── Public handle exposed via virtuosoRef ───────────────────────────────────
+// ─── Public handle exposed via cellListRef ───────────────────────────────────
 export interface CellListHandle {
   scrollToIndex: (options: {
     index: number;
@@ -14,7 +14,7 @@ export interface CellListHandle {
 interface Props {
   cells: Cell[];
   renderCell: (cell: Cell, index: number) => React.ReactNode;
-  virtuosoRef?: React.RefObject<CellListHandle | null>;
+  cellListRef?: React.RefObject<CellListHandle | null>;
   className?: string;
   onRangeChange?: (range: { startIndex: number; endIndex: number }) => void;
   renderKey?: string | number;
@@ -44,7 +44,7 @@ const BATCH_SIZE = 10;
 export const VirtualCellList: React.FC<Props> = ({
   cells,
   renderCell,
-  virtuosoRef,
+  cellListRef,
   className,
   onRangeChange,
   renderKey,
@@ -129,7 +129,7 @@ export const VirtualCellList: React.FC<Props> = ({
 
   // ── scrollToIndex ────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!virtuosoRef) return;
+    if (!cellListRef) return;
 
     const handle: CellListHandle = {
       scrollToIndex({ index, align = 'start', behavior = 'auto', offset = 0 }) {
@@ -172,14 +172,14 @@ export const VirtualCellList: React.FC<Props> = ({
       },
     };
 
-    (virtuosoRef as React.MutableRefObject<CellListHandle | null>).current =
+    (cellListRef as React.MutableRefObject<CellListHandle | null>).current =
       handle;
 
     return () => {
-      (virtuosoRef as React.MutableRefObject<CellListHandle | null>).current =
+      (cellListRef as React.MutableRefObject<CellListHandle | null>).current =
         null;
     };
-  }, [virtuosoRef]);
+  }, [cellListRef]);
 
   // ── Track visible range via IntersectionObserver ─────────────────────────
   useEffect(() => {

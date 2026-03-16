@@ -1058,7 +1058,7 @@ export const Notebook: React.FC = () => {
   }, []);
 
   // Virtuoso Handle for programmatic scrolling
-  const virtuosoRef = useRef<CellListHandle>(null);
+  const cellListRef = useRef<CellListHandle>(null);
 
   // Pending scroll after cell changes (for undo/redo of insert/delete)
   const pendingScrollCellIdRef = useRef<string | null>(null);
@@ -1096,7 +1096,7 @@ export const Notebook: React.FC = () => {
         return;
       }
       // Cell not rendered yet (progressive rendering) — use handle to force-render
-      virtuosoRef.current?.scrollToIndex({ index, align: 'start', behavior, offset: -80 });
+      cellListRef.current?.scrollToIndex({ index, align: 'start', behavior, offset: -80 });
     };
 
     if (delay > 0) {
@@ -4247,7 +4247,7 @@ export const Notebook: React.FC = () => {
             <VirtualCellList
               key={currentFileId || 'empty'}
               cells={displayCells}
-              virtuosoRef={virtuosoRef}
+              cellListRef={cellListRef}
               className="h-full"
               onRangeChange={handleRangeChange}
               renderKey={`${showLineNumbers ? 'ln' : ''}-${showCellIds ? 'ci' : ''}-${isPreviewMode ? 'pv' : ''}`}
