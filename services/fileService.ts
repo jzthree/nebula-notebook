@@ -344,9 +344,18 @@ export const getNotebookCells = async (path: string): Promise<Cell[]> => {
 };
 
 /**
- * Get notebook data including cells, kernelspec, and mtime
+ * Get notebook data including cells, kernelspec, and mtime.
+ * Results are cached briefly (500ms) so React Strict Mode double-mounts
+ * reuse the same cell objects instead of creating a second copy (~500MB saved).
  */
+let _notebookDataCache: { path: string; data: NotebookData; ts: number } | null = null;
+
 export const getNotebookData = async (path: string): Promise<NotebookData> => {
+  // Return cached result if same path and <500ms old (Strict Mode double-mount)
+  if (_notebookDataCache && _notebookDataCache.path === path && Date.now() - _notebookDataCache.ts < 500) {
+    return _notebookDataCache.data;
+  }
+
   const response = await fetch(`${API_BASE}/notebook/cells?path=${encodeURIComponent(path)}`);
 
   if (!response.ok) {
@@ -355,11 +364,17 @@ export const getNotebookData = async (path: string): Promise<NotebookData> => {
   }
 
   const data = await response.json();
-  return {
+  const result: NotebookData = {
     cells: data.cells,
     kernelspec: data.kernelspec || 'python3',
     mtime: data.mtime,
   };
+
+  // Cache briefly for Strict Mode dedup
+  _notebookDataCache = { path, data: result, ts: Date.now() };
+  setTimeout(() => { if (_notebookDataCache?.path === path) _notebookDataCache = null; }, 1000);
+
+  return result;
 };
 
 /**
