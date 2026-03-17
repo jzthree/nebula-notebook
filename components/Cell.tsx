@@ -1,4 +1,4 @@
-import React, { useState, useCallback, memo, useRef, useEffect } from 'react';
+import React, { useState, useCallback, memo, useRef, useEffect, useLayoutEffect } from 'react';
 import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
 import { CodeEditor } from './CodeEditor';
@@ -272,15 +272,11 @@ const CellComponent: React.FC<Props> = ({
   const enableInteractiveFeatures = shouldForceInteractiveFeatures() || focusState === 'editor';
 
   // ⚠️ PERFORMANCE: Lazy CodeMirror — render a lightweight <pre> until the
-  // cell scrolls into view. Destroy CodeMirror when the cell scrolls far away
-  // (>2000px) to bound editor memory to O(visible cells).
-  // The Cell component itself stays mounted (outputs, DOM stable).
-  // Lazy CodeMirror: mount when the cell first scrolls near the viewport.
-  // Once mounted, stays mounted forever — unmounting causes height changes
-  // that shift scroll position, creating a bounce-back loop during fast scroll.
+  // Lazy CodeMirror: mount when the cell scrolls near the viewport.
   const [editorMounted, setEditorMounted] = useState(false);
+
   useEffect(() => {
-    if (editorMounted) return; // already mounted, no need to observe
+    if (editorMounted) return;
     const el = cellRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
@@ -556,7 +552,6 @@ const CellComponent: React.FC<Props> = ({
       {/* Editor Area */}
       <div onClick={(e) => {
         e.stopPropagation();
-        // Clicking the pre fallback should mount CodeMirror and focus it
         if (!editorMounted) setEditorMounted(true);
         onClick(cell.id, e);
       }}>
@@ -584,7 +579,6 @@ const CellComponent: React.FC<Props> = ({
             kernelSessionId={kernelSessionId}
           />
         ) : (
-          /* Lightweight fallback until cell scrolls into view */
           <pre className="font-mono text-sm px-3 py-2 text-slate-700 whitespace-pre-wrap min-h-[1.5rem]">
             {cell.content || (cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title')}
           </pre>

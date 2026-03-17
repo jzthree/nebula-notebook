@@ -249,11 +249,6 @@ export const VirtualCellList: React.FC<Props> = ({
       key={cell.id}
       data-cell-id={cell.id}
       data-cell-index={index}
-      style={{
-        contentVisibility: 'auto',
-        containIntrinsicSize: 'auto 200px',
-        contain: 'style paint',
-      }}
     >
       {renderCellRef.current(cell, index)}
     </div>
