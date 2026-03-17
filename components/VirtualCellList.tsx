@@ -252,7 +252,7 @@ export const VirtualCellList: React.FC<Props> = ({
       style={{
         contentVisibility: 'auto',
         containIntrinsicSize: 'auto 200px',
-        contain: 'layout style paint',
+        contain: 'style paint',
       }}
     >
       {renderCellRef.current(cell, index)}
