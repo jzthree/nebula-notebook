@@ -275,24 +275,26 @@ const CellComponent: React.FC<Props> = ({
   // cell scrolls into view. Destroy CodeMirror when the cell scrolls far away
   // (>2000px) to bound editor memory to O(visible cells).
   // The Cell component itself stays mounted (outputs, DOM stable).
+  // Lazy CodeMirror: mount when the cell first scrolls near the viewport.
+  // Once mounted, stays mounted forever — unmounting causes height changes
+  // that shift scroll position, creating a bounce-back loop during fast scroll.
   const [editorMounted, setEditorMounted] = useState(false);
   useEffect(() => {
+    if (editorMounted) return; // already mounted, no need to observe
     const el = cellRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
           setEditorMounted(true);
-        } else if (editorMounted && focusState === 'none') {
-          // Only unmount if the cell isn't focused (user isn't editing)
-          setEditorMounted(false);
+          observer.disconnect();
         }
       },
-      { rootMargin: '2000px 0px' }, // generous margin to avoid flicker
+      { rootMargin: '200px 0px' },
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [editorMounted, focusState]);
+  }, [editorMounted]);
 
   // Border colors based on focus state:
   // - editor (blue): CodeMirror has focus, handles keyboard
