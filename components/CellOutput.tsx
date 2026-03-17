@@ -1,4 +1,5 @@
 import React, { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { CellOutput as ICellOutput } from '../types';
 import { ChevronDown, ChevronRight, GripHorizontal, WrapText, ArrowRightLeft, ExternalLink } from 'lucide-react';
 import { encodeHtmlParam, wrapHtmlDocument, MAX_HTML_PARAM_LENGTH } from '../utils/htmlPreview';
@@ -602,12 +603,15 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
 
   return (
     <>
-      {activeImageSrc && (
-        <div className="fixed inset-0 z-50 bg-slate-900/70 flex items-center justify-center p-4">
+      {activeImageSrc && createPortal(
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/70 flex items-center justify-center p-4"
+          onClick={() => setActiveImageSrc(null)}
+        >
           <button
             type="button"
             onClick={() => setActiveImageSrc(null)}
-            className="absolute top-4 right-4 text-white/80 hover:text-white text-xl"
+            className="absolute top-4 right-4 text-white/80 hover:text-white text-xl z-10"
             title="Close"
           >
             ✕
@@ -615,6 +619,7 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
           <div
             ref={imageViewportRef}
             className="w-full h-full overflow-auto cursor-grab active:cursor-grabbing"
+            onClick={(e) => e.stopPropagation()}
             onMouseDown={handleImageMouseDown}
             onMouseMove={handleImageMouseMove}
             onMouseUp={stopImagePan}
@@ -627,7 +632,8 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
               draggable={false}
             />
           </div>
-        </div>
+        </div>,
+        document.body
       )}
       <div
         ref={containerRef}
