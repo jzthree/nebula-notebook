@@ -618,8 +618,8 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
           </button>
           <div
             ref={imageViewportRef}
-            className="w-full h-full overflow-auto cursor-grab active:cursor-grabbing flex items-center justify-center"
-            onClick={(e) => e.stopPropagation()}
+            className="w-full h-full overflow-auto flex items-center justify-center"
+            onClick={() => setActiveImageSrc(null)}
             onMouseDown={handleImageMouseDown}
             onMouseMove={handleImageMouseMove}
             onMouseUp={stopImagePan}
@@ -628,8 +628,9 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
             <img
               src={activeImageSrc}
               alt="Output"
-              className="block max-w-full max-h-full object-contain"
+              className="block max-w-full max-h-full object-contain cursor-grab active:cursor-grabbing"
               draggable={false}
+              onClick={(e) => e.stopPropagation()}
             />
           </div>
         </div>,

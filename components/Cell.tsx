@@ -1,4 +1,4 @@
-import React, { useState, useCallback, memo, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useCallback, memo, useRef, useEffect } from 'react';
 import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
 import { CodeEditor } from './CodeEditor';
@@ -271,9 +271,13 @@ const CellComponent: React.FC<Props> = ({
   const hasError = cell.outputs.some(o => o.type === 'error');
   const enableInteractiveFeatures = shouldForceInteractiveFeatures() || focusState === 'editor';
 
-  // ⚠️ PERFORMANCE: Lazy CodeMirror — render a lightweight <pre> until the
-  // Lazy CodeMirror: mount when the cell scrolls near the viewport.
+  // Lazy CodeMirror: show <pre> until cell enters viewport, then swap to CM.
+  // Pin the wrapper at <pre> height during the swap to absorb CM's async
+  // measurement oscillation (CM estimates height, then re-measures when lines
+  // enter its viewport — causing 500px+ height changes). When CM settles,
+  // release the pin. The <pre> → settled CM delta is typically <10px.
   const [editorMounted, setEditorMounted] = useState(false);
+  const editorWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (editorMounted) return;
@@ -282,14 +286,59 @@ const CellComponent: React.FC<Props> = ({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
+          // Lock wrapper at <pre> height BEFORE React swaps to CM
+          const wrap = editorWrapRef.current;
+          if (wrap) {
+            const h = wrap.offsetHeight;
+            wrap.style.height = `${h}px`;
+            wrap.style.overflow = 'hidden';
+          }
           setEditorMounted(true);
           observer.disconnect();
         }
       },
-      { rootMargin: '200px 0px' },
+      { rootMargin: '300px 0px' },
     );
     observer.observe(el);
     return () => observer.disconnect();
+  }, [editorMounted]);
+
+  // After CM mounts: wait for it to settle (stop resizing), then release pin
+  useEffect(() => {
+    if (!editorMounted) return;
+    const wrap = editorWrapRef.current;
+    if (!wrap) return;
+
+    // ResizeObserver may not exist in test environments
+    if (typeof ResizeObserver === 'undefined') {
+      wrap.style.height = '';
+      wrap.style.overflow = '';
+      return;
+    }
+
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    const observer = new ResizeObserver(() => {
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        wrap.style.height = '';
+        wrap.style.overflow = '';
+        observer.disconnect();
+      }, 150);
+    });
+    observer.observe(wrap);
+
+    // Fallback release after 1s
+    const fallback = setTimeout(() => {
+      wrap.style.height = '';
+      wrap.style.overflow = '';
+      observer.disconnect();
+    }, 1000);
+
+    return () => {
+      observer.disconnect();
+      if (settleTimer) clearTimeout(settleTimer);
+      clearTimeout(fallback);
+    };
   }, [editorMounted]);
 
   // Border colors based on focus state:
@@ -550,7 +599,7 @@ const CellComponent: React.FC<Props> = ({
       )}
 
       {/* Editor Area */}
-      <div onClick={(e) => {
+      <div ref={editorWrapRef} onClick={(e) => {
         e.stopPropagation();
         if (!editorMounted) setEditorMounted(true);
         onClick(cell.id, e);
@@ -579,7 +628,7 @@ const CellComponent: React.FC<Props> = ({
             kernelSessionId={kernelSessionId}
           />
         ) : (
-          <pre className="font-mono text-sm px-3 py-2 text-slate-700 whitespace-pre-wrap min-h-[1.5rem]">
+          <pre className="font-mono text-sm px-3 py-2 text-slate-700 whitespace-pre-wrap break-all min-h-[1.5rem]">
             {cell.content || (cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title')}
           </pre>
         )}

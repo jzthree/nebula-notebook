@@ -81,6 +81,7 @@ const lightTheme = EditorView.theme({
   },
   '.cm-scroller': {
     overflow: 'auto',
+    height: 'auto !important', // Override @uiw/react-codemirror's "100% !important" which constrains height
   },
   '.cm-placeholder': {
     color: '#94a3b8',
