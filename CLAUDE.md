@@ -289,9 +289,37 @@ type UndoableOperation =
 
 ## Performance
 
-- **Virtualization**: React Virtuoso renders only visible cells
+- **Progressive rendering**: Cells render in batches of 10 via `requestIdleCallback` (VirtualCellList)
+- **Lazy CodeMirror**: Cells start as `<pre>` placeholders, swap to CodeMirror when near viewport
 - **Autosave**: 1-second debounce with conflict detection
 - **Output Truncation**: Large outputs truncated for display (data preserved)
+
+### Scroll Jump Prevention (IMPORTANT — do not regress)
+
+CodeMirror 6 defers line measurement for off-screen content. When a cell enters the viewport,
+CM re-measures its lines and can change height by 500px+. This causes visible scroll jumps,
+especially when jumping to the bottom of a notebook and scrolling back up.
+
+The fix uses **height pinning** during the `<pre>` → CodeMirror transition (Cell.tsx):
+
+1. Each cell renders a `<pre>` placeholder with matching CSS (`break-all`, same font/padding as CM)
+2. When the cell enters the viewport (IntersectionObserver, 300px margin), the editor wrapper div
+   is **locked** to the `<pre>` height (`height: Xpx; overflow: hidden`) before React swaps to CM
+3. CM mounts inside the locked container and goes through async measurement passes (height oscillates)
+   — but none of this affects page layout because the wrapper is locked
+4. A ResizeObserver watches for CM to stop resizing (150ms of stability), then **releases** the pin
+5. The final height delta (`<pre>` vs settled CM) is typically <10px — imperceptible
+
+Three things that must stay in sync for this to work:
+- **Cell.tsx `<pre>`**: must have `break-all` and matching font/padding to closely match CM's final height
+- **CodeEditor.tsx `.cm-scroller`**: must have `height: auto !important` to override `@uiw/react-codemirror`'s
+  `height: 100% !important` default — without this, CM editors collapse to ~625px with internal scrollbars
+- **Cell.tsx height pinning**: the IntersectionObserver must lock height BEFORE `setEditorMounted(true)`,
+  and the ResizeObserver must wait for CM to fully settle before releasing
+
+**Do NOT**: remove lazy mounting (causes CM to estimate heights for all cells upfront — wrong estimates
+cause jumps when cells enter viewport). Do NOT remove `break-all` from `<pre>` (causes large height
+mismatch). Do NOT remove `height: auto !important` from `.cm-scroller` (causes tiny editors).
 
 ## Metadata Preservation
 
