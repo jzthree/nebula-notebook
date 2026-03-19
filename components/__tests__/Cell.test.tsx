@@ -62,6 +62,46 @@ describe('Cell', () => {
     expect(cmContent?.textContent).toContain('print');
   });
 
+  it('renders markdown cells as formatted preview outside edit mode', () => {
+    const markdownCell: ICell = {
+      ...mockCell,
+      type: 'markdown',
+      content: '# Heading\n\nA paragraph with **bold** text.',
+    };
+
+    const { container } = renderCell({
+      ...defaultProps,
+      cell: markdownCell,
+    });
+
+    expect(screen.getByRole('heading', { name: 'Heading' })).toBeInTheDocument();
+    expect(screen.getByText('bold')).toBeInTheDocument();
+    expect(container.querySelector('.cm-content')).not.toBeInTheDocument();
+  });
+
+  it('enters raw markdown edit mode on Enter from command mode', () => {
+    const markdownCell: ICell = {
+      ...mockCell,
+      type: 'markdown',
+      content: '# Heading\n\nBody text',
+    };
+
+    const { container } = renderCell({
+      ...defaultProps,
+      cell: markdownCell,
+      isActive: true,
+      onActivate: vi.fn(),
+    });
+
+    const cellDiv = container.querySelector('[data-cell-id]') as HTMLElement;
+    fireEvent.focus(cellDiv);
+    fireEvent.keyDown(cellDiv, { key: 'Enter' });
+
+    const cmContent = container.querySelector('.cm-content');
+    expect(cmContent).toBeInTheDocument();
+    expect(cmContent?.textContent).toContain('# Heading');
+  });
+
   it('renders cell index', () => {
     renderCell({
       ...defaultProps,

@@ -2,6 +2,7 @@ import React, { useState, useCallback, memo, useRef, useEffect } from 'react';
 import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
 import { CodeEditor } from './CodeEditor';
+import { MarkdownPreview } from './MarkdownPreview';
 import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Sparkles, Plus } from 'lucide-react';
 import { generateCellContentStructured, fixCellError, getSettings, CellGenerationResponse } from '../services/llmService';
 import { useNotification } from './NotificationSystem';
@@ -341,6 +342,12 @@ const CellComponent: React.FC<Props> = ({
     };
   }, [editorMounted]);
 
+  useEffect(() => {
+    if (focusState === 'editor' && !editorMounted) {
+      setEditorMounted(true);
+    }
+  }, [editorMounted, focusState]);
+
   // Border colors based on focus state:
   // - editor (blue): CodeMirror has focus, handles keyboard
   // - cell (green): cell div has focus, cell-level commands
@@ -363,6 +370,22 @@ const CellComponent: React.FC<Props> = ({
     // Use preventScroll to avoid unwanted page scrolling
     cellRef.current?.focus({ preventScroll: true });
   }, []);
+
+  const handleMarkdownPreviewClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onClick(cell.id, e);
+    cellRef.current?.focus({ preventScroll: true });
+  }, [cell.id, onClick]);
+
+  const handleMarkdownPreviewDoubleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onClick(cell.id, e);
+    if (isLocked) {
+      cellRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    setFocusState('editor');
+  }, [cell.id, isLocked, onClick]);
 
   // Handle keyboard shortcuts when cell div has focus (command mode)
   const handleCellKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -433,6 +456,8 @@ const CellComponent: React.FC<Props> = ({
       return;
     }
   }, [cell.id, onMove, onDelete, focusState, isLocked]);
+
+  const showsMarkdownPreview = cell.type === 'markdown' && focusState !== 'editor';
 
   return (
     <div
@@ -601,10 +626,22 @@ const CellComponent: React.FC<Props> = ({
       {/* Editor Area */}
       <div ref={editorWrapRef} onClick={(e) => {
         e.stopPropagation();
-        if (!editorMounted) setEditorMounted(true);
+        if (!editorMounted && !showsMarkdownPreview) setEditorMounted(true);
         onClick(cell.id, e);
       }}>
-        {editorMounted ? (
+        {showsMarkdownPreview ? (
+          <div
+            className="cursor-default"
+            onClick={handleMarkdownPreviewClick}
+            onDoubleClick={handleMarkdownPreviewDoubleClick}
+            title={isLocked ? undefined : 'Double-click or press Enter to edit'}
+          >
+            <MarkdownPreview
+              content={cell.content}
+              placeholder="## Markdown Title"
+            />
+          </div>
+        ) : editorMounted ? (
           <CodeEditor
             value={cell.content}
             onChange={handleEditorChange}

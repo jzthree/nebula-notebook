@@ -5,6 +5,7 @@ const MIN_SCALE = 1;
 const MAX_SCALE = 6;
 const DOUBLE_CLICK_SCALE = 2.5;
 const WHEEL_ZOOM_SENSITIVITY = 0.002;
+const CLICK_DRAG_THRESHOLD = 4;
 
 type Point = { x: number; y: number };
 type Transform = { scale: number; x: number; y: number };
@@ -48,6 +49,8 @@ const getDistance = (first: Point, second: Point): number => {
 export const ImageModalViewer: React.FC<Props> = ({ alt, onClose, src }) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
+  const clickTimeoutRef = useRef<number | null>(null);
+  const suppressClickRef = useRef(false);
   const pointersRef = useRef<Map<number, Point>>(new Map());
   const gestureRef = useRef<GestureState>(null);
   const transformRef = useRef<Transform>({ scale: MIN_SCALE, x: 0, y: 0 });
@@ -152,6 +155,10 @@ export const ImageModalViewer: React.FC<Props> = ({ alt, onClose, src }) => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
+      if (clickTimeoutRef.current !== null) {
+        window.clearTimeout(clickTimeoutRef.current);
+        clickTimeoutRef.current = null;
+      }
       document.body.style.overflow = previousOverflow;
     };
   }, []);
@@ -269,6 +276,7 @@ export const ImageModalViewer: React.FC<Props> = ({ alt, onClose, src }) => {
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
 
     if (pointersRef.current.size >= 2) {
+      suppressClickRef.current = true;
       startPinchGesture();
       setIsDragging(false);
       return;
@@ -292,6 +300,13 @@ export const ImageModalViewer: React.FC<Props> = ({ alt, onClose, src }) => {
     if (!gesture) return;
 
     event.preventDefault();
+
+    if (gesture.type === 'pan') {
+      const movedDistance = getDistance(gesture.startPoint, { x: event.clientX, y: event.clientY });
+      if (movedDistance > CLICK_DRAG_THRESHOLD) {
+        suppressClickRef.current = true;
+      }
+    }
 
     if (gesture.type === 'pan' && pointersRef.current.size === 1) {
       commitTransform({
@@ -355,7 +370,32 @@ export const ImageModalViewer: React.FC<Props> = ({ alt, onClose, src }) => {
     }
   }, [commitTransform, getRelativePoint, zoomAroundPoint]);
 
+  const handleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+
+    const anchor = getRelativePoint(event.clientX, event.clientY);
+    if (!anchor) return;
+
+    if (clickTimeoutRef.current !== null) {
+      window.clearTimeout(clickTimeoutRef.current);
+    }
+
+    clickTimeoutRef.current = window.setTimeout(() => {
+      clickTimeoutRef.current = null;
+      const nextScale = transformRef.current.scale > MIN_SCALE ? MIN_SCALE : DOUBLE_CLICK_SCALE;
+      zoomAroundPoint(nextScale, anchor);
+    }, 180);
+  }, [getRelativePoint, zoomAroundPoint]);
+
   const handleDoubleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (clickTimeoutRef.current !== null) {
+      window.clearTimeout(clickTimeoutRef.current);
+      clickTimeoutRef.current = null;
+    }
+
     const anchor = getRelativePoint(event.clientX, event.clientY);
     if (!anchor) return;
 
@@ -380,7 +420,10 @@ export const ImageModalViewer: React.FC<Props> = ({ alt, onClose, src }) => {
         ref={viewportRef}
         aria-label="Image viewer"
         className={`relative h-full w-full overflow-hidden ${transform.scale > MIN_SCALE ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-zoom-in'}`}
-        onClick={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          handleClick(event);
+        }}
         onDoubleClick={handleDoubleClick}
         onPointerCancel={handlePointerCancel}
         onPointerDown={handlePointerDown}
@@ -408,4 +451,3 @@ export const ImageModalViewer: React.FC<Props> = ({ alt, onClose, src }) => {
     document.body,
   );
 };
-
