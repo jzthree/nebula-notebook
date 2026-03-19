@@ -1,9 +1,9 @@
 import React, { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import { CellOutput as ICellOutput } from '../types';
 import { ChevronDown, ChevronRight, GripHorizontal, WrapText, ArrowRightLeft, ExternalLink } from 'lucide-react';
 import { encodeHtmlParam, wrapHtmlDocument, MAX_HTML_PARAM_LENGTH } from '../utils/htmlPreview';
 import AnsiToHtml from 'ansi-to-html';
+import { ImageModalViewer } from './ImageModalViewer';
 import {
   MAX_OUTPUT_LINES,
   MAX_OUTPUT_CHARS,
@@ -34,6 +34,7 @@ const MAX_DISPLAY_CHARS_ERROR = MAX_OUTPUT_CHARS_ERROR;
 
 interface Props {
   outputs: ICellOutput[];
+  isUpdating?: boolean;
   executionMs?: number; // Execution time in milliseconds
   scrolled?: boolean; // Jupyter standard: true = collapsed with max-height, false/undefined = expanded
   onScrolledChange?: (scrolled: boolean) => void; // Called when user toggles collapse/expand
@@ -321,7 +322,7 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage
 const MIN_HEIGHT = OUTPUT_MIN_HEIGHT_PX;
 const DEFAULT_COLLAPSED_HEIGHT = OUTPUT_DEFAULT_HEIGHT_PX;
 
-const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, onScrolledChange, scrolledHeight, onScrolledHeightChange }) => {
+const CellOutputComponent: React.FC<Props> = ({ outputs, isUpdating = false, executionMs, scrolled, onScrolledChange, scrolledHeight, onScrolledHeightChange }) => {
   // scrolled prop controls collapse state (Jupyter standard: true = collapsed with scrollbar)
   // Use prop if provided, otherwise default to false (expanded)
   const isCollapsed = scrolled === true;
@@ -335,14 +336,6 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
   const [activeImageSrc, setActiveImageSrc] = useState<string | null>(null);
   // Track mount time: outputs created after mount are from fresh execution and may autoplay
   const mountTimeRef = useRef(Date.now());
-  const imageViewportRef = useRef<HTMLDivElement>(null);
-  const panStateRef = useRef<{ isPanning: boolean; startX: number; startY: number; scrollLeft: number; scrollTop: number }>({
-    isPanning: false,
-    startX: 0,
-    startY: 0,
-    scrollLeft: 0,
-    scrollTop: 0,
-  });
 
   // Track if this is the initial render to avoid resetting collapse state
   const initialRenderRef = useRef(true);
@@ -356,15 +349,6 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
       resizeCleanupRef.current?.();
     };
   }, []);
-
-  useEffect(() => {
-    if (!activeImageSrc) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [activeImageSrc]);
 
   // Sync local collapsed height with prop when it changes (e.g., from undo/redo)
   useEffect(() => {
@@ -485,27 +469,6 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
   // This is done after truncation so limits are applied to raw output count, not coalesced count.
   const coalescedOutputs = useMemo(() => coalesceOutputs(displayOutputs), [displayOutputs]);
 
-  const handleImageMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!imageViewportRef.current) return;
-    panStateRef.current.isPanning = true;
-    panStateRef.current.startX = event.clientX;
-    panStateRef.current.startY = event.clientY;
-    panStateRef.current.scrollLeft = imageViewportRef.current.scrollLeft;
-    panStateRef.current.scrollTop = imageViewportRef.current.scrollTop;
-  };
-
-  const handleImageMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!panStateRef.current.isPanning || !imageViewportRef.current) return;
-    const deltaX = event.clientX - panStateRef.current.startX;
-    const deltaY = event.clientY - panStateRef.current.startY;
-    imageViewportRef.current.scrollLeft = panStateRef.current.scrollLeft - deltaX;
-    imageViewportRef.current.scrollTop = panStateRef.current.scrollTop - deltaY;
-  };
-
-  const stopImagePan = () => {
-    panStateRef.current.isPanning = false;
-  };
-
   // Check if output is tall enough to warrant collapse option.
   // Seed this from an estimate so tall outputs don't render once as "short"
   // and then expand controls in a second pass (which can cause scroll jumps).
@@ -603,47 +566,28 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
 
   return (
     <>
-      {activeImageSrc && createPortal(
-        <div
-          className="fixed inset-0 z-50 bg-slate-900/70 flex items-center justify-center p-4"
-          onClick={() => setActiveImageSrc(null)}
-        >
-          <button
-            type="button"
-            onClick={() => setActiveImageSrc(null)}
-            className="absolute top-4 right-4 text-white/80 hover:text-white text-xl z-10"
-            title="Close"
-          >
-            ✕
-          </button>
-          <div
-            ref={imageViewportRef}
-            className="w-full h-full overflow-auto flex items-center justify-center"
-            onClick={() => setActiveImageSrc(null)}
-            onMouseDown={handleImageMouseDown}
-            onMouseMove={handleImageMouseMove}
-            onMouseUp={stopImagePan}
-            onMouseLeave={stopImagePan}
-          >
-            <img
-              src={activeImageSrc}
-              alt="Output"
-              className="block max-w-full max-h-full object-contain cursor-grab active:cursor-grabbing"
-              draggable={false}
-              onClick={(e) => e.stopPropagation()}
-            />
-          </div>
-        </div>,
-        document.body
+      {activeImageSrc && (
+        <ImageModalViewer
+          src={activeImageSrc}
+          alt="Output"
+          onClose={() => setActiveImageSrc(null)}
+        />
       )}
       <div
         ref={containerRef}
         className="relative border-t border-slate-100 rounded-b-lg bg-white"
       >
+      {isUpdating && outputs.length > 0 && (
+        <div
+          aria-label="Output updating"
+          data-testid="cell-output-updating-overlay"
+          className="absolute inset-0 bg-slate-500/10 pointer-events-none z-10"
+        />
+      )}
       {/* Left gutter - clickable to collapse/expand */}
       {showCollapseOption && (
         <div
-          className="absolute left-0 top-0 bottom-0 w-6 flex items-start pt-3 justify-center cursor-pointer hover:bg-slate-100 transition-colors z-10 border-r border-slate-100"
+          className="absolute left-0 top-0 bottom-0 w-6 flex items-start pt-3 justify-center cursor-pointer hover:bg-slate-100 transition-colors z-20 border-r border-slate-100"
           onClick={handleCollapseToggle}
           title={isCollapsed ? "Expand output" : "Collapse output"}
         >
@@ -656,7 +600,7 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
       )}
 
       {/* Top right controls: execution time and wrap toggle */}
-      <div className="absolute top-1 right-2 flex items-center gap-2 z-10">
+      <div className="absolute top-1 right-2 flex items-center gap-2 z-20">
         {/* Execution time indicator */}
         {executionMs !== undefined && (
           <span className="text-xs text-slate-400 tabular-nums" title="Execution time">
@@ -699,7 +643,7 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
       {/* Resize handle - only show when collapsed */}
       {isCollapsed && (
         <div
-          className={`absolute bottom-0 left-0 right-0 h-3 flex items-center justify-center cursor-ns-resize bg-slate-50 hover:bg-slate-100 border-t border-slate-200 transition-colors ${isResizing ? 'bg-blue-100' : ''}`}
+          className={`absolute bottom-0 left-0 right-0 h-3 flex items-center justify-center cursor-ns-resize bg-slate-50 hover:bg-slate-100 border-t border-slate-200 transition-colors z-20 ${isResizing ? 'bg-blue-100' : ''}`}
           onMouseDown={handleResizeStart}
         >
           <GripHorizontal className="w-4 h-4 text-slate-400" />
@@ -708,7 +652,7 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
 
       {/* Collapsed indicator */}
       {isCollapsed && (
-        <div className="absolute bottom-3 right-2 text-xs text-slate-400 bg-white px-1 rounded">
+        <div className="absolute bottom-3 right-2 text-xs text-slate-400 bg-white px-1 rounded z-20">
           Scroll for more
         </div>
       )}
@@ -719,6 +663,7 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, executionMs, scrolled, 
 
 export const CellOutput = memo(CellOutputComponent, (prevProps, nextProps) => {
   return (
+    prevProps.isUpdating === nextProps.isUpdating &&
     prevProps.executionMs === nextProps.executionMs &&
     prevProps.scrolled === nextProps.scrolled &&
     prevProps.scrolledHeight === nextProps.scrolledHeight &&

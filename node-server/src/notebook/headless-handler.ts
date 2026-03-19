@@ -111,6 +111,13 @@ export class HeadlessOperationHandler {
     return this.getCachedNotebook(notebookPath).cells;
   }
 
+  private getVisibleOutputs(cell: NebulaCell): CellOutput[] {
+    if (cell.pendingOutputReset) {
+      return [];
+    }
+    return cell.outputs || [];
+  }
+
   private saveCells(notebookPath: string, cells: NebulaCell[]): void {
     const notebook = this.getCachedNotebook(notebookPath);
     notebook.cells = cells;
@@ -957,8 +964,9 @@ export class HeadlessOperationHandler {
 
     // Poll for new outputs if maxWait > 0
     if (maxWait > 0) {
-      let baselineOutputCount = (cell.outputs || []).length;
-      let baselineOutputChars = (cell.outputs || []).reduce((sum, o) => sum + (o.content?.length || 0), 0);
+      let visibleOutputs = this.getVisibleOutputs(cell);
+      let baselineOutputCount = visibleOutputs.length;
+      let baselineOutputChars = visibleOutputs.reduce((sum, o) => sum + (o.content?.length || 0), 0);
       let wasExecuting = !!cell.isExecuting;
       const startTime = Date.now();
       const pollInterval = 500; // Poll every 500ms like Python
@@ -982,11 +990,13 @@ export class HeadlessOperationHandler {
         // wait for outputs from this run rather than comparing against previous outputs.
         if (!wasExecuting && cell.isExecuting) {
           wasExecuting = true;
-          baselineOutputCount = (cell.outputs || []).length;
-          baselineOutputChars = (cell.outputs || []).reduce((sum, o) => sum + (o.content?.length || 0), 0);
+          visibleOutputs = this.getVisibleOutputs(cell);
+          baselineOutputCount = visibleOutputs.length;
+          baselineOutputChars = visibleOutputs.reduce((sum, o) => sum + (o.content?.length || 0), 0);
         }
-        const currentOutputCount = (cell.outputs || []).length;
-        const currentOutputChars = (cell.outputs || []).reduce((sum, o) => sum + (o.content?.length || 0), 0);
+        visibleOutputs = this.getVisibleOutputs(cell);
+        const currentOutputCount = visibleOutputs.length;
+        const currentOutputChars = visibleOutputs.reduce((sum, o) => sum + (o.content?.length || 0), 0);
 
         // Check if outputs changed (more outputs or more content)
         if (currentOutputCount > baselineOutputCount || currentOutputChars > baselineOutputChars) {
@@ -1003,7 +1013,7 @@ export class HeadlessOperationHandler {
     const processedOutputs: Record<string, unknown>[] = [];
     const tempFiles: string[] = [];
 
-    for (const output of cell.outputs || []) {
+    for (const output of this.getVisibleOutputs(cell)) {
       const outputType = output.type || 'stdout';
       const content = output.content || '';
 
@@ -1380,10 +1390,10 @@ export class HeadlessOperationHandler {
       }
     }
 
-    // Mark executing and clear outputs immediately so read_output doesn't return stale
-    // outputs from a previous run while this execution is in-flight.
+    // Preserve previous outputs until fresh output arrives so UI consumers can still
+    // render them, but mark them stale so read_output hides them for this new run.
     cell.isExecuting = true;
-    cell.outputs = [];
+    cell.pendingOutputReset = true;
 
     // Execute the cell with periodic output saving
     const runId = uuidv4();
@@ -1404,11 +1414,24 @@ export class HeadlessOperationHandler {
     let executionComplete = false;
     let queueInfo: { queuePosition: number; queueLength: number } | null = null;
 
+    const publishOutputs = () => {
+      if (outputs.length > 0) {
+        cell.outputs = [...outputs];
+        cell.pendingOutputReset = false;
+        return;
+      }
+
+      if (executionComplete) {
+        cell.outputs = [];
+        cell.pendingOutputReset = false;
+      }
+    };
+
     const outputCallback = async (output: { type: string; content: string }) => {
       outputs.push(createCellOutput(output.type as CellOutput['type'], output.content));
       // Save outputs periodically (every 5 outputs) like Python
       if (saveOutputs && outputs.length % 5 === 0) {
-        cell.outputs = [...outputs];
+        publishOutputs();
         this.saveCells(notebookPath, cells);
       }
     };
@@ -1449,8 +1472,8 @@ export class HeadlessOperationHandler {
         ? (executionError ? 'error' : 'idle')
         : 'busy';
 
-      // Update cell with outputs
-      cell.outputs = [...outputs];
+      // Update cell with any fresh outputs from this run.
+      publishOutputs();
       if (executionCount !== null) {
         cell.executionCount = executionCount;
       }
@@ -1467,7 +1490,7 @@ export class HeadlessOperationHandler {
         // Execution continues in background - finalize when promise resolves
         executionPromise.then(() => {
           const finalElapsed = Date.now() - startTime;
-          cell.outputs = [...outputs];
+          publishOutputs();
           if (executionCount !== null) {
             cell.executionCount = executionCount;
           }

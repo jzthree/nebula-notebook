@@ -7,9 +7,21 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+
+vi.mock('child_process', async () => {
+  const actual = await vi.importActual<typeof import('child_process')>('child_process');
+  return {
+    ...actual,
+    spawn: vi.fn(),
+  };
+});
+
+import * as childProcess from 'child_process';
+import * as kernelspecModule from '../kernel/kernelspec';
 import {
   discoverKernelSpecs,
   getKernelSpec,
@@ -27,6 +39,25 @@ const createDeferred = <T>() => {
     reject = rej;
   });
   return { promise, resolve, reject };
+};
+
+const createMockChildProcess = (pid: number) => {
+  const proc = new EventEmitter() as EventEmitter & {
+    pid: number;
+    killed: boolean;
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  proc.pid = pid;
+  proc.killed = false;
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.kill = vi.fn(() => {
+    proc.killed = true;
+    return true;
+  });
+  return proc as unknown as childProcess.ChildProcess;
 };
 
 describe('Kernelspec Discovery', () => {
@@ -389,6 +420,7 @@ describe('KernelService', () => {
     testDbPath = path.join(os.tmpdir(), `nebula-test-kernel-${Date.now()}.db`);
     testSessionStore = new SessionStore(testDbPath);
     service = new KernelService({}, testSessionStore);
+    vi.mocked(childProcess.spawn).mockReset();
   });
 
   afterEach(async () => {
@@ -504,6 +536,149 @@ describe('KernelService', () => {
         }),
         undefined
       );
+    });
+  });
+
+  describe('restartKernel lifecycle', () => {
+    it('keeps the restarted session alive if the old process exits afterward', async () => {
+      const sessionId = 'restart-race';
+      const filePath = '/tmp/restart-race.ipynb';
+      const oldConnFile = path.join(os.tmpdir(), `nebula-old-conn-${Date.now()}.json`);
+      fs.writeFileSync(oldConnFile, '{}');
+
+      const oldProc = createMockChildProcess(1111);
+      const newProc = createMockChildProcess(2222);
+      const now = Date.now() / 1000;
+      const connectionConfig = {
+        ip: '127.0.0.1',
+        transport: 'tcp',
+        signatureScheme: 'hmac-sha256',
+        key: 'test-key',
+        shellPort: 12345,
+        stdinPort: 12346,
+        controlPort: 12347,
+        iopubPort: 12348,
+        hbPort: 12349,
+      };
+
+      const session = {
+        id: sessionId,
+        kernelName: 'python3',
+        filePath,
+        status: 'idle' as const,
+        executionCount: 7,
+        pid: 1111,
+        connectionFile: oldConnFile,
+        connectionConfig,
+        createdAt: now,
+        lastActivity: now,
+      };
+
+      (service as any).sessions.set(sessionId, session);
+      (service as any).fileToSession.set(filePath, sessionId);
+      (service as any).kernelProcesses.set(sessionId, oldProc);
+      (service as any).attachProcessLifecycle(sessionId, oldProc, session);
+
+      vi.mocked(childProcess.spawn).mockReturnValue(newProc as unknown as ReturnType<typeof childProcess.spawn>);
+      const sleepSpy = vi.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
+      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockResolvedValue(undefined);
+      const generateConnectionFileSpy = vi.spyOn(service as any, 'generateConnectionFile').mockResolvedValue({
+        config: connectionConfig,
+        filePath: path.join(os.tmpdir(), `nebula-new-conn-${Date.now()}.json`),
+      });
+      const getProcessStartTimeSpy = vi.spyOn(service as any, 'getProcessStartTime').mockResolvedValue('123');
+      const getKernelSpecSpy = vi.spyOn(kernelspecModule, 'getKernelSpec').mockReturnValue({
+        name: 'python3',
+        displayName: 'Python 3',
+        language: 'python',
+        path: '/tmp/python3',
+        argv: ['python', '-m', 'ipykernel_launcher', '-f', '{connection_file}'],
+      });
+
+      const restarted = await service.restartKernel(sessionId);
+      expect(restarted).toBe(true);
+      expect((service as any).kernelProcesses.get(sessionId)).toBe(newProc);
+      expect(service.getSessionIdForFile(filePath)).toBe(sessionId);
+
+      oldProc.emit('exit', 0);
+
+      const status = await service.getSessionStatus(sessionId);
+      expect(status).not.toBeNull();
+      expect(status?.status).toBe('idle');
+      expect(service.getSessionIdForFile(filePath)).toBe(sessionId);
+      expect((service as any).kernelProcesses.get(sessionId)).toBe(newProc);
+
+      sleepSpy.mockRestore();
+      waitForReadySpy.mockRestore();
+      generateConnectionFileSpy.mockRestore();
+      getProcessStartTimeSpy.mockRestore();
+      getKernelSpecSpy.mockRestore();
+    });
+
+    it('cleans up the session if restart fails after spawning a replacement kernel', async () => {
+      const sessionId = 'restart-fail';
+      const filePath = '/tmp/restart-fail.ipynb';
+      const oldConnFile = path.join(os.tmpdir(), `nebula-old-conn-fail-${Date.now()}.json`);
+      fs.writeFileSync(oldConnFile, '{}');
+
+      const oldProc = createMockChildProcess(3333);
+      const newProc = createMockChildProcess(4444);
+      const now = Date.now() / 1000;
+      const connectionConfig = {
+        ip: '127.0.0.1',
+        transport: 'tcp',
+        signatureScheme: 'hmac-sha256',
+        key: 'test-key',
+        shellPort: 22345,
+        stdinPort: 22346,
+        controlPort: 22347,
+        iopubPort: 22348,
+        hbPort: 22349,
+      };
+
+      const session = {
+        id: sessionId,
+        kernelName: 'python3',
+        filePath,
+        status: 'idle' as const,
+        executionCount: 3,
+        pid: 3333,
+        connectionFile: oldConnFile,
+        connectionConfig,
+        createdAt: now,
+        lastActivity: now,
+      };
+
+      (service as any).sessions.set(sessionId, session);
+      (service as any).fileToSession.set(filePath, sessionId);
+      (service as any).kernelProcesses.set(sessionId, oldProc);
+      (service as any).attachProcessLifecycle(sessionId, oldProc, session);
+
+      vi.mocked(childProcess.spawn).mockReturnValue(newProc as unknown as ReturnType<typeof childProcess.spawn>);
+      const sleepSpy = vi.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
+      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockRejectedValue(new Error('boom'));
+      const generateConnectionFileSpy = vi.spyOn(service as any, 'generateConnectionFile').mockResolvedValue({
+        config: connectionConfig,
+        filePath: path.join(os.tmpdir(), `nebula-new-conn-fail-${Date.now()}.json`),
+      });
+      const getKernelSpecSpy = vi.spyOn(kernelspecModule, 'getKernelSpec').mockReturnValue({
+        name: 'python3',
+        displayName: 'Python 3',
+        language: 'python',
+        path: '/tmp/python3',
+        argv: ['python', '-m', 'ipykernel_launcher', '-f', '{connection_file}'],
+      });
+
+      const restarted = await service.restartKernel(sessionId);
+      expect(restarted).toBe(false);
+      expect(await service.getSessionStatus(sessionId)).toBeNull();
+      expect(service.getSessionIdForFile(filePath)).toBeNull();
+      expect(newProc.kill).toHaveBeenCalled();
+
+      sleepSpy.mockRestore();
+      waitForReadySpy.mockRestore();
+      generateConnectionFileSpy.mockRestore();
+      getKernelSpecSpy.mockRestore();
     });
   });
 

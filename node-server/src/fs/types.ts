@@ -71,6 +71,7 @@ export interface NebulaCell {
   content: string;
   outputs: CellOutput[];
   isExecuting: boolean;
+  pendingOutputReset?: boolean; // transient: hide previous-run outputs from read_output until fresh output arrives
   executionCount: number | null;
   scrolled?: boolean;
   scrolledHeight?: number;

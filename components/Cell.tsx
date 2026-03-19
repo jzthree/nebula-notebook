@@ -639,6 +639,7 @@ const CellComponent: React.FC<Props> = ({
          <div id={`cell-output-${cell.id}`} className="scroll-mt-20">
            <CellOutput
              outputs={cell.outputs}
+             isUpdating={cell.isExecuting}
              executionMs={cell.lastExecutionMs}
              scrolled={cell.scrolled}
              onScrolledChange={onSetCellScrolled ? (scrolled) => onSetCellScrolled(cell.id, scrolled) : undefined}

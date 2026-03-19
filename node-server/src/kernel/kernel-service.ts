@@ -54,6 +54,10 @@ export class KernelService {
   private sessions: Map<string, KernelSession> = new Map();
   private fileToSession: Map<string, string> = new Map();
   private kernelProcesses: Map<string, ChildProcess> = new Map();
+  private processLifecycleHandlers: WeakMap<ChildProcess, {
+    onError: (err: Error) => void;
+    onExit: (code: number | null) => void;
+  }> = new WeakMap();
   private zmqSockets: Map<string, { shell: ZmqSocket; iopub: ZmqSocket }> = new Map();
   private sessionStore: SessionStore;
   private config: Required<KernelServiceConfig>;
@@ -97,6 +101,44 @@ export class KernelService {
     } catch {
       return false;
     }
+  }
+
+  private attachProcessLifecycle(sessionId: string, proc: ChildProcess, session: KernelSession): void {
+    const onError = (err: Error) => {
+      if (this.kernelProcesses.get(sessionId) !== proc) {
+        return;
+      }
+      console.error(`Kernel ${sessionId} error:`, err);
+      session.status = 'dead';
+    };
+
+    const onExit = (code: number | null) => {
+      if (this.kernelProcesses.get(sessionId) !== proc) {
+        return;
+      }
+      console.log(`Kernel ${sessionId} exited with code ${code}`);
+      session.status = 'dead';
+      this.cleanupKernelResources(sessionId);
+    };
+
+    this.processLifecycleHandlers.set(proc, { onError, onExit });
+    proc.on('error', onError);
+    proc.on('exit', onExit);
+  }
+
+  private detachProcessLifecycle(proc: ChildProcess | null | undefined): void {
+    if (!proc) {
+      return;
+    }
+
+    const handlers = this.processLifecycleHandlers.get(proc);
+    if (!handlers) {
+      return;
+    }
+
+    proc.off('error', handlers.onError);
+    proc.off('exit', handlers.onExit);
+    this.processLifecycleHandlers.delete(proc);
   }
 
   /**
@@ -449,16 +491,7 @@ export class KernelService {
     }
 
     // Handle process events
-    proc.on('error', (err) => {
-      console.error(`Kernel ${sessionId} error:`, err);
-      session.status = 'dead';
-    });
-
-    proc.on('exit', (code) => {
-      console.log(`Kernel ${sessionId} exited with code ${code}`);
-      session.status = 'dead';
-      this.cleanupKernelResources(sessionId);
-    });
+    this.attachProcessLifecycle(sessionId, proc, session);
 
     // Wait for kernel to be ready. If startup fails, clean up aggressively so we
     // don't leave behind orphaned sessions/processes/connection files.
@@ -1206,6 +1239,7 @@ export class KernelService {
     // Kill kernel process
     const proc = this.kernelProcesses.get(sessionId);
     if (proc) {
+      this.detachProcessLifecycle(proc);
       try {
         proc.kill('SIGTERM');
         // Wait for graceful shutdown
@@ -1328,6 +1362,8 @@ export class KernelService {
   private cleanupKernelResources(sessionId: string): void {
     // stopKernel() already handles these, but unexpected process exits and failed startups
     // may call cleanup directly. Ensure we don't leak sockets or stale ChildProcess handles.
+    this.detachProcessLifecycle(this.kernelProcesses.get(sessionId));
+
     const sockets = this.zmqSockets.get(sessionId);
     if (sockets) {
       try {
@@ -1380,6 +1416,8 @@ export class KernelService {
     if (session?.filePath) {
       this.fileToSession.delete(session.filePath);
     }
+
+    this.detachProcessLifecycle(this.kernelProcesses.get(sessionId));
 
     const sockets = this.zmqSockets.get(sessionId);
     if (sockets) {
@@ -1465,6 +1503,7 @@ export class KernelService {
     // Kill existing kernel process
     const proc = this.kernelProcesses.get(sessionId);
     if (proc) {
+      this.detachProcessLifecycle(proc);
       try {
         proc.kill('SIGTERM');
         await this.sleep(500);
@@ -1543,16 +1582,7 @@ export class KernelService {
       this.kernelProcesses.set(sessionId, newProc);
 
       // Handle process events
-      newProc.on('error', (err) => {
-        console.error(`Kernel ${sessionId} error:`, err);
-        session.status = 'dead';
-      });
-
-      newProc.on('exit', (code) => {
-        console.log(`Kernel ${sessionId} exited with code ${code}`);
-        session.status = 'dead';
-        this.cleanupKernelResources(sessionId);
-      });
+      this.attachProcessLifecycle(sessionId, newProc, session);
 
       // Wait for kernel to be ready
       await this.waitForReady(sessionId);
@@ -1579,7 +1609,7 @@ export class KernelService {
       return true;
     } catch (err) {
       console.error(`Failed to restart kernel ${sessionId}:`, err);
-      session.status = 'dead';
+      await this.stopKernel(sessionId).catch(() => undefined);
       return false;
     }
   }

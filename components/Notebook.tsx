@@ -35,6 +35,7 @@ import { TerminalPanel } from './TerminalPanel';
 import { HistoryPanel } from './HistoryPanel';
 import { RestoreDialog } from './RestoreDialog';
 import { VirtualCellList } from './VirtualCellList';
+import { ImageModalViewer } from './ImageModalViewer';
 import { useUndoRedo, EditSource } from '../hooks/useUndoRedo';
 import { useOperationHandler } from '../hooks/useOperationHandler';
 import { SettingsModal } from './SettingsModal';
@@ -307,24 +308,6 @@ export const Notebook: React.FC = () => {
     };
   }, [textEditorPath]);
 
-  const imageViewportRef = useRef<HTMLDivElement>(null);
-  const imagePanStateRef = useRef<{ isPanning: boolean; startX: number; startY: number; scrollLeft: number; scrollTop: number }>({
-    isPanning: false,
-    startX: 0,
-    startY: 0,
-    scrollLeft: 0,
-    scrollTop: 0,
-  });
-
-  useEffect(() => {
-    if (!imageViewerPath) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [imageViewerPath]);
-
   useEffect(() => {
     if (!isNavigatorOpen) return;
     const previousOverflow = document.body.style.overflow;
@@ -359,28 +342,6 @@ export const Notebook: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isNavigatorOpen, closeNavigator, openNavigator]);
-
-  const handleImageViewerMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!imageViewportRef.current) return;
-    imagePanStateRef.current.isPanning = true;
-    imagePanStateRef.current.startX = event.clientX;
-    imagePanStateRef.current.startY = event.clientY;
-    imagePanStateRef.current.scrollLeft = imageViewportRef.current.scrollLeft;
-    imagePanStateRef.current.scrollTop = imageViewportRef.current.scrollTop;
-  };
-
-  const handleImageViewerMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!imagePanStateRef.current.isPanning || !imageViewportRef.current) return;
-    const deltaX = event.clientX - imagePanStateRef.current.startX;
-    const deltaY = event.clientY - imagePanStateRef.current.startY;
-    imageViewportRef.current.scrollLeft = imagePanStateRef.current.scrollLeft - deltaX;
-    imageViewportRef.current.scrollTop = imagePanStateRef.current.scrollTop - deltaY;
-  };
-
-  const stopImageViewerPan = () => {
-    imagePanStateRef.current.isPanning = false;
-  };
-
 
   // Kernel State
   const [isKernelMenuOpen, setIsKernelMenuOpen] = useState(false);
@@ -848,7 +809,7 @@ export const Notebook: React.FC = () => {
   }, []);
 
   // Operation handler - receives operations routed from backend OperationRouter
-  const { isConnected: isAgentConnected, activeOperation: agentOperation, agentSession, forceEndAgentSession } = useOperationHandler({
+  const { activeOperation: agentOperation, agentSession, forceEndAgentSession } = useOperationHandler({
     filePath: currentFileId,
     cells,
     insertCell: undoableInsertCell,
@@ -3189,12 +3150,14 @@ export const Notebook: React.FC = () => {
         const FLUSH_INTERVAL_MS = 100; // Flush at most every 100ms
         let pendingFlush: number | null = null;
 
-        const flushToCell = () => {
+        const flushToCell = (forceClear = false) => {
           pendingFlush = null;
-          if (allOutputs.length === 0) return;
+          if (!forceClear && allOutputs.length === 0) return;
           // Copy current accumulated outputs - don't clear, keep accumulating
-          const snapshot = [...allOutputs];
-          lastFlushTime = Date.now();
+          const snapshot = forceClear ? [] : [...allOutputs];
+          if (!forceClear) {
+            lastFlushTime = Date.now();
+          }
 
           // Replace entire outputs array - this is idempotent and race-condition-free
           setCells(prev => prev.map(c => {
@@ -3215,7 +3178,7 @@ export const Notebook: React.FC = () => {
           }
         };
 
-        setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: true, outputs: [], lastExecutionMs: undefined } : c));
+        setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: true, lastExecutionMs: undefined } : c));
 
         try {
           await kernelService.executeCode(kernelSessionId, cell.content, (output) => {
@@ -3265,7 +3228,7 @@ export const Notebook: React.FC = () => {
             clearTimeout(pendingFlush);
             pendingFlush = null;
           }
-          flushToCell();
+          flushToCell(allOutputs.length === 0);
         } catch (error) {
           console.error('Execution error:', error);
           hasError = true;
@@ -3274,7 +3237,7 @@ export const Notebook: React.FC = () => {
             clearTimeout(pendingFlush);
             pendingFlush = null;
           }
-          flushToCell();
+          flushToCell(allOutputs.length === 0);
         }
 
         // Log execution completion for history
@@ -3440,6 +3403,8 @@ export const Notebook: React.FC = () => {
     }
   };
 
+  const isKernelReconnecting = kernelSessionId !== null && kernelStatus === 'disconnected';
+
   const scrollToCellOutput = useCallback((cellId: string, _cellIndex: number) => {
     setActiveCellId(cellId);
     // Scroll directly to the output section. Use the cell wrapper as fallback
@@ -3529,35 +3494,11 @@ export const Notebook: React.FC = () => {
       <div className={`relative flex-1 flex flex-col h-screen transition-all duration-300 ${isFileBrowserOpen ? 'nebula-filebrowser-offset' : ''} ${isChatOpen ? 'lg:mr-80' : ''}`}>
 
         {imageViewerPath && (
-          <div
-            className="fixed inset-0 z-50 bg-slate-900/70 flex items-center justify-center p-4"
-            onClick={() => setImageViewerPath(null)}
-          >
-            <button
-              type="button"
-              onClick={() => setImageViewerPath(null)}
-              className="absolute top-4 right-4 text-white/80 hover:text-white text-xl"
-              title="Close"
-            >
-              ✕
-            </button>
-            <div
-              ref={imageViewportRef}
-              className="w-full h-full overflow-auto cursor-grab active:cursor-grabbing"
-              onClick={(event) => event.stopPropagation()}
-              onMouseDown={handleImageViewerMouseDown}
-              onMouseMove={handleImageViewerMouseMove}
-              onMouseUp={stopImageViewerPan}
-              onMouseLeave={stopImageViewerPan}
-            >
-              <img
-                src={`/api/fs/download?path=${encodeURIComponent(imageViewerPath)}`}
-                alt="Preview"
-                className="block max-w-none max-h-none"
-                draggable={false}
-              />
-            </div>
-          </div>
+          <ImageModalViewer
+            src={`/api/fs/download?path=${encodeURIComponent(imageViewerPath)}`}
+            alt="Preview"
+            onClose={() => setImageViewerPath(null)}
+          />
         )}
 
         {isNavigatorOpen && (
@@ -3902,10 +3843,13 @@ export const Notebook: React.FC = () => {
 
                       {/* Save Status Indicator */}
                       <span className="flex items-center gap-1 text-xs">
-                        {currentFileId && !isAgentConnected && (
-                          <span className="flex items-center gap-1 text-amber-600 mr-2" title="Reconnecting to server...">
+                        {currentFileId && isKernelReconnecting && (
+                          <span
+                            className="flex items-center gap-1 text-amber-600 mr-2"
+                            title="Kernel disconnected, attempting to reconnect..."
+                          >
                             <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-                            <span>Reconnecting</span>
+                            <span>Kernel reconnecting</span>
                           </span>
                         )}
                         {!isOnline && (

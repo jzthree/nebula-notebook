@@ -813,6 +813,52 @@ describe('HeadlessOperationHandler', () => {
       const outputs = result.outputs as Array<Record<string, unknown>>;
       expect(outputs[0].content).toBe('new');
     });
+
+    it('should hide stale outputs from readCellOutput while a new execution is in flight', async () => {
+      const notebookPath = createTestNotebook('stale-output-hidden.ipynb', [
+        {
+          id: 'cell-1',
+          content: 'print(\"old\")',
+          outputs: [{ type: 'stdout', content: 'old' }],
+        },
+      ]);
+
+      let resolveExecution: ((value: { status: string; executionCount: number | null }) => void) | null = null;
+      const kernelService = {
+        hasSession: vi.fn(() => true),
+        getOrCreateKernel: vi.fn(async () => ({ sessionId: 'session-1', created: true })),
+        executeCode: vi.fn(async () => (
+          await new Promise<{ status: string; executionCount: number | null }>((resolve) => {
+            resolveExecution = resolve;
+          })
+        )),
+      };
+
+      handler = new HeadlessOperationHandler(fsService, router, kernelService as unknown as any);
+
+      const executeResult = await handler.applyOperation({
+        type: 'executeCell',
+        notebookPath,
+        cellId: 'cell-1',
+        maxWait: 0,
+      });
+
+      expect(executeResult.success).toBe(true);
+      expect(executeResult.executionStatus).toBe('busy');
+
+      const result = await handler.applyOperation({
+        type: 'readCellOutput',
+        notebookPath,
+        cellId: 'cell-1',
+        maxWait: 0,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.outputs).toEqual([]);
+
+      resolveExecution?.({ status: 'ok', executionCount: 1 });
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
   });
 
   describe('executeCell', () => {

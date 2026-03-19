@@ -98,6 +98,10 @@ vi.mock('../../hooks/useAutosave', () => ({
   formatLastSaved: vi.fn().mockReturnValue('just now'),
 }));
 
+vi.mock('../../hooks/useOperationHandler', () => ({
+  useOperationHandler: vi.fn(),
+}));
+
 // Mock VirtualCellList
 vi.mock('../VirtualCellList', () => ({
   VirtualCellList: ({ cells, renderCell }: any) => (
@@ -143,7 +147,7 @@ vi.mock('../NotebookBreadcrumb', () => ({
 
 // Mock Cell component to avoid CodeMirror DOM measurement issues in tests
 vi.mock('../Cell', () => ({
-  Cell: ({ cell, index, isActive, onClick, onDelete, onMove, onChangeType }: any) => (
+  Cell: ({ cell, index, isActive, onClick, onDelete, onMove, onChangeType, onRun }: any) => (
     <div
       data-testid={`cell-${cell.id}`}
       data-cell-id={cell.id}
@@ -153,11 +157,14 @@ vi.mock('../Cell', () => ({
     >
       <span data-testid={`cell-index-${index}`}>#{index + 1}</span>
       <div data-testid={`cell-content-${cell.id}`}>{cell.content}</div>
+      <div data-testid={`cell-output-count-${cell.id}`}>{cell.outputs.length}</div>
+      <div data-testid={`cell-executing-${cell.id}`}>{cell.isExecuting ? 'true' : 'false'}</div>
       <button data-testid={`delete-${cell.id}`} onClick={(e) => { e.stopPropagation(); onDelete(cell.id); }}>Delete</button>
       <button data-testid={`move-up-${cell.id}`} onClick={(e) => { e.stopPropagation(); onMove(cell.id, 'up'); }}>Up</button>
       <button data-testid={`move-down-${cell.id}`} onClick={(e) => { e.stopPropagation(); onMove(cell.id, 'down'); }}>Down</button>
       <button data-testid={`to-markdown-${cell.id}`} onClick={(e) => { e.stopPropagation(); onChangeType(cell.id, 'markdown'); }}>M</button>
       <button data-testid={`to-code-${cell.id}`} onClick={(e) => { e.stopPropagation(); onChangeType(cell.id, 'code'); }}>Y</button>
+      <button data-testid={`run-${cell.id}`} onClick={(e) => { e.stopPropagation(); onRun(cell.id); }}>Run</button>
     </div>
   ),
 }));
@@ -165,6 +172,9 @@ vi.mock('../Cell', () => ({
 // Import after mocks
 import { Notebook } from '../Notebook';
 import { NotificationProvider } from '../NotificationSystem';
+import { kernelService } from '../../services/kernelService';
+import * as fileService from '../../services/fileService';
+import { useOperationHandler } from '../../hooks/useOperationHandler';
 
 // Helper to render Notebook with required providers
 const renderNotebook = () => {
@@ -188,6 +198,31 @@ describe('Notebook', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(fileService.getNotebookData).mockResolvedValue({
+      cells: [
+        { id: 'cell-1', type: 'code', content: 'print("hello")', outputs: [], isExecuting: false },
+        { id: 'cell-2', type: 'code', content: 'x = 1', outputs: [], isExecuting: false },
+      ],
+      kernelspec: 'python3',
+      mtime: Date.now() / 1000,
+    } as Awaited<ReturnType<typeof fileService.getNotebookData>>);
+    vi.mocked(fileService.getFileContentWithMtime).mockResolvedValue({
+      cells: [
+        { id: 'cell-1', type: 'code', content: 'print("hello")', outputs: [], isExecuting: false },
+        { id: 'cell-2', type: 'code', content: 'x = 1', outputs: [], isExecuting: false },
+      ],
+      kernelspec: 'python3',
+      mtime: Date.now() / 1000,
+    } as Awaited<ReturnType<typeof fileService.getFileContentWithMtime>>);
+    vi.mocked(kernelService.executeCode).mockResolvedValue({ status: 'ok', execution_count: 1 } as Awaited<ReturnType<typeof kernelService.executeCode>>);
+    vi.mocked(useOperationHandler).mockReturnValue({
+      isConnected: true,
+      activeOperation: null,
+      agentSession: null,
+      forceEndAgentSession: vi.fn(),
+      disconnect: vi.fn(),
+      reconnect: vi.fn(),
+    } as ReturnType<typeof useOperationHandler>);
     // Mock window.confirm
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     // Mock crypto.randomUUID with valid UUID format
@@ -357,6 +392,97 @@ describe('Notebook', () => {
       // Arrow navigation is handled at the Cell level when cell div is focused
       // Here we just verify the cell was activated
       expect(screen.getByText('#1')).toBeInTheDocument();
+    });
+  });
+
+  describe('kernel reconnecting indicator', () => {
+    it('does not show reconnecting during startup when only the operation handler is disconnected', async () => {
+      vi.mocked(useOperationHandler).mockReturnValue({
+        isConnected: false,
+        activeOperation: null,
+        agentSession: null,
+        forceEndAgentSession: vi.fn(),
+        disconnect: vi.fn(),
+        reconnect: vi.fn(),
+      } as ReturnType<typeof useOperationHandler>);
+
+      renderNotebook();
+
+      await waitFor(() => {
+        expect(screen.getByText('#1')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByText('Kernel reconnecting')).not.toBeInTheDocument();
+      expect(screen.queryByText('Reconnecting')).not.toBeInTheDocument();
+    });
+
+    it('shows reconnecting when the active kernel disconnects', async () => {
+      renderNotebook();
+
+      await waitFor(() => {
+        expect(screen.getByText('#1')).toBeInTheDocument();
+        expect(vi.mocked(kernelService.onDisconnect).mock.calls.length).toBeGreaterThan(1);
+      });
+
+      const disconnectCallback = vi.mocked(kernelService.onDisconnect).mock.calls.at(-1)?.[0];
+      expect(disconnectCallback).toBeTypeOf('function');
+
+      act(() => {
+        disconnectCallback?.('test-session-id');
+      });
+
+      expect(await screen.findByText('Kernel reconnecting')).toBeInTheDocument();
+    });
+  });
+
+  describe('execution output refresh', () => {
+    it('keeps previous output visible until the rerun finishes with no new output', async () => {
+      const oldOutputCell = {
+        id: 'cell-1',
+        type: 'code' as const,
+        content: 'print("hello again")',
+        outputs: [{ id: 'out-1', type: 'stdout' as const, content: 'old output', timestamp: Date.now() }],
+        isExecuting: false,
+      };
+
+      vi.mocked(fileService.getNotebookData).mockResolvedValue({
+        cells: [oldOutputCell],
+        kernelspec: 'python3',
+        mtime: Date.now() / 1000,
+      } as Awaited<ReturnType<typeof fileService.getNotebookData>>);
+      vi.mocked(fileService.getFileContentWithMtime).mockResolvedValue({
+        cells: [oldOutputCell],
+        kernelspec: 'python3',
+        mtime: Date.now() / 1000,
+      } as Awaited<ReturnType<typeof fileService.getFileContentWithMtime>>);
+
+      let resolveExecution: ((value: { status: 'ok'; execution_count: number }) => void) | null = null;
+      vi.mocked(kernelService.executeCode).mockImplementation(() => (
+        new Promise(resolve => {
+          resolveExecution = resolve;
+        })
+      ) as ReturnType<typeof kernelService.executeCode>);
+
+      renderNotebook();
+
+      await screen.findByTestId('cell-cell-1');
+      expect(screen.getByTestId('cell-output-count-cell-1')).toHaveTextContent('1');
+
+      fireEvent.click(screen.getByTestId('run-cell-1'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('cell-executing-cell-1')).toHaveTextContent('true');
+        expect(screen.getByTestId('cell-output-count-cell-1')).toHaveTextContent('1');
+      });
+
+      await act(async () => {
+        resolveExecution?.({ status: 'ok', execution_count: 1 });
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('cell-executing-cell-1')).toHaveTextContent('false');
+        expect(screen.getByTestId('cell-output-count-cell-1')).toHaveTextContent('0');
+      });
     });
   });
 

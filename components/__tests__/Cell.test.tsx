@@ -180,6 +180,18 @@ describe('Cell', () => {
       expect(screen.getByText('[*]')).toBeInTheDocument();
     });
 
+    it('shows an updating overlay while previous output is being refreshed', () => {
+      renderCell({
+        ...defaultProps,
+        cell: {
+          ...mockCell,
+          isExecuting: true,
+          outputs: [{ id: 'out-1', type: 'stdout', content: 'old output', timestamp: Date.now() }],
+        },
+      });
+      expect(screen.getByLabelText('Output updating')).toBeInTheDocument();
+    });
+
     it('shows [n] after cell has executed', () => {
       renderCell({ ...defaultProps, cell: { ...mockCell, executionCount: 5 } });
       expect(screen.getByText('[5]')).toBeInTheDocument();
