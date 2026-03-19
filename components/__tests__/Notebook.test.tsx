@@ -38,6 +38,7 @@ vi.mock('../../services/kernelService', () => ({
 vi.mock('../../services/fileService', () => ({
   getFiles: vi.fn().mockResolvedValue([]),
   getNotebookData: vi.fn().mockResolvedValue({
+    path: '/test/notebook.ipynb',
     cells: [
       { id: 'cell-1', type: 'code', content: 'print("hello")', outputs: [], isExecuting: false },
       { id: 'cell-2', type: 'code', content: 'x = 1', outputs: [], isExecuting: false },
@@ -46,6 +47,7 @@ vi.mock('../../services/fileService', () => ({
     mtime: Date.now() / 1000
   }),
   getFileContentWithMtime: vi.fn().mockResolvedValue({
+    path: '/test/notebook.ipynb',
     cells: [
       { id: 'cell-1', type: 'code', content: 'print("hello")', outputs: [], isExecuting: false },
       { id: 'cell-2', type: 'code', content: 'x = 1', outputs: [], isExecuting: false },
@@ -198,7 +200,9 @@ describe('Notebook', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, '', '/');
     vi.mocked(fileService.getNotebookData).mockResolvedValue({
+      path: '/test/notebook.ipynb',
       cells: [
         { id: 'cell-1', type: 'code', content: 'print("hello")', outputs: [], isExecuting: false },
         { id: 'cell-2', type: 'code', content: 'x = 1', outputs: [], isExecuting: false },
@@ -207,6 +211,7 @@ describe('Notebook', () => {
       mtime: Date.now() / 1000,
     } as Awaited<ReturnType<typeof fileService.getNotebookData>>);
     vi.mocked(fileService.getFileContentWithMtime).mockResolvedValue({
+      path: '/test/notebook.ipynb',
       cells: [
         { id: 'cell-1', type: 'code', content: 'print("hello")', outputs: [], isExecuting: false },
         { id: 'cell-2', type: 'code', content: 'x = 1', outputs: [], isExecuting: false },
@@ -446,11 +451,13 @@ describe('Notebook', () => {
       };
 
       vi.mocked(fileService.getNotebookData).mockResolvedValue({
+        path: '/test/notebook.ipynb',
         cells: [oldOutputCell],
         kernelspec: 'python3',
         mtime: Date.now() / 1000,
       } as Awaited<ReturnType<typeof fileService.getNotebookData>>);
       vi.mocked(fileService.getFileContentWithMtime).mockResolvedValue({
+        path: '/test/notebook.ipynb',
         cells: [oldOutputCell],
         kernelspec: 'python3',
         mtime: Date.now() / 1000,
@@ -483,6 +490,87 @@ describe('Notebook', () => {
         expect(screen.getByTestId('cell-executing-cell-1')).toHaveTextContent('false');
         expect(screen.getByTestId('cell-output-count-cell-1')).toHaveTextContent('0');
       });
+    });
+  });
+
+  describe('file path canonicalization', () => {
+    it('canonicalizes a relative file URL to the backend-resolved absolute path', async () => {
+      window.history.replaceState({}, '', '/?file=alphagenome_official_eval_v2.ipynb');
+
+      vi.mocked(fileService.getFileContentWithMtime).mockResolvedValue({
+        path: '/endosome/archive/bioinformatics/Zhou_lab/shared/jzhou/Code/dnase/alphagenome_official_eval_v2.ipynb',
+        cells: [
+          { id: 'cell-1', type: 'code', content: 'print("hello")', outputs: [], isExecuting: false },
+        ],
+        kernelspec: 'python3',
+        mtime: Date.now() / 1000,
+      } as Awaited<ReturnType<typeof fileService.getFileContentWithMtime>>);
+
+      renderNotebook();
+
+      await waitFor(() => {
+        expect(window.location.search).toContain(
+          'file=/endosome/archive/bioinformatics/Zhou_lab/shared/jzhou/Code/dnase/alphagenome_official_eval_v2.ipynb'
+        );
+      });
+
+      expect(vi.mocked(fileService.saveActiveFileId)).toHaveBeenCalledWith(
+        '/endosome/archive/bioinformatics/Zhou_lab/shared/jzhou/Code/dnase/alphagenome_official_eval_v2.ipynb'
+      );
+    });
+  });
+
+  describe('text selection', () => {
+    it('preserves an existing selection when clicking inside the same cell', async () => {
+      renderNotebook();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('cell-cell-1')).toBeInTheDocument();
+      });
+
+      const cell = screen.getByTestId('cell-cell-1');
+      const content = screen.getByTestId('cell-content-cell-1');
+      const textNode = content.firstChild;
+      expect(textNode?.nodeType).toBe(Node.TEXT_NODE);
+
+      const range = document.createRange();
+      range.setStart(textNode!, 0);
+      range.setEnd(textNode!, 5);
+
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      expect(selection?.toString()).toBe('print');
+
+      fireEvent.click(cell);
+
+      expect(window.getSelection()?.toString()).toBe('print');
+    });
+
+    it('clears a stale selection when clicking a different cell', async () => {
+      renderNotebook();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('cell-cell-2')).toBeInTheDocument();
+      });
+
+      const firstCellContent = screen.getByTestId('cell-content-cell-1');
+      const secondCell = screen.getByTestId('cell-cell-2');
+      const textNode = firstCellContent.firstChild;
+      expect(textNode?.nodeType).toBe(Node.TEXT_NODE);
+
+      const range = document.createRange();
+      range.setStart(textNode!, 0);
+      range.setEnd(textNode!, 5);
+
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      expect(selection?.toString()).toBe('print');
+
+      fireEvent.click(secondCell);
+
+      expect(window.getSelection()?.toString()).toBe('');
     });
   });
 

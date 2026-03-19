@@ -1948,9 +1948,10 @@ export const Notebook: React.FC = () => {
     id: string,
     content: Cell[],
     notebookKernel?: string,
+    requestedId?: string,
   ) => {
-
-    if (currentFileId && currentFileId !== id) {
+    const sameFileAliases = new Set([id, requestedId].filter((value): value is string => Boolean(value)));
+    if (currentFileId && !sameFileAliases.has(currentFileId)) {
       // Keyframe: flush active cell before switching files
       flushActiveCell();
       saveNow(); // Save current file before switching
@@ -2184,10 +2185,12 @@ export const Notebook: React.FC = () => {
       if (result) {
         setLastKnownMtime(result.mtime);
         setPendingSave(false);
+        const normalizedId = result.path || id;
         loadFileAsync(
-          id,
+          normalizedId,
           result.cells,
           result.kernelspec,
+          id,
         );
       } else {
         // File doesn't exist or is empty
@@ -2817,8 +2820,14 @@ export const Notebook: React.FC = () => {
     const clickTarget = event.target as HTMLElement | null;
     if (clickTarget?.closest('.cm-editor')) return;
 
+    const clickedCell = event.currentTarget as HTMLElement | null;
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0 && selection.toString().length > 0) {
+      const selectionRange = selection.getRangeAt(0);
+      const selectionIsInsideClickedCell = clickedCell?.contains(selectionRange.commonAncestorContainer) ?? false;
+      if (selectionIsInsideClickedCell) {
+        return;
+      }
       selection.removeAllRanges();
     }
   }, [setActiveCellId]);

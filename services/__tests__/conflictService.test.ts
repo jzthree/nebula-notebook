@@ -281,6 +281,7 @@ describe('conflictService', () => {
         { id: 'remote-1', type: 'code' as const, content: 'remote code', outputs: [], isExecuting: false }
       ];
       mockGetFileContentWithMtime.mockResolvedValue({
+        path: '/path/to/file.ipynb',
         cells: remoteCells,
         mtime: 5000,
         kernelspec: 'python3'

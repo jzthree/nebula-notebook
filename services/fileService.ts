@@ -35,6 +35,7 @@ export interface FileMtime {
 }
 
 export interface NotebookData {
+  path: string;
   cells: Cell[];
   mtime: number;
 }
@@ -329,6 +330,7 @@ export const uploadFile = async (directory: string, file: File): Promise<FileIte
  * Notebook data including cells and metadata
  */
 export interface NotebookData {
+  path: string;        // normalized absolute path from backend
   cells: Cell[];
   kernelspec: string;  // kernel name from notebook metadata
   mtime: number;       // modification time for conflict detection
@@ -348,11 +350,15 @@ export const getNotebookCells = async (path: string): Promise<Cell[]> => {
  * Results are cached briefly (500ms) so React Strict Mode double-mounts
  * reuse the same cell objects instead of creating a second copy (~500MB saved).
  */
-let _notebookDataCache: { path: string; data: NotebookData; ts: number } | null = null;
+let _notebookDataCache: { requestPath: string; canonicalPath: string; data: NotebookData; ts: number } | null = null;
 
 export const getNotebookData = async (path: string): Promise<NotebookData> => {
   // Return cached result if same path and <500ms old (Strict Mode double-mount)
-  if (_notebookDataCache && _notebookDataCache.path === path && Date.now() - _notebookDataCache.ts < 500) {
+  if (
+    _notebookDataCache &&
+    (_notebookDataCache.requestPath === path || _notebookDataCache.canonicalPath === path) &&
+    Date.now() - _notebookDataCache.ts < 500
+  ) {
     return _notebookDataCache.data;
   }
 
@@ -365,14 +371,27 @@ export const getNotebookData = async (path: string): Promise<NotebookData> => {
 
   const data = await response.json();
   const result: NotebookData = {
+    path: data.path || path,
     cells: data.cells,
     kernelspec: data.kernelspec || 'python3',
     mtime: data.mtime,
   };
 
   // Cache briefly for Strict Mode dedup
-  _notebookDataCache = { path, data: result, ts: Date.now() };
-  setTimeout(() => { if (_notebookDataCache?.path === path) _notebookDataCache = null; }, 1000);
+  _notebookDataCache = {
+    requestPath: path,
+    canonicalPath: result.path,
+    data: result,
+    ts: Date.now(),
+  };
+  setTimeout(() => {
+    if (
+      _notebookDataCache?.requestPath === path &&
+      _notebookDataCache?.canonicalPath === result.path
+    ) {
+      _notebookDataCache = null;
+    }
+  }, 1000);
 
   return result;
 };

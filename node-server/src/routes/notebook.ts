@@ -53,9 +53,10 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
       if (!filePath) {
         return reply.code(400).send({ detail: 'path query parameter is required' });
       }
+      const normalizedPath = fsService.normalizePath(filePath);
       const result = await fsService.getNotebookCellsWithKernel(filePath);
       return reply.send({
-        path: filePath,
+        path: normalizedPath,
         cells: result.cells,
         kernelspec: result.kernelspec,
         mtime: result.mtime,
