@@ -514,8 +514,33 @@ export const createNotebook = async (name: string, initialCells: Cell[], directo
   // Expand ~ if present
   const fullPath = dir.startsWith('~') ? `${dir}/${name}.ipynb` : `${dir}/${name}.ipynb`;
 
-  await createFile(fullPath);
-  await saveNotebookCells(fullPath, initialCells);
+  const response = await fetch(`${API_BASE}/notebook/operation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: {
+        type: 'createNotebook',
+        notebookPath: fullPath,
+        overwrite: false,
+        kernelName: 'python3',
+        kernelDisplayName: 'Python 3',
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to create notebook');
+  }
+
+  const result = await response.json();
+  if (!result.success) {
+    throw new Error(result.error || 'Failed to create notebook');
+  }
+
+  if (initialCells.length > 0) {
+    await saveNotebookCells(fullPath, initialCells);
+  }
 
   return {
     id: fullPath,
