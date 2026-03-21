@@ -242,18 +242,45 @@ WebSocket endpoint for code execution with streaming output.
 }
 ```
 
-**Output (stdout/stderr/images):**
+**Output (stdout/stderr/images/rich display):**
 ```json
 {
   "type": "output",
   "output": {
-    "type": "stdout",
-    "content": "Hello, world!\n"
+    "type": "display_data",
+    "content": "Plotly figure",
+    "preferredMimeType": "application/vnd.plotly.v1+json",
+    "mimeBundle": {
+      "application/vnd.plotly.v1+json": {
+        "data": [],
+        "layout": {
+          "title": "Example"
+        }
+      },
+      "text/plain": "Plotly figure"
+    },
+    "metadata": {}
   }
 }
 ```
 
-Output types: `stdout`, `stderr`, `image`, `html`, `error`
+Output types: `stdout`, `stderr`, `image`, `html`, `display_data`, `error`
+
+For `display_data`, Nebula preserves the MIME bundle when available:
+
+- `mimeBundle`: normalized Jupyter MIME bundle
+- `preferredMimeType`: MIME type selected for rendering
+- `metadata`: Jupyter output metadata
+
+Currently prioritized rich MIME types include:
+
+- `application/vnd.plotly.v1+json`
+- `application/vnd.nebula.web+json`
+- `text/html`
+- `image/png`
+- `text/plain`
+
+See [RICH_OUTPUTS.md](RICH_OUTPUTS.md) for the full rendering model and examples.
 
 **Execution Result:**
 ```json

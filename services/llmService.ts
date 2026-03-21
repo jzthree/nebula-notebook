@@ -127,6 +127,9 @@ const formatCellOutputs = (outputs: Cell['outputs']): string => {
       case 'image':
         parts.push(`[IMAGE OUTPUT]`);
         break;
+      case 'display_data':
+        parts.push(`[DISPLAY OUTPUT${output.preferredMimeType ? `: ${output.preferredMimeType}` : ''}]`);
+        break;
     }
   }
 

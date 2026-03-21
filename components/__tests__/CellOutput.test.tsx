@@ -1,8 +1,13 @@
 import React from 'react';
-import { describe, it, expect } from 'vitest';
-import { render } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, waitFor } from '@testing-library/react';
 import { CellOutput } from '../CellOutput';
 import { CellOutput as Output } from '../../types';
+import { loadExternalLibrary } from '../../utils/externalLibraryLoader';
+
+vi.mock('../../utils/externalLibraryLoader', () => ({
+  loadExternalLibrary: vi.fn(),
+}));
 
 const htmlOutput: Output = {
   id: 'output-1',
@@ -12,6 +17,10 @@ const htmlOutput: Output = {
 };
 
 describe('CellOutput', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('preserves existing html media DOM when the parent rerenders for unrelated state', () => {
     const outputs = [htmlOutput];
 
@@ -72,5 +81,63 @@ describe('CellOutput', () => {
     rerender(<CellOutput outputs={updatedOutputs} executionMs={125} />);
 
     expect(container.querySelector('audio')?.getAttribute('src')).toBe('updated.mp3');
+  });
+
+  it('renders Plotly MIME bundle outputs through the shared library loader', async () => {
+    const reactMock = vi.fn();
+    vi.mocked(loadExternalLibrary).mockResolvedValue({
+      react: reactMock,
+      purge: vi.fn(),
+    });
+
+    const plotlyOutput: Output = {
+      id: 'plotly-output',
+      type: 'display_data',
+      content: 'Figure({ ... })',
+      timestamp: 3,
+      preferredMimeType: 'application/vnd.plotly.v1+json',
+      mimeBundle: {
+        'application/vnd.plotly.v1+json': {
+          data: [{ x: [1, 2], y: [3, 4], type: 'scatter' }],
+          layout: { title: 'Demo' },
+        },
+        'text/plain': 'Figure({ ... })',
+      },
+    };
+
+    render(<CellOutput outputs={[plotlyOutput]} executionMs={125} />);
+
+    await waitFor(() => {
+      expect(loadExternalLibrary).toHaveBeenCalledWith('plotly');
+      expect(reactMock).toHaveBeenCalled();
+    });
+  });
+
+  it('executes nebula web outputs with loaded libraries', async () => {
+    vi.mocked(loadExternalLibrary).mockResolvedValue({
+      value: 42,
+    });
+
+    const webOutput: Output = {
+      id: 'web-output',
+      type: 'display_data',
+      content: '{"html":"<div data-nebula-root></div>"}',
+      timestamp: 4,
+      preferredMimeType: 'application/vnd.nebula.web+json',
+      mimeBundle: {
+        'application/vnd.nebula.web+json': {
+          html: '<div data-nebula-root></div>',
+          libraries: ['plotly'],
+          js: 'container.textContent = String(libraries.plotly.value);',
+        },
+      },
+    };
+
+    const { container } = render(<CellOutput outputs={[webOutput]} executionMs={125} />);
+
+    await waitFor(() => {
+      const host = container.querySelector('.shadow-sm');
+      expect(host?.shadowRoot?.textContent).toContain('42');
+    });
   });
 });

@@ -98,6 +98,16 @@ function getDirectoryFromPath(filePath: string | null): string | undefined {
   return filePath.slice(0, idx);
 }
 
+function copyCellOutput(output: Cell['outputs'][number]) {
+  return {
+    type: output.type,
+    content: output.content,
+    ...(output.mimeBundle ? { mimeBundle: output.mimeBundle } : {}),
+    ...(output.metadata ? { metadata: output.metadata } : {}),
+    ...(output.preferredMimeType ? { preferredMimeType: output.preferredMimeType } : {}),
+  };
+}
+
 // ─── Cell Navigator (self-contained to avoid Notebook re-renders on typing) ──
 interface NavigatorItem { cellId: string; index: number; type: string; preview: string; content: string }
 const CellNavigator: React.FC<{
@@ -741,7 +751,7 @@ export const Notebook: React.FC = () => {
             executionStatus: hasError ? 'error' : 'idle',
             executionCount: currentCell.executionCount,
             executionTime: elapsed,
-            outputs: currentCell.outputs.map(o => ({ type: o.type, content: o.content })),
+            outputs: currentCell.outputs.map(copyCellOutput),
             sessionId: effectiveSessionId,
             queuePosition,
             queueLength,
@@ -756,7 +766,7 @@ export const Notebook: React.FC = () => {
             success: true,
             executionStatus: 'busy',
             executionTime: elapsed,
-            outputs: currentCell.outputs.map(o => ({ type: o.type, content: o.content })),
+            outputs: currentCell.outputs.map(copyCellOutput),
             sessionId: effectiveSessionId,
             queuePosition,
             queueLength,

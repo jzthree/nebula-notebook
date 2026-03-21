@@ -25,6 +25,7 @@ interface UIConnection {
   websocket: WebSocket;
   notebookPath: string;
   pendingRequests: Map<string, PendingRequest>;
+  lastActivityAt: number;
 }
 
 type Backend = 'ui' | 'headless';
@@ -46,6 +47,7 @@ interface AgentLock {
 }
 
 const AGENT_LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const UI_STALE_TIMEOUT_MS = 45 * 1000; // 45 seconds
 
 function normalizeNotebookPath(notebookPath: string): string {
   // IMPORTANT: This must match how the kernel service normalizes file paths.
@@ -93,6 +95,7 @@ export class OperationRouter {
       websocket,
       notebookPath: normalizedPath,
       pendingRequests: new Map(),
+      lastActivityAt: Date.now(),
     });
 
     console.log(`[OperationRouter] UI registered for: ${normalizedPath}`);
@@ -124,7 +127,19 @@ export class OperationRouter {
    */
   hasUI(notebookPath: string): boolean {
     const normalizedPath = normalizeNotebookPath(notebookPath);
-    return this.uiConnections.has(normalizedPath);
+    return this.getResponsiveUIConnection(normalizedPath) !== null;
+  }
+
+  /**
+   * Record UI WebSocket activity so stale connections stop intercepting operations.
+   */
+  markUIActivity(websocket: WebSocket, notebookPath: string): void {
+    const normalizedPath = normalizeNotebookPath(notebookPath);
+    const conn = this.uiConnections.get(normalizedPath);
+    if (!conn || conn.websocket !== websocket) {
+      return;
+    }
+    conn.lastActivityAt = Date.now();
   }
 
   /**
@@ -261,11 +276,26 @@ export class OperationRouter {
    */
   private getAnyUIConnection(): { path: string; connection: UIConnection } | null {
     for (const [uiPath, conn] of this.uiConnections) {
-      if (conn.websocket.readyState === WebSocket.OPEN) {
+      if (this.isUIConnectionResponsive(conn)) {
         return { path: uiPath, connection: conn };
       }
     }
     return null;
+  }
+
+  private isUIConnectionResponsive(conn: UIConnection): boolean {
+    return conn.websocket.readyState === WebSocket.OPEN && (Date.now() - conn.lastActivityAt) <= UI_STALE_TIMEOUT_MS;
+  }
+
+  private getResponsiveUIConnection(notebookPath: string): UIConnection | null {
+    const conn = this.uiConnections.get(notebookPath);
+    if (!conn) {
+      return null;
+    }
+    if (!this.isUIConnectionResponsive(conn)) {
+      return null;
+    }
+    return conn;
   }
 
   /**
@@ -281,7 +311,7 @@ export class OperationRouter {
     // This allows the UI to open the new notebook in a new tab
     const isCreateNotebook = opType === 'createNotebook';
     const anyUI = isCreateNotebook ? this.getAnyUIConnection() : null;
-    const hasUI = isCreateNotebook ? (anyUI !== null) : this.uiConnections.has(normalizedPath);
+    const hasUI = isCreateNotebook ? (anyUI !== null) : (this.getResponsiveUIConnection(normalizedPath) !== null);
     const backend: Backend = hasUI ? 'ui' : 'headless';
 
     // Clean up expired locks
@@ -388,7 +418,13 @@ export class OperationRouter {
   }
 
   private async forwardToUI(notebookPath: string, operation: Record<string, unknown>): Promise<OperationResult> {
-    const conn = this.uiConnections.get(notebookPath)!;
+    const conn = this.getResponsiveUIConnection(notebookPath);
+    if (!conn) {
+      return {
+        success: false,
+        error: 'UI connection is no longer responsive',
+      };
+    }
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     // Calculate timeout based on operation type
@@ -453,12 +489,13 @@ export class OperationRouter {
   handleUIResponse(notebookPath: string, response: Record<string, unknown>): void {
     const normalizedPath = normalizeNotebookPath(notebookPath);
 
-    if (!this.uiConnections.has(normalizedPath)) {
+    if (!this.getResponsiveUIConnection(normalizedPath)) {
       console.log(`[OperationRouter] Received response for unknown notebook: ${notebookPath}`);
       return;
     }
 
-    const conn = this.uiConnections.get(normalizedPath)!;
+    const conn = this.getResponsiveUIConnection(normalizedPath)!;
+    conn.lastActivityAt = Date.now();
     const requestId = response.requestId as string;
 
     if (requestId && conn.pendingRequests.has(requestId)) {
@@ -495,7 +532,7 @@ export class OperationRouter {
   ): Promise<OperationResult> {
     const normalizedPath = normalizeNotebookPath(notebookPath);
 
-    if (this.uiConnections.has(normalizedPath)) {
+    if (this.getResponsiveUIConnection(normalizedPath)) {
       const result = await this.readFromUI(normalizedPath);
       if (result.success) {
         const truncated = this.applyOutputTruncation(result, includeOutputs, maxLines, maxChars, maxLinesError, maxCharsError);
@@ -518,7 +555,10 @@ export class OperationRouter {
   }
 
   private async readFromUI(notebookPath: string): Promise<OperationResult> {
-    const conn = this.uiConnections.get(notebookPath)!;
+    const conn = this.getResponsiveUIConnection(notebookPath);
+    if (!conn) {
+      return this.readFromFile(notebookPath);
+    }
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     return new Promise((resolve) => {
@@ -620,7 +660,7 @@ export class OperationRouter {
           const outputType = (o.type as string) || 'stdout';
           const content = (o.content as string) || '';
 
-          if (outputType === 'image' || outputType === 'html') {
+          if (outputType === 'image' || outputType === 'html' || outputType === 'display_data') {
             return { ...o, is_binary: outputType === 'image' };
           }
 

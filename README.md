@@ -54,8 +54,18 @@ This root is used for the file browser and terminals. You can also change it fro
 **UI/UX**
 - Virtualized cell list for large notebooks
 - Collapsible/resizable outputs
+- Rich interactive outputs, including Plotly MIME rendering and Nebula-native JS outputs
 - Sound & browser notifications for long-running cells
 - Dark-mode friendly error display
+
+## Rich Outputs
+
+Nebula supports structured rich notebook outputs instead of flattening everything to plain text.
+
+- Jupyter-compatible Plotly rendering via `application/vnd.plotly.v1+json`
+- Nebula-native interactive outputs via `application/vnd.nebula.web+json`
+
+See [docs/RICH_OUTPUTS.md](docs/RICH_OUTPUTS.md) for examples, payload format, shared library loading, and current compatibility limits.
 
 ## Prerequisites
 

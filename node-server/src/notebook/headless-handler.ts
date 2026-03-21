@@ -21,11 +21,13 @@ import {
   UpdateSummary,
 } from './undoRedoManager';
 
-// Helper to create a CellOutput (API-compatible format matching Python)
-function createCellOutput(type: CellOutput['type'], content: string): CellOutput {
+function copyCellOutput(output: Partial<CellOutput>): CellOutput {
   return {
-    type,
-    content,
+    type: (output.type || 'stdout') as CellOutput['type'],
+    content: output.content || '',
+    ...(output.mimeBundle ? { mimeBundle: output.mimeBundle } : {}),
+    ...(output.metadata ? { metadata: output.metadata } : {}),
+    ...(output.preferredMimeType ? { preferredMimeType: output.preferredMimeType } : {}),
   };
 }
 
@@ -389,8 +391,9 @@ export class HeadlessOperationHandler {
         const content = output.content || '';
 
         // Skip truncation for binary/image outputs
-        if (outputType === 'image' || outputType === 'html') {
+        if (outputType === 'image' || outputType === 'html' || outputType === 'display_data') {
           return {
+            ...output,
             type: outputType,
             content,
             is_binary: outputType === 'image',
@@ -404,6 +407,7 @@ export class HeadlessOperationHandler {
         const { truncatedContent, metadata } = this.truncateOutput(content, linesLimit, charsLimit, 0);
 
         return {
+          ...output,
           type: outputType,
           content: truncatedContent,
           ...metadata,
@@ -812,10 +816,7 @@ export class HeadlessOperationHandler {
       return { success: false, error: `Cell with ID "${cellId}" not found` };
     }
 
-    cells[targetIndex].outputs = outputs.map(o => createCellOutput(
-      (o.type || 'stdout') as CellOutput['type'],
-      o.content || ''
-    ));
+    cells[targetIndex].outputs = outputs.map(o => copyCellOutput(o));
 
     if (executionCount !== undefined) {
       cells[targetIndex].executionCount = executionCount;
@@ -916,7 +917,7 @@ export class HeadlessOperationHandler {
         id: cell.id,
         type: cell.type,
         content: cell.content || '',
-        outputs: (cell.outputs || []).map(o => ({ type: o.type, content: o.content || '' })),
+        outputs: (cell.outputs || []).map(o => copyCellOutput(o)),
         executionCount: cell.executionCount,
         metadata: {
           scrolled: cell.scrolled,
@@ -1374,15 +1375,18 @@ export class HeadlessOperationHandler {
 
     // Get or create a kernel session for this notebook
     const requestedSessionId = (operation.sessionId as string | undefined) ?? (operation.session_id as string | undefined);
-    let sessionId: string;
-    if (requestedSessionId) {
-      if (!this.kernelService.hasSession(requestedSessionId)) {
-        return { success: false, error: `Session ${requestedSessionId} not found` };
-      }
+    const preferredKernelName = this.kernelService.getNotebookKernelPreference(notebookPath)?.kernelName || 'python3';
+    let sessionId: string | null = null;
+
+    if (requestedSessionId && this.kernelService.hasSession(requestedSessionId)) {
       sessionId = requestedSessionId;
     } else {
+      sessionId = this.kernelService.getSessionIdForFile(notebookPath);
+    }
+
+    if (!sessionId) {
       try {
-        const result = await this.kernelService.getOrCreateKernel(notebookPath, 'python3');
+        const result = await this.kernelService.getOrCreateKernel(notebookPath, preferredKernelName);
         sessionId = result.sessionId;
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -1427,8 +1431,8 @@ export class HeadlessOperationHandler {
       }
     };
 
-    const outputCallback = async (output: { type: string; content: string }) => {
-      outputs.push(createCellOutput(output.type as CellOutput['type'], output.content));
+    const outputCallback = async (output: Partial<CellOutput>) => {
+      outputs.push(copyCellOutput(output));
       // Save outputs periodically (every 5 outputs) like Python
       if (saveOutputs && outputs.length % 5 === 0) {
         publishOutputs();
@@ -1518,7 +1522,7 @@ export class HeadlessOperationHandler {
           executionStatus: 'busy',
           cellId: actualCellId,
           cellIndex: targetIndex,
-          outputs: outputs.map(o => ({ type: o.type, content: o.content })),
+          outputs: outputs.map(o => copyCellOutput(o)),
           executionTime: elapsed,
           sessionId,
           queuePosition: qi?.queuePosition,
@@ -1543,7 +1547,7 @@ export class HeadlessOperationHandler {
         cellIndex: targetIndex,
         executionStatus: status,
         executionCount,
-        outputs: outputs.map(o => ({ type: o.type, content: o.content })),
+        outputs: outputs.map(o => copyCellOutput(o)),
         executionTime: elapsed,
         sessionId,
         queuePosition: qi?.queuePosition,

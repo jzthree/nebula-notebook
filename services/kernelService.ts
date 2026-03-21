@@ -343,7 +343,13 @@ class KernelService {
 
     if (data.type === 'sync_outputs') {
       // Cell-level replace protocol: server sends complete cell output arrays
-      const cellsData = data.cells as Record<string, Array<{ type: string; content: string }>> | undefined;
+      const cellsData = data.cells as Record<string, Array<{
+        type: string;
+        content: string;
+        mimeBundle?: CellOutput['mimeBundle'];
+        metadata?: CellOutput['metadata'];
+        preferredMimeType?: string;
+      }>> | undefined;
       if (cellsData && typeof cellsData === 'object') {
         const cellOutputMap = new Map<string, CellOutput[]>();
         const now = Date.now();
@@ -354,6 +360,9 @@ class KernelService {
             type: o.type as CellOutput['type'],
             content: o.content,
             timestamp: now,
+            mimeBundle: o.mimeBundle,
+            metadata: o.metadata,
+            preferredMimeType: o.preferredMimeType,
           }));
           cellOutputMap.set(cellId, cellOutputs);
         }
@@ -405,6 +414,9 @@ class KernelService {
         type: output.type,
         content: output.content,
         timestamp: Date.now(),
+        mimeBundle: output.mimeBundle,
+        metadata: output.metadata,
+        preferredMimeType: output.preferredMimeType,
       };
 
       if (handler && handler.cellId && cellId && handler.cellId !== cellId) {

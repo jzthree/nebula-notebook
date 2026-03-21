@@ -25,10 +25,161 @@ import {
   NebulaConfig,
 } from './types';
 import { getDefaultKernelName } from '../kernel/default-kernel';
+import { buildDisplayOutput, convertMimeBundleToJupyter } from '../output/display-data';
 
 const NEBULA_DIR = path.join(os.homedir(), '.nebula');
 const USER_CONFIG_PATH = path.join(NEBULA_DIR, 'config.json');
 const PROJECT_CONFIG_PATH = path.join(__dirname, '..', '..', '..', '.nebula-config.json');
+const NOTEBOOK_METADATA_FAST_PATH_BYTES = 64 * 1024;
+const NOTEBOOK_METADATA_FALLBACK_PARSE_BYTES = 8 * 1024 * 1024;
+
+function readJsonString(source: string, startIndex: number): { value: string; endIndex: number } | null {
+  if (source[startIndex] !== '"') {
+    return null;
+  }
+
+  let i = startIndex + 1;
+  let escaped = false;
+  while (i < source.length) {
+    const ch = source[i];
+    if (escaped) {
+      escaped = false;
+      i++;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      try {
+        return {
+          value: JSON.parse(source.slice(startIndex, i + 1)) as string,
+          endIndex: i + 1,
+        };
+      } catch {
+        return null;
+      }
+    }
+    i++;
+  }
+
+  return null;
+}
+
+function findMatchingJsonObjectEnd(source: string, startIndex: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = startIndex; i < source.length; i++) {
+    const ch = source[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{') {
+      depth++;
+      continue;
+    }
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function extractTopLevelObjectField(source: string, fieldName: string): Record<string, unknown> | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      if (depth !== 1) {
+        inString = true;
+        continue;
+      }
+
+      const key = readJsonString(source, i);
+      if (!key) {
+        return null;
+      }
+
+      let j = key.endIndex;
+      while (j < source.length && /\s/.test(source[j])) {
+        j++;
+      }
+
+      if (source[j] !== ':') {
+        i = key.endIndex - 1;
+        continue;
+      }
+
+      if (key.value !== fieldName) {
+        i = key.endIndex - 1;
+        continue;
+      }
+
+      j++;
+      while (j < source.length && /\s/.test(source[j])) {
+        j++;
+      }
+
+      if (source[j] !== '{') {
+        return null;
+      }
+
+      const endIndex = findMatchingJsonObjectEnd(source, j);
+      if (endIndex === -1) {
+        return null;
+      }
+
+      try {
+        return JSON.parse(source.slice(j, endIndex + 1)) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    }
+
+    if (ch === '{' || ch === '[') {
+      depth++;
+    } else if (ch === '}' || ch === ']') {
+      depth--;
+    }
+  }
+
+  return null;
+}
 
 /**
  * Load root directory from config files if they exist.
@@ -803,33 +954,16 @@ export class FilesystemService {
           timestamp,
         });
       } else if (output.output_type === 'execute_result' || output.output_type === 'display_data') {
-        const data = output.data || {};
-
-        if (data['image/png']) {
+        const normalizedOutput = buildDisplayOutput(output.data || {}, output.metadata);
+        if (normalizedOutput) {
           result.push({
             id: `output-${cellIndex}-${result.length}`,
-            type: 'image',
-            content: this.sourceToString(data['image/png']),
+            type: normalizedOutput.type,
+            content: normalizedOutput.content,
             timestamp,
-          });
-        } else if (data['text/html']) {
-          // Strip autoplay from audio/video at parse time so the frontend
-          // never holds both the original and a stripped copy in memory.
-          // For a 44 MB audio WAV base64, this avoids a ~44 MB string duplication.
-          let html = this.sourceToString(data['text/html']);
-          html = html.replace(/(<(?:audio|video)\b[^>]*?)\s+autoplay(?:=["'][^"']*["'])?/gi, '$1');
-          result.push({
-            id: `output-${cellIndex}-${result.length}`,
-            type: 'html',
-            content: html,
-            timestamp,
-          });
-        } else if (data['text/plain']) {
-          result.push({
-            id: `output-${cellIndex}-${result.length}`,
-            type: 'stdout',
-            content: this.sourceToString(data['text/plain']),
-            timestamp,
+            mimeBundle: normalizedOutput.mimeBundle,
+            metadata: normalizedOutput.metadata,
+            preferredMimeType: normalizedOutput.preferredMimeType,
           });
         }
       } else if (output.output_type === 'error') {
@@ -853,6 +987,15 @@ export class FilesystemService {
     const result: JupyterOutput[] = [];
 
     for (const output of outputs) {
+      if (output.type !== 'stdout' && output.type !== 'stderr' && output.type !== 'error' && output.mimeBundle) {
+        result.push({
+          output_type: 'display_data',
+          data: convertMimeBundleToJupyter(output.mimeBundle),
+          metadata: output.metadata || {},
+        });
+        continue;
+      }
+
       if (output.type === 'stdout' || output.type === 'stderr') {
         // Coalesce consecutive same-name streams into one entry (matches Jupyter behavior).
         // This prevents tqdm progress bars from creating hundreds of output entries.
@@ -872,13 +1015,19 @@ export class FilesystemService {
         result.push({
           output_type: 'display_data',
           data: { 'image/png': output.content },
-          metadata: {},
+          metadata: output.metadata || {},
         });
       } else if (output.type === 'html') {
         result.push({
           output_type: 'display_data',
           data: { 'text/html': output.content },
-          metadata: {},
+          metadata: output.metadata || {},
+        });
+      } else if (output.type === 'display_data') {
+        result.push({
+          output_type: 'display_data',
+          data: { 'text/plain': output.content },
+          metadata: output.metadata || {},
         });
       } else if (output.type === 'error') {
         result.push({
@@ -993,32 +1142,25 @@ export class FilesystemService {
     const normalizedPath = this.normalizePath(notebookPath);
 
     // Load existing notebook metadata if file exists.
-    // Only read the metadata section — avoid parsing the entire file
-    // which for large notebooks (500 MB+) would allocate ~1 GB in the
-    // Node process just to extract a few kilobytes of metadata.
+    // Prefer a fast scan for the top-level metadata object so we avoid
+    // parsing the full notebook on every save. Fall back to full JSON
+    // parsing only for smaller notebooks when the fast path cannot find it.
     let existingMetadata: JupyterNotebook['metadata'] = {};
     if (fs.existsSync(normalizedPath)) {
       try {
-        // Read only the first 64 KB — metadata is always at the top of .ipynb files
+        const stat = fs.statSync(normalizedPath);
         const fd = fs.openSync(normalizedPath, 'r');
-        const buf = Buffer.alloc(65536);
-        const bytesRead = fs.readSync(fd, buf, 0, 65536, 0);
+        const buf = Buffer.alloc(NOTEBOOK_METADATA_FAST_PATH_BYTES);
+        const bytesRead = fs.readSync(fd, buf, 0, NOTEBOOK_METADATA_FAST_PATH_BYTES, 0);
         fs.closeSync(fd);
         const head = buf.toString('utf-8', 0, bytesRead);
-        // Extract the "metadata" key from the top-level JSON object
-        const metaMatch = head.match(/"metadata"\s*:\s*(\{)/);
-        if (metaMatch) {
-          // Find the matching closing brace (handles nested objects)
-          const startIdx = metaMatch.index! + metaMatch[0].length - 1;
-          let depth = 0;
-          let endIdx = -1;
-          for (let i = startIdx; i < head.length; i++) {
-            if (head[i] === '{') depth++;
-            else if (head[i] === '}') { depth--; if (depth === 0) { endIdx = i; break; } }
-          }
-          if (endIdx > 0) {
-            existingMetadata = JSON.parse(head.slice(startIdx, endIdx + 1));
-          }
+
+        const extractedMetadata = extractTopLevelObjectField(head, 'metadata');
+        if (extractedMetadata) {
+          existingMetadata = extractedMetadata;
+        } else if (stat.size <= NOTEBOOK_METADATA_FALLBACK_PARSE_BYTES) {
+          const notebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8')) as JupyterNotebook;
+          existingMetadata = notebook.metadata || {};
         }
       } catch {
         // Start fresh — metadata extraction failed
@@ -1083,10 +1225,10 @@ export class FilesystemService {
     }
 
     const notebook: JupyterNotebook = {
-      cells: nbCells,
       metadata: finalMetadata,
       nbformat: 4,
       nbformat_minor: 5,
+      cells: nbCells,
     };
 
     // Create parent directory if needed

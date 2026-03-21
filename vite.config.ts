@@ -10,6 +10,12 @@ export default defineConfig(({ mode }) => {
         port: 3000,
         host: '0.0.0.0',
         allowedHosts: true, // Allow all hosts (for internal cluster access)
+        watch: {
+          ignored: [
+            '**/*.ipynb',
+            '**/.nebula/**',
+          ],
+        },
         proxy: {
           '/api': {
             target: `http://localhost:${env.VITE_API_PORT || '8000'}`,

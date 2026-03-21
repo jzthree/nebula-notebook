@@ -457,6 +457,47 @@ describe('FilesystemService', () => {
     it('should throw on non-existent notebook', () => {
       expect(() => service.getNotebookCells('/nonexistent.ipynb')).toThrow();
     });
+
+    it('preserves rich display outputs with MIME bundles', () => {
+      fs.writeFileSync(
+        path.join(testDir, 'cells-test.ipynb'),
+        JSON.stringify({
+          cells: [
+            {
+              cell_type: 'code',
+              source: ['fig'],
+              metadata: { nebula_id: 'plotly-cell' },
+              outputs: [
+                {
+                  output_type: 'display_data',
+                  data: {
+                    'application/vnd.plotly.v1+json': {
+                      data: [{ x: [1, 2], y: [3, 4], type: 'scatter' }],
+                      layout: { title: 'Demo' },
+                    },
+                    'text/plain': 'Figure({ ... })',
+                  },
+                  metadata: {},
+                },
+              ],
+              execution_count: 1,
+            },
+          ],
+          metadata: { kernelspec: { name: 'python3', display_name: 'Python 3', language: 'python' } },
+          nbformat: 4,
+          nbformat_minor: 5,
+        })
+      );
+
+      const result = service.getNotebookCells(path.join(testDir, 'cells-test.ipynb'));
+      expect(result.cells[0].outputs).toHaveLength(1);
+      expect(result.cells[0].outputs[0].type).toBe('display_data');
+      expect(result.cells[0].outputs[0].preferredMimeType).toBe('application/vnd.plotly.v1+json');
+      expect(result.cells[0].outputs[0].mimeBundle?.['application/vnd.plotly.v1+json']).toEqual({
+        data: [{ x: [1, 2], y: [3, 4], type: 'scatter' }],
+        layout: { title: 'Demo' },
+      });
+    });
   });
 
   describe('Notebook Cells Saving', () => {
@@ -530,6 +571,29 @@ describe('FilesystemService', () => {
       expect(saved.metadata.nebula.agent_created).toBe(true);
     });
 
+    it('should preserve top-level metadata when cell metadata appears first in the file', () => {
+      fs.writeFileSync(path.join(testDir, 'save-cells.ipynb'), JSON.stringify({
+        cells: [
+          {
+            cell_type: 'code',
+            source: ['print("old")'],
+            metadata: { nebula_id: 'existing-cell' },
+            outputs: [],
+            execution_count: null,
+          },
+        ],
+        metadata: { custom: 'value', nebula: { agent_permitted: true } },
+        nbformat: 4,
+        nbformat_minor: 5,
+      }));
+
+      service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells);
+      const saved = JSON.parse(fs.readFileSync(path.join(testDir, 'save-cells.ipynb'), 'utf-8'));
+
+      expect(saved.metadata.custom).toBe('value');
+      expect(saved.metadata.nebula.agent_permitted).toBe(true);
+    });
+
     it('should save output without nebula_seq', () => {
       const seqCells = [
         {
@@ -546,6 +610,42 @@ describe('FilesystemService', () => {
       const saved = JSON.parse(fs.readFileSync(path.join(testDir, 'save-cells.ipynb'), 'utf-8'));
 
       expect(saved.cells[0].outputs[0].nebula_seq).toBeUndefined();
+    });
+
+    it('round-trips MIME bundle outputs back to Jupyter display_data', () => {
+      const richCells = [
+        {
+          id: 'cell-1',
+          type: 'code' as const,
+          content: 'fig',
+          outputs: [{
+            id: 'out-1',
+            type: 'display_data' as const,
+            content: 'Figure({ ... })',
+            timestamp: Date.now(),
+            preferredMimeType: 'application/vnd.plotly.v1+json',
+            mimeBundle: {
+              'application/vnd.plotly.v1+json': {
+                data: [{ x: [1], y: [2], type: 'bar' }],
+                layout: { title: 'Round Trip' },
+              },
+              'text/plain': 'Figure({ ... })',
+            },
+            metadata: {},
+          }],
+          isExecuting: false,
+          executionCount: 1,
+        },
+      ];
+
+      service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), richCells, 'python3');
+      const saved = JSON.parse(fs.readFileSync(path.join(testDir, 'save-cells.ipynb'), 'utf-8'));
+
+      expect(saved.cells[0].outputs[0].output_type).toBe('display_data');
+      expect(saved.cells[0].outputs[0].data['application/vnd.plotly.v1+json']).toEqual({
+        data: [{ x: [1], y: [2], type: 'bar' }],
+        layout: { title: 'Round Trip' },
+      });
     });
   });
 

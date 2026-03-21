@@ -826,6 +826,8 @@ describe('HeadlessOperationHandler', () => {
       let resolveExecution: ((value: { status: string; executionCount: number | null }) => void) | null = null;
       const kernelService = {
         hasSession: vi.fn(() => true),
+        getSessionIdForFile: vi.fn(() => null),
+        getNotebookKernelPreference: vi.fn(() => null),
         getOrCreateKernel: vi.fn(async () => ({ sessionId: 'session-1', created: true })),
         executeCode: vi.fn(async () => (
           await new Promise<{ status: string; executionCount: number | null }>((resolve) => {
@@ -869,6 +871,8 @@ describe('HeadlessOperationHandler', () => {
 
       const kernelService = {
         hasSession: vi.fn((sessionId: string) => sessionId === 'session-1'),
+        getSessionIdForFile: vi.fn(() => null),
+        getNotebookKernelPreference: vi.fn(() => null),
         getOrCreateKernel: vi.fn(async () => ({ sessionId: 'session-auto', created: true })),
         executeCode: vi.fn(async (
           _sessionId: string,
@@ -878,7 +882,7 @@ describe('HeadlessOperationHandler', () => {
           _cellId?: string | null
         ) => {
           onQueueInfo?.({ queuePosition: 0, queueLength: 1 });
-          await onOutput({ seq: 1, output: { type: 'stdout', content: 'ok' } });
+          await onOutput({ type: 'stdout', content: 'ok' });
           return { status: 'ok', executionCount: 1, queuePosition: 0, queueLength: 1 };
         }),
       };
@@ -898,6 +902,50 @@ describe('HeadlessOperationHandler', () => {
       expect(kernelService.getOrCreateKernel).not.toHaveBeenCalled();
       expect(kernelService.executeCode).toHaveBeenCalledWith(
         'session-1',
+        'print(\"hi\")',
+        expect.any(Function),
+        expect.any(Function),
+        'cell-1'
+      );
+    });
+
+    it('falls back to the notebook kernel when a provided sessionId is stale', async () => {
+      const notebookPath = createTestNotebook('execute-stale-session.ipynb', [
+        { id: 'cell-1', content: 'print("hi")' },
+      ]);
+
+      const kernelService = {
+        hasSession: vi.fn((sessionId: string) => sessionId === 'session-current'),
+        getSessionIdForFile: vi.fn(() => 'session-current'),
+        getNotebookKernelPreference: vi.fn(() => ({ kernelName: 'python3', serverId: null, updatedAt: Date.now() })),
+        getOrCreateKernel: vi.fn(async () => ({ sessionId: 'session-auto', created: true })),
+        executeCode: vi.fn(async (
+          _sessionId: string,
+          _code: string,
+          onOutput: (entry: any) => Promise<void>,
+          onQueueInfo?: (info: { queuePosition: number; queueLength: number }) => void,
+          _cellId?: string | null
+        ) => {
+          onQueueInfo?.({ queuePosition: 0, queueLength: 1 });
+          await onOutput({ type: 'stdout', content: 'ok' });
+          return { status: 'ok', executionCount: 1, queuePosition: 0, queueLength: 1 };
+        }),
+      };
+
+      handler = new HeadlessOperationHandler(fsService, router, kernelService as unknown as any);
+
+      const result = await handler.applyOperation({
+        type: 'executeCell',
+        notebookPath,
+        cellId: 'cell-1',
+        sessionId: 'session-stale',
+      });
+
+      expect(result.success).toBe(true);
+      expect(kernelService.getSessionIdForFile).toHaveBeenCalledWith(notebookPath);
+      expect(kernelService.getOrCreateKernel).not.toHaveBeenCalled();
+      expect(kernelService.executeCode).toHaveBeenCalledWith(
+        'session-current',
         'print(\"hi\")',
         expect.any(Function),
         expect.any(Function),

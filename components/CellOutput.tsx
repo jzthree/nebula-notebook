@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, GripHorizontal, WrapText, ArrowRightLeft, Ex
 import { encodeHtmlParam, wrapHtmlDocument, MAX_HTML_PARAM_LENGTH } from '../utils/htmlPreview';
 import AnsiToHtml from 'ansi-to-html';
 import { ImageModalViewer } from './ImageModalViewer';
+import { DisplayDataOutput, HtmlOutputRenderer } from './DisplayDataOutput';
 import {
   MAX_OUTPUT_LINES,
   MAX_OUTPUT_CHARS,
@@ -147,6 +148,10 @@ function estimateDisplayOutputHeight(outputs: ICellOutput[]): number {
       total += 240;
       continue;
     }
+    if (output.type === 'display_data') {
+      total += 320;
+      continue;
+    }
     const lineCount = (output.content?.match(/\n/g) || []).length + 1;
     total += lineCount * 20;
   }
@@ -245,7 +250,7 @@ const ImageOutput: React.FC<{ content: string; onOpenImage: (src: string) => voi
 });
 
 // HTML output with data URIs replaced by blob URLs
-const HtmlOutput: React.FC<{ content: string; renderedHtml: string; openHtmlInNewTab: (html: string) => void }> = memo(({ content, renderedHtml, openHtmlInNewTab }) => {
+const HtmlOutput: React.FC<{ content: string; renderedHtml: string; openHtmlInNewTab: (html: string) => void; isolated?: boolean }> = memo(({ content, renderedHtml, openHtmlInNewTab, isolated = false }) => {
   const processedHtml = useHtmlBlobUrls(renderedHtml);
   if (processedHtml === null) return null;
   return (
@@ -260,7 +265,7 @@ const HtmlOutput: React.FC<{ content: string; renderedHtml: string; openHtmlInNe
           <span>Open in new tab</span>
         </button>
       </div>
-      <div dangerouslySetInnerHTML={{ __html: processedHtml }} className="overflow-x-auto" />
+      <HtmlOutputRenderer html={processedHtml} isolated={isolated} />
     </div>
   );
 });
@@ -299,6 +304,25 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage
     }
   }, [output.type, output.content, allowAutoplay]);
 
+  const renderPlainText = useCallback((text: string) => (
+    <div className={`font-mono text-sm text-slate-700 mb-1 ${textClass}`}>
+      {text}
+    </div>
+  ), [textClass]);
+
+  const renderHtmlOutput = useCallback((html: string, isolated = false) => (
+    <HtmlOutput
+      content={html}
+      renderedHtml={html}
+      openHtmlInNewTab={openHtmlInNewTab}
+      isolated={isolated}
+    />
+  ), [openHtmlInNewTab]);
+
+  const renderImageOutput = useCallback((base64: string) => (
+    <ImageOutput content={base64} onOpenImage={onOpenImage} />
+  ), [onOpenImage]);
+
   switch (output.type) {
     case 'stdout':
       return <div className={`font-mono text-sm text-slate-700 mb-1 ${textClass}`} dangerouslySetInnerHTML={{ __html: renderedHtml }} />;
@@ -313,7 +337,28 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage
     case 'image':
       return <ImageOutput content={output.content} onOpenImage={onOpenImage} />;
     case 'html':
-      return <HtmlOutput content={output.content} renderedHtml={renderedHtml} openHtmlInNewTab={openHtmlInNewTab} />;
+      return (
+        <HtmlOutput
+          content={output.content}
+          renderedHtml={renderedHtml}
+          openHtmlInNewTab={openHtmlInNewTab}
+          isolated={Boolean(
+            output.metadata?.['text/html'] &&
+            typeof output.metadata['text/html'] === 'object' &&
+            !Array.isArray(output.metadata['text/html']) &&
+            (output.metadata['text/html'] as Record<string, unknown>).isolated === true
+          )}
+        />
+      );
+    case 'display_data':
+      return (
+        <DisplayDataOutput
+          output={output}
+          fallbackHtmlRenderer={renderHtmlOutput}
+          fallbackImageRenderer={renderImageOutput}
+          fallbackTextRenderer={renderPlainText}
+        />
+      );
     default:
       return null;
   }
@@ -368,6 +413,7 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, isUpdating = false, exe
 
     for (const output of outputs) {
       const lines = output.type === 'image' || output.type === 'html'
+        || output.type === 'display_data'
         ? 0
         : (output.content?.match(/\n/g) || []).length + 1;
       const chars = output.content?.length || 0;

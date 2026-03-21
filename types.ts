@@ -1,10 +1,24 @@
 export type CellType = 'code' | 'markdown';
 
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type OutputType = 'stdout' | 'stderr' | 'image' | 'html' | 'error' | 'display_data';
+export type MimeBundle = Record<string, JsonValue>;
+
 export interface CellOutput {
   id: string;
-  type: 'stdout' | 'stderr' | 'image' | 'html' | 'error';
+  type: OutputType;
   content: string;
   timestamp: number;
+  mimeBundle?: MimeBundle;
+  metadata?: Record<string, JsonValue>;
+  preferredMimeType?: string;
 }
 
 export interface Cell {

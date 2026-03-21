@@ -142,9 +142,9 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
         } else if (message.type === 'sync_outputs') {
           // Send complete cell output arrays for all buffered cells (replace semantics)
           const cellOutputs = kernelService.getAllCellOutputs(sessionId);
-          const cells: Record<string, { type: string; content: string }[]> = {};
+          const cells: Record<string, Array<Record<string, unknown>>> = {};
           for (const [cId, outputs] of cellOutputs) {
-            cells[cId] = outputs.map(o => ({ type: o.type, content: o.content }));
+            cells[cId] = outputs.map(o => ({ ...o }));
           }
 
           const executingCellId = kernelService.getExecutingCellId(sessionId);

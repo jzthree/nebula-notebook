@@ -74,7 +74,16 @@ export interface PersistedSession {
 /**
  * Kernel output types (matching Jupyter message types)
  */
-export type OutputType = 'stdout' | 'stderr' | 'image' | 'html' | 'error';
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type OutputType = 'stdout' | 'stderr' | 'image' | 'html' | 'error' | 'display_data';
+export type MimeBundle = Record<string, JsonValue>;
 
 /**
  * Kernel output message
@@ -82,6 +91,9 @@ export type OutputType = 'stdout' | 'stderr' | 'image' | 'html' | 'error';
 export interface KernelOutput {
   type: OutputType;
   content: string;
+  mimeBundle?: MimeBundle;
+  metadata?: Record<string, JsonValue>;
+  preferredMimeType?: string;
 }
 
 export interface SequencedKernelOutput {

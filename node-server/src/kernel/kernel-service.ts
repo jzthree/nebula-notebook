@@ -27,6 +27,7 @@ import {
   ConnectionConfig,
   DEFAULT_CONFIG,
 } from './types';
+import { buildDisplayOutput } from '../output/display-data';
 import {
   MAX_OUTPUT_LINES,
   MAX_OUTPUT_CHARS,
@@ -940,7 +941,10 @@ export class KernelService {
             content: msgContent.text as string,
           });
         } else if (msgType === 'execute_result' || msgType === 'display_data') {
-          const output = this.formatDisplayData(msgContent.data as Record<string, string>);
+          const output = this.formatDisplayData(
+            (msgContent.data as Record<string, unknown>) || {},
+            (msgContent.metadata as Record<string, unknown>) || undefined,
+          );
           if (output) {
             await onOutput(output);
           }
@@ -1105,17 +1109,22 @@ export class KernelService {
   /**
    * Format display data for output
    */
-  private formatDisplayData(data: Record<string, string>): KernelOutput | null {
-    if ('image/png' in data) {
-      return { type: 'image', content: data['image/png'] };
+  private formatDisplayData(
+    data: Record<string, unknown>,
+    metadata?: Record<string, unknown>,
+  ): KernelOutput | null {
+    const normalizedOutput = buildDisplayOutput(data, metadata);
+    if (!normalizedOutput) {
+      return null;
     }
-    if ('text/html' in data) {
-      return { type: 'html', content: data['text/html'] };
-    }
-    if ('text/plain' in data) {
-      return { type: 'stdout', content: data['text/plain'] };
-    }
-    return null;
+
+    return {
+      type: normalizedOutput.type,
+      content: normalizedOutput.content,
+      mimeBundle: normalizedOutput.mimeBundle,
+      metadata: normalizedOutput.metadata,
+      preferredMimeType: normalizedOutput.preferredMimeType,
+    };
   }
 
   /**
@@ -1128,9 +1137,9 @@ export class KernelService {
   private getOutputStats(output: KernelOutput): { lines: number; chars: number; isError: boolean } {
     const isError = output.type === 'error';
     const chars = output.content?.length || 0;
-    const lines = output.type === 'image' || output.type === 'html'
-      ? 0
-      : (output.content?.match(/\n/g) || []).length + 1;
+      const lines = output.type === 'image' || output.type === 'html' || output.type === 'display_data'
+        ? 0
+        : (output.content?.match(/\n/g) || []).length + 1;
     return { lines, chars, isError };
   }
 

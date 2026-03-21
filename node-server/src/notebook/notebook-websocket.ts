@@ -61,11 +61,26 @@ export function setupNotebookWebSocket(server: HttpServer): WebSocketServer {
     // Register UI connection
     await operationRouter.registerUI(ws, notebookPath);
 
+    const heartbeatInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.ping();
+        } catch {
+          // Ignore ping failures; close/error handlers will clean up.
+        }
+      }
+    }, 15000);
+
     ws.on('error', (err) => {
       console.error(`[Notebook WS] WebSocket error for ${notebookPath}:`, err);
     });
 
+    ws.on('pong', () => {
+      operationRouter.markUIActivity(ws, notebookPath);
+    });
+
     ws.on('message', async (data) => {
+      operationRouter.markUIActivity(ws, notebookPath);
       try {
         const message = JSON.parse(data.toString());
 
@@ -88,6 +103,7 @@ export function setupNotebookWebSocket(server: HttpServer): WebSocketServer {
     });
 
     ws.on('close', () => {
+      clearInterval(heartbeatInterval);
       console.log(`[Notebook WS] Disconnected for notebook: ${notebookPath}`);
       operationRouter.unregisterUI(ws, notebookPath);
     });

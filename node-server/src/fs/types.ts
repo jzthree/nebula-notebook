@@ -50,18 +50,35 @@ export interface WriteFileOptions {
   fileType?: 'text' | 'notebook';
 }
 
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type OutputType = 'stdout' | 'stderr' | 'image' | 'html' | 'error' | 'display_data';
+export type MimeBundle = Record<string, JsonValue>;
+
 // Notebook cell output types (matching frontend types)
 export interface CellOutput {
   id?: string;  // Optional - frontend uses this, API doesn't
-  type: 'stdout' | 'stderr' | 'image' | 'html' | 'error';
+  type: OutputType;
   content: string;
   timestamp?: number;  // Optional - frontend uses this, API doesn't
+  mimeBundle?: MimeBundle;
+  metadata?: Record<string, JsonValue>;
+  preferredMimeType?: string;
 }
 
 // API-compatible output format (matches Python backend)
 export interface ApiCellOutput {
-  type: 'stdout' | 'stderr' | 'image' | 'html' | 'error';
+  type: OutputType;
   content: string;
+  mimeBundle?: MimeBundle;
+  metadata?: Record<string, JsonValue>;
+  preferredMimeType?: string;
 }
 
 // Internal cell format used by Nebula
@@ -110,7 +127,7 @@ export interface JupyterOutput {
   output_type: 'stream' | 'execute_result' | 'display_data' | 'error';
   name?: string; // for stream
   text?: string | string[]; // for stream
-  data?: Record<string, string | string[]>; // for execute_result/display_data
+  data?: Record<string, unknown>; // for execute_result/display_data
   metadata?: Record<string, unknown>;
   ename?: string; // for error
   evalue?: string; // for error
