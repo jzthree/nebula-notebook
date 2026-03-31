@@ -230,6 +230,14 @@ interface CommitJournal {
   };
 }
 
+export interface AgentPermissionSnapshot {
+  agent_created: boolean;
+  agent_permitted: boolean;
+  has_history: boolean;
+  can_agent_modify: boolean;
+  reason: string;
+}
+
 export class FilesystemService {
   private writeLocks: Map<string, Promise<void>> = new Map();
   private defaultRoot: string;
@@ -1099,6 +1107,7 @@ export class FilesystemService {
 
     return {
       cells,
+      metadata: notebook.metadata || {},
       kernelspec,
       kernelspecSource: metadataKernel ? 'metadata' : 'default',
       mtime: stat.mtimeMs / 1000,
@@ -1335,41 +1344,141 @@ export class FilesystemService {
   /**
    * Update notebook-level metadata without modifying cells
    */
-  updateNotebookMetadata(notebookPath: string, metadataUpdates: Record<string, unknown>): { success: boolean; error?: string } {
-    const normalizedPath = this.normalizePath(notebookPath);
+  async updateNotebookMetadata(
+    notebookPath: string,
+    metadataUpdates: Record<string, unknown>
+  ): Promise<{ success: boolean; error?: string }> {
+    return await this.withWriteLock(notebookPath, async () => {
+      const normalizedPath = this.normalizePath(notebookPath);
 
-    if (!fs.existsSync(normalizedPath)) {
-      return { success: false, error: `Notebook not found: ${normalizedPath}` };
-    }
-
-    try {
-      const notebook: JupyterNotebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8'));
-
-      const existingMetadata = notebook.metadata || {};
-      for (const [key, value] of Object.entries(metadataUpdates)) {
-        if (typeof value === 'object' && value !== null && typeof existingMetadata[key] === 'object' && existingMetadata[key] !== null) {
-          existingMetadata[key] = { ...(existingMetadata[key] as Record<string, unknown>), ...(value as Record<string, unknown>) };
-        } else {
-          existingMetadata[key] = value;
-        }
+      if (!fs.existsSync(normalizedPath)) {
+        return { success: false, error: `Notebook not found: ${normalizedPath}` };
       }
 
-      notebook.metadata = existingMetadata;
-      this.writeJsonAtomicSync(normalizedPath, notebook);
+      try {
+        const notebook: JupyterNotebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8'));
 
-      return { success: true };
-    } catch (e) {
-      return { success: false, error: `Failed to update notebook: ${e}` };
-    }
+        const existingMetadata = notebook.metadata || {};
+        for (const [key, value] of Object.entries(metadataUpdates)) {
+          if (typeof value === 'object' && value !== null && typeof existingMetadata[key] === 'object' && existingMetadata[key] !== null) {
+            existingMetadata[key] = {
+              ...(existingMetadata[key] as Record<string, unknown>),
+              ...(value as Record<string, unknown>),
+            };
+          } else {
+            existingMetadata[key] = value;
+          }
+        }
+
+        notebook.metadata = existingMetadata;
+        this.writeJsonAtomicSync(normalizedPath, notebook);
+
+        return { success: true };
+      } catch (e) {
+        return { success: false, error: `Failed to update notebook: ${e}` };
+      }
+    });
+  }
+
+  private stripOutputsForHistorySnapshot(cell: NebulaCell): NebulaCell {
+    const snapshot: NebulaCell = {
+      ...cell,
+      outputs: [],
+      isExecuting: false,
+      pendingOutputReset: undefined,
+    };
+    return snapshot;
+  }
+
+  private buildInitialHistory(notebookPath: string): unknown[] {
+    const { cells } = this.getNotebookCells(notebookPath);
+    return [{
+      type: 'snapshot',
+      cells: cells.map(cell => this.stripOutputsForHistorySnapshot(cell)),
+      timestamp: Date.now(),
+    }];
+  }
+
+  /**
+   * Set agent permission and ensure newly-permitted notebooks are immediately editable.
+   */
+  async setAgentPermission(
+    notebookPath: string,
+    permitted: boolean
+  ): Promise<{ success: boolean; error?: string; status?: AgentPermissionSnapshot }> {
+    return await this.withWriteLock(notebookPath, async () => {
+      const normalizedPath = this.normalizePath(notebookPath);
+
+      if (!fs.existsSync(normalizedPath)) {
+        return { success: false, error: `Notebook not found: ${normalizedPath}` };
+      }
+
+      try {
+        const notebook: JupyterNotebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8'));
+        const metadata = notebook.metadata || {};
+        const nebula = ((metadata.nebula as Record<string, unknown> | undefined) || {});
+
+        notebook.metadata = {
+          ...metadata,
+          nebula: {
+            ...nebula,
+            agent_permitted: permitted,
+          },
+        };
+        this.writeJsonAtomicSync(normalizedPath, notebook);
+
+        if (permitted && !this.hasHistory(notebookPath)) {
+          const historyPath = this.getHistoryPath(notebookPath);
+          const nebulaDir = path.dirname(historyPath);
+          if (!fs.existsSync(nebulaDir)) {
+            fs.mkdirSync(nebulaDir, { recursive: true });
+          }
+          this.writeJsonAtomicSync(historyPath, this.buildInitialHistory(notebookPath));
+        }
+
+        return {
+          success: true,
+          status: this.getAgentPermissionStatus(notebookPath),
+        };
+      } catch (e) {
+        return { success: false, error: `Failed to set agent permission: ${e}` };
+      }
+    });
+  }
+
+  /**
+   * Derive agent permission status from persisted notebook metadata.
+   */
+  getAgentPermissionStatus(notebookPath: string): AgentPermissionSnapshot {
+    const metadata = this.getNotebookMetadata(notebookPath);
+    const nebula = (metadata.nebula || {}) as Record<string, unknown>;
+    const hasHistory = this.hasHistory(notebookPath);
+
+    const agentCreated = Boolean(nebula.agent_created);
+    const agentPermitted = Boolean(nebula.agent_permitted);
+    const canModify = agentCreated || (agentPermitted && hasHistory);
+
+    return {
+      agent_created: agentCreated,
+      agent_permitted: agentPermitted,
+      has_history: hasHistory,
+      can_agent_modify: canModify,
+      reason: agentCreated
+        ? 'Agent created this notebook'
+        : canModify
+          ? 'User permitted and history enabled'
+          : agentPermitted
+            ? 'User permitted but history not enabled'
+            : 'Not permitted for agent modifications',
+    };
   }
 
   /**
    * Check if a notebook is permitted for agent modifications
    */
   isAgentPermitted(notebookPath: string): boolean {
-    const metadata = this.getNotebookMetadata(notebookPath);
-    const nebula = (metadata.nebula || {}) as Record<string, unknown>;
-    return Boolean(nebula.agent_created) || Boolean(nebula.agent_permitted);
+    const status = this.getAgentPermissionStatus(notebookPath);
+    return status.agent_created || status.agent_permitted;
   }
 
   /**

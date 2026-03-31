@@ -58,6 +58,7 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
       return reply.send({
         path: normalizedPath,
         cells: result.cells,
+        metadata: result.metadata,
         kernelspec: result.kernelspec,
         mtime: result.mtime,
       });
@@ -176,26 +177,16 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ detail: 'notebook_path is required' });
       }
 
-      const result = fsService.updateNotebookMetadata(notebook_path, {
-        nebula: { agent_permitted: permitted },
-      });
+      const result = await fsService.setAgentPermission(notebook_path, permitted);
 
       if (!result.success) {
         return reply.code(400).send({ detail: result.error || 'Failed to update notebook' });
       }
 
-      // Return current permission status
-      const metadata = fsService.getNotebookMetadata(notebook_path);
-      const nebula = (metadata.nebula || {}) as Record<string, unknown>;
-      const hasHistory = fsService.hasHistory(notebook_path);
-
       return reply.send({
         status: 'ok',
         notebook_path,
-        agent_permitted: nebula.agent_permitted || false,
-        agent_created: nebula.agent_created || false,
-        has_history: hasHistory,
-        can_agent_modify: nebula.agent_created || (nebula.agent_permitted && hasHistory),
+        ...(result.status || fsService.getAgentPermissionStatus(notebook_path)),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -213,27 +204,11 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ detail: 'path query parameter is required' });
       }
 
-      const metadata = fsService.getNotebookMetadata(filePath);
-      const nebula = (metadata.nebula || {}) as Record<string, unknown>;
-      const hasHistory = fsService.hasHistory(filePath);
-
-      const agentCreated = nebula.agent_created || false;
-      const agentPermitted = nebula.agent_permitted || false;
-      const canModify = agentCreated || (agentPermitted && hasHistory);
+      const status = fsService.getAgentPermissionStatus(filePath);
 
       return reply.send({
         notebook_path: filePath,
-        agent_created: agentCreated,
-        agent_permitted: agentPermitted,
-        has_history: hasHistory,
-        can_agent_modify: canModify,
-        reason: agentCreated
-          ? 'Agent created this notebook'
-          : canModify
-            ? 'User permitted and history enabled'
-            : agentPermitted
-              ? 'User permitted but history not enabled'
-              : 'Not permitted for agent modifications',
+        ...status,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -361,7 +336,7 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
       }
 
       // Save back
-      const updateResult = fsService.updateNotebookMetadata(filePath, { nebula });
+      const updateResult = await fsService.updateNotebookMetadata(filePath, { nebula });
       if (!updateResult.success) {
         return reply.code(500).send({ detail: updateResult.error || 'Failed to update notebook metadata' });
       }

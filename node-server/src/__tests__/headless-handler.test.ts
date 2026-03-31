@@ -702,7 +702,7 @@ describe('HeadlessOperationHandler', () => {
       expect(data.cells[0].outputs).toEqual([]);
     });
 
-    it('should return empty notebook metadata in headless mode', async () => {
+    it('should return persisted notebook metadata in headless mode', async () => {
       const notebookPath = createTestNotebook('metadata.ipynb', [
         { id: 'cell-1', content: 'x=1' },
       ]);
@@ -711,7 +711,10 @@ describe('HeadlessOperationHandler', () => {
 
       expect(result.success).toBe(true);
       const data = result.data as Record<string, unknown>;
-      expect(data.metadata).toEqual({});
+      expect(data.metadata).toEqual({
+        kernelspec: { name: 'python3', display_name: 'Python 3' },
+        nebula: { agent_created: true },
+      });
     });
 
     it('should honor cell id when nebula_id metadata is missing', async () => {
@@ -957,6 +960,23 @@ describe('HeadlessOperationHandler', () => {
   describe('Agent Permission Checking', () => {
     it('should allow operations on agent-created notebooks', async () => {
       const notebookPath = createTestNotebook('agent-created.ipynb', [], true);
+
+      const result = await handler.applyOperation({
+        type: 'insertCell',
+        notebookPath,
+        index: 0,
+        cell: { id: 'new-cell', type: 'code', content: 'x=1' },
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('should allow operations immediately after granting permission', async () => {
+      const notebookPath = createTestNotebook('granted.ipynb', [], false);
+
+      const permissionResult = await fsService.setAgentPermission(notebookPath, true);
+      expect(permissionResult.success).toBe(true);
+      expect(permissionResult.status?.can_agent_modify).toBe(true);
 
       const result = await handler.applyOperation({
         type: 'insertCell',

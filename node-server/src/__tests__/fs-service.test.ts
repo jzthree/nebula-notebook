@@ -436,6 +436,7 @@ describe('FilesystemService', () => {
       const result = service.getNotebookCells(path.join(testDir, 'cells-test.ipynb'));
       expect(result.cells.length).toBe(2);
       expect(result.kernelspec).toBe('python3');
+      expect(result.metadata.kernelspec?.name).toBe('python3');
 
       // Check code cell
       const codeCell = result.cells[0];
@@ -745,8 +746,8 @@ describe('FilesystemService', () => {
       expect(metadata.kernelspec.name).toBe('python3');
     });
 
-    it('should update notebook metadata', () => {
-      const result = service.updateNotebookMetadata(getNotebookPath(), {
+    it('should update notebook metadata', async () => {
+      const result = await service.updateNotebookMetadata(getNotebookPath(), {
         nebula: { agent_permitted: true }
       });
       expect(result.success).toBe(true);
@@ -759,6 +760,32 @@ describe('FilesystemService', () => {
     it('should return empty object for non-existent notebook', () => {
       const metadata = service.getNotebookMetadata('/nonexistent.ipynb');
       expect(metadata).toEqual({});
+    });
+
+    it('should derive agent permission status from notebook metadata', async () => {
+      await service.updateNotebookMetadata(getNotebookPath(), {
+        nebula: { agent_permitted: true },
+      });
+
+      const status = service.getAgentPermissionStatus(getNotebookPath());
+      expect(status.agent_created).toBe(false);
+      expect(status.agent_permitted).toBe(true);
+      expect(status.has_history).toBe(false);
+      expect(status.can_agent_modify).toBe(false);
+      expect(status.reason).toBe('User permitted but history not enabled');
+    });
+
+    it('should initialize history when granting agent permission', async () => {
+      const result = await service.setAgentPermission(getNotebookPath(), true);
+
+      expect(result.success).toBe(true);
+      expect(result.status?.agent_permitted).toBe(true);
+      expect(result.status?.has_history).toBe(true);
+      expect(result.status?.can_agent_modify).toBe(true);
+
+      const history = service.loadHistory(getNotebookPath()) as any[];
+      expect(history).toHaveLength(1);
+      expect(history[0].type).toBe('snapshot');
     });
   });
 

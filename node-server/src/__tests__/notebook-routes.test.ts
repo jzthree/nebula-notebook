@@ -107,6 +107,7 @@ describe('Notebook Routes', () => {
       expect(response.statusCode).toBe(200);
       expect(body).toHaveProperty('path');
       expect(body).toHaveProperty('cells');
+      expect(body).toHaveProperty('metadata');
       expect(body).toHaveProperty('kernelspec');
       expect(body).toHaveProperty('mtime');
       expect(Array.isArray(body.cells)).toBe(true);
@@ -374,6 +375,14 @@ describe('Notebook Routes', () => {
       expect(body).toHaveProperty('agent_created');
       expect(body).toHaveProperty('has_history');
       expect(body).toHaveProperty('can_agent_modify');
+      expect(body.has_history).toBe(true);
+      expect(body.can_agent_modify).toBe(true);
+
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+      expect(saved.metadata.nebula.agent_permitted).toBe(true);
+
+      const historyPath = path.join(testDir, '.nebula', 'permit-test.history.json');
+      expect(fs.existsSync(historyPath)).toBe(true);
     });
 
     it('should return 400 if notebook_path is missing', async () => {

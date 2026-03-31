@@ -99,10 +99,9 @@ export class HeadlessOperationHandler {
   private getCachedNotebook(notebookPath: string): NotebookCache {
     if (!this.cache.has(notebookPath)) {
       const result = this.fsService.getNotebookCells(notebookPath);
-      const metadata = (result as { metadata?: Record<string, unknown> }).metadata || {};
       this.cache.set(notebookPath, {
         cells: result.cells || [],
-        metadata,
+        metadata: result.metadata || {},
         dirty: false,
       });
     }
@@ -182,15 +181,14 @@ export class HeadlessOperationHandler {
    * Check if agent has permission to modify this notebook.
    */
   private checkAgentPermission(notebookPath: string, _operationType: string): OperationResult | null {
-    if (this.fsService.isAgentPermitted(notebookPath)) {
-      const metadata = this.fsService.getNotebookMetadata(notebookPath);
-      const nebula = (metadata.nebula || {}) as Record<string, unknown>;
+    const status = this.fsService.getAgentPermissionStatus(notebookPath);
 
-      if (nebula.agent_created) {
-        return null; // Agent-created notebooks are always modifiable
-      }
+    if (status.agent_created) {
+      return null;
+    }
 
-      if (!this.fsService.hasHistory(notebookPath)) {
+    if (status.agent_permitted) {
+      if (!status.has_history) {
         return {
           success: false,
           error: `Agent cannot modify "${notebookPath}": notebook is user-permitted but history is not enabled. Open the notebook in the UI first to enable history tracking, or the agent can create a new notebook.`,

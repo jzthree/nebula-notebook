@@ -97,6 +97,7 @@ export interface NebulaCell {
 
 export interface NotebookCellsResponse {
   cells: NebulaCell[];
+  metadata: JupyterNotebook['metadata'];
   kernelspec: string;
   kernelspecSource?: 'metadata' | 'default' | 'env-default';
   mtime: number;
