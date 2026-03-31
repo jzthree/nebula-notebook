@@ -581,7 +581,7 @@ describe('KernelService', () => {
 
       vi.mocked(childProcess.spawn).mockReturnValue(newProc as unknown as ReturnType<typeof childProcess.spawn>);
       const sleepSpy = vi.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
-      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockResolvedValue(undefined);
+      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockResolvedValue('idle');
       const generateConnectionFileSpy = vi.spyOn(service as any, 'generateConnectionFile').mockResolvedValue({
         config: connectionConfig,
         filePath: path.join(os.tmpdir(), `nebula-new-conn-${Date.now()}.json`),
@@ -913,8 +913,8 @@ describe('KernelService', () => {
 
       // Mock isPidAlive to return true
       const isPidAliveSpy = vi.spyOn(service as any, 'isPidAlive').mockReturnValue(true);
-      // Mock waitForReady to succeed
-      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockResolvedValue(undefined);
+      // Mock waitForReady to succeed (returns 'idle')
+      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockResolvedValue('idle');
 
       const connectionConfig = {
         ip: '127.0.0.1',
@@ -1063,7 +1063,7 @@ describe('KernelService', () => {
       // Mock isPidAlive to return true
       const isPidAliveSpy = vi.spyOn(service as any, 'isPidAlive').mockReturnValue(true);
       // Mock waitForReady to succeed
-      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockResolvedValue(undefined);
+      const waitForReadySpy = vi.spyOn(service as any, 'waitForReady').mockResolvedValue('idle');
 
       const connectionConfig = {
         ip: '127.0.0.1',

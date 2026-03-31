@@ -270,9 +270,17 @@ export class KernelService {
         }
 
         try {
-          // Use shorter timeout for reattach - kernel should already be running
-          await this.waitForReady(sessionId, 10);
-          kernelSession.status = 'idle';
+          // Use shorter timeout for reattach — kernel should already be running.
+          // Pass PID so waitForReady can distinguish "busy" from "dead" on timeout.
+          const detectedStatus = await this.waitForReady(sessionId, 10, session.kernelPid);
+          kernelSession.status = detectedStatus;
+
+          if (detectedStatus === 'busy') {
+            // Kernel is alive but mid-execution. Monitor iopub in background
+            // so we can flip to 'idle' when the execution finishes.
+            this.monitorBusyKernel(sessionId);
+          }
+
           const kernelStartTime = session.kernelStartTime
             ?? (session.kernelPid ? await this.getProcessStartTime(session.kernelPid) : null);
           this.sessionStore.saveSession({
@@ -526,10 +534,16 @@ export class KernelService {
   }
 
   /**
-   * Wait for kernel to be ready by connecting to ZeroMQ channels
+   * Wait for kernel to be ready by connecting to ZeroMQ channels.
+   *
+   * Returns the detected kernel execution state:
+   * - 'idle': kernel responded to kernel_info_request (ready for work)
+   * - 'busy': kernel PID is alive but shell channel is blocked (mid-execution)
+   *
    * @param timeoutSeconds Optional override for startup timeout (default: use config)
+   * @param pid Optional kernel PID — used to distinguish "busy" from "dead" on timeout
    */
-  private async waitForReady(sessionId: string, timeoutSeconds?: number): Promise<void> {
+  private async waitForReady(sessionId: string, timeoutSeconds?: number, pid?: number | null): Promise<'idle' | 'busy'> {
     const session = this.sessions.get(sessionId);
     if (!session || !session.connectionConfig) {
       throw new Error('Session or connection config not found');
@@ -538,7 +552,7 @@ export class KernelService {
     if (!this.zmq) {
       // No ZeroMQ available, just wait a bit and hope the kernel starts
       await this.sleep(1000);
-      return;
+      return 'idle';
     }
 
     const config = session.connectionConfig;
@@ -564,13 +578,75 @@ export class KernelService {
       try {
         await this.sendKernelInfoRequest(sessionId);
         // If we get here without error, kernel is ready
-        return;
+        return 'idle';
       } catch {
         await this.sleep(100);
       }
     }
 
+    // Shell channel didn't respond within timeout.
+    // If the kernel PID is alive, it's likely busy executing code
+    // (shell requests queue behind the current execution in Jupyter protocol).
+    if (pid && this.isPidAlive(pid)) {
+      return 'busy';
+    }
+
     throw new Error(`Kernel did not start within ${actualTimeout} seconds`);
+  }
+
+  /**
+   * Monitor a busy reattached kernel on iopub. When its current execution
+   * finishes (status: idle on iopub), verify shell connectivity and update
+   * the in-memory session status.
+   */
+  private monitorBusyKernel(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    const sockets = this.zmqSockets.get(sessionId);
+    if (!session || !sockets) return;
+
+    console.log(`[Kernel] Monitoring busy kernel ${sessionId} for idle transition...`);
+
+    const poll = async () => {
+      try {
+        while (session.status === 'busy') {
+          const receivePromise = sockets.iopub.receive();
+          const timeoutPromise = new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), 5000);
+          });
+          const frames = await Promise.race([receivePromise, timeoutPromise]);
+
+          if (!frames) {
+            // Periodic liveness check
+            if (session.pid && !this.isPidAlive(session.pid)) {
+              console.log(`[Kernel] Busy kernel ${sessionId} PID ${session.pid} died`);
+              session.status = 'dead';
+              return;
+            }
+            continue;
+          }
+
+          const { msgType, content } = this.parseJupyterMessage(frames);
+          if (msgType === 'status' && content.execution_state === 'idle') {
+            break;
+          }
+        }
+
+        // Prior execution finished — verify shell connectivity
+        try {
+          await this.sendKernelInfoRequest(sessionId);
+        } catch {
+          // Non-fatal; next executeCode will detect issues
+        }
+        session.status = 'idle';
+        session.lastActivity = Date.now() / 1000;
+        console.log(`[Kernel] Busy kernel ${sessionId} is now idle`);
+      } catch (err) {
+        console.error(`[Kernel] Error monitoring busy kernel ${sessionId}:`, err);
+        session.status = 'idle'; // Assume idle — next operation will detect real issues
+      }
+    };
+
+    void poll();
   }
 
   /**

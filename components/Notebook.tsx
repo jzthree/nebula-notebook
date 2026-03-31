@@ -1309,7 +1309,9 @@ export const Notebook: React.FC = () => {
       }
 
       console.log('Kernel reconnected, checking for file changes...');
-      setKernelStatus('idle');
+      // Don't hardcode 'idle' — the initial WebSocket status message from the
+      // server carries the actual kernel state (may be 'busy' if the kernel was
+      // mid-execution during a server restart). The onStatus callback handles it.
       setIsKernelReady(true);
 
       // Trigger save which will check for conflicts via saveWithCheck
@@ -3676,7 +3678,7 @@ export const Notebook: React.FC = () => {
                           <div className="border-b border-slate-100 py-1">
                             <button
                               onClick={() => interruptKernel()}
-                              disabled={kernelStatus !== 'busy'}
+                              disabled={kernelStatus !== 'busy' && !isProcessingQueue && executionQueue.length === 0}
                               className="w-full text-left px-3 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-2 disabled:opacity-40 disabled:hover:bg-transparent"
                             >
                               <Square className="w-3 h-3" /> Interrupt
