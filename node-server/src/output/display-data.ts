@@ -107,7 +107,16 @@ function classifyOutputType(bundle: MimeBundle, preferredMimeType: string): Outp
   return 'display_data';
 }
 
-function getDisplayContent(bundle: MimeBundle, preferredMimeType: string): string {
+function getDisplayContent(bundle: MimeBundle, preferredMimeType: string, outputType: OutputType): string {
+  // For image and html types the content field IS the rendered data (base64 / markup),
+  // so we must return the preferred MIME value, not the text/plain fallback.
+  // For display_data / stdout the text/plain fallback is more useful (shown as error
+  // fallback text in plotly/nebula-web renderers).
+  if (outputType === 'image' || outputType === 'html') {
+    const preferredValue = bundle[preferredMimeType];
+    return preferredValue === undefined ? '' : stringifyMimeValue(preferredValue);
+  }
+
   const fallbackText = bundle['text/plain'];
   if (preferredMimeType !== 'text/plain' && fallbackText !== undefined) {
     return stringifyMimeValue(fallbackText);
@@ -132,9 +141,11 @@ export function buildDisplayOutput(
     ? (metadata as Record<string, JsonValue>)
     : undefined;
 
+  const type = classifyOutputType(mimeBundle, preferredMimeType);
+
   return {
-    type: classifyOutputType(mimeBundle, preferredMimeType),
-    content: getDisplayContent(mimeBundle, preferredMimeType),
+    type,
+    content: getDisplayContent(mimeBundle, preferredMimeType, type),
     mimeBundle,
     metadata: normalizedMetadata,
     preferredMimeType,
