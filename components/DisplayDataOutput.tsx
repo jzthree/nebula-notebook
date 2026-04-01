@@ -255,10 +255,10 @@ const PlotlyModalViewer: React.FC<{ figure: PlotlyFigure; onClose: () => void }>
         </button>
       </div>
       <div
-        className="flex-1 min-h-0 p-4"
+        className="flex-1 min-h-0 p-4 overflow-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div ref={containerRef} className="w-full h-full bg-white rounded-lg" />
+        <div ref={containerRef} className="w-full min-h-full bg-white rounded-lg" />
       </div>
     </div>,
     document.body,
