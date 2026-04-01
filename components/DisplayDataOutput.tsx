@@ -68,19 +68,77 @@ function stringifyValue(value: JsonValue | null): string {
   return JSON.stringify(value, null, 2);
 }
 
+/**
+ * Decode a Plotly binary typed-array object ({dtype, bdata}) to a plain JS array.
+ * Newer plotly.py encodes numeric arrays this way for efficiency.
+ */
+function decodePlotlyBinaryArray(obj: { dtype: string; bdata: string }): number[] {
+  const b64 = obj.bdata;
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const dtypeMap: Record<string, { ctor: new (buf: ArrayBuffer) => { length: number; [i: number]: number }; size: number }> = {
+    i1: { ctor: Int8Array, size: 1 },
+    u1: { ctor: Uint8Array, size: 1 },
+    i2: { ctor: Int16Array, size: 2 },
+    u2: { ctor: Uint16Array, size: 2 },
+    i4: { ctor: Int32Array, size: 4 },
+    u4: { ctor: Uint32Array, size: 4 },
+    f4: { ctor: Float32Array, size: 4 },
+    f8: { ctor: Float64Array, size: 8 },
+  };
+  const spec = dtypeMap[obj.dtype];
+  if (!spec) return Array.from(bytes);
+  const typed = new spec.ctor(bytes.buffer);
+  return Array.from(typed as unknown as ArrayLike<number>);
+}
+
+function isPlotlyBinaryArray(v: unknown): v is { dtype: string; bdata: string } {
+  return typeof v === 'object' && v !== null && 'dtype' in v && 'bdata' in v;
+}
+
+/**
+ * Walk a Plotly trace/layout object and decode any binary-encoded arrays in place.
+ */
+function decodeBinaryArrays(obj: Record<string, unknown>): void {
+  for (const key of Object.keys(obj)) {
+    const val = obj[key];
+    if (isPlotlyBinaryArray(val)) {
+      obj[key] = decodePlotlyBinaryArray(val);
+    } else if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+      decodeBinaryArrays(val as Record<string, unknown>);
+    }
+  }
+}
+
 function parsePlotlyFigure(value: JsonValue | null): PlotlyFigure | null {
   if (value === null) return null;
+  let fig: PlotlyFigure | null = null;
   if (typeof value === 'string') {
     try {
-      return JSON.parse(value) as PlotlyFigure;
+      fig = JSON.parse(value) as PlotlyFigure;
     } catch {
       return null;
     }
+  } else if (typeof value === 'object' && !Array.isArray(value)) {
+    fig = value as unknown as PlotlyFigure;
   }
-  if (typeof value === 'object' && !Array.isArray(value)) {
-    return value as unknown as PlotlyFigure;
+  if (!fig) return null;
+
+  // Newer plotly.py encodes numeric arrays as {dtype, bdata} binary objects.
+  // Decode them to plain arrays for Plotly.js compatibility.
+  if (fig.data) {
+    for (const trace of fig.data) {
+      decodeBinaryArrays(trace as Record<string, unknown>);
+    }
   }
-  return null;
+
+  // Also decode binary arrays in layout (e.g., axis tickvals, range, shapes)
+  if (fig.layout && typeof fig.layout === 'object') {
+    decodeBinaryArrays(fig.layout as unknown as Record<string, unknown>);
+  }
+
+  return fig;
 }
 
 function parseNebulaWebPayload(value: JsonValue | null): NebulaWebPayload | null {
