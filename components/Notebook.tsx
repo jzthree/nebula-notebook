@@ -3341,6 +3341,19 @@ export const Notebook: React.FC = () => {
       cellExecutionStartRef.current = null;
       setIsProcessingQueue(false);
       setKernelStatus('idle');
+
+      // After execution completes, the executed cell's output may have pushed
+      // the active cell (next cell after Shift+Enter) out of view. Scroll it
+      // back into view if needed. Use a short delay so the DOM settles.
+      const activeCellId = activeCellIdRef.current;
+      if (activeCellId && activeCellId !== cellId) {
+        setTimeout(() => {
+          const activeIndex = cellsRef.current.findIndex(c => c.id === activeCellId);
+          if (activeIndex >= 0 && !isCellVisibleInViewport(activeCellId, activeIndex)) {
+            scrollToCell(activeIndex, { behavior: 'auto' });
+          }
+        }, 100);
+      }
     };
 
     processNext();
