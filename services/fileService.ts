@@ -309,8 +309,10 @@ export const duplicateFile = async (sourcePath: string): Promise<FileItem> => {
  */
 export const uploadFile = async (directory: string, file: File): Promise<FileItem> => {
   const formData = new FormData();
-  formData.append('file', file);
+  // path must come before file — @fastify/multipart's request.file() may
+  // not see fields that follow the file part in the multipart stream.
   formData.append('path', directory);
+  formData.append('file', file);
 
   const response = await fetch(`${API_BASE}/fs/upload`, {
     method: 'POST',
