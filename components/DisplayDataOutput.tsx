@@ -287,7 +287,7 @@ const PlotlyOutput: React.FC<{ figure: PlotlyFigure; fallbackText?: string }> = 
   return (
     <>
       {isFullscreen && <PlotlyModalViewer figure={figure} onClose={() => setIsFullscreen(false)} />}
-      <div className="my-2 relative group">
+      <div className="my-2 relative group overflow-hidden rounded border border-slate-200">
         <button
           type="button"
           onClick={() => setIsFullscreen(true)}
@@ -296,7 +296,7 @@ const PlotlyOutput: React.FC<{ figure: PlotlyFigure; fallbackText?: string }> = 
         >
           Expand
         </button>
-        <div ref={containerRef} className="min-h-[18rem] w-full overflow-x-auto rounded border border-slate-200 bg-white" />
+        <div ref={containerRef} className="min-h-[18rem] w-full overflow-x-auto bg-white" />
       </div>
     </>
   );
