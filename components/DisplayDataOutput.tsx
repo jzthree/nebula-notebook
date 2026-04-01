@@ -1,4 +1,5 @@
-import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CellOutput as ICellOutput, JsonValue, MimeBundle } from '../types';
 import { loadExternalLibrary } from '../utils/externalLibraryLoader';
 import { wrapHtmlDocument } from '../utils/htmlPreview';
@@ -166,35 +167,41 @@ function isIsolatedHtml(metadata: ICellOutput['metadata'] | undefined): boolean 
   );
 }
 
-const PlotlyOutput: React.FC<{ figure: PlotlyFigure; fallbackText?: string }> = ({ figure, fallbackText }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [error, setError] = useState<string | null>(null);
+type PlotlyLib = {
+  react?: (node: HTMLElement, data?: unknown[], layout?: Record<string, unknown>, config?: Record<string, unknown>) => Promise<void> | void;
+  purge?: (node: HTMLElement) => void;
+};
 
+function usePlotlyRender(
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  figure: PlotlyFigure,
+  layoutOverrides?: Record<string, unknown>,
+  onError?: (msg: string) => void,
+) {
   useEffect(() => {
     let cancelled = false;
-    let activePlotly: { react?: (...args: unknown[]) => Promise<void> | void; purge?: (node: HTMLElement) => void } | null = null;
+    let activePlotly: PlotlyLib | null = null;
 
     const renderPlot = async () => {
       try {
-        const plotly = await loadExternalLibrary('plotly') as {
-          react?: (node: HTMLElement, data?: unknown[], layout?: Record<string, unknown>, config?: Record<string, unknown>) => Promise<void> | void;
-          purge?: (node: HTMLElement) => void;
-        };
+        const plotly = (await loadExternalLibrary('plotly')) as PlotlyLib;
 
         if (cancelled || !containerRef.current || !plotly?.react) {
           return;
         }
 
         activePlotly = plotly;
-        await plotly.react(containerRef.current, figure.data || [], figure.layout || {}, figure.config || {});
+        const layout = layoutOverrides
+          ? { ...figure.layout, ...layoutOverrides }
+          : figure.layout || {};
+        await plotly.react(containerRef.current, figure.data || [], layout, figure.config || {});
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to render Plotly output');
+        if (!cancelled && onError) {
+          onError(err instanceof Error ? err.message : 'Failed to render Plotly output');
         }
       }
     };
 
-    setError(null);
     void renderPlot();
 
     return () => {
@@ -203,7 +210,69 @@ const PlotlyOutput: React.FC<{ figure: PlotlyFigure; fallbackText?: string }> = 
         activePlotly.purge(containerRef.current);
       }
     };
-  }, [figure]);
+  }, [containerRef, figure, layoutOverrides, onError]);
+}
+
+const PlotlyModalViewer: React.FC<{ figure: PlotlyFigure; onClose: () => void }> = ({ figure, onClose }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const layoutOverrides = useMemo(
+    () => ({ autosize: true, paper_bgcolor: 'white', plot_bgcolor: undefined }),
+    [],
+  );
+
+  const handleError = useCallback((msg: string) => {
+    console.error('[PlotlyModal]', msg);
+  }, []);
+
+  usePlotlyRender(containerRef, figure, layoutOverrides, handleError);
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex flex-col" onClick={onClose}>
+      <div className="flex justify-end p-3 shrink-0">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-full bg-slate-900/70 px-3 py-1.5 text-sm text-white/85 hover:text-white hover:bg-slate-900 z-20"
+        >
+          Close
+        </button>
+      </div>
+      <div
+        className="flex-1 min-h-0 p-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div ref={containerRef} className="w-full h-full bg-white rounded-lg" />
+      </div>
+    </div>,
+    document.body,
+  );
+};
+
+const PlotlyOutput: React.FC<{ figure: PlotlyFigure; fallbackText?: string }> = ({ figure, fallbackText }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const handleError = useCallback((msg: string) => setError(msg), []);
+
+  usePlotlyRender(containerRef, figure, undefined, handleError);
 
   if (error) {
     return (
@@ -215,7 +284,22 @@ const PlotlyOutput: React.FC<{ figure: PlotlyFigure; fallbackText?: string }> = 
     );
   }
 
-  return <div ref={containerRef} className="my-2 min-h-[18rem] w-full overflow-x-auto rounded border border-slate-200 bg-white" />;
+  return (
+    <>
+      {isFullscreen && <PlotlyModalViewer figure={figure} onClose={() => setIsFullscreen(false)} />}
+      <div className="my-2 relative group">
+        <button
+          type="button"
+          onClick={() => setIsFullscreen(true)}
+          className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity rounded bg-slate-800/70 px-2 py-1 text-xs text-white hover:bg-slate-800"
+          title="View fullscreen"
+        >
+          Expand
+        </button>
+        <div ref={containerRef} className="min-h-[18rem] w-full overflow-x-auto rounded border border-slate-200 bg-white" />
+      </div>
+    </>
+  );
 };
 
 const NebulaWebOutput: React.FC<{ payload: NebulaWebPayload; fallbackText?: string }> = ({ payload, fallbackText }) => {
