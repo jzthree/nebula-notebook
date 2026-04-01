@@ -1060,6 +1060,7 @@ export class HeadlessOperationHandler {
       cellIndex: targetIndex,
       outputs: processedOutputs,
       executionCount: cell.executionCount,
+      executionStatus: cell.isExecuting ? 'busy' : 'idle',
       output_count: processedOutputs.length,
       temp_files: tempFiles.length > 0 ? tempFiles : null,
     };
