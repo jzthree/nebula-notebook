@@ -21,7 +21,7 @@ export function stripAutoplayFromHtml(html: string): string {
   return html.replace(/(<(?:audio|video)\b[^>]*?)\s+autoplay(?:=["'][^"']*["'])?/gi, '$1');
 }
 
-function isJsonValue(value: unknown): value is JsonValue {
+function isJsonValue(value: unknown, depth = 0): value is JsonValue {
   if (
     value === null ||
     typeof value === 'string' ||
@@ -31,12 +31,18 @@ function isJsonValue(value: unknown): value is JsonValue {
     return true;
   }
 
+  // Assume deeply-nested structures are valid rather than risk a stack overflow.
+  // Plotly figures can nest 10+ levels deep in their default templates.
+  if (depth > 64) {
+    return typeof value === 'object';
+  }
+
   if (Array.isArray(value)) {
-    return value.every(isJsonValue);
+    return value.every((v) => isJsonValue(v, depth + 1));
   }
 
   if (typeof value === 'object') {
-    return Object.values(value as Record<string, unknown>).every(isJsonValue);
+    return Object.values(value as Record<string, unknown>).every((v) => isJsonValue(v, depth + 1));
   }
 
   return false;
@@ -53,6 +59,13 @@ export function normalizeMimeValue(mimeType: string, value: unknown): JsonValue 
     normalized = stripAutoplayFromHtml(normalized);
   }
 
+  // JSON-based MIME types (plotly, nebula-web, etc.) arrive from JSON.parse
+  // and are inherently valid JSON values. Skip the expensive recursive check
+  // which can stack-overflow on deeply-nested Plotly templates.
+  if (mimeType.endsWith('+json') && typeof normalized === 'object' && normalized !== null) {
+    return normalized as JsonValue;
+  }
+
   return isJsonValue(normalized) ? normalized : null;
 }
 
@@ -63,6 +76,10 @@ export function normalizeMimeBundle(data: Record<string, unknown>): MimeBundle {
     const normalized = normalizeMimeValue(mimeType, value);
     if (normalized !== null) {
       bundle[mimeType] = normalized;
+    } else if (value !== undefined) {
+      console.warn(
+        `[display-data] Dropped MIME type "${mimeType}": normalizeMimeValue returned null (value type: ${typeof value}, isArray: ${Array.isArray(value)})`,
+      );
     }
   }
 

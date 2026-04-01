@@ -1324,16 +1324,19 @@ export const Notebook: React.FC = () => {
     });
 
     const unsubscribeDisconnect = kernelService.onDisconnect((sessionId) => {
-      if (kernelSessionId === sessionId) {
+      if (kernelSessionIdRef.current === sessionId) {
         console.log('Kernel disconnected, will attempt reconnection...');
         setKernelStatus('disconnected');
         setIsKernelReady(false);
       }
     });
 
-    // Subscribe to status updates from server
+    // Subscribe to status updates from server.
+    // Use kernelSessionIdRef instead of closure-captured kernelSessionId so that
+    // the initial status message sent right after WebSocket connect isn't dropped
+    // when onReconnect changes the session ID mid-render.
     const unsubscribeStatus = kernelService.onStatus((sessionId, status, cellId) => {
-      if (kernelSessionId === sessionId) {
+      if (kernelSessionIdRef.current === sessionId) {
         console.log(`Kernel status update: ${status}${cellId ? ` (cell: ${cellId})` : ''}`);
         if (status === 'idle' || status === 'busy') {
           setKernelStatus(status);
@@ -1625,6 +1628,7 @@ export const Notebook: React.FC = () => {
   const runAndAdvanceRef = useRef<((id: string, focusMode: 'cell' | 'editor') => void) | null>(null);
   const queueExecutionRef = useRef<((id: string) => void) | null>(null);
   const kernelStatusRef = useRef<string>(kernelStatus);
+  const kernelSessionIdRef = useRef<string | null>(kernelSessionId);
   const interruptKernelRef = useRef<(() => void) | null>(null);
   // Track pending focus for next cell - Cell component handles the actual focusing
   const [pendingFocus, setPendingFocus] = useState<{ cellId: string; mode: 'cell' | 'editor' } | null>(null);
@@ -2898,6 +2902,7 @@ export const Notebook: React.FC = () => {
   addCellRef.current = addCell;
   changeCellTypeRef.current = changeCellType;
   kernelStatusRef.current = kernelStatus;
+  kernelSessionIdRef.current = kernelSessionId;
   interruptKernelRef.current = interruptKernel;
 
   const moveCell = (id: string, direction: 'up' | 'down') => {
