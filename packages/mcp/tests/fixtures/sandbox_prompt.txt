@@ -1,0 +1,6 @@
+Can you review this directory? After the review is completed, implement an improvement of your choice. Do not ask for my input.
+
+Guidelines:
+- You may modify files as needed.
+- Prefer a small, safe, high-impact improvement.
+- If you run tests or commands, summarize the results briefly.

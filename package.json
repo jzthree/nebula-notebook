@@ -12,8 +12,12 @@
     "preview": "vite preview",
     "node-server": "cd node-server && npm run dev",
     "node-server:build": "cd node-server && npm run build",
+    "mcp": "npm --prefix packages/mcp run mcp",
+    "mcp:build": "npm --prefix packages/mcp run build",
+    "mcp:test": "npm --prefix packages/mcp test",
+    "setup-mcp": "npm --prefix packages/mcp run setup-mcp",
     "setup": "node setup.cjs",
-    "postinstall": "cd node-server && npm install || echo '⚠️  Node server install failed.'",
+    "postinstall": "npm --prefix node-server install || echo '⚠️  Node server install failed.'; npm --prefix packages/mcp install || echo '⚠️  MCP install failed.'",
     "stop": "lsof -ti:3000,3001,8000 | xargs kill -9 2>/dev/null; echo 'Servers stopped'",
     "test": "vitest",
     "test:run": "vitest run"

@@ -8,7 +8,6 @@ Nebula is an AI-native notebook computing environment built for what's coming ne
 git clone https://github.com/jzthree/nebula-notebook.git
 cd nebula-notebook
 npm install
-cd node-server && npm install && cd ..
 
 npm run start
 ```
@@ -87,7 +86,26 @@ nebula-notebook/
 │       ├── cluster/          # Multi-server cluster support
 │       ├── auth/             # 2FA authentication
 │       └── routes/           # API routes
+├── packages/
+│   └── mcp/          # Separately installable MCP adapter package
 └── types.ts
+```
+
+## MCP Adapter
+
+The MCP adapter now lives in this repository under `packages/mcp`. It remains a
+separate Node package so it can be installed on a local agent/client machine even
+when the Nebula Notebook server is running elsewhere.
+
+```bash
+# From this repo: build or run the MCP server
+npm run mcp:build
+npm run mcp
+
+# Client-only install from source
+cd packages/mcp
+npm install
+npm run build
 ```
 
 ## Authentication

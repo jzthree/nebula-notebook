@@ -1,0 +1,61 @@
+{
+  "name": "nebula-tools",
+  "version": "0.1.0",
+  "description": "MCP server for Nebula Notebook - Jupyter alternative with AI integration",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "nebula-mcp": "./bin/nebula-mcp.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "setup-mcp.js"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "jupyter",
+    "notebook",
+    "ai",
+    "claude"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jzthree/nebula-notebook.git",
+    "directory": "packages/mcp"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./notebook": "./dist/notebook/index.js",
+    "./mcp": "./dist/mcp/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "clean": "rm -rf dist",
+    "mcp": "node dist/mcp/index.js",
+    "setup-mcp": "node setup-mcp.js",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "glob": "^11.0.0",
+    "sharp": "^0.34.5",
+    "strip-ansi": "^7.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/sharp": "^0.31.1",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
