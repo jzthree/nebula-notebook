@@ -141,6 +141,13 @@ function parseBodyLimit(limit: string): number {
   return Math.floor(value * (multipliers[unit] || 1));
 }
 
+// HTTP/1.1 only for now — HTTP/2 streaming requires a separate HTTPS server.
+// Returning from a function (vs a literal null const) keeps the TLS branch
+// typechecking so the build stays green while the feature is parked.
+function loadTlsCert(): { key: string | Buffer; cert: string | Buffer } | null {
+  return null;
+}
+
 /**
  * Generate or load self-signed TLS certificate for HTTP/2
  */
@@ -199,7 +206,7 @@ function getOrCreateTlsCert(): { key: Buffer; cert: Buffer } | null {
 async function createApp(): Promise<FastifyInstance> {
   const bodyLimitBytes = parseBodyLimit(BODY_LIMIT);
 
-  const tlsCert = null; // HTTP/1.1 only — HTTP/2 streaming requires separate HTTPS server
+  const tlsCert = loadTlsCert();
 
   let fastify: FastifyInstance;
 

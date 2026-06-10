@@ -1,2 +1,10 @@
 #!/usr/bin/env node
-import '../dist/mcp/index.js';
+// Single bin, two roles:
+//   `npx nebula-tools`            → start the MCP server (what agent configs run)
+//   `npx nebula-tools setup-mcp`  → register the MCP with installed agent CLIs
+if (process.argv[2] === 'setup-mcp') {
+  process.argv.splice(2, 1); // drop the subcommand so setup sees its own flags
+  await import('../setup-mcp.js');
+} else {
+  await import('../dist/mcp/index.js');
+}

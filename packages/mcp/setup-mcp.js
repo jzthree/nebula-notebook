@@ -36,16 +36,24 @@ const CONFIG_PATHS = {
   antigravity: path.join(process.env.HOME, '.gemini', 'antigravity', 'mcp_config.json'),
 };
 
+// When running from an npm install (node_modules, including the npx cache),
+// write configs that invoke `npx -y nebula-tools` — stable across npx cache
+// evictions and package updates. A repo checkout keeps the absolute path
+// (works offline and tracks local edits).
+const IS_NPM_INSTALL = __dirname.split(path.sep).includes('node_modules');
+const MCP_COMMAND = IS_NPM_INSTALL ? 'npx' : 'node';
+const MCP_ARGS = IS_NPM_INSTALL ? ['-y', 'nebula-tools'] : [MCP_SERVER_PATH];
+
 // Nebula MCP server configuration
 const NEBULA_MCP_CONFIG = {
-  command: 'node',
-  args: [MCP_SERVER_PATH],
+  command: MCP_COMMAND,
+  args: MCP_ARGS,
 };
 
 const NEBULA_MCP_VSCODE_CONFIG = {
   type: 'stdio',
-  command: 'node',
-  args: [MCP_SERVER_PATH],
+  command: MCP_COMMAND,
+  args: MCP_ARGS,
 };
 
 // Helper to check if command exists
@@ -221,8 +229,8 @@ function configureJsonServer(configPath, rootKey, serverConfig, options = {}) {
 function buildCodexBlock() {
   return [
     '[mcp_servers.nebula-notebook]',
-    'command = "node"',
-    `args = ["${MCP_SERVER_PATH}"]`,
+    `command = "${MCP_COMMAND}"`,
+    `args = [${MCP_ARGS.map((a) => `"${a}"`).join(', ')}]`,
   ].join('\n');
 }
 
@@ -250,8 +258,9 @@ function codexHasRequiredConfig(content) {
   }
 
   const baseBlock = baseMatch[0];
-  const hasCommand = /command\s*=\s*"node"/.test(baseBlock);
-  const hasArgs = new RegExp(`args\\s*=\\s*\\[\\s*"${escapeRegExp(MCP_SERVER_PATH)}"\\s*\\]`).test(baseBlock);
+  const hasCommand = new RegExp(`command\\s*=\\s*"${escapeRegExp(MCP_COMMAND)}"`).test(baseBlock);
+  const expectedArgs = MCP_ARGS.map((a) => `"${escapeRegExp(a)}"`).join('\\s*,\\s*');
+  const hasArgs = new RegExp(`args\\s*=\\s*\\[\\s*${expectedArgs}\\s*\\]`).test(baseBlock);
   const envMatch = content.match(/\[mcp_servers\.nebula-notebook\.env\][\s\S]*?(?=\n\[|$)/);
   // If an env block exists, treat as not "clean" since we want to remove legacy NEBULA_URL defaults.
   const hasEnvBlock = !!envMatch;

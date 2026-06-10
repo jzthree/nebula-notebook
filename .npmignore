@@ -1,0 +1,3 @@
+# Presence of this file stops npm from applying .gitignore to the package
+# contents. The package.json "files" whitelist controls what ships; nothing
+# extra needs excluding here.

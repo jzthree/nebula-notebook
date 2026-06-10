@@ -131,14 +131,12 @@ class AgentTerminalService {
   }
 
   /**
-   * Exact command that registers the Nebula MCP with the agent CLIs. Users
-   * don't know `npm run setup-mcp` must run from the Nebula repo, so qualify
-   * it with the repo path when the server has told us where that is.
+   * Command that registers the Nebula MCP with the agent CLIs. The npx form
+   * works on any machine with Node (no repo checkout, no paths) — the
+   * nebula-tools package is published exactly for this.
    */
   buildSetupMcpCommand(): string {
-    return this.repoRoot
-      ? `cd ${shellSingleQuote(this.repoRoot)} && npm run setup-mcp`
-      : 'npm run setup-mcp  # run from your Nebula repo';
+    return 'npx nebula-tools setup-mcp';
   }
 
   /**
@@ -150,8 +148,9 @@ class AgentTerminalService {
     const parts: string[] = ['You are driving a Nebula notebook through the nebula-notebook MCP tools.'];
     parts.push(
       `If the nebula-notebook MCP tools are not available in this session, register them by running ` +
-      `${this.buildSetupMcpCommand()} (the Nebula repo on the server) and then restart this CLI; ` +
-      `if you are running on a different machine than the Nebula server, ask the user where their Nebula repo is.`
+      `${this.buildSetupMcpCommand()} and then restart this CLI` +
+      (this.repoRoot ? ` (the server's Nebula repo is at ${this.repoRoot} if you need the source)` : '') +
+      `.`
     );
     if (this.serverBaseUrl) {
       parts.push(

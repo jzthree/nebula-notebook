@@ -68,3 +68,4 @@ nebula-notebook-viewer/
 # Machine-local agent CLI config and scratch
 .codex/
 tmp/
+*.tgz

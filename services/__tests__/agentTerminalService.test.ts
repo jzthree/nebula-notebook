@@ -67,10 +67,12 @@ describe('agentTerminalService prompt injection', () => {
     window.sessionStorage.clear();
   });
 
-  it('qualifies the MCP setup command with the repo path when known', () => {
+  it('uses the machine-agnostic npx setup command, with server repo path as context', () => {
     agentTerminalService.setRepoRoot('/srv/my nebula');
-    expect(agentTerminalService.buildSetupMcpCommand()).toBe("cd '/srv/my nebula' && npm run setup-mcp");
-    expect(agentTerminalService.buildBootstrapPrompt()).toContain("cd '/srv/my nebula' && npm run setup-mcp");
+    expect(agentTerminalService.buildSetupMcpCommand()).toBe('npx nebula-tools setup-mcp');
+    const prompt = agentTerminalService.buildBootstrapPrompt();
+    expect(prompt).toContain('npx nebula-tools setup-mcp');
+    expect(prompt).toContain('/srv/my nebula');
   });
 
   it('restores running status when the sender re-registers (panel closed and reopened)', () => {

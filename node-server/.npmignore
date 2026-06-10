@@ -1,0 +1,4 @@
+# Override node-server/.gitignore for npm packing: dist/ must ship in the
+# published nebula-notebook package (prebuilt server).
+src
+*.log
