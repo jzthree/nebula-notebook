@@ -148,7 +148,9 @@ export class NebulaMCPServer {
           {
             const connectNote = ' MCP: call connect_server first (see connect_server for workflow).';
             const tools = getToolDefinitions().map(def => {
-              if (def.name === 'connect_server') {
+              // writer_* tools talk to the Nebula Writer sidecar, not the
+              // notebook server — they don't need connect_server.
+              if (def.name === 'connect_server' || def.name.startsWith('writer_')) {
                 return def;
               }
               return {
@@ -208,7 +210,7 @@ export class NebulaMCPServer {
         return { content: [{ type: 'text', text: `Connected to ${this.currentUrl}` }] };
       }
 
-      if (!this.hasConnected) {
+      if (!this.hasConnected && !name.startsWith('writer_')) {
         return {
           content: [
             {
