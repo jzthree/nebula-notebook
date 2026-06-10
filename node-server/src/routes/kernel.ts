@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { KernelService } from '../kernel/kernel-service';
-import { getKernelSearchPaths } from '../kernel/kernelspec';
+import { getKernelSearchPaths, getKernelSpec } from '../kernel/kernelspec';
 import { fsService } from '../fs/fs-service';
 import { operationRouter } from '../notebook/operation-router';
 import {
@@ -42,6 +42,41 @@ const kernelService = new KernelService();
 kernelService.initialize().catch(err => {
   console.error('Failed to initialize kernel service:', err);
 });
+
+function buildKernelMetadata(kernelName: string): Record<string, unknown> {
+  const spec = getKernelSpec(kernelName);
+  return {
+    kernelspec: {
+      name: kernelName,
+      display_name: spec?.displayName || (kernelName === 'python3' ? 'Python 3' : kernelName),
+      language: spec?.language || 'python',
+    },
+  };
+}
+
+async function persistNotebookKernelMetadata(
+  filePath: string,
+  kernelName: string
+): Promise<{ changed?: boolean; mtime?: number }> {
+  // Best-effort: persisting the kernel choice into the notebook's metadata is a
+  // secondary side-effect. If it fails (e.g. the notebook file doesn't exist yet,
+  // or isn't writable), the kernel session itself is still valid — don't fail the
+  // whole request. The choice gets re-persisted on the next save.
+  try {
+    const result = await fsService.updateNotebookMetadata(filePath, buildKernelMetadata(kernelName));
+    if (!result.success) {
+      console.warn(`[Kernel] Could not persist kernel metadata for ${filePath}: ${result.error}`);
+      return {};
+    }
+    return {
+      changed: result.changed,
+      mtime: result.mtime,
+    };
+  } catch (err) {
+    console.warn(`[Kernel] Could not persist kernel metadata for ${filePath}:`, err);
+    return {};
+  }
+}
 
 /**
  * Setup WebSocket handler for kernel execution
@@ -357,17 +392,23 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
    */
   fastify.post('/kernels/start', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { kernel_name = 'python3', cwd, file_path, server_id } = request.body as any;
+      const { kernel_name = 'python3', cwd, file_path, server_id, client_origin } = request.body as any;
 
       const localServerId = serverRegistry.getLocalServerId();
       // Check if we should start on a remote server
       if (server_id && server_id !== localServerId && server_id !== 'local') {
         // Start on remote server
         const result = await startRemoteKernel(server_id, kernel_name, file_path);
+        let notebookMtime: number | undefined;
         if (file_path) {
           kernelService.saveNotebookKernelPreference(file_path, kernel_name, server_id);
+          const metadataResult = await persistNotebookKernelMetadata(file_path, kernel_name);
+          notebookMtime = metadataResult.mtime;
+          if (client_origin !== 'ui') {
+            operationRouter.notifyKernelChanged(file_path, { kernelName: kernel_name, serverId: server_id });
+          }
         }
-        return reply.send({ session_id: result.sessionId, kernel_name, server_id });
+        return reply.send({ session_id: result.sessionId, kernel_name, server_id, mtime: notebookMtime });
       }
 
       // Start locally
@@ -376,10 +417,16 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
         cwd,
         filePath: file_path,
       });
+      let notebookMtime: number | undefined;
       if (file_path) {
         kernelService.saveNotebookKernelPreference(file_path, kernel_name, localServerId);
+        const metadataResult = await persistNotebookKernelMetadata(file_path, kernel_name);
+        notebookMtime = metadataResult.mtime;
+        if (client_origin !== 'ui') {
+          operationRouter.notifyKernelChanged(file_path, { kernelName: kernel_name, serverId: localServerId });
+        }
       }
-      return reply.send({ session_id: sessionId, kernel_name, server_id: localServerId });
+      return reply.send({ session_id: sessionId, kernel_name, server_id: localServerId, mtime: notebookMtime });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       return reply.code(500).send({ detail: message });
@@ -412,7 +459,7 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
    */
   fastify.post('/kernels/for-file', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { file_path, kernel_name = 'python3', server_id } = request.body as any;
+      const { file_path, kernel_name = 'python3', server_id, client_origin } = request.body as any;
       if (!file_path) {
         return reply.code(400).send({ detail: 'file_path is required' });
       }
@@ -442,6 +489,13 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
         // Start on remote server
         const result = await startRemoteKernel(effectiveServerId, effectiveKernelName, file_path);
         kernelService.saveNotebookKernelPreference(normalizedFilePath, effectiveKernelName, effectiveServerId);
+        const metadataResult = await persistNotebookKernelMetadata(normalizedFilePath, effectiveKernelName);
+        if (client_origin !== 'ui') {
+          operationRouter.notifyKernelChanged(normalizedFilePath, {
+            kernelName: effectiveKernelName,
+            serverId: effectiveServerId,
+          });
+        }
         return reply.send({
           session_id: result.sessionId,
           kernel_name: effectiveKernelName,
@@ -449,6 +503,7 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
           server_id: effectiveServerId,
           created: result.created ?? false,
           created_at: result.createdAt,
+          mtime: metadataResult.mtime,
         });
       }
 
@@ -456,6 +511,13 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
       const { sessionId, created } = await kernelService.getOrCreateKernel(normalizedFilePath, effectiveKernelName);
       const sessionInfo = await kernelService.getSessionStatus(sessionId);
       kernelService.saveNotebookKernelPreference(normalizedFilePath, effectiveKernelName, localServerId);
+      const metadataResult = await persistNotebookKernelMetadata(normalizedFilePath, effectiveKernelName);
+      if (client_origin !== 'ui') {
+        operationRouter.notifyKernelChanged(normalizedFilePath, {
+          kernelName: effectiveKernelName,
+          serverId: localServerId,
+        });
+      }
       return reply.send({
         session_id: sessionId,
         kernel_name: effectiveKernelName,
@@ -463,6 +525,7 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
         server_id: localServerId,
         created,
         created_at: sessionInfo?.createdAt,
+        mtime: metadataResult.mtime,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';

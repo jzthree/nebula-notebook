@@ -20,6 +20,7 @@ import {
   UndoableOperation,
   UpdateSummary,
 } from './undoRedoManager';
+import { getKernelSpec } from '../kernel/kernelspec';
 
 function copyCellOutput(output: Partial<CellOutput>): CellOutput {
   return {
@@ -388,28 +389,37 @@ export class HeadlessOperationHandler {
         const outputType = output.type || 'stdout';
         const content = output.content || '';
 
+        let result: CellOutput;
         // Skip truncation for binary/image outputs
         if (outputType === 'image' || outputType === 'html' || outputType === 'display_data') {
-          return {
+          result = {
             ...output,
             type: outputType,
             content,
             is_binary: outputType === 'image',
           } as CellOutput;
+        } else {
+          // Use separate limits for error outputs
+          const linesLimit = outputType === 'error' ? maxLinesError : maxLines;
+          const charsLimit = outputType === 'error' ? maxCharsError : maxChars;
+
+          const { truncatedContent, metadata } = this.truncateOutput(content, linesLimit, charsLimit, 0);
+
+          result = {
+            ...output,
+            type: outputType,
+            content: truncatedContent,
+            ...metadata,
+          } as CellOutput;
         }
 
-        // Use separate limits for error outputs
-        const linesLimit = outputType === 'error' ? maxLinesError : maxLines;
-        const charsLimit = outputType === 'error' ? maxCharsError : maxChars;
-
-        const { truncatedContent, metadata } = this.truncateOutput(content, linesLimit, charsLimit, 0);
-
-        return {
-          ...output,
-          type: outputType,
-          content: truncatedContent,
-          ...metadata,
-        } as CellOutput;
+        // Strip internal-only fields: `id`/`timestamp` are stamped by convertOutputs
+        // for the live UI, but the headless/MCP read contract returns clean outputs
+        // (see the "should apply output truncation" test).
+        const mutable = result as unknown as Record<string, unknown>;
+        delete mutable.id;
+        delete mutable.timestamp;
+        return result;
       }),
     }));
   }
@@ -966,6 +976,7 @@ export class HeadlessOperationHandler {
       let visibleOutputs = this.getVisibleOutputs(cell);
       let baselineOutputCount = visibleOutputs.length;
       let baselineOutputChars = visibleOutputs.reduce((sum, o) => sum + (o.content?.length || 0), 0);
+      let baselineExecutionCount = cell.executionCount;
       let wasExecuting = !!cell.isExecuting;
       const startTime = Date.now();
       const pollInterval = 500; // Poll every 500ms like Python
@@ -992,18 +1003,25 @@ export class HeadlessOperationHandler {
           visibleOutputs = this.getVisibleOutputs(cell);
           baselineOutputCount = visibleOutputs.length;
           baselineOutputChars = visibleOutputs.reduce((sum, o) => sum + (o.content?.length || 0), 0);
+          baselineExecutionCount = cell.executionCount;
         }
         visibleOutputs = this.getVisibleOutputs(cell);
         const currentOutputCount = visibleOutputs.length;
         const currentOutputChars = visibleOutputs.reduce((sum, o) => sum + (o.content?.length || 0), 0);
+        const executionCountChanged = cell.executionCount !== baselineExecutionCount;
 
         // Check if outputs changed (more outputs or more content)
-        if (currentOutputCount > baselineOutputCount || currentOutputChars > baselineOutputChars) {
+        if (currentOutputCount > baselineOutputCount || currentOutputChars > baselineOutputChars || executionCountChanged) {
           break; // New output arrived
         }
 
         // If the cell finished executing but produced no additional output, stop waiting.
         if (wasExecuting && !cell.isExecuting) {
+          break;
+        }
+
+        // If the cell is already idle, there is no in-flight execution to wait on.
+        if (!wasExecuting && !cell.isExecuting) {
           break;
         }
       }
@@ -1644,6 +1662,17 @@ export class HeadlessOperationHandler {
     try {
       const { sessionId, created } = await this.kernelService.getOrCreateKernel(notebookPath, kernelName);
       this.kernelService.saveNotebookKernelPreference(notebookPath, kernelName);
+      const spec = getKernelSpec(kernelName);
+      const metadataResult = await this.fsService.updateNotebookMetadata(notebookPath, {
+        kernelspec: {
+          name: kernelName,
+          display_name: spec?.displayName || (kernelName === 'python3' ? 'Python 3' : kernelName),
+          language: spec?.language || 'python',
+        },
+      });
+      if (!metadataResult.success) {
+        return { success: false, error: metadataResult.error || `Failed to update kernel metadata for ${notebookPath}` };
+      }
 
       if (created) {
         this.recordLogOperation(notebookPath, {

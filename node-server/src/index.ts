@@ -378,7 +378,6 @@ async function setupStaticServing(fastify: FastifyInstance): Promise<void> {
     await fastify.register(fastifyStatic, {
       root: distDir,
       prefix: '/',
-      wildcard: false,
     });
 
     // SPA fallback - serve index.html for all non-API routes
@@ -386,6 +385,9 @@ async function setupStaticServing(fastify: FastifyInstance): Promise<void> {
       const pathname = request.url.split('?')[0];
       if (pathname.startsWith('/api/')) {
         return reply.code(404).send({ detail: 'Not found' });
+      }
+      if (pathname.startsWith('/assets/') || path.extname(pathname)) {
+        return reply.code(404).type('text/plain').send('Not found');
       }
       return reply.sendFile('index.html');
     });
@@ -510,14 +512,28 @@ async function main(): Promise<void> {
   }
 
   // Graceful shutdown
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return; // ignore repeat signals (tsx watch can send several)
+    shuttingDown = true;
     console.log('\n[Server] Shutting down...');
     console.log(`[Server] PRESERVE_KERNELS=${PRESERVE_KERNELS}`);
+
+    // Safety net: shutdown must never hang the process. fastify.close() blocks
+    // until every open connection drains, and Nebula holds long-lived WebSockets
+    // (kernel/notebook/terminal), so without this a SIGTERM from `tsx watch` would
+    // leave the old process alive — and backend code changes would silently never
+    // reload. Force-exit if cleanup stalls.
+    const forceExit = setTimeout(() => {
+      console.warn('[Server] Shutdown exceeded 3s — forcing exit');
+      process.exit(0);
+    }, 3000);
+    forceExit.unref();
 
     // Cleanup terminals
     cleanupTerminals();
 
-    // Cleanup kernel sessions
+    // Cleanup kernel sessions (fast when preserving; awaited so kernel state is saved)
     try {
       await kernelService.shutdown({ preserveKernels: PRESERVE_KERNELS });
     } catch (err) {
@@ -532,8 +548,18 @@ async function main(): Promise<void> {
       console.error('[Server] Error during cluster cleanup:', err);
     }
 
-    await fastify.close();
+    // Close the HTTP/WS server, but don't wait forever on open WebSocket clients —
+    // race the close against a short timeout so dev restarts stay snappy.
+    try {
+      await Promise.race([
+        fastify.close(),
+        new Promise<void>((resolve) => setTimeout(resolve, 750)),
+      ]);
+    } catch (err) {
+      console.error('[Server] Error during server close:', err);
+    }
     console.log('[Server] Server closed');
+    clearTimeout(forceExit);
     process.exit(0);
   };
 
