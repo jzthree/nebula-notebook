@@ -26,10 +26,34 @@ export interface PythonEnvironment {
   path: string;
   version: string;
   display_name: string;
-  env_type: 'system' | 'conda' | 'pyenv' | 'venv' | 'homebrew';
+  env_type: 'system' | 'conda' | 'pyenv' | 'venv' | 'homebrew' | 'uv' | 'pixi';
   env_name: string | null;
   has_ipykernel: boolean;
+  // PEP 668: interpreter forbids in-place pip installs → guide to an isolated env.
+  externally_managed: boolean;
+  // Copy-pasteable command to make ipykernel available; null when already present.
+  install_hint: string | null;
   kernel_name: string | null;
+}
+
+/** Stable error codes returned by the kernel-provisioning API. */
+export type KernelProvisionErrorCode =
+  | 'python_not_found'
+  | 'externally_managed'
+  | 'needs_ipykernel'
+  | 'install_failed'
+  | 'register_failed';
+
+/** Error thrown by installKernel carrying a machine-readable code + guidance. */
+export class KernelProvisionError extends Error {
+  code?: KernelProvisionErrorCode;
+  installHint?: string;
+  constructor(message: string, code?: KernelProvisionErrorCode, installHint?: string) {
+    super(message);
+    this.name = 'KernelProvisionError';
+    this.code = code;
+    this.installHint = installHint;
+  }
 }
 
 export interface PythonEnvironmentsResponse {
@@ -127,7 +151,10 @@ class KernelService {
    * @returns The session ID
    */
   async startKernel(kernelName: string = 'python3', cwd?: string, filePath?: string, serverId?: string | null): Promise<string> {
-    const body: { kernel_name: string; cwd?: string; file_path?: string; server_id?: string } = { kernel_name: kernelName };
+    const body: { kernel_name: string; cwd?: string; file_path?: string; server_id?: string; client_origin: 'ui' } = {
+      kernel_name: kernelName,
+      client_origin: 'ui',
+    };
     if (cwd) {
       body.cwd = cwd;
     }
@@ -181,10 +208,11 @@ class KernelService {
     filePath: string,
     kernelName: string = 'python3',
     serverId?: string | null,
-  ): Promise<{ sessionId: string; created?: boolean; createdAt?: number; serverId?: string | null }> {
-    const body: { file_path: string; kernel_name: string; server_id?: string } = {
+  ): Promise<{ sessionId: string; created?: boolean; createdAt?: number; serverId?: string | null; mtime?: number }> {
+    const body: { file_path: string; kernel_name: string; server_id?: string; client_origin: 'ui' } = {
       file_path: filePath,
-      kernel_name: kernelName
+      kernel_name: kernelName,
+      client_origin: 'ui',
     };
     if (serverId) {
       body.server_id = serverId;
@@ -206,6 +234,7 @@ class KernelService {
     const created = data.created as boolean | undefined;
     const createdAt = data.created_at as number | undefined;
     const resolvedServerId = data.server_id ?? serverId ?? null;
+    const mtime = data.mtime as number | undefined;
 
     // Initialize session state if not already connected
     if (!this.sessions.has(sessionId)) {
@@ -233,7 +262,53 @@ class KernelService {
       }
     }
 
-    return { sessionId, created, createdAt, serverId: resolvedServerId };
+    return { sessionId, created, createdAt, serverId: resolvedServerId, mtime };
+  }
+
+  /**
+   * Attach the frontend to an existing kernel session by ID.
+   * Used when an external client has already chosen the concrete session.
+   */
+  async attachToSession(
+    sessionId: string,
+    filePath?: string,
+  ): Promise<{ sessionId: string; filePath?: string; kernelName?: string; serverId?: string | null }> {
+    const response = await fetch(`${API_BASE}/kernels/${encodeURIComponent(sessionId)}/status`);
+    if (response.status === 404) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Failed to attach to kernel session' }));
+      throw new Error(error.detail || 'Failed to attach to kernel session');
+    }
+
+    const data = await response.json();
+    const resolvedFilePath = (data.file_path as string | undefined) ?? filePath;
+    const kernelName = data.kernel_name as string | undefined;
+    const serverId = (data.server_id as string | null | undefined) ?? null;
+
+    if (!this.sessions.has(sessionId)) {
+      this.sessions.set(sessionId, {
+        sessionId,
+        ws: null,
+        messageQueue: [],
+        filePath: resolvedFilePath,
+        kernelName,
+        serverId,
+      });
+      await this.connectWebSocket(sessionId);
+    } else {
+      const session = this.sessions.get(sessionId)!;
+      session.filePath = resolvedFilePath;
+      session.kernelName = kernelName;
+      session.serverId = serverId;
+
+      if (!this.isConnected(sessionId)) {
+        await this.connectWebSocket(sessionId);
+      }
+    }
+
+    return { sessionId, filePath: resolvedFilePath, kernelName, serverId };
   }
 
   /**
@@ -830,8 +905,14 @@ class KernelService {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || 'Failed to install kernel');
+      const error = await response.json().catch(() => ({}));
+      // Preserve the structured code + guidance so the UI can branch on it
+      // (e.g. show install instructions for an externally-managed Python).
+      throw new KernelProvisionError(
+        error.detail || 'Failed to install kernel',
+        error.code,
+        error.install_hint
+      );
     }
 
     return response.json();

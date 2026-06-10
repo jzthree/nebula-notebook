@@ -337,6 +337,18 @@ export class KernelService {
   }
 
   /**
+   * Re-run kernelspec discovery and refresh the in-memory cache.
+   *
+   * `getAvailableKernels()` caches once at startup and never expires, so a kernel
+   * registered while the server is running would otherwise stay invisible until a
+   * restart. Call this after registering/installing a kernel.
+   */
+  refreshKernelSpecs(): KernelSpec[] {
+    this.kernelSpecsCache = discoverKernelSpecs(true);
+    return this.kernelSpecsCache;
+  }
+
+  /**
    * Normalize file path for consistent lookup
    */
   private normalizePath(filePath: string): string {

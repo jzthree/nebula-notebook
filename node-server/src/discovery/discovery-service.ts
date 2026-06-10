@@ -16,6 +16,7 @@ import {
   CacheData,
   CacheInfo,
   InstallKernelResult,
+  KernelProvisionError,
   DEFAULT_CACHE_TTL_HOURS,
   DEFAULT_VERSION_CHECK_TIMEOUT_MS,
   DEFAULT_IPYKERNEL_CHECK_TIMEOUT_MS,
@@ -186,6 +187,10 @@ export class PythonDiscoveryService {
       return `Python ${version} (pyenv: ${envName})`;
     } else if (envType === 'venv' && envName) {
       return `Python ${version} (venv: ${envName})`;
+    } else if (envType === 'pixi') {
+      return `Python ${version} (pixi${envName ? `: ${envName}` : ''})`;
+    } else if (envType === 'uv') {
+      return `Python ${version} (uv-managed)`;
     } else if (envType === 'homebrew') {
       return `Python ${version} (Homebrew)`;
     }
@@ -200,8 +205,10 @@ export class PythonDiscoveryService {
       conda: 0,
       pyenv: 1,
       venv: 2,
-      homebrew: 3,
-      system: 4,
+      pixi: 3,
+      uv: 4,
+      homebrew: 5,
+      system: 6,
     };
 
     return [...envs].sort((a, b) => {
@@ -338,12 +345,102 @@ export class PythonDiscoveryService {
    * Check if ipykernel is installed
    */
   private async checkIpykernel(pythonPath: string): Promise<boolean> {
+    return (await this.probeEnvironment(pythonPath)).hasIpykernel;
+  }
+
+  /**
+   * Probe an interpreter for the two facts that drive kernel provisioning, in a
+   * single Python invocation (keeps discovery cheap — one spawn per env):
+   *   - whether `ipykernel` is importable
+   *   - whether the interpreter is PEP 668 "externally managed" (an
+   *     `EXTERNALLY-MANAGED` marker beside the stdlib), which blocks pip installs.
+   *
+   * Detecting the marker file is capability-based and stable: we ask Python
+   * itself rather than fingerprinting tool names by path, so it keeps working as
+   * new package managers (uv, pixi, …) appear.
+   */
+  private async probeEnvironment(pythonPath: string): Promise<{ hasIpykernel: boolean; externallyManaged: boolean; isVenv: boolean }> {
+    const script = [
+      'import json, os, sys, sysconfig',
+      'from importlib.util import find_spec',
+      'stdlib = sysconfig.get_path("stdlib") or ""',
+      'marker = bool(stdlib) and os.path.exists(os.path.join(stdlib, "EXTERNALLY-MANAGED"))',
+      // A virtual environment always allows pip installs — PEP 668 enforcement is
+      // skipped inside venvs (pip checks sys.prefix != sys.base_prefix), even when
+      // the venv's base interpreter carries the EXTERNALLY-MANAGED marker.
+      'in_venv = sys.prefix != sys.base_prefix',
+      'em = marker and not in_venv',
+      'ik = find_spec("ipykernel") is not None',
+      'print(json.dumps({"ipykernel": ik, "externally_managed": em, "venv": in_venv}))',
+    ].join('; ');
     try {
-      await this.runCommand(pythonPath, ['-c', 'import ipykernel'], this.ipykernelCheckTimeoutMs);
-      return true;
+      const { stdout } = await this.runCommand(pythonPath, ['-c', script], this.ipykernelCheckTimeoutMs);
+      const parsed = JSON.parse(stdout.trim().split('\n').pop() || '{}');
+      return {
+        hasIpykernel: !!parsed.ipykernel,
+        externallyManaged: !!parsed.externally_managed,
+        isVenv: !!parsed.venv,
+      };
     } catch {
-      return false;
+      return { hasIpykernel: false, externallyManaged: false, isVenv: false };
     }
+  }
+
+  /**
+   * Refine an environment's type using stable path markers that the coarse
+   * discovery scans miss. Only used to pick a better label / guidance hint —
+   * the safe-vs-unsafe install decision relies on `externallyManaged`, not this.
+   *
+   * A venv is left as-is: its `bin/python` symlinks to (and `sysconfig` resolves
+   * to) its base interpreter, so following the symlink to e.g. a uv-managed build
+   * must NOT relabel the venv itself as "uv".
+   */
+  private classifyEnvType(originalPath: string, realPath: string, current: PythonEnvType, isVenv: boolean): PythonEnvType {
+    const o = originalPath.replace(/\\/g, '/');
+    const r = realPath.replace(/\\/g, '/');
+    if (o.includes('/.pixi/envs/') || r.includes('/.pixi/envs/')) return 'pixi';
+    // uv-managed standalone interpreters live under .../uv/python/cpython-* . Only
+    // a bare interpreter qualifies — a venv built on one stays a venv.
+    if (!isVenv && (r.includes('/uv/python/') || r.includes('/.local/share/uv/'))) return 'uv';
+    return current;
+  }
+
+  /**
+   * Build a copy-pasteable command that makes `ipykernel` available for an env,
+   * tailored to the detected ecosystem. After the user runs it (and clicks
+   * Refresh), the env shows up with ipykernel and Nebula offers one-click
+   * Register — Nebula never installs packages itself.
+   *
+   * Returns null when ipykernel is already present (nothing to do but Register).
+   */
+  private buildInstallHint(
+    pythonPath: string,
+    envType: PythonEnvType,
+    envName: string | null,
+    hasIpykernel: boolean,
+    externallyManaged: boolean
+  ): string | null {
+    if (hasIpykernel) return null;
+    const py = pythonPath.includes(' ') ? `"${pythonPath}"` : pythonPath;
+
+    // Installable in place: not externally managed → use the env's own manager.
+    if (!externallyManaged) {
+      if (envType === 'conda') {
+        return `conda install -n ${envName || 'base'} ipykernel`;
+      }
+      if (envType === 'pixi') {
+        return `pixi add ipykernel`;
+      }
+      // venv / pyenv / plain: pip into the interpreter directly.
+      return `${py} -m pip install ipykernel`;
+    }
+
+    // Externally managed (PEP 668): can't install in place — create an isolated
+    // env Nebula will then discover under ~/.venvs.
+    if (envType === 'uv') {
+      return `uv venv ~/.venvs/nebula && uv pip install --python ~/.venvs/nebula/bin/python ipykernel`;
+    }
+    return `${py} -m venv ~/.venvs/nebula && ~/.venvs/nebula/bin/python -m pip install ipykernel`;
   }
 
   /**
@@ -541,17 +638,29 @@ export class PythonDiscoveryService {
       return null;
     }
 
-    const hasIpykernel = await this.checkIpykernel(candidate.path);
-    const displayName = this.generateDisplayName(version, candidate.envType, candidate.envName);
+    const { hasIpykernel, externallyManaged, isVenv } = await this.probeEnvironment(candidate.path);
+
+    // Refine the type via stable path markers (uv/pixi) that the coarse scans
+    // can't distinguish; resolve symlinks first (e.g. ~/.local/bin/python3 → uv).
+    let realPath = candidate.path;
+    try { realPath = fs.realpathSync(candidate.path); } catch { /* keep original */ }
+    const envType = this.classifyEnvType(candidate.path, realPath, candidate.envType, isVenv);
+
+    const displayName = this.generateDisplayName(version, envType, candidate.envName);
+    const installHint = this.buildInstallHint(
+      candidate.path, envType, candidate.envName, hasIpykernel, externallyManaged
+    );
 
     return {
       path: candidate.path,
       version,
       displayName,
-      envType: candidate.envType,
+      envType,
       envName: candidate.envName,
       hasIpykernel,
       kernelName: null,
+      externallyManaged,
+      installHint,
     };
   }
 
@@ -652,23 +761,58 @@ export class PythonDiscoveryService {
   }
 
   /**
-   * Install ipykernel and register as Jupyter kernel
+   * Register a Python environment as a Jupyter kernel.
+   *
+   * Policy (capability-based, see ADR in the kernel onboarding flow):
+   *   - If `ipykernel` is already importable → just register the kernelspec.
+   *     This is the safe, universal path and works for every ecosystem.
+   *   - If `ipykernel` is missing and the interpreter is PEP 668 externally
+   *     managed → refuse, with a `needs_ipykernel`/`externally_managed` code so
+   *     the UI shows guidance instead of a raw pip traceback. Nebula does not
+   *     install into managed interpreters.
+   *   - If `ipykernel` is missing but the interpreter is writable (a plain venv,
+   *     conda env, …) → install it, then register. This keeps the API usable for
+   *     deliberate callers (MCP, scripts); the UI funnels everything through the
+   *     register-only path.
    */
   async installKernel(pythonPath: string, kernelName?: string): Promise<InstallKernelResult> {
     if (!fs.existsSync(pythonPath)) {
-      throw new Error(`Python not found: ${pythonPath}`);
+      throw new KernelProvisionError(`Python not found: ${pythonPath}`, 'python_not_found');
     }
 
-    console.log(`Installing ipykernel for ${pythonPath}...`);
+    const { hasIpykernel, externallyManaged } = await this.probeEnvironment(pythonPath);
 
-    // Install ipykernel
-    try {
-      execSync(`"${pythonPath}" -m pip install ipykernel -q`, {
-        timeout: this.kernelInstallTimeoutMs,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (e) {
-      throw new Error(`Failed to install ipykernel: ${e}`);
+    if (!hasIpykernel) {
+      if (externallyManaged) {
+        const version = await this.getPythonVersion(pythonPath);
+        const hint = this.buildInstallHint(pythonPath, 'system', null, false, true);
+        throw new KernelProvisionError(
+          `This Python (${version || pythonPath}) is externally managed (PEP 668) and ipykernel is not installed, ` +
+          `so Nebula can't install it here. Set up ipykernel in an isolated environment, then Register it.`,
+          'externally_managed',
+          hint || undefined
+        );
+      }
+      // Writable env without ipykernel: install it (safe — not externally managed).
+      console.log(`Installing ipykernel for ${pythonPath}...`);
+      try {
+        execSync(`"${pythonPath}" -m pip install ipykernel -q`, {
+          timeout: this.kernelInstallTimeoutMs,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch (e) {
+        const detail = this.errorOutput(e);
+        // A late-detected PEP 668 (marker absent but pip still refused): treat as managed.
+        if (this.isExternallyManagedError(detail)) {
+          const hint = this.buildInstallHint(pythonPath, 'system', null, false, true);
+          throw new KernelProvisionError(
+            `This Python blocks package installation (PEP 668). Set up ipykernel in an isolated environment, then Register it.`,
+            'externally_managed',
+            hint || undefined
+          );
+        }
+        throw new KernelProvisionError(`Failed to install ipykernel: ${detail || e}`, 'install_failed');
+      }
     }
 
     // Generate kernel name if not provided
@@ -685,7 +829,7 @@ export class PythonDiscoveryService {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (e) {
-      throw new Error(`Failed to register kernel: ${e}`);
+      throw new KernelProvisionError(`Failed to register kernel: ${this.errorOutput(e) || e}`, 'register_failed');
     }
 
     // Update cache entry
@@ -701,7 +845,26 @@ export class PythonDiscoveryService {
       message: `Successfully registered kernel '${kernelName}'`,
     };
   }
+
+  /** Extract combined stdout+stderr text from a child_process error. */
+  private errorOutput(e: unknown): string {
+    const err = e as { stderr?: Buffer | string; stdout?: Buffer | string; message?: string };
+    const parts = [err?.stderr, err?.stdout, err?.message]
+      .map(p => (p == null ? '' : p.toString()))
+      .filter(Boolean);
+    return parts.join('\n');
+  }
+
+  /** Detect PEP 668 "externally managed" refusals generically (not tool-specific). */
+  private isExternallyManagedError(msg: string): boolean {
+    const m = (msg || '').toLowerCase();
+    return m.includes('externally-managed')
+      || m.includes('externally managed')
+      || m.includes('break-system-packages')
+      || m.includes('pep 668');
+  }
 }
 
 // Global instance with default configuration
 export const pythonDiscovery = new PythonDiscoveryService();
+

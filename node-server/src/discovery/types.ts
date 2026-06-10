@@ -2,7 +2,7 @@
  * Python Discovery Service Types
  */
 
-export type PythonEnvType = 'system' | 'conda' | 'pyenv' | 'venv' | 'homebrew';
+export type PythonEnvType = 'system' | 'conda' | 'pyenv' | 'venv' | 'homebrew' | 'uv' | 'pixi';
 
 export interface PythonEnvironment {
   path: string;           // Full path to python executable
@@ -12,6 +12,13 @@ export interface PythonEnvironment {
   envName: string | null; // e.g., "base", "myenv"
   hasIpykernel: boolean;  // Whether ipykernel is installed
   kernelName: string | null; // If registered as Jupyter kernel
+  // PEP 668: the interpreter forbids installing packages into it directly
+  // (uv-managed standalone builds, Homebrew/system Python, etc.). When true,
+  // Nebula must guide the user to an isolated env instead of installing in place.
+  externallyManaged: boolean;
+  // Copy-pasteable command that makes `ipykernel` available for this env,
+  // tailored to the detected ecosystem. Null when ipykernel is already present.
+  installHint: string | null;
 }
 
 export interface DiscoveryCandidate {
@@ -30,6 +37,26 @@ export interface InstallKernelResult {
   kernelName: string;
   pythonPath: string;
   message: string;
+}
+
+// Stable error codes surfaced to the API/frontend so the UI can branch
+// (e.g. show guidance) instead of parsing free-text error strings.
+export type KernelProvisionErrorCode =
+  | 'python_not_found'
+  | 'externally_managed' // PEP 668 — cannot pip install into this interpreter
+  | 'needs_ipykernel'    // ipykernel missing; user must install it first
+  | 'install_failed'
+  | 'register_failed';
+
+export class KernelProvisionError extends Error {
+  code: KernelProvisionErrorCode;
+  installHint?: string;
+  constructor(message: string, code: KernelProvisionErrorCode, installHint?: string) {
+    super(message);
+    this.name = 'KernelProvisionError';
+    this.code = code;
+    this.installHint = installHint;
+  }
 }
 
 export interface CacheInfo {

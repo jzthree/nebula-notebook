@@ -64,6 +64,16 @@ describe('PythonDiscoveryService', () => {
       const name = service.generateDisplayName('3.8.10', 'system', null);
       expect(name).toBe('Python 3.8.10 (System)');
     });
+
+    it('should generate uv-managed display name', () => {
+      const name = service.generateDisplayName('3.12.13', 'uv', null);
+      expect(name).toBe('Python 3.12.13 (uv-managed)');
+    });
+
+    it('should generate pixi display name', () => {
+      const name = service.generateDisplayName('3.11.0', 'pixi', 'default');
+      expect(name).toBe('Python 3.11.0 (pixi: default)');
+    });
   });
 
   describe('Cache Management', () => {
@@ -76,6 +86,8 @@ describe('PythonDiscoveryService', () => {
         envName: null,
         hasIpykernel: false,
         kernelName: null,
+        externallyManaged: false,
+        installHint: null,
       };
 
       service.saveToCache({ [env.path]: env });
@@ -97,6 +109,8 @@ describe('PythonDiscoveryService', () => {
         envName: null,
         hasIpykernel: false,
         kernelName: null,
+        externallyManaged: false,
+        installHint: null,
       };
 
       // Save cache with old timestamp
@@ -124,6 +138,8 @@ describe('PythonDiscoveryService', () => {
         envName: null,
         hasIpykernel: false,
         kernelName: null,
+        externallyManaged: false,
+        installHint: null,
       };
 
       service.saveToCache({ [env.path]: env });
@@ -140,6 +156,8 @@ describe('PythonDiscoveryService', () => {
         envName: null,
         hasIpykernel: false,
         kernelName: null,
+        externallyManaged: false,
+        installHint: null,
       };
 
       service.saveToCache({ [env.path]: env });
@@ -156,12 +174,12 @@ describe('PythonDiscoveryService', () => {
   describe('Environment Sorting', () => {
     it('should sort environments by type and name', () => {
       const envs: PythonEnvironment[] = [
-        { path: '/sys', version: '3.11', displayName: 'System', envType: 'system', envName: null, hasIpykernel: false, kernelName: null },
-        { path: '/conda1', version: '3.11', displayName: 'Conda Base', envType: 'conda', envName: 'base', hasIpykernel: false, kernelName: null },
-        { path: '/pyenv', version: '3.10', displayName: 'Pyenv', envType: 'pyenv', envName: '3.10', hasIpykernel: false, kernelName: null },
-        { path: '/conda2', version: '3.9', displayName: 'Conda ML', envType: 'conda', envName: 'ml', hasIpykernel: false, kernelName: null },
-        { path: '/brew', version: '3.11', displayName: 'Homebrew', envType: 'homebrew', envName: null, hasIpykernel: false, kernelName: null },
-        { path: '/venv', version: '3.11', displayName: 'Venv', envType: 'venv', envName: 'myenv', hasIpykernel: false, kernelName: null },
+        { path: '/sys', version: '3.11', displayName: 'System', envType: 'system', envName: null, hasIpykernel: false, kernelName: null, externallyManaged: false, installHint: null },
+        { path: '/conda1', version: '3.11', displayName: 'Conda Base', envType: 'conda', envName: 'base', hasIpykernel: false, kernelName: null, externallyManaged: false, installHint: null },
+        { path: '/pyenv', version: '3.10', displayName: 'Pyenv', envType: 'pyenv', envName: '3.10', hasIpykernel: false, kernelName: null, externallyManaged: false, installHint: null },
+        { path: '/conda2', version: '3.9', displayName: 'Conda ML', envType: 'conda', envName: 'ml', hasIpykernel: false, kernelName: null, externallyManaged: false, installHint: null },
+        { path: '/brew', version: '3.11', displayName: 'Homebrew', envType: 'homebrew', envName: null, hasIpykernel: false, kernelName: null, externallyManaged: false, installHint: null },
+        { path: '/venv', version: '3.11', displayName: 'Venv', envType: 'venv', envName: 'myenv', hasIpykernel: false, kernelName: null, externallyManaged: false, installHint: null },
       ];
 
       const sorted = service.sortEnvironments(envs);
@@ -265,7 +283,7 @@ describe('PythonDiscoveryService', () => {
         expect(firstEnv.path).toBeTruthy();
         expect(firstEnv.version).toBeTruthy();
         expect(firstEnv.displayName).toBeTruthy();
-        expect(['system', 'conda', 'pyenv', 'venv', 'homebrew']).toContain(firstEnv.envType);
+        expect(['system', 'conda', 'pyenv', 'venv', 'homebrew', 'uv', 'pixi']).toContain(firstEnv.envType);
       }
     }, 60000); // Allow up to 60 seconds for discovery
 

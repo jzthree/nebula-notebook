@@ -4,9 +4,11 @@
 
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { PythonDiscoveryService } from '../discovery/discovery-service';
+import { KernelProvisionError } from '../discovery/types';
 import { discoverKernelSpecs, invalidateKernelspecCache } from '../kernel/kernelspec';
 import { invalidateDefaultKernelName } from '../kernel/default-kernel';
 import { serverRegistry } from '../cluster/server-registry';
+import { kernelService } from './kernel';
 
 const discoveryService = new PythonDiscoveryService();
 
@@ -62,6 +64,8 @@ export default async function pythonRoutes(fastify: FastifyInstance) {
         env_type: env.envType,
         env_name: env.envName,
         has_ipykernel: env.hasIpykernel,
+        externally_managed: env.externallyManaged,
+        install_hint: env.installHint,
         kernel_name: env.kernelName && kernelspecNames.has(env.kernelName) ? env.kernelName : null,
       }));
 
@@ -110,19 +114,39 @@ export default async function pythonRoutes(fastify: FastifyInstance) {
           body: JSON.stringify({ python_path, kernel_name }),
         });
         if (!response.ok) {
-          const error = await response.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string };
-          return reply.code(response.status).send({ detail: error.detail || 'Failed to install kernel' });
+          // Forward the structured error (code + install_hint) so cluster clients
+          // get the same guidance as a local externally-managed env.
+          const error = await response.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string; code?: string; install_hint?: string };
+          return reply.code(response.status).send({
+            detail: error.detail || 'Failed to install kernel',
+            code: error.code,
+            install_hint: error.install_hint,
+          });
         }
         const data = await response.json();
         return reply.send(data);
       }
 
       const result = await discoveryService.installKernel(python_path, kernel_name);
-      // Invalidate kernelspec cache so the new kernel is discovered
+      // Invalidate caches so the new kernel is discovered without a restart.
       invalidateKernelspecCache();
       invalidateDefaultKernelName();
-      return reply.send(result);
+      kernelService.refreshKernelSpecs();
+      // snake_case to match the frontend KernelService client contract.
+      return reply.send({
+        kernel_name: result.kernelName,
+        python_path: result.pythonPath,
+        message: result.message,
+      });
     } catch (err) {
+      // Structured provisioning errors carry a stable code + guidance hint so the
+      // UI can show actionable help instead of a raw traceback.
+      if (err instanceof KernelProvisionError) {
+        const status = err.code === 'python_not_found' ? 404
+          : err.code === 'externally_managed' || err.code === 'needs_ipykernel' ? 422
+          : 500;
+        return reply.code(status).send({ detail: err.message, code: err.code, install_hint: err.installHint });
+      }
       if (err instanceof Error) {
         if (err.message.includes('not found') || err.message.includes('ENOENT')) {
           return reply.code(404).send({ detail: err.message });
@@ -175,3 +199,4 @@ export default async function pythonRoutes(fastify: FastifyInstance) {
 }
 
 export { discoveryService };
+
