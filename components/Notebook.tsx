@@ -4493,17 +4493,13 @@ export const Notebook: React.FC = () => {
           {/* Left side */}
           <div className="flex items-center gap-3 flex-shrink-0">
             <button
-              onClick={() => {
-                if (!isTerminalOpen) { setIsTerminalOpen(true); setTerminalTab('shell'); }
-                else if (terminalTab === 'shell') setIsTerminalOpen(false);
-                else setTerminalTab('shell');
-              }}
+              onClick={() => setIsTerminalOpen(!isTerminalOpen)}
               className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-colors ${
-                isTerminalOpen && terminalTab === 'shell'
+                isTerminalOpen
                   ? 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
                   : 'hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
-              title="Toggle Terminal (Ctrl+`)"
+              title="Toggle terminal panel (Ctrl+`)"
             >
               <Terminal className="w-3 h-3" />
               <span>Terminal</span>

@@ -36,11 +36,21 @@ export interface CreateTerminalOptions {
  * Check if the terminal server is available
  */
 export async function checkTerminalServer(): Promise<boolean> {
+  return (await getTerminalServerInfo()).available;
+}
+
+/**
+ * Terminal server health + context: repo_root is the Nebula repo location on
+ * the server, used to show a path-qualified MCP setup command.
+ */
+export async function getTerminalServerInfo(): Promise<{ available: boolean; repoRoot: string | null }> {
   try {
     const response = await fetch(`${TERMINAL_API_PREFIX}/terminals/health`);
-    return response.ok;
+    if (!response.ok) return { available: false, repoRoot: null };
+    const data = await response.json().catch(() => ({}));
+    return { available: true, repoRoot: typeof data.repo_root === 'string' ? data.repo_root : null };
   } catch {
-    return false;
+    return { available: false, repoRoot: null };
   }
 }
 

@@ -62,8 +62,29 @@ describe('agentTerminalService prompt injection', () => {
     agentTerminalService.setAgentTerminal(null);
     agentTerminalService.setNotebookContext(null);
     agentTerminalService.setServerContext(null);
+    agentTerminalService.setRepoRoot(null);
     agentTerminalService.setPanelOpener(null);
     window.sessionStorage.clear();
+  });
+
+  it('qualifies the MCP setup command with the repo path when known', () => {
+    agentTerminalService.setRepoRoot('/srv/my nebula');
+    expect(agentTerminalService.buildSetupMcpCommand()).toBe("cd '/srv/my nebula' && npm run setup-mcp");
+    expect(agentTerminalService.buildBootstrapPrompt()).toContain("cd '/srv/my nebula' && npm run setup-mcp");
+  });
+
+  it('restores running status when the sender re-registers (panel closed and reopened)', () => {
+    agentTerminalService.registerSender('t1', () => true);
+    agentTerminalService.launchAgent('claude');
+
+    // Panel closes: WS drops, in-memory status is lost — but same terminal id.
+    agentTerminalService.unregisterSender('t1');
+    expect(agentTerminalService.getState().status).toBe('none');
+
+    // Panel reopens: sender re-registers for the still-designated terminal.
+    agentTerminalService.registerSender('t1', () => true);
+    expect(agentTerminalService.getState().status).toBe('running');
+    expect(agentTerminalService.getState().agentKind).toBe('claude');
   });
 
   it('restores running status after a refresh (same named terminal, new page)', () => {

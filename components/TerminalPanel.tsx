@@ -16,7 +16,7 @@ import { TerminalInstance } from './TerminalInstance';
 import {
   getOrCreateNamedTerminal,
   closeTerminal,
-  checkTerminalServer,
+  getTerminalServerInfo,
   TerminalInfo,
 } from '../services/terminalService';
 import { agentTerminalService } from '../services/agentTerminalService';
@@ -74,6 +74,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const [isResizing, setIsResizing] = useState(false);
   const [serverAvailable, setServerAvailable] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [everOpened, setEverOpened] = useState(false);
+  useEffect(() => {
+    if (isOpen) setEverOpened(true);
+  }, [isOpen]);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
@@ -114,13 +118,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     }
   }, [notebookPath, shellTerm, agentTerm]);
 
-  // Check server availability when panel opens
+  // Check server availability when panel opens (also learns the server's
+  // Nebula repo path, used for the path-qualified MCP setup command)
   useEffect(() => {
     if (!isOpen) return;
 
     const checkServer = async () => {
-      const available = await checkTerminalServer();
-      setServerAvailable(available);
+      const info = await getTerminalServerInfo();
+      setServerAvailable(info.available);
+      agentTerminalService.setRepoRoot(info.repoRoot);
     };
 
     checkServer();
@@ -238,7 +244,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     };
   }, []);
 
-  if (!isOpen) return null;
+  // After the first open, stay mounted (hidden) when closed: the terminal
+  // WebSockets stay alive, so a running agent keeps receiving injected
+  // prompts and its status isn't lost on close/reopen.
+  if (!isOpen && !everOpened) return null;
 
   // Get notebook name for display
   const notebookName = notebookPath
@@ -249,7 +258,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     <div
       ref={panelRef}
       data-testid="terminal-panel"
-      className="flex-none flex flex-col bg-transparent overflow-hidden"
+      className={`flex-none flex flex-col bg-transparent overflow-hidden ${isOpen ? '' : 'hidden'}`}
       style={{ height: `${height}px` }}
     >
       {/* Resize Handle - transparent hit area, cursor indicates draggable */}
@@ -319,7 +328,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           >
             Codex
           </button>
-          <span className="text-purple-400 hidden sm:inline">requires the Nebula MCP server (npm run setup-mcp)</span>
+          <button
+            onClick={async () => {
+              try { await navigator.clipboard.writeText(agentTerminalService.buildSetupMcpCommand()); } catch { /* clipboard optional */ }
+            }}
+            className="text-purple-400 hover:text-purple-600 hidden sm:inline underline decoration-dotted"
+            title={`Requires the Nebula MCP. Click to copy the setup command:\n${agentTerminalService.buildSetupMcpCommand()}`}
+          >
+            needs Nebula MCP? copy setup command
+          </button>
           <span className="ml-auto flex items-center gap-2 flex-shrink-0">
             <button
               onClick={async () => {

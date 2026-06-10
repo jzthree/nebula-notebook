@@ -67,11 +67,22 @@ class AgentTerminalService {
   private panelOpener: (() => void) | null = null;
   private notebookPath: string | null = null;
   private serverBaseUrl: string | null = null;
+  private repoRoot: string | null = null;
 
   // --- registration (called by TerminalInstance / TerminalPanel / Notebook) ---
 
   registerSender(terminalId: string, sender: Sender): void {
     this.senders.set(terminalId, sender);
+    // Reconnection to the designated agent terminal (panel reopened, page
+    // refreshed): the pty — and any agent in it — survived, so restore the
+    // persisted status. setAgentTerminal can't do this when the id is
+    // unchanged (it early-returns).
+    if (terminalId === this.state.terminalId && this.state.status === 'none') {
+      const restored = readAgentFlag(terminalId);
+      if (restored) {
+        this.state = { ...this.state, status: 'running', agentKind: restored };
+      }
+    }
     this.notify();
   }
 
@@ -114,6 +125,22 @@ class AgentTerminalService {
     this.serverBaseUrl = baseUrl;
   }
 
+  /** Nebula repo location on the server, for a path-qualified setup command. */
+  setRepoRoot(repoRoot: string | null): void {
+    this.repoRoot = repoRoot;
+  }
+
+  /**
+   * Exact command that registers the Nebula MCP with the agent CLIs. Users
+   * don't know `npm run setup-mcp` must run from the Nebula repo, so qualify
+   * it with the repo path when the server has told us where that is.
+   */
+  buildSetupMcpCommand(): string {
+    return this.repoRoot
+      ? `cd ${shellSingleQuote(this.repoRoot)} && npm run setup-mcp`
+      : 'npm run setup-mcp  # run from your Nebula repo';
+  }
+
   /**
    * Orientation prompt handed to a freshly started agent: which server to
    * connect_server to (the MCP intentionally ignores env config and requires
@@ -122,9 +149,9 @@ class AgentTerminalService {
   buildBootstrapPrompt(): string {
     const parts: string[] = ['You are driving a Nebula notebook through the nebula-notebook MCP tools.'];
     parts.push(
-      'If the nebula-notebook MCP tools are not available in this session, ask the user to run ' +
-      '`npm run setup-mcp` in their Nebula installation (it registers the MCP for Claude Code, Codex, and others), ' +
-      'then restart this CLI.'
+      `If the nebula-notebook MCP tools are not available in this session, register them by running ` +
+      `${this.buildSetupMcpCommand()} (the Nebula repo on the server) and then restart this CLI; ` +
+      `if you are running on a different machine than the Nebula server, ask the user where their Nebula repo is.`
     );
     if (this.serverBaseUrl) {
       parts.push(

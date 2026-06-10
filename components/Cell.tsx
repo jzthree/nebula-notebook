@@ -217,11 +217,14 @@ const CellComponent: React.FC<Props> = ({
 
   const reportAgentSend = (result: SendResult) => {
     if (result.ok) {
-      toast('Sent to agent — watch the terminal panel', 'success', 2500);
+      // Surface the agent tab so the user sees the prompt land — sends also
+      // work while the panel is hidden (the pty connection stays alive).
+      agentTerminalService.openPanel();
+      toast('Sent to agent — watch the Agent tab below', 'success', 2500);
     } else if (result.reason === 'agent-not-running') {
-      toast('No agent running — launch Claude Code or Codex in the panel below, then retry', 'info', 5000);
+      toast('No agent is running yet — opened the Agent tab: click "Claude Code" or "Codex" to launch one, then retry', 'info', 6000);
     } else {
-      toast('Agent terminal is not connected — open the panel below and try again', 'info', 5000);
+      toast('Agent terminal is not connected — opened the Agent tab; wait for it to connect and try again', 'info', 5000);
     }
   };
 

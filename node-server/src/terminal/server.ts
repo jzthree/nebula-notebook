@@ -5,6 +5,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as HttpServer } from 'http';
+import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { fsService } from '../fs/fs-service';
 import {
@@ -19,6 +20,12 @@ function getDefaultCwd(): string {
   return fsService.normalizePath('~');
 }
 
+// Nebula repo root on the server (parent of node-server). Surfaced so the UI
+// can show a path-qualified MCP setup command — agents/users won't know where
+// the repo lives, and `npm run setup-mcp` only works from inside it.
+// Works from both src/ (tsx) and dist/ (build): each is 3 levels deep.
+const NEBULA_REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
+
 // Track WebSocket connections by terminal ID
 const wsConnections = new Map<string, Set<WebSocket>>();
 
@@ -26,9 +33,10 @@ const wsConnections = new Map<string, Set<WebSocket>>();
  * Setup terminal REST routes as a Fastify plugin
  */
 export async function setupTerminalRoutes(fastify: FastifyInstance): Promise<void> {
-  // Terminal health check (includes terminal count)
+  // Terminal health check (includes terminal count and repo root for the
+  // path-qualified MCP setup hint shown in the agent terminal UI)
   fastify.get('/api/terminals/health', async (_request: FastifyRequest, reply: FastifyReply) => {
-    return reply.send({ status: 'ok', terminals: ptyManager.list().length });
+    return reply.send({ status: 'ok', terminals: ptyManager.list().length, repo_root: NEBULA_REPO_ROOT });
   });
 
   // List all terminals

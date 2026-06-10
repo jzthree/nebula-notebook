@@ -7,7 +7,7 @@ let resizeSpy: ReturnType<typeof vi.fn> | null = null;
 let rafSpy: ReturnType<typeof vi.spyOn> | null = null;
 
 vi.mock('../../services/terminalService', () => ({
-  checkTerminalServer: vi.fn().mockResolvedValue(true),
+  getTerminalServerInfo: vi.fn().mockResolvedValue({ available: true, repoRoot: '/srv/nebula' }),
   getOrCreateNamedTerminal: vi.fn().mockResolvedValue({ id: 'terminal-1' }),
   closeTerminal: vi.fn(),
 }));
