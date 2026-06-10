@@ -2,10 +2,10 @@
 import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo, startTransition } from 'react';
 import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
-import { kernelService, KernelSpec, PythonEnvironment } from '../services/kernelService';
+import { kernelService, KernelSpec, PythonEnvironment, KernelProvisionError } from '../services/kernelService';
 import { getClusterInfo, ClusterServer, ClusterInfo } from '../services/clusterService';
 import { getSettings, saveSettings, IndentationPreference } from '../services/llmService';
-import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server, Clock } from 'lucide-react';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server, Clock, Maximize2, Minimize2 } from 'lucide-react';
 import { CellListHandle } from './VirtualCellList';
 import { EditorView } from '@codemirror/view';
 import {
@@ -30,8 +30,8 @@ import {
 import { FileBrowser } from './FileBrowser';
 import { TextFileEditor } from './TextFileEditor';
 import { addRecentNotebook } from './Dashboard';
-import { AIChatSidebar } from './AIChatSidebar';
 import { TerminalPanel } from './TerminalPanel';
+import { agentTerminalService } from '../services/agentTerminalService';
 import { HistoryPanel } from './HistoryPanel';
 import { RestoreDialog } from './RestoreDialog';
 import { VirtualCellList } from './VirtualCellList';
@@ -266,8 +266,20 @@ export const Notebook: React.FC = () => {
   const [textEditorPath, setTextEditorPath] = useState<string | null>(null);
   const [imageViewerPath, setImageViewerPath] = useState<string | null>(null);
   const [isNavigatorOpen, setIsNavigatorOpen] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
-  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+  // Terminal panel state survives refresh (the server-side ptys do too — the
+  // panel reattaches to them by name), so a reload restores the workspace.
+  const [isTerminalOpen, setIsTerminalOpen] = useState(() => {
+    try { return window.sessionStorage.getItem('nebula-terminal-open') === '1'; } catch { return false; }
+  });
+  const [terminalTab, setTerminalTab] = useState<'shell' | 'agent'>(() => {
+    try { return window.sessionStorage.getItem('nebula-terminal-tab') === 'agent' ? 'agent' : 'shell'; } catch { return 'shell'; }
+  });
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem('nebula-terminal-open', isTerminalOpen ? '1' : '0');
+      window.sessionStorage.setItem('nebula-terminal-tab', terminalTab);
+    } catch { /* storage unavailable */ }
+  }, [isTerminalOpen, terminalTab]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   // History preview - timestamp of the point in history to preview (null = present)
   const [previewTimestamp, setPreviewTimestamp] = useState<number | null>(null);
@@ -375,6 +387,7 @@ export const Notebook: React.FC = () => {
 
   // Output logging mode for history - 'minimal' logs no output, 'full' logs complete output
   const [outputLoggingMode, setOutputLoggingMode] = useState<OutputLoggingMode>('minimal');
+  const [isFullWidth, setIsFullWidth] = useState(false);
 
   // Undo/Redo & State Management (operation-based)
   const {
@@ -537,7 +550,7 @@ export const Notebook: React.FC = () => {
   const setCellOutputs = useCallback((cellId: string, outputs: Cell['outputs'], executionCount?: number) => {
     setCells(prevCells => prevCells.map(c =>
       c.id === cellId
-        ? { ...c, outputs, executionCount: executionCount ?? c.executionCount }
+        ? { ...c, outputs, pendingOutputReset: false, executionCount: executionCount ?? c.executionCount }
         : c
     ));
   }, [setCells]);
@@ -669,7 +682,21 @@ export const Notebook: React.FC = () => {
       return { success: false, error: `Cell ${cellId} is not a code cell` };
     }
 
-    const effectiveSessionId = options?.sessionId || kernelSessionId;
+    let effectiveSessionId = options?.sessionId || kernelSessionIdRef.current;
+    if (options?.sessionId && options.sessionId !== kernelSessionIdRef.current) {
+      try {
+        const attached = await kernelService.attachToSession(options.sessionId, currentFileId ?? undefined);
+        effectiveSessionId = attached.sessionId;
+        kernelSessionIdRef.current = attached.sessionId;
+        setKernelSessionId(attached.sessionId);
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+
     if (!effectiveSessionId) {
       return { success: false, error: 'No kernel session available. Start a kernel first.' };
     }
@@ -745,13 +772,14 @@ export const Notebook: React.FC = () => {
         // Check if execution completed (execution markers changed)
         if (executionCountChanged || lastExecutionChanged) {
           // Execution complete - read outputs from cell state
-          const hasError = currentCell.outputs.some(o => o.type === 'error');
+          const visibleOutputs = currentCell.pendingOutputReset ? [] : currentCell.outputs;
+          const hasError = visibleOutputs.some(o => o.type === 'error');
           resolve({
             success: true,
             executionStatus: hasError ? 'error' : 'idle',
             executionCount: currentCell.executionCount,
             executionTime: elapsed,
-            outputs: currentCell.outputs.map(copyCellOutput),
+            outputs: visibleOutputs.map(copyCellOutput),
             sessionId: effectiveSessionId,
             queuePosition,
             queueLength,
@@ -762,11 +790,12 @@ export const Notebook: React.FC = () => {
         // Check timeout
         if (elapsed >= maxWait) {
           // Timeout - return current outputs, execution continues in background
+          const visibleOutputs = currentCell.pendingOutputReset ? [] : currentCell.outputs;
           resolve({
             success: true,
             executionStatus: 'busy',
             executionTime: elapsed,
-            outputs: currentCell.outputs.map(copyCellOutput),
+            outputs: visibleOutputs.map(copyCellOutput),
             sessionId: effectiveSessionId,
             queuePosition,
             queueLength,
@@ -781,7 +810,7 @@ export const Notebook: React.FC = () => {
       // Start polling after a small delay to let execution start
       setTimeout(checkCompletion, pollInterval);
     });
-  }, [kernelSessionId]);
+  }, [currentFileId]);
 
   const kernelOpsRef = useRef<{
     startKernel?: (kernelName?: string, source?: EditSource) => Promise<{ success: boolean; sessionId?: string; kernelName?: string; error?: string }>;
@@ -817,6 +846,7 @@ export const Notebook: React.FC = () => {
     }
     return kernelOpsRef.current.interruptKernel(source);
   }, []);
+  const syncKernelFromBackendRef = useRef<((kernelName: string, serverId?: string | null) => Promise<void>) | null>(null);
 
   // Operation handler - receives operations routed from backend OperationRouter
   const { activeOperation: agentOperation, agentSession, forceEndAgentSession } = useOperationHandler({
@@ -829,12 +859,16 @@ export const Notebook: React.FC = () => {
     updateContentAI,
     updateMetadata,
     setCellOutputs,
+    isCellQueued: (cellId) => executionQueueRef.current.includes(cellId),
     createNotebook: handleCreateNotebook,
     executeCell: handleAgentExecuteCell,
     startKernel: startKernelForAgent,
     shutdownKernel: shutdownKernelForAgent,
     restartKernel: restartKernelForAgent,
     interruptKernel: interruptKernelForAgent,
+    onKernelChanged: async (kernelName, serverId) => {
+      await syncKernelFromBackendRef.current?.(kernelName, serverId);
+    },
     undo: rawUndo,
     redo: rawRedo,
     canUndo,
@@ -965,8 +999,27 @@ export const Notebook: React.FC = () => {
     }
   }, [cells]);
 
-  const handleChatClose = useCallback(() => setIsChatOpen(false), []);
-  const getCells = useCallback(() => getCellsRef.current(), []);
+  // Agent terminal wiring: cell-level "Fix with agent" actions open this
+  // panel when no agent is running, and prompts carry the notebook path.
+  useEffect(() => {
+    agentTerminalService.setPanelOpener(() => {
+      setIsTerminalOpen(true);
+      setTerminalTab('agent');
+    });
+    return () => agentTerminalService.setPanelOpener(null);
+  }, []);
+  useEffect(() => {
+    agentTerminalService.setNotebookContext(currentFileId ?? null);
+  }, [currentFileId]);
+  useEffect(() => {
+    // The canonical MCP base_url is the URL Nebula is reached at (dev: vite on
+    // :3000 proxying /api; prod: the single :3000 server). This also stays
+    // correct when the agent runs on a different machine than the server —
+    // unlike the server's internal API port. The bootstrap prompt tells the
+    // agent to ask the user if this URL isn't reachable from where it runs
+    // (e.g. SSH tunnels).
+    agentTerminalService.setServerContext(window.location.origin);
+  }, []);
 
   // Track last-known cursor position so search next/prev can be relative to cursor.
   const cursorAnchorRef = useRef<{ cellId: string; pos: number; ts: number } | null>(null);
@@ -1559,7 +1612,7 @@ export const Notebook: React.FC = () => {
       if (!cellId) return;
       setCells(prev => prev.map(c => {
         if (c.id !== cellId) return c;
-        return { ...c, outputs: [...(c.outputs || []), output] };
+        return { ...c, outputs: [...(c.outputs || []), output], pendingOutputReset: false };
       }));
     });
     return unsubscribe;
@@ -1573,11 +1626,21 @@ export const Notebook: React.FC = () => {
       setCells(prev => prev.map(c => {
         const syncedOutputs = cellOutputs.get(c.id);
         const isExecuting = c.id === executingCellId;
-        if (syncedOutputs === undefined && c.isExecuting === isExecuting) return c;
+        const nextPendingOutputReset = syncedOutputs !== undefined || !isExecuting
+          ? false
+          : c.pendingOutputReset;
+        if (
+          syncedOutputs === undefined &&
+          c.isExecuting === isExecuting &&
+          c.pendingOutputReset === nextPendingOutputReset
+        ) {
+          return c;
+        }
         return {
           ...c,
           outputs: syncedOutputs ?? c.outputs,
           isExecuting,
+          pendingOutputReset: nextPendingOutputReset,
         };
       }));
     });
@@ -2054,10 +2117,9 @@ export const Notebook: React.FC = () => {
         if (permissionStatus) {
           setAgentPermissionStatus(permissionStatus);
         }
-        // Set output logging mode from notebook settings
-        if (notebookSettings) {
-          setOutputLoggingMode(notebookSettings.output_logging);
-        }
+        // Set notebook-scoped settings
+        setOutputLoggingMode(notebookSettings?.output_logging || 'minimal');
+        setIsFullWidth(notebookSettings?.full_width === true);
         // Restore unflushed edit state so undo can capture pending changes
         // Also navigate to the cell with unflushed edits so flushActiveCell works
         if (savedSession.unflushedEdit) {
@@ -2151,12 +2213,15 @@ export const Notebook: React.FC = () => {
     // Get or create kernel for this file (one notebook = one kernel)
     try {
       setKernelStatus('starting');
-      const { sessionId, created, createdAt, serverId: resolvedServerId } = await kernelService.getOrCreateKernelForFile(
+      const { sessionId, created, createdAt, serverId: resolvedServerId, mtime } = await kernelService.getOrCreateKernelForFile(
         id,
         kernelToUse,
         preferredServerId,
       );
       setKernelSessionId(sessionId);
+      if (mtime !== undefined) {
+        setLastKnownMtime(mtime);
+      }
       if (createdAt) setKernelCreatedAt(createdAt);
       if (resolvedServerId && resolvedServerId !== selectedServerId) {
         setSelectedServerId(resolvedServerId);
@@ -2479,6 +2544,9 @@ export const Notebook: React.FC = () => {
     const result = await updateNotebookSettings(currentFileId, { output_logging: newMode });
     if (result) {
       setOutputLoggingMode(result.output_logging);
+      if (result.mtime !== undefined) {
+        setLastKnownMtime(result.mtime);
+      }
       toast(
         newMode === 'full' ? 'Full output logging enabled' : 'Minimal output logging enabled',
         'info',
@@ -2488,6 +2556,25 @@ export const Notebook: React.FC = () => {
       toast('Failed to update output logging mode', 'error');
     }
   }, [currentFileId, outputLoggingMode, toast]);
+
+  const handleToggleFullWidth = useCallback(async () => {
+    if (!currentFileId) return;
+
+    const nextFullWidth = !isFullWidth;
+    setIsFullWidth(nextFullWidth);
+
+    const result = await updateNotebookSettings(currentFileId, { full_width: nextFullWidth });
+    if (result) {
+      setIsFullWidth(result.full_width);
+      if (result.mtime !== undefined) {
+        setLastKnownMtime(result.mtime);
+      }
+      return;
+    }
+
+    setIsFullWidth(!nextFullWidth);
+    toast('Failed to update notebook width mode', 'error');
+  }, [currentFileId, isFullWidth, toast, setLastKnownMtime]);
 
   // --- KERNEL OPERATIONS ---
 
@@ -2513,13 +2600,16 @@ export const Notebook: React.FC = () => {
       // Use getOrCreateKernelForFile which handles kernel switching on the backend
       // (it will stop the old kernel if kernel type differs)
       if (currentFileId) {
-        const { sessionId: newSessionId, created, createdAt, serverId: resolvedServerId } = await kernelService.getOrCreateKernelForFile(
+        const { sessionId: newSessionId, created, createdAt, serverId: resolvedServerId, mtime } = await kernelService.getOrCreateKernelForFile(
           currentFileId,
           kernelName,
           targetServerId
         );
         startedSessionId = newSessionId;
         setKernelSessionId(newSessionId);
+        if (mtime !== undefined) {
+          setLastKnownMtime(mtime);
+        }
         if (createdAt) setKernelCreatedAt(createdAt);
         if (resolvedServerId && resolvedServerId !== selectedServerId) {
           setSelectedServerId(resolvedServerId);
@@ -2561,8 +2651,11 @@ export const Notebook: React.FC = () => {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   };
+  syncKernelFromBackendRef.current = async (kernelName: string, serverId?: string | null) => {
+    await switchKernel(kernelName, serverId, true, 'mcp');
+  };
 
-  // Install kernel for a Python environment
+  // Register an environment that already has ipykernel as a Jupyter kernel.
   const installKernelForPython = useCallback(async (pythonPath: string) => {
     try {
       setIsInstallingKernel(pythonPath);
@@ -2576,12 +2669,32 @@ export const Notebook: React.FC = () => {
         await switchKernel(result.kernel_name);
       }
     } catch (error) {
-      console.error('Failed to install kernel:', error);
-      toast(`Failed to install kernel: ${error}`, 'error');
+      // Externally-managed / missing-ipykernel: show actionable guidance, not a raw error.
+      if (error instanceof KernelProvisionError && error.installHint) {
+        try { await navigator.clipboard.writeText(error.installHint); } catch { /* clipboard optional */ }
+        toast(`Can't register directly: ${error.message} Copied a setup command — run it, then Refresh.`, 'warning', 9000);
+      } else {
+        console.error('Failed to register kernel:', error);
+        toast(`Failed to register kernel: ${error instanceof Error ? error.message : error}`, 'error');
+      }
     } finally {
       setIsInstallingKernel(null);
     }
   }, [loadPythonEnvironments, selectedServerId, switchKernel, toast]);
+
+  // Guidance path for envs without ipykernel: copy the ecosystem-specific install
+  // command so the user can run it themselves, then Refresh + Register. Nebula
+  // never installs packages or creates environments on the user's behalf.
+  const copyInstallHint = useCallback(async (env: PythonEnvironment) => {
+    const hint = env.install_hint || `"${env.path}" -m pip install ipykernel`;
+    let copied = false;
+    try { await navigator.clipboard.writeText(hint); copied = true; } catch { /* clipboard optional */ }
+    toast(
+      `${copied ? 'Copied' : 'Run'}: ${hint}  —  then click Refresh and Register.`,
+      'info',
+      10000
+    );
+  }, [toast]);
 
   /**
    * Switch to a different server for kernel execution
@@ -2654,6 +2767,9 @@ export const Notebook: React.FC = () => {
           if (currentFileId) {
             const result = await kernelService.getOrCreateKernelForFile(currentFileId, kernelToUse, selectedServerId);
             newSessionId = result.sessionId;
+            if (result.mtime !== undefined) {
+              setLastKnownMtime(result.mtime);
+            }
             if (result.createdAt) setKernelCreatedAt(result.createdAt);
             if (result.serverId && result.serverId !== selectedServerId) {
               setSelectedServerId(result.serverId);
@@ -3188,7 +3304,7 @@ export const Notebook: React.FC = () => {
           // Replace entire outputs array - this is idempotent and race-condition-free
           setCells(prev => prev.map(c => {
             if (c.id !== cellId) return c;
-            return { ...c, outputs: snapshot };
+            return { ...c, outputs: snapshot, pendingOutputReset: false };
           }));
         };
 
@@ -3204,7 +3320,12 @@ export const Notebook: React.FC = () => {
           }
         };
 
-        setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: true, lastExecutionMs: undefined } : c));
+        setCells(prev => prev.map(c => c.id === cellId ? {
+          ...c,
+          isExecuting: true,
+          pendingOutputReset: true,
+          lastExecutionMs: undefined,
+        } : c));
 
         try {
           await kernelService.executeCode(kernelSessionId, cell.content, (output) => {
@@ -3295,6 +3416,7 @@ export const Notebook: React.FC = () => {
           setCells(cells => cells.map(c => c.id === cellId ? {
             ...c,
             isExecuting: false,
+            pendingOutputReset: false,
             executionCount: newCount,
             lastExecutionMs: durationMs
           } : c));
@@ -3334,7 +3456,7 @@ export const Notebook: React.FC = () => {
         if (cellIndex >= 0) {
           lastCompletedCellRef.current = { cellId, cellIndex };
         }
-        setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: false } : c));
+        setCells(prev => prev.map(c => c.id === cellId ? { ...c, isExecuting: false, pendingOutputReset: false } : c));
         setExecutionQueue(prev => prev.slice(1));
       }
 
@@ -3512,6 +3634,8 @@ export const Notebook: React.FC = () => {
   }, []);
 
   const fileBrowserInitialPath = useMemo(() => getDirectoryFromPath(currentFileId), [currentFileId]);
+  const notebookChromeClass = isFullWidth ? 'w-full min-w-0' : 'max-w-5xl mx-auto w-full min-w-0';
+  const notebookContentClass = isFullWidth ? 'w-full min-w-0 px-4' : 'max-w-5xl mx-auto w-full min-w-0 px-4';
 
   return (
     <div className="flex min-h-screen bg-slate-50 relative overflow-hidden">
@@ -3530,7 +3654,7 @@ export const Notebook: React.FC = () => {
       />
 
       {/* Main Content */}
-      <div className={`relative flex-1 flex flex-col h-screen transition-all duration-300 ${isFileBrowserOpen ? 'nebula-filebrowser-offset' : ''} ${isChatOpen ? 'lg:mr-80' : ''}`}>
+      <div className={`relative flex-1 min-w-0 flex flex-col h-screen transition-all duration-300 ${isFileBrowserOpen ? 'nebula-filebrowser-offset' : ''}`}>
 
         {imageViewerPath && (
           <ImageModalViewer
@@ -3598,8 +3722,8 @@ export const Notebook: React.FC = () => {
         )}
 
         <header className="flex-none bg-slate-50/90 backdrop-blur py-3 border-b border-slate-200 px-4 z-20">
-            <div className="flex justify-between items-center max-w-5xl mx-auto w-full">
-               <div className="flex items-center gap-3 min-w-0">
+            <div className={`flex flex-wrap justify-between items-start gap-3 ${notebookChromeClass}`}>
+               <div className="flex min-w-0 flex-1 items-start gap-3">
                  <button
                     onClick={() => setIsFileBrowserOpen(!isFileBrowserOpen)}
                     className="p-2 hover:bg-white hover:shadow-sm rounded-md text-slate-600 transition-all flex-shrink-0"
@@ -3639,7 +3763,7 @@ export const Notebook: React.FC = () => {
                     </h1>
 
                     {/* Second row: Kernel Selector + Save Status */}
-                    <div className="flex items-center gap-3">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
                       {/* Kernel Selector */}
                       <div className="relative">
                       <button
@@ -3754,6 +3878,25 @@ export const Notebook: React.FC = () => {
                               </>
                             )}
 
+                            {/* Empty-state onboarding: no kernels registered yet */}
+                            {availableKernels.length === 0 && (
+                              <div className="px-3 py-3 bg-amber-50 border-b border-amber-100">
+                                <div className="text-xs font-semibold text-amber-700 flex items-center gap-1.5 mb-1">
+                                  <AlertCircle className="w-3.5 h-3.5" /> No Jupyter kernels yet
+                                </div>
+                                <p className="text-[0.6875rem] leading-relaxed text-slate-600">
+                                  To run code, you need a kernel. Pick a Python environment below:
+                                  click <span className="font-medium text-amber-700">Register</span> if it's offered, or{' '}
+                                  <span className="font-medium text-slate-700">Setup</span> to copy the command that installs{' '}
+                                  <code className="px-1 py-0.5 rounded bg-white/70 text-slate-700">ipykernel</code>, then{' '}
+                                  <span className="font-medium">Refresh</span>.
+                                  {pythonEnvironments.length === 0 && !isDiscoveringPythons && (
+                                    <span className="block mt-1 text-slate-500">No Python environments detected — install Python (or uv/conda/pixi), then Refresh.</span>
+                                  )}
+                                </p>
+                              </div>
+                            )}
+
                             {/* Registered Kernels */}
                             <div className="px-3 py-1.5 text-[0.625rem] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50">
                               Jupyter Kernels
@@ -3819,23 +3962,32 @@ export const Notebook: React.FC = () => {
                                       </div>
                                       {isRegistered ? (
                                         <span className="text-[0.625rem] text-green-600 flex-shrink-0">Registered</span>
-                                      ) : (
+                                      ) : env.has_ipykernel ? (
+                                        // ipykernel present → one-click Register (safe everywhere).
                                         <button
                                           onClick={(e) => { e.stopPropagation(); installKernelForPython(env.path); }}
                                           disabled={isInstallingKernel === env.path}
-                                          className={`flex items-center gap-1 px-2 py-1 text-[0.625rem] rounded transition-colors flex-shrink-0 ${
-                                            env.has_ipykernel
-                                              ? 'bg-amber-50 text-amber-600 hover:bg-amber-100'
-                                              : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                                          }`}
-                                          title={env.has_ipykernel ? "Register as Jupyter kernel" : "Install ipykernel and register"}
+                                          className="flex items-center gap-1 px-2 py-1 text-[0.625rem] rounded transition-colors flex-shrink-0 bg-amber-50 text-amber-600 hover:bg-amber-100"
+                                          title="Register as Jupyter kernel"
                                         >
                                           {isInstallingKernel === env.path ? (
                                             <Loader2 className="w-3 h-3 animate-spin" />
                                           ) : (
                                             <Download className="w-3 h-3" />
                                           )}
-                                          <span>{isInstallingKernel === env.path ? 'Installing...' : env.has_ipykernel ? 'Register' : 'Install'}</span>
+                                          <span>{isInstallingKernel === env.path ? 'Registering…' : 'Register'}</span>
+                                        </button>
+                                      ) : (
+                                        // No ipykernel → copy the ecosystem-specific install command (guide, don't install).
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); copyInstallHint(env); }}
+                                          className="flex items-center gap-1 px-2 py-1 text-[0.625rem] rounded transition-colors flex-shrink-0 bg-slate-100 text-slate-500 hover:bg-slate-200"
+                                          title={env.externally_managed
+                                            ? "Externally managed (PEP 668) — copy a command to set up ipykernel in an isolated env"
+                                            : "Copy the command to install ipykernel for this environment"}
+                                        >
+                                          <Terminal className="w-3 h-3" />
+                                          <span>Setup</span>
                                         </button>
                                       )}
                                     </div>
@@ -4068,7 +4220,7 @@ export const Notebook: React.FC = () => {
                  </div>
                </div>
 
-               <div className="flex gap-2 items-center flex-shrink-0 whitespace-nowrap">
+               <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
                   {/* Undo / Redo Controls */}
                   <div className="flex items-center gap-1 mr-2 border-r border-slate-200 pr-2">
                     <button
@@ -4102,7 +4254,7 @@ export const Notebook: React.FC = () => {
 
                   <button
                     onClick={() => setIsKeyboardHelpOpen(true)}
-                    className="btn-secondary hidden sm:flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors"
+                    className="btn-secondary flex items-center justify-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors"
                     title="Keyboard Shortcuts"
                   >
                     <Keyboard className="w-4 h-4" />
@@ -4118,7 +4270,7 @@ export const Notebook: React.FC = () => {
                   <button
                     onClick={handleToggleAgentPermission}
                     disabled={agentSession !== null}
-                    className={`btn-secondary hidden sm:flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                    className={`btn-secondary flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium transition-colors ${
                       agentSession
                         ? 'bg-purple-100 text-purple-600 cursor-not-allowed'
                         : agentPermissionStatus?.can_agent_modify
@@ -4146,32 +4298,50 @@ export const Notebook: React.FC = () => {
                     )}
                   </button>
                   <button
+                    onClick={handleToggleFullWidth}
+                    aria-label={isFullWidth ? 'Exit full width mode' : 'Enable full width mode'}
+                    className={`btn-secondary flex items-center justify-center px-2 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                      isFullWidth
+                        ? 'bg-slate-900 text-white hover:bg-slate-700'
+                        : 'hover:bg-slate-200 text-slate-600'
+                    }`}
+                    title={isFullWidth ? 'Exit full width mode' : 'Enable full width mode'}
+                  >
+                    {isFullWidth ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                  </button>
+                  <button
                     onClick={() => setIsSettingsOpen(true)}
-                    className="btn-secondary hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors"
+                    className="btn-secondary flex items-center justify-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors"
                   >
                     <Settings className="w-4 h-4" />
                   </button>
-                  <button onClick={handleManualSave} className="btn-secondary hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors">
-                      <Save className="w-4 h-4" /> Save
+                  <button onClick={handleManualSave} className="btn-secondary flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors">
+                      <Save className="w-4 h-4" />
+                      <span className="hidden lg:inline">Save</span>
                   </button>
                   <button
                     onClick={handleRunAllCells}
-                    className="btn-primary flex items-center gap-2 bg-slate-900 text-white px-3 py-1.5 rounded-md hover:bg-slate-700 text-xs font-medium transition-colors shadow-sm"
+                    className="btn-primary flex items-center gap-2 bg-slate-900 text-white px-2 sm:px-3 py-1.5 rounded-md hover:bg-slate-700 text-xs font-medium transition-colors shadow-sm"
                   >
-                      <Play className="w-4 h-4" /> Run All
+                      <Play className="w-4 h-4" />
+                      <span className="hidden md:inline">Run All</span>
                   </button>
 
                   <button
-                    onClick={() => setIsChatOpen(!isChatOpen)}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md font-medium text-xs transition-all shadow-sm
-                      ${isChatOpen
+                    onClick={() => {
+                      if (!isTerminalOpen) { setIsTerminalOpen(true); setTerminalTab('agent'); }
+                      else if (terminalTab === 'agent') setIsTerminalOpen(false);
+                      else setTerminalTab('agent');
+                    }}
+                    className={`flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-md font-medium text-xs transition-all shadow-sm
+                      ${isTerminalOpen && terminalTab === 'agent'
                         ? 'bg-purple-600 text-white ring-2 ring-purple-200'
                         : 'bg-white text-slate-700 border border-purple-200 hover:border-purple-300 hover:bg-purple-50'
                       }`}
-                    title="Toggle AI Copilot"
+                    title="Open the agent terminal — drive this notebook with Claude Code or Codex"
                   >
-                    <Sparkles className={`w-4 h-4 ${isChatOpen ? 'text-purple-200' : 'text-purple-600'}`} />
-                    Copilot
+                    <Bot className={`w-4 h-4 ${isTerminalOpen && terminalTab === 'agent' ? 'text-purple-200' : 'text-purple-600'}`} />
+                    <span className="hidden md:inline">Agent</span>
                   </button>
 
                </div>
@@ -4190,6 +4360,7 @@ export const Notebook: React.FC = () => {
           cells={cells}
           activeCellId={activeCellId}
           onNavigate={navigateToCell}
+          fullWidth={isFullWidth}
         />
 
         {/* History Preview Banner */}
@@ -4232,6 +4403,7 @@ export const Notebook: React.FC = () => {
               cells={displayCells}
               cellListRef={cellListRef}
               className="h-full"
+              fullWidth={isFullWidth}
               onRangeChange={handleRangeChange}
               renderKey={`${showLineNumbers ? 'ln' : ''}-${showCellIds ? 'ci' : ''}-${isPreviewMode ? 'pv' : ''}`}
               renderCell={(cell, idx) => (
@@ -4286,6 +4458,8 @@ export const Notebook: React.FC = () => {
           isOpen={isTerminalOpen}
           onClose={() => setIsTerminalOpen(false)}
           notebookPath={currentFileId}
+          activeTab={terminalTab}
+          onTabChange={setTerminalTab}
         />
 
         {/* History Panel - toggle with ?history=true or status bar */}
@@ -4319,9 +4493,13 @@ export const Notebook: React.FC = () => {
           {/* Left side */}
           <div className="flex items-center gap-3 flex-shrink-0">
             <button
-              onClick={() => setIsTerminalOpen(!isTerminalOpen)}
+              onClick={() => {
+                if (!isTerminalOpen) { setIsTerminalOpen(true); setTerminalTab('shell'); }
+                else if (terminalTab === 'shell') setIsTerminalOpen(false);
+                else setTerminalTab('shell');
+              }}
               className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-colors ${
-                isTerminalOpen
+                isTerminalOpen && terminalTab === 'shell'
                   ? 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
                   : 'hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
@@ -4369,36 +4547,29 @@ export const Notebook: React.FC = () => {
           </div>
         </div>
 
-        <div className={`absolute bottom-14 left-1/2 -translate-x-1/2 flex gap-4 bg-white p-2 rounded-full shadow-lg border border-slate-200 z-20 ${agentSession ? 'opacity-50' : ''} ${isTerminalOpen ? 'hidden' : ''}`}>
-            <button
-              onClick={() => handleAddCell('code')}
-              disabled={agentSession !== null}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-colors ${agentSession ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
-              title={agentSession ? 'Locked during agent session' : 'Add Code Cell'}
-            >
-              <Plus className="w-4 h-4" /> Code
-            </button>
-            <button
-              onClick={() => handleAddCell('markdown')}
-              disabled={agentSession !== null}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-colors ${agentSession ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
-              title={agentSession ? 'Locked during agent session' : 'Add Text Cell'}
-            >
-              <Plus className="w-4 h-4" /> Text
-            </button>
+        <div className={`pointer-events-none absolute inset-x-0 bottom-14 z-20 ${isTerminalOpen ? 'hidden' : ''}`}>
+          <div className={`${notebookContentClass} flex justify-center`}>
+            <div className={`pointer-events-auto flex gap-4 rounded-full border border-slate-200 bg-white p-2 shadow-lg ${agentSession ? 'opacity-50' : ''}`}>
+              <button
+                onClick={() => handleAddCell('code')}
+                disabled={agentSession !== null}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-colors ${agentSession ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
+                title={agentSession ? 'Locked during agent session' : 'Add Code Cell'}
+              >
+                <Plus className="w-4 h-4" /> Code
+              </button>
+              <button
+                onClick={() => handleAddCell('markdown')}
+                disabled={agentSession !== null}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-colors ${agentSession ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+                title={agentSession ? 'Locked during agent session' : 'Add Text Cell'}
+              >
+                <Plus className="w-4 h-4" /> Text
+              </button>
+            </div>
+          </div>
         </div>
       </div>
-
-      {/* AI Chat Sidebar */}
-      <AIChatSidebar
-        isOpen={isChatOpen}
-        onClose={handleChatClose}
-        getCells={getCells}
-        fileId={currentFileId}
-        onInsertCode={handleInsertCode}
-        onEditCell={handleEditCell}
-        onDeleteCell={handleDeleteCellByIndex}
-      />
 
       {/* Settings Modal */}
       <SettingsModal

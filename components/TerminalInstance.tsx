@@ -11,6 +11,7 @@ import {
   connectTerminal,
   TerminalServerMessage,
 } from '../services/terminalService';
+import { agentTerminalService } from '../services/agentTerminalService';
 
 interface TerminalInstanceProps {
   terminalId: string;
@@ -106,6 +107,13 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
           rows: dimensions.rows,
         }));
       }
+      // Expose a programmatic input path (used to inject agent prompts).
+      // Distinct from terminal.onData, which is gated on user focus.
+      agentTerminalService.registerSender(terminalId, (data: string) => {
+        if (ws.readyState !== WebSocket.OPEN) return false;
+        ws.send(JSON.stringify({ type: 'input', data }));
+        return true;
+      });
     };
 
     ws.onmessage = (event) => {
@@ -121,6 +129,7 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
 
           case 'exit':
             terminal.write(`\r\n\x1b[90m[Process exited with code ${message.code}]\x1b[0m\r\n`);
+            agentTerminalService.unregisterSender(terminalId);
             onExit?.(message.code);
             break;
 
@@ -150,6 +159,7 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
     };
 
     ws.onclose = () => {
+      agentTerminalService.unregisterSender(terminalId);
       // Suppress close message during unmount
       if (isUnmounting) return;
       terminal.write('\r\n\x1b[90m[Disconnected]\x1b[0m\r\n');
@@ -167,6 +177,7 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
     // Cleanup
     return () => {
       isUnmounting = true;  // Suppress error/close handlers
+      agentTerminalService.unregisterSender(terminalId);
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close();
       }

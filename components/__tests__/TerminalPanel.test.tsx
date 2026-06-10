@@ -8,7 +8,7 @@ let rafSpy: ReturnType<typeof vi.spyOn> | null = null;
 
 vi.mock('../../services/terminalService', () => ({
   checkTerminalServer: vi.fn().mockResolvedValue(true),
-  createTerminal: vi.fn().mockResolvedValue({ id: 'terminal-1' }),
+  getOrCreateNamedTerminal: vi.fn().mockResolvedValue({ id: 'terminal-1' }),
   closeTerminal: vi.fn(),
 }));
 

@@ -3,8 +3,8 @@ import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
 import { CodeEditor } from './CodeEditor';
 import { MarkdownPreview } from './MarkdownPreview';
-import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Sparkles, Plus } from 'lucide-react';
-import { generateCellContentStructured, fixCellError, getSettings, CellGenerationResponse } from '../services/llmService';
+import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Plus } from 'lucide-react';
+import { agentTerminalService, SendResult } from '../services/agentTerminalService';
 import { useNotification } from './NotificationSystem';
 import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 import { shouldForceInteractiveFeatures } from '../utils/editorPerf';
@@ -94,11 +94,8 @@ const CellComponent: React.FC<Props> = ({
   const { toast } = useNotification();
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
-  const [isAiGenerating, setIsAiGenerating] = useState(false);
-  const [isFixing, setIsFixing] = useState(false);
   // Focus state: 'editor' = editing code, 'cell' = command mode, 'none' = unfocused
   const [focusState, setFocusState] = useState<'none' | 'cell' | 'editor'>('none');
-  const [aiExplanation, setAiExplanation] = useState<string | null>(null);
 
   // ⚠️ PERFORMANCE CRITICAL: All callbacks passed to CodeEditor MUST be stable.
   // CodeEditor rebuilds extensions when onKeyDown/onFocus/onBlur change.
@@ -214,59 +211,44 @@ const CellComponent: React.FC<Props> = ({
     }
   }, []);
 
-  const handleAiGenerate = async () => {
-    if (!aiPrompt.trim()) return;
-    setIsAiGenerating(true);
-    setAiExplanation(null);
-    try {
-      const settings = getSettings();
-      const config = { provider: settings.llmProvider, model: settings.llmModel };
-      const result = await generateCellContentStructured(aiPrompt, allCellsRef.current, cell.id, config);
+  // Cell AI actions inject prompts into the agent terminal (Claude Code /
+  // Codex driving the notebook via MCP) instead of calling a model API.
+  const cellNumber = () => (cellIndexMapRef.current?.get(cell.id) ?? index) + 1;
 
-      // Handle different actions
-      if (result.action === 'explain_only') {
-        // Just show explanation, don't modify code
-        setAiExplanation(result.explanation);
-      } else if (result.code) {
-        // Apply code change
-        const newContent = result.action === 'append'
-          ? cell.content + '\n' + result.code
-          : result.code;
-        // Use onAIUpdate for undo tracking, fall back to onUpdate
-        (onAIUpdate || onUpdate)(cell.id, newContent);
-        // Show explanation if provided
-        if (result.explanation) {
-          setAiExplanation(result.explanation);
-        }
-      }
-
-      setIsAiOpen(false);
-      setAiPrompt('');
-    } catch (e) {
-      console.error('AI generation failed:', e);
-      toast('Failed to generate AI content. Check console for details.', 'error');
-    } finally {
-      setIsAiGenerating(false);
+  const reportAgentSend = (result: SendResult) => {
+    if (result.ok) {
+      toast('Sent to agent — watch the terminal panel', 'success', 2500);
+    } else if (result.reason === 'agent-not-running') {
+      toast('No agent running — launch Claude Code or Codex in the panel below, then retry', 'info', 5000);
+    } else {
+      toast('Agent terminal is not connected — open the panel below and try again', 'info', 5000);
     }
   };
 
-  const handleAiFix = async () => {
+  const handleAgentPrompt = () => {
+    const prompt = aiPrompt.trim();
+    if (!prompt) return;
+    const result = agentTerminalService.sendCellPrompt({
+      cellNumber: cellNumber(),
+      cellId: cell.id,
+      prompt,
+    });
+    if (result.ok) {
+      setAiPrompt('');
+      setIsAiOpen(false);
+    }
+    reportAgentSend(result);
+  };
+
+  const handleAgentFix = () => {
     const errorOutput = cell.outputs.find(o => o.type === 'error' || o.type === 'stderr');
     if (!errorOutput) return;
-
-    setIsFixing(true);
-    try {
-      const settings = getSettings();
-      const config = { provider: settings.llmProvider, model: settings.llmModel };
-      const fixedCode = await fixCellError(cell.content, errorOutput.content, allCellsRef.current, config);
-      // Use onAIUpdate for undo tracking, fall back to onUpdate
-      (onAIUpdate || onUpdate)(cell.id, fixedCode);
-    } catch (e) {
-      console.error(e);
-      toast('Could not fix code automatically.', 'error');
-    } finally {
-      setIsFixing(false);
-    }
+    const result = agentTerminalService.sendFixPrompt({
+      cellNumber: cellNumber(),
+      cellId: cell.id,
+      errorContent: errorOutput.content,
+    });
+    reportAgentSend(result);
   };
 
   const hasError = cell.outputs.some(o => o.type === 'error');
@@ -554,16 +536,16 @@ const CellComponent: React.FC<Props> = ({
           </button>
         </div>
 
-        {/* Center: Error fix button */}
+        {/* Center: Error fix button — hands the error to the agent terminal */}
         <div className="flex-1 flex justify-center">
           {hasError && (
             <button
-              onClick={(e) => { e.stopPropagation(); handleAiFix(); }}
-              disabled={isFixing}
+              onClick={(e) => { e.stopPropagation(); handleAgentFix(); }}
               className="flex items-center gap-1 text-[0.625rem] px-2 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
+              title="Send this cell's error to the agent (Claude Code / Codex) to fix"
             >
-              <Sparkles className="w-3 h-3" />
-              {isFixing ? 'Fixing...' : 'Fix with AI'}
+              <Bot className="w-3 h-3" />
+              Fix with agent
             </button>
           )}
         </div>
@@ -585,7 +567,7 @@ const CellComponent: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* AI Prompt Input */}
+      {/* Agent Prompt Input — sends a cell-scoped instruction to the agent terminal */}
       {isAiOpen && (
         <div className="px-3 py-2 bg-purple-50 border-b border-purple-100 flex gap-2 items-center">
           <Bot className="w-4 h-4 text-purple-600 flex-shrink-0" />
@@ -593,32 +575,16 @@ const CellComponent: React.FC<Props> = ({
             type="text"
             value={aiPrompt}
             onChange={(e) => setAiPrompt(e.target.value)}
-            placeholder="Ask AI to write code, debug, or explain..."
+            placeholder="Ask the agent to edit, debug, or explain this cell…"
             className="flex-grow bg-white border-purple-200 border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-            onKeyDown={(e) => e.key === 'Enter' && handleAiGenerate()}
+            onKeyDown={(e) => e.key === 'Enter' && handleAgentPrompt()}
             onClick={(e) => e.stopPropagation()}
           />
           <button
-            onClick={(e) => { e.stopPropagation(); handleAiGenerate(); }}
-            disabled={isAiGenerating}
-            className="px-2 py-1 bg-purple-600 text-white text-xs font-medium rounded hover:bg-purple-700 disabled:opacity-50"
+            onClick={(e) => { e.stopPropagation(); handleAgentPrompt(); }}
+            className="px-2 py-1 bg-purple-600 text-white text-xs font-medium rounded hover:bg-purple-700"
           >
-            {isAiGenerating ? 'Thinking...' : 'Generate'}
-          </button>
-        </div>
-      )}
-
-      {/* AI Explanation - shown when AI provides explanatory text */}
-      {aiExplanation && (
-        <div className="px-3 py-2 bg-purple-50 border-b border-purple-100 flex gap-2 items-start">
-          <Sparkles className="w-4 h-4 text-purple-500 flex-shrink-0 mt-0.5" />
-          <p className="flex-grow text-sm text-purple-800">{aiExplanation}</p>
-          <button
-            onClick={(e) => { e.stopPropagation(); setAiExplanation(null); }}
-            className="text-purple-400 hover:text-purple-600 flex-shrink-0"
-            title="Dismiss"
-          >
-            <span className="text-lg leading-none">&times;</span>
+            Send to agent
           </button>
         </div>
       )}
