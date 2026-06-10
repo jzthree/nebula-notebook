@@ -15,7 +15,6 @@ import {
   kernelTools,
   executionTools,
   fileTools,
-  writerTools,
 
   // Tool utilities
   getToolDefinitions,
@@ -56,15 +55,14 @@ describe('Tool Collections', () => {
         notebookTools.length +
         kernelTools.length +
         executionTools.length +
-        fileTools.length +
-        writerTools.length;
+        fileTools.length;
 
       expect(allTools.length).toBe(expectedCount);
     });
 
-    it('should contain 38 total tools', () => {
-      // 18 notebook + 5 kernel + 1 execution + 7 files + 7 writer = 38
-      expect(allTools.length).toBe(38);
+    it('should contain 31 total tools', () => {
+      // 18 notebook + 5 kernel + 1 execution + 7 files = 31
+      expect(allTools.length).toBe(31);
     });
 
     it('should have unique tool names', () => {
@@ -98,7 +96,6 @@ describe('Tool Collections', () => {
         'kernel',
         'execution',
         'files',
-        'writer',
       ]);
     });
 
