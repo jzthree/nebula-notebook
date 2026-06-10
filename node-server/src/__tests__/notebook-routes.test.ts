@@ -432,6 +432,82 @@ describe('Notebook Routes', () => {
     });
   });
 
+  describe('GET /api/notebook/settings', () => {
+    it('should return notebook settings including full width mode', async () => {
+      const notebookPath = path.join(testDir, 'settings-test.ipynb');
+      fs.writeFileSync(notebookPath, JSON.stringify({
+        cells: [],
+        metadata: {
+          nebula: {
+            output_logging: 'full',
+            full_width: true,
+          },
+        },
+        nbformat: 4,
+        nbformat_minor: 5,
+      }));
+
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/notebook/settings?path=${encodeURIComponent(notebookPath)}`,
+      });
+      const body = JSON.parse(response.body);
+
+      expect(response.statusCode).toBe(200);
+      expect(body.output_logging).toBe('full');
+      expect(body.full_width).toBe(true);
+    });
+  });
+
+  describe('POST /api/notebook/settings', () => {
+    it('should persist full width mode and return updated mtime', async () => {
+      const notebookPath = path.join(testDir, 'settings-save.ipynb');
+      fs.writeFileSync(notebookPath, JSON.stringify({
+        cells: [],
+        metadata: {
+          nebula: {
+            output_logging: 'minimal',
+          },
+        },
+        nbformat: 4,
+        nbformat_minor: 5,
+      }));
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/settings',
+        payload: { path: notebookPath, full_width: true },
+      });
+      const body = JSON.parse(response.body);
+      const saved = JSON.parse(fs.readFileSync(notebookPath, 'utf-8'));
+
+      expect(response.statusCode).toBe(200);
+      expect(body.full_width).toBe(true);
+      expect(typeof body.mtime).toBe('number');
+      expect(saved.metadata.nebula.full_width).toBe(true);
+      expect(saved.metadata.nebula.output_logging).toBe('minimal');
+    });
+
+    it('should reject non-boolean full_width', async () => {
+      const notebookPath = path.join(testDir, 'settings-invalid.ipynb');
+      fs.writeFileSync(notebookPath, JSON.stringify({
+        cells: [],
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 5,
+      }));
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/settings',
+        payload: { path: notebookPath, full_width: 'yes' },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(JSON.parse(response.body).detail).toContain('full_width');
+    });
+  });
+
   describe('GET /api/notebook/read', () => {
     it('should read notebook via operation router', async () => {
       const notebookPath = path.join(testDir, 'read-test.ipynb');

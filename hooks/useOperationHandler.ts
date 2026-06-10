@@ -365,7 +365,13 @@ interface ReadNotebookMessage {
   requestId: string;
 }
 
-type IncomingMessage = OperationMessage | ReadNotebookMessage | { type: 'pong' };
+interface KernelChangedMessage {
+  type: 'kernelChanged';
+  kernelName: string;
+  serverId?: string | null;
+}
+
+type IncomingMessage = OperationMessage | ReadNotebookMessage | KernelChangedMessage | { type: 'pong' };
 
 /** Info about an agent operation for UI display */
 export interface AgentOperationInfo {
@@ -414,6 +420,9 @@ interface UseOperationHandlerOptions {
 
   /** Set cell outputs callback */
   setCellOutputs?: (cellId: string, outputs: Cell['outputs'], executionCount?: number) => void;
+
+  /** Whether a cell is queued for execution but has not started yet */
+  isCellQueued?: (cellId: string) => boolean;
 
   /** Create notebook callback - returns promise with mtime */
   createNotebook?: (path: string, overwrite: boolean, kernelName: string, kernelDisplayName?: string) => Promise<{ success: boolean; mtime?: number; error?: string }>;
@@ -467,6 +476,9 @@ interface UseOperationHandlerOptions {
     error?: string;
   }>;
 
+  /** Callback when backend reports a kernel change initiated outside the UI */
+  onKernelChanged?: (kernelName: string, serverId?: string | null) => Promise<void> | void;
+
   /** Callback when an agent operation is applied (for toasts/notifications) */
   onAgentOperation?: (operation: NotebookOperation, result: OperationResult) => void;
 
@@ -497,12 +509,14 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     updateContentAI,
     updateMetadata,
     setCellOutputs,
+    isCellQueued,
     createNotebook,
     executeCell,
     startKernel,
     shutdownKernel,
     restartKernel,
     interruptKernel,
+    onKernelChanged,
     onAgentOperation,
     undo,
     redo,
@@ -526,12 +540,14 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const updateContentAIRef = useRef(updateContentAI);
   const updateMetadataRef = useRef(updateMetadata);
   const setCellOutputsRef = useRef(setCellOutputs);
+  const isCellQueuedRef = useRef(isCellQueued);
   const createNotebookRef = useRef(createNotebook);
   const executeCellRef = useRef(executeCell);
   const startKernelRef = useRef(startKernel);
   const shutdownKernelRef = useRef(shutdownKernel);
   const restartKernelRef = useRef(restartKernel);
   const interruptKernelRef = useRef(interruptKernel);
+  const onKernelChangedRef = useRef(onKernelChanged);
   const onAgentOperationRef = useRef(onAgentOperation);
   const undoRef = useRef(undo);
   const redoRef = useRef(redo);
@@ -548,12 +564,14 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   updateContentAIRef.current = updateContentAI;
   updateMetadataRef.current = updateMetadata;
   setCellOutputsRef.current = setCellOutputs;
+  isCellQueuedRef.current = isCellQueued;
   createNotebookRef.current = createNotebook;
   executeCellRef.current = executeCell;
   startKernelRef.current = startKernel;
   shutdownKernelRef.current = shutdownKernel;
   restartKernelRef.current = restartKernel;
   interruptKernelRef.current = interruptKernel;
+  onKernelChangedRef.current = onKernelChanged;
   onAgentOperationRef.current = onAgentOperation;
   undoRef.current = undo;
   redoRef.current = redo;
@@ -588,6 +606,13 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     while (!isIdUnique(`${baseId}-${suffix}`)) suffix++;
     return `${baseId}-${suffix}`;
   }, [isIdUnique]);
+
+  const getVisibleOutputs = useCallback((cell: Cell): Cell['outputs'] => {
+    if (cell.pendingOutputReset) {
+      return [];
+    }
+    return cell.outputs;
+  }, []);
 
   /**
    * Apply an operation and return the result
@@ -1100,8 +1125,11 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           // If maxWait > 0, poll for new outputs
           let cell = currentCells[targetIndex];
           if (maxWait > 0) {
-            let baselineOutputCount = cell.outputs.length;
-            let baselineOutputChars = cell.outputs.reduce((sum, o) => sum + o.content.length, 0);
+            let visibleOutputs = getVisibleOutputs(cell);
+            let baselineOutputCount = visibleOutputs.length;
+            let baselineOutputChars = visibleOutputs.reduce((sum, o) => sum + o.content.length, 0);
+            let baselineExecutionCount = cell.executionCount;
+            let baselineLastExecutionMs = cell.lastExecutionMs;
             let wasExecuting = !!cell.isExecuting;
             const startTime = Date.now();
             const pollInterval = 500; // 500ms
@@ -1120,19 +1148,36 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
                 // Execution started after we began polling (e.g. queued). Reset baseline so we
                 // wait for outputs from this run rather than comparing against previous outputs.
                 wasExecuting = true;
-                baselineOutputCount = cell.outputs.length;
-                baselineOutputChars = cell.outputs.reduce((sum, o) => sum + o.content.length, 0);
+                visibleOutputs = getVisibleOutputs(cell);
+                baselineOutputCount = visibleOutputs.length;
+                baselineOutputChars = visibleOutputs.reduce((sum, o) => sum + o.content.length, 0);
+                baselineExecutionCount = cell.executionCount;
+                baselineLastExecutionMs = cell.lastExecutionMs;
               }
-              const currentOutputCount = cell.outputs.length;
-              const currentOutputChars = cell.outputs.reduce((sum, o) => sum + o.content.length, 0);
+              visibleOutputs = getVisibleOutputs(cell);
+              const currentOutputCount = visibleOutputs.length;
+              const currentOutputChars = visibleOutputs.reduce((sum, o) => sum + o.content.length, 0);
+              const executionCountChanged = cell.executionCount !== baselineExecutionCount;
+              const lastExecutionChanged = cell.lastExecutionMs !== baselineLastExecutionMs;
+              const isQueued = !!isCellQueuedRef.current?.(cell.id);
 
               // Check if outputs changed
-              if (currentOutputCount > baselineOutputCount || currentOutputChars > baselineOutputChars) {
+              if (
+                currentOutputCount > baselineOutputCount ||
+                currentOutputChars > baselineOutputChars ||
+                executionCountChanged ||
+                lastExecutionChanged
+              ) {
                 break; // New output arrived
               }
 
               if (wasExecuting && !cell.isExecuting) {
                 break; // Execution completed without new output
+              }
+
+              // If the cell is already idle and not queued, there is nothing left to wait for.
+              if (!wasExecuting && !cell.isExecuting && !isQueued) {
+                break;
               }
             }
           }
@@ -1141,7 +1186,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             success: true,
             cellId: cell.id,
             cellIndex: targetIndex,
-            outputs: cell.outputs.map(o => ({ type: o.type, content: o.content })),
+            outputs: getVisibleOutputs(cell).map(o => ({ type: o.type, content: o.content })),
             executionCount: cell.executionCount,
           };
         }
@@ -1456,7 +1501,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     } catch (e) {
       return { success: false, error: String(e) };
     }
-  }, [isIdUnique, makeUniqueId]);
+  }, [getVisibleOutputs, isIdUnique, makeUniqueId]);
 
   /**
    * Handle incoming WebSocket message
@@ -1464,6 +1509,11 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const handleMessage = useCallback(async (data: IncomingMessage) => {
     if (data.type === 'pong') {
       // Keep-alive response, ignore
+      return;
+    }
+
+    if (data.type === 'kernelChanged') {
+      await onKernelChangedRef.current?.(data.kernelName, data.serverId);
       return;
     }
 
@@ -1627,7 +1677,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
       console.error('[OperationHandler] WebSocket error:', error);
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (wsRef.current !== ws || connectionAttempt !== connectionAttemptRef.current) {
         return;
       }
@@ -1635,6 +1685,11 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
       console.log('[OperationHandler] Disconnected');
       setIsConnected(false);
       wsRef.current = null;
+
+      const replacedByAnotherTab = event.reason === 'Connection replaced';
+      if (replacedByAnotherTab) {
+        console.log('[OperationHandler] Another tab took over the live notebook connection');
+      }
 
       // Clear ping interval
       if (pingIntervalRef.current) {
@@ -1644,7 +1699,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
       // Only auto-reconnect if this was NOT an intentional close
       // (intentional closes happen when connect() replaces the connection)
-      if (!intentionalCloseRef.current) {
+      if (!intentionalCloseRef.current && !replacedByAnotherTab) {
         reconnectTimeoutRef.current = setTimeout(() => {
           if (filePath) {
             console.log('[OperationHandler] Attempting reconnect...');

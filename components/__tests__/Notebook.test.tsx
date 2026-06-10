@@ -66,6 +66,12 @@ vi.mock('../../services/fileService', () => ({
   saveNotebookHistory: vi.fn().mockResolvedValue(undefined),
   loadNotebookSession: vi.fn().mockResolvedValue({}),
   getNotebookSettings: vi.fn().mockResolvedValue(null),
+  updateNotebookSettings: vi.fn().mockResolvedValue({
+    notebook_path: '/test/notebook.ipynb',
+    output_logging: 'minimal',
+    full_width: false,
+    mtime: Date.now() / 1000,
+  }),
   saveNotebookSession: vi.fn().mockResolvedValue(true),
   getAgentPermissionStatus: vi.fn().mockResolvedValue({
     agent_created: false,
@@ -106,8 +112,8 @@ vi.mock('../../hooks/useOperationHandler', () => ({
 
 // Mock VirtualCellList
 vi.mock('../VirtualCellList', () => ({
-  VirtualCellList: ({ cells, renderCell }: any) => (
-    <div data-testid="virtual-cell-list">
+  VirtualCellList: ({ cells, renderCell, fullWidth }: any) => (
+    <div data-testid="virtual-cell-list" data-full-width={String(Boolean(fullWidth))}>
       {cells.map((cell: any, idx: number) => (
         <div key={cell.id} data-testid={`cell-container-${idx}`}>
           {renderCell(cell, idx)}
@@ -219,6 +225,13 @@ describe('Notebook', () => {
       kernelspec: 'python3',
       mtime: Date.now() / 1000,
     } as Awaited<ReturnType<typeof fileService.getFileContentWithMtime>>);
+    vi.mocked(fileService.getNotebookSettings).mockResolvedValue(null);
+    vi.mocked(fileService.updateNotebookSettings).mockResolvedValue({
+      notebook_path: '/test/notebook.ipynb',
+      output_logging: 'minimal',
+      full_width: false,
+      mtime: Date.now() / 1000,
+    });
     vi.mocked(kernelService.executeCode).mockResolvedValue({ status: 'ok', execution_count: 1 } as Awaited<ReturnType<typeof kernelService.executeCode>>);
     vi.mocked(useOperationHandler).mockReturnValue({
       isConnected: true,
@@ -868,6 +881,80 @@ describe('Notebook', () => {
       expect(screen.getByText('#1')).toBeInTheDocument();
       expect(screen.getByText('#2')).toBeInTheDocument();
       expect(screen.queryByText('#3')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('full width mode', () => {
+    it('applies persisted full width setting on load', async () => {
+      vi.mocked(fileService.getNotebookSettings).mockResolvedValue({
+        notebook_path: '/test/notebook.ipynb',
+        output_logging: 'minimal',
+        full_width: true,
+      });
+
+      renderNotebook();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('virtual-cell-list')).toHaveAttribute('data-full-width', 'true');
+      });
+    });
+
+    it('toggles full width mode and persists notebook settings', async () => {
+      vi.mocked(fileService.updateNotebookSettings).mockResolvedValue({
+        notebook_path: '/test/notebook.ipynb',
+        output_logging: 'minimal',
+        full_width: true,
+        mtime: 1234,
+      });
+
+      renderNotebook();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('virtual-cell-list')).toHaveAttribute('data-full-width', 'false');
+      });
+
+      fireEvent.click(screen.getByTitle('Enable full width mode'));
+
+      await waitFor(() => {
+        expect(fileService.updateNotebookSettings).toHaveBeenCalledWith('/test/notebook.ipynb', { full_width: true });
+        expect(screen.getByTestId('virtual-cell-list')).toHaveAttribute('data-full-width', 'true');
+      });
+    });
+
+    it('shows an explicit exit control and can disable full width mode', async () => {
+      vi.mocked(fileService.updateNotebookSettings)
+        .mockResolvedValueOnce({
+          notebook_path: '/test/notebook.ipynb',
+          output_logging: 'minimal',
+          full_width: true,
+          mtime: 1234,
+        })
+        .mockResolvedValueOnce({
+          notebook_path: '/test/notebook.ipynb',
+          output_logging: 'minimal',
+          full_width: false,
+          mtime: 1235,
+        });
+
+      renderNotebook();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('virtual-cell-list')).toHaveAttribute('data-full-width', 'false');
+      });
+
+      fireEvent.click(screen.getByTitle('Enable full width mode'));
+
+      await waitFor(() => {
+        expect(screen.getByTitle('Exit full width mode')).toBeInTheDocument();
+        expect(screen.getByTestId('virtual-cell-list')).toHaveAttribute('data-full-width', 'true');
+      });
+
+      fireEvent.click(screen.getByTitle('Exit full width mode'));
+
+      await waitFor(() => {
+        expect(fileService.updateNotebookSettings).toHaveBeenLastCalledWith('/test/notebook.ipynb', { full_width: false });
+        expect(screen.getByTestId('virtual-cell-list')).toHaveAttribute('data-full-width', 'false');
+      });
     });
   });
 });

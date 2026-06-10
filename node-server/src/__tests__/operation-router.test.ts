@@ -60,4 +60,25 @@ describe('OperationRouter', () => {
 
     expect(router.hasUI('/tmp/live.ipynb')).toBe(true);
   });
+
+  it('notifies a responsive UI when the kernel changes externally', async () => {
+    const router = new OperationRouter();
+    const ws = {
+      readyState: WebSocket.OPEN,
+      close: vi.fn(),
+      send: vi.fn(),
+    } as unknown as WebSocket;
+
+    await router.registerUI(ws, '/tmp/kernel.ipynb');
+    router.notifyKernelChanged('/tmp/kernel.ipynb', {
+      kernelName: 'python3',
+      serverId: 'local',
+    });
+
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'kernelChanged',
+      kernelName: 'python3',
+      serverId: 'local',
+    }));
+  });
 });

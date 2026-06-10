@@ -75,6 +75,7 @@ describe('useOperationHandler', () => {
   let mockUpdateMetadata: ReturnType<typeof vi.fn>;
   let mockSetCellOutputs: ReturnType<typeof vi.fn>;
   let mockCreateNotebook: ReturnType<typeof vi.fn>;
+  let mockIsCellQueued: ReturnType<typeof vi.fn>;
 
   // Initial cells
   let initialCells: Cell[];
@@ -93,6 +94,7 @@ describe('useOperationHandler', () => {
     mockUpdateMetadata = vi.fn();
     mockSetCellOutputs = vi.fn();
     mockCreateNotebook = vi.fn();
+    mockIsCellQueued = vi.fn(() => false);
 
     // Initial cells state
     initialCells = [
@@ -106,9 +108,14 @@ describe('useOperationHandler', () => {
     // Restore original WebSocket
     (global as any).WebSocket = originalWebSocket;
     vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
-  const renderOperationHandler = (cells: Cell[] = initialCells, filePath: string | null = '/test/notebook.ipynb') => {
+  const renderOperationHandler = (
+    cells: Cell[] = initialCells,
+    filePath: string | null = '/test/notebook.ipynb',
+    overrides: Partial<Parameters<typeof useOperationHandler>[0]> = {}
+  ) => {
     return renderHook(() =>
       useOperationHandler({
         filePath,
@@ -120,7 +127,9 @@ describe('useOperationHandler', () => {
         updateContentAI: mockUpdateContentAI as any,
         updateMetadata: mockUpdateMetadata as any,
         setCellOutputs: mockSetCellOutputs as (cellId: string, outputs: CellOutput[], executionCount?: number) => void,
+        isCellQueued: mockIsCellQueued as (cellId: string) => boolean,
         createNotebook: mockCreateNotebook as any,
+        ...overrides,
       })
     );
   };
@@ -195,6 +204,160 @@ describe('useOperationHandler', () => {
 
       expect(result.current.isConnected).toBe(true);
       expect(MockWebSocket.instances.length).toBe(2);
+    });
+
+    it('should not auto-reconnect when another tab replaces the connection', async () => {
+      vi.useFakeTimers();
+
+      const { result } = renderOperationHandler();
+      expect(MockWebSocket.instances.length).toBe(1);
+
+      await act(async () => {
+        vi.advanceTimersByTime(20);
+      });
+
+      expect(result.current.isConnected).toBe(true);
+
+      const ws = MockWebSocket.instances[0];
+      act(() => {
+        ws.onclose?.({ reason: 'Connection replaced' });
+      });
+
+      expect(result.current.isConnected).toBe(false);
+
+      await act(async () => {
+        vi.advanceTimersByTime(1100);
+      });
+
+      expect(MockWebSocket.instances.length).toBe(1);
+      expect(result.current.isConnected).toBe(false);
+    });
+
+    it('should still auto-reconnect after an ordinary disconnect', async () => {
+      vi.useFakeTimers();
+
+      const { result } = renderOperationHandler();
+      expect(MockWebSocket.instances.length).toBe(1);
+
+      await act(async () => {
+        vi.advanceTimersByTime(20);
+      });
+
+      expect(result.current.isConnected).toBe(true);
+
+      const ws = MockWebSocket.instances[0];
+      act(() => {
+        ws.onclose?.({ reason: '' });
+      });
+
+      expect(result.current.isConnected).toBe(false);
+
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(MockWebSocket.instances.length).toBe(2);
+
+      await act(async () => {
+        vi.advanceTimersByTime(20);
+      });
+
+      expect(result.current.isConnected).toBe(true);
+    });
+  });
+
+  describe('Read Cell Output Operation', () => {
+    it('should hide stale outputs while a new execution is pending', async () => {
+      vi.useFakeTimers();
+
+      const cells: Cell[] = [
+        {
+          id: 'cell-1',
+          type: 'code',
+          content: 'print("done")',
+          outputs: [{ id: 'out-1', type: 'stdout', content: 'old', timestamp: 1 }],
+          isExecuting: true,
+          pendingOutputReset: true,
+        },
+      ];
+
+      renderOperationHandler(cells);
+
+      await act(async () => {
+        vi.advanceTimersByTime(20);
+      });
+
+      const ws = MockWebSocket.instances[0];
+
+      act(() => {
+        ws.receiveMessage({
+          type: 'operation',
+          requestId: 'req-read-output-stale',
+          operation: {
+            type: 'readCellOutput',
+            notebookPath: '/test/notebook.ipynb',
+            cellId: 'cell-1',
+            maxWait: 0,
+          },
+        });
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(10);
+      });
+
+      const responses = ws.sentMessages.filter(m => m.includes('operationResult'));
+      expect(responses.length).toBe(1);
+      const response = JSON.parse(responses[0]);
+      expect(response.result.success).toBe(true);
+      expect(response.result.outputs).toEqual([]);
+    });
+
+    it('should return quickly when the target cell is already idle', async () => {
+      vi.useFakeTimers();
+
+      const cells: Cell[] = [
+        {
+          id: 'cell-1',
+          type: 'code',
+          content: 'print("done")',
+          outputs: [{ id: 'out-1', type: 'stdout', content: 'done', timestamp: 1 }],
+          isExecuting: false,
+          executionCount: 1,
+          lastExecutionMs: 42,
+        },
+      ];
+
+      renderOperationHandler(cells);
+
+      await act(async () => {
+        vi.advanceTimersByTime(20);
+      });
+
+      const ws = MockWebSocket.instances[0];
+
+      act(() => {
+        ws.receiveMessage({
+          type: 'operation',
+          requestId: 'req-read-output',
+          operation: {
+            type: 'readCellOutput',
+            notebookPath: '/test/notebook.ipynb',
+            cellId: 'cell-1',
+            maxWait: 300,
+          },
+        });
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(600);
+      });
+
+      const responses = ws.sentMessages.filter(m => m.includes('operationResult'));
+      expect(responses.length).toBe(1);
+      const response = JSON.parse(responses[0]);
+      expect(response.result.success).toBe(true);
+      expect(response.result.outputs).toEqual([{ type: 'stdout', content: 'done' }]);
     });
   });
 

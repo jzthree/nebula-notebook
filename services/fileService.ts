@@ -793,6 +793,8 @@ export type OutputLoggingMode = 'minimal' | 'full';
 export interface NotebookSettings {
   notebook_path: string;
   output_logging: OutputLoggingMode;
+  full_width: boolean;
+  mtime?: number;
 }
 
 /**
@@ -823,7 +825,7 @@ export const getNotebookSettings = async (
  */
 export const updateNotebookSettings = async (
   notebookPath: string,
-  settings: { output_logging?: OutputLoggingMode }
+  settings: { output_logging?: OutputLoggingMode; full_width?: boolean }
 ): Promise<NotebookSettings | null> => {
   try {
     const response = await fetch(`${API_BASE}/notebook/settings`, {

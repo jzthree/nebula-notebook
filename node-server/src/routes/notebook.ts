@@ -304,6 +304,7 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
       return reply.send({
         notebook_path: filePath,
         output_logging: nebula.output_logging || 'minimal',
+        full_width: nebula.full_width === true,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -316,7 +317,7 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
    */
   fastify.post('/notebook/settings', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { path: filePath, output_logging } = request.body as any;
+      const { path: filePath, output_logging, full_width } = request.body as any;
       if (!filePath) {
         return reply.code(400).send({ detail: 'path is required' });
       }
@@ -324,6 +325,9 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
       // Validate output_logging value
       if (output_logging !== undefined && output_logging !== 'minimal' && output_logging !== 'full') {
         return reply.code(400).send({ detail: 'output_logging must be "minimal" or "full"' });
+      }
+      if (full_width !== undefined && typeof full_width !== 'boolean') {
+        return reply.code(400).send({ detail: 'full_width must be a boolean' });
       }
 
       // Get existing metadata
@@ -333,6 +337,9 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
       // Update settings
       if (output_logging !== undefined) {
         nebula.output_logging = output_logging;
+      }
+      if (full_width !== undefined) {
+        nebula.full_width = full_width;
       }
 
       // Save back
@@ -345,6 +352,8 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
         status: 'ok',
         notebook_path: filePath,
         output_logging: nebula.output_logging || 'minimal',
+        full_width: nebula.full_width === true,
+        mtime: updateResult.mtime,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';

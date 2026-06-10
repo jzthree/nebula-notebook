@@ -46,6 +46,11 @@ describe('FilesystemService', () => {
       expect(normalized).toBe(absPath);
     });
 
+    it('should resolve relative paths against the default root', () => {
+      const normalized = service.normalizePath('motif_analysis_ag.ipynb');
+      expect(normalized).toBe(path.join(testDir, 'motif_analysis_ag.ipynb'));
+    });
+
     it('should handle empty path as default root', () => {
       const normalized = service.normalizePath('');
       expect(normalized).toBe(testDir);
@@ -751,10 +756,26 @@ describe('FilesystemService', () => {
         nebula: { agent_permitted: true }
       });
       expect(result.success).toBe(true);
+      expect(result.changed).toBe(true);
+      expect(typeof result.mtime).toBe('number');
 
       const metadata = service.getNotebookMetadata(getNotebookPath()) as any;
       expect(metadata.nebula.agent_permitted).toBe(true);
       expect(metadata.kernelspec.name).toBe('python3'); // preserved
+    });
+
+    it('should not rewrite notebook metadata when updates are a no-op', async () => {
+      const beforeMtime = fs.statSync(getNotebookPath()).mtimeMs / 1000;
+
+      const result = await service.updateNotebookMetadata(getNotebookPath(), {
+        kernelspec: { name: 'python3' }
+      });
+
+      const afterMtime = fs.statSync(getNotebookPath()).mtimeMs / 1000;
+      expect(result.success).toBe(true);
+      expect(result.changed).toBe(false);
+      expect(result.mtime).toBe(beforeMtime);
+      expect(afterMtime).toBe(beforeMtime);
     });
 
     it('should return empty object for non-existent notebook', () => {

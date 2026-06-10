@@ -14,6 +14,7 @@ interface Props {
   cells: Cell[];
   activeCellId: string | null;
   onNavigate: (cellIndex: number, cellId: string) => void;
+  fullWidth?: boolean;
 }
 
 // Parse markdown cell content for headers (allows multiple per cell)
@@ -178,7 +179,7 @@ const BreadcrumbSegment: React.FC<BreadcrumbSegmentProps> = ({
   );
 };
 
-export const NotebookBreadcrumb: React.FC<Props> = ({ cells, activeCellId, onNavigate }) => {
+export const NotebookBreadcrumb: React.FC<Props> = ({ cells, activeCellId, onNavigate, fullWidth = false }) => {
   const [isAllOpen, setIsAllOpen] = useState(false);
   const allDropdownRef = useRef<HTMLDivElement>(null);
   const allButtonRef = useRef<HTMLButtonElement>(null);
@@ -231,9 +232,9 @@ export const NotebookBreadcrumb: React.FC<Props> = ({ cells, activeCellId, onNav
 
   return (
     <div className="border-b border-gray-100">
-      <div className="max-w-5xl mx-auto px-4">
+      <div className={fullWidth ? 'w-full min-w-0 px-4' : 'max-w-5xl mx-auto w-full min-w-0 px-4'}>
         <div className="flex items-center py-1 text-xs text-gray-500">
-          <div className="flex items-center gap-1 min-w-0 flex-1">
+          <div className="flex items-center gap-1 min-w-0 flex-1 pl-1">
             {breadcrumbPath.map((header, idx) => (
               <React.Fragment key={header.key}>
                 {idx > 0 && (

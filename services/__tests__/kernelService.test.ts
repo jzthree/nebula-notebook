@@ -78,6 +78,7 @@ describe('KernelService', () => {
         method: 'POST',
         body: expect.stringContaining('python3')
       }));
+      expect(mockFetch.mock.calls[0][1].body).toContain('"client_origin":"ui"');
     });
 
     it('should include cwd in request when provided', async () => {
@@ -156,6 +157,44 @@ describe('KernelService', () => {
       // First should be disconnected, second should still be connected
       expect(kernelService.isConnected(session1)).toBe(false);
       expect(kernelService.isConnected(session2)).toBe(true);
+    });
+  });
+
+  describe('getOrCreateKernelForFile', () => {
+    it('marks notebook-scoped kernel requests as ui-originated', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          session_id: 'file-session-1',
+          kernel_name: 'python3',
+          file_path: '/tmp/example.ipynb',
+          server_id: 'local',
+        })
+      });
+
+      await kernelService.getOrCreateKernelForFile('/tmp/example.ipynb', 'python3');
+
+      expect(mockFetch).toHaveBeenCalledWith('/api/kernels/for-file', expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"client_origin":"ui"'),
+      }));
+    });
+
+    it('surfaces notebook mtime returned by the backend', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          session_id: 'file-session-2',
+          kernel_name: 'python3',
+          file_path: '/tmp/example.ipynb',
+          server_id: 'local',
+          mtime: 1234.5,
+        })
+      });
+
+      const result = await kernelService.getOrCreateKernelForFile('/tmp/example.ipynb', 'python3');
+
+      expect(result.mtime).toBe(1234.5);
     });
   });
 

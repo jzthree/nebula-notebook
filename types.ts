@@ -27,6 +27,7 @@ export interface Cell {
   content: string;
   outputs: CellOutput[];
   isExecuting: boolean;
+  pendingOutputReset?: boolean; // transient: hide previous-run outputs from read_output until fresh output arrives
   executionCount?: number;
   lastExecutionMs?: number;
   scrolled?: boolean; // Output collapsed state: true = collapsed with scrollbar (Jupyter standard)

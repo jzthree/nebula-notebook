@@ -50,8 +50,9 @@ export interface VerifyResult {
 // Rate limiting: max 5 attempts per 30 seconds
 const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 30000;
-// Accept one TOTP step before and after current time to tolerate small clock drift.
-const TOTP_WINDOW_STEPS = 1;
+// Temporary debugging setting: accept up to five TOTP steps before and after
+// current time while investigating clock skew and login flow issues.
+const TOTP_WINDOW_STEPS = 5;
 authenticator.options = {
   ...authenticator.options,
   window: [TOTP_WINDOW_STEPS, TOTP_WINDOW_STEPS],

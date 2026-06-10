@@ -23,7 +23,11 @@ html {
 
 @media (min-width: 1024px) {
   .nebula-filebrowser-offset {
-    margin-left: var(--nebula-filebrowser-width, 18rem);
+    padding-left: var(--nebula-filebrowser-width, 18rem);
+  }
+
+  .nebula-chat-offset {
+    padding-right: 20rem;
   }
 }
 

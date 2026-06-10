@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { isDeepStrictEqual } from 'util';
 import {
   FileInfo,
   FileInfoResponse,
@@ -306,6 +307,9 @@ export class FilesystemService {
     if (filePath.startsWith('~')) {
       // Handle ~user paths (rare in practice)
       return path.resolve(os.homedir(), '..', filePath.slice(1));
+    }
+    if (!path.isAbsolute(filePath)) {
+      return path.resolve(this.defaultRoot, filePath);
     }
     return path.resolve(filePath);
   }
@@ -1347,7 +1351,7 @@ export class FilesystemService {
   async updateNotebookMetadata(
     notebookPath: string,
     metadataUpdates: Record<string, unknown>
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; changed?: boolean; mtime?: number; error?: string }> {
     return await this.withWriteLock(notebookPath, async () => {
       const normalizedPath = this.normalizePath(notebookPath);
 
@@ -1359,21 +1363,36 @@ export class FilesystemService {
         const notebook: JupyterNotebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8'));
 
         const existingMetadata = notebook.metadata || {};
+        const nextMetadata: Record<string, unknown> = { ...existingMetadata };
         for (const [key, value] of Object.entries(metadataUpdates)) {
-          if (typeof value === 'object' && value !== null && typeof existingMetadata[key] === 'object' && existingMetadata[key] !== null) {
-            existingMetadata[key] = {
-              ...(existingMetadata[key] as Record<string, unknown>),
+          if (typeof value === 'object' && value !== null && typeof nextMetadata[key] === 'object' && nextMetadata[key] !== null) {
+            nextMetadata[key] = {
+              ...(nextMetadata[key] as Record<string, unknown>),
               ...(value as Record<string, unknown>),
             };
           } else {
-            existingMetadata[key] = value;
+            nextMetadata[key] = value;
           }
         }
 
-        notebook.metadata = existingMetadata;
-        this.writeJsonAtomicSync(normalizedPath, notebook);
+        if (isDeepStrictEqual(existingMetadata, nextMetadata)) {
+          const stat = fs.statSync(normalizedPath);
+          return {
+            success: true,
+            changed: false,
+            mtime: stat.mtimeMs / 1000,
+          };
+        }
 
-        return { success: true };
+        notebook.metadata = nextMetadata;
+        this.writeJsonAtomicSync(normalizedPath, notebook);
+        const stat = fs.statSync(normalizedPath);
+
+        return {
+          success: true,
+          changed: true,
+          mtime: stat.mtimeMs / 1000,
+        };
       } catch (e) {
         return { success: false, error: `Failed to update notebook: ${e}` };
       }

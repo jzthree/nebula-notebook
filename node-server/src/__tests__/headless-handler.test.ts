@@ -28,6 +28,7 @@ describe('HeadlessOperationHandler', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (testDir && fs.existsSync(testDir)) {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
@@ -783,6 +784,39 @@ describe('HeadlessOperationHandler', () => {
   });
 
   describe('readCellOutput', () => {
+    it('should return promptly when the cell is already idle', async () => {
+      vi.useFakeTimers();
+
+      const notebookPath = createTestNotebook('idle-output.ipynb', [
+        {
+          id: 'cell-1',
+          content: 'print("done")',
+          outputs: [{ type: 'stdout', content: 'done' }],
+          execution_count: 1,
+        },
+      ]);
+
+      let settled = false;
+      const resultPromise = handler.applyOperation({
+        type: 'readCellOutput',
+        notebookPath,
+        cellId: 'cell-1',
+        maxWait: 300,
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(settled).toBe(true);
+      const result = await resultPromise;
+      expect(result.success).toBe(true);
+      expect(result.outputs).toEqual([
+        expect.objectContaining({ type: 'stdout', content: 'done' }),
+      ]);
+    });
+
     it('should not drop cached outputs during maxWait polling', async () => {
       const notebookPath = createTestNotebook('polling-output.ipynb', [
         {

@@ -28,6 +28,11 @@ interface UIConnection {
   lastActivityAt: number;
 }
 
+interface KernelChangedPayload {
+  kernelName: string;
+  serverId?: string | null;
+}
+
 type Backend = 'ui' | 'headless';
 
 interface OperationResult {
@@ -119,6 +124,24 @@ export class OperationRouter {
       }
       this.uiConnections.delete(normalizedPath);
       console.log(`[OperationRouter] UI unregistered for: ${normalizedPath}`);
+    }
+  }
+
+  notifyKernelChanged(notebookPath: string, payload: KernelChangedPayload): void {
+    const normalizedPath = normalizeNotebookPath(notebookPath);
+    const conn = this.getResponsiveUIConnection(normalizedPath);
+    if (!conn) {
+      return;
+    }
+
+    try {
+      conn.websocket.send(JSON.stringify({
+        type: 'kernelChanged',
+        kernelName: payload.kernelName,
+        serverId: payload.serverId ?? null,
+      }));
+    } catch (err) {
+      console.warn(`[OperationRouter] Failed to notify UI about kernel change for ${normalizedPath}:`, err);
     }
   }
 

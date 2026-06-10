@@ -18,6 +18,7 @@ interface Props {
   className?: string;
   onRangeChange?: (range: { startIndex: number; endIndex: number }) => void;
   renderKey?: string | number;
+  fullWidth?: boolean;
 }
 
 /**
@@ -48,6 +49,7 @@ export const VirtualCellList: React.FC<Props> = ({
   className,
   onRangeChange,
   renderKey,
+  fullWidth = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const onRangeChangeRef = useRef(onRangeChange);
@@ -226,7 +228,7 @@ export const VirtualCellList: React.FC<Props> = ({
         }
       }
     });
-    mutation.observe(container.querySelector('.max-w-5xl') || container, {
+    mutation.observe(container.querySelector('[data-virtual-cell-list-width-container]') || container, {
       childList: true,
       subtree: true,
     });
@@ -270,7 +272,10 @@ export const VirtualCellList: React.FC<Props> = ({
           </span>
         </div>
       )}
-      <div className="max-w-5xl mx-auto px-4">
+      <div
+        data-virtual-cell-list-width-container
+        className={fullWidth ? 'w-full min-w-0 px-4' : 'max-w-5xl mx-auto w-full min-w-0 px-4'}
+      >
         {cellList}
         {/* Spacer for not-yet-rendered cells so scrollbar is roughly correct */}
         {isLoading && (
