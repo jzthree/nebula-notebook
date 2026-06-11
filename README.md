@@ -5,16 +5,30 @@ Nebula is an AI-native notebook computing environment built for what's coming ne
 ## Quick Start
 
 ```bash
+npx nebula-notebook
+```
+
+On first start, a QR code will appear in the terminal. Scan it with an authenticator app (Google Authenticator, Authy, etc.) to set up 2FA.
+
+Open http://localhost:3000 and enter your 6-digit code.
+
+To let agents (Claude Code, Codex, Cursor, Gemini CLI, …) drive your notebooks, register the Nebula MCP on the machine where your agent runs:
+
+```bash
+npx nebula-notebook-mcp setup-mcp
+```
+
+Then open a notebook, click **Agent**, and launch Claude Code or Codex right in the notebook's terminal.
+
+### From source
+
+```bash
 git clone https://github.com/jzthree/nebula-notebook.git
 cd nebula-notebook
 npm install
 
 npm run start
 ```
-
-On first start, a QR code will appear in the terminal. Scan it with an authenticator app (Google Authenticator, Authy, etc.) to set up 2FA.
-
-Open http://localhost:3000 and enter your 6-digit code.
 
 ## Root Directory
 
@@ -93,19 +107,21 @@ nebula-notebook/
 
 ## MCP Adapter
 
-The MCP adapter now lives in this repository under `packages/mcp`. It remains a
-separate Node package so it can be installed on a local agent/client machine even
-when the Nebula Notebook server is running elsewhere.
+The MCP adapter is published as [`nebula-notebook-mcp`](https://www.npmjs.com/package/nebula-notebook-mcp)
+and lives in this repository under `packages/mcp`. It is a separate package so it
+can be installed on a local agent/client machine even when the Nebula Notebook
+server is running elsewhere.
 
 ```bash
-# From this repo: build or run the MCP server
+# Register the MCP with your installed agent CLIs (Claude Code, Codex, …)
+npx nebula-notebook-mcp setup-mcp
+
+# Agents must call connect_server(base_url) once per session —
+# the base_url is the URL you open Nebula at, e.g. http://localhost:3000
+
+# From a repo checkout instead: build or run the MCP server
 npm run mcp:build
 npm run mcp
-
-# Client-only install from source
-cd packages/mcp
-npm install
-npm run build
 ```
 
 ## Authentication
