@@ -559,6 +559,9 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const wsEpochRef = useRef(0);
+  // True when another window/page-instance took over the live connection.
+  const [connectionReplaced, setConnectionReplaced] = useState(false);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const intentionalCloseRef = useRef(false); // Track if we closed intentionally
   const connectionAttemptRef = useRef(0);
@@ -1675,6 +1678,12 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const connect = useCallback(() => {
     if (!filePath) return;
     const connectionAttempt = ++connectionAttemptRef.current;
+    // Window-global epoch: dev-mode HMR can leave ghost component trees with
+    // live sockets. Only the newest epoch in this window may auto-reclaim the
+    // live connection, so stale generations can never steal it back.
+    const w = window as unknown as { __nebulaNotebookWsEpoch?: number };
+    w.__nebulaNotebookWsEpoch = (w.__nebulaNotebookWsEpoch ?? 0) + 1;
+    wsEpochRef.current = w.__nebulaNotebookWsEpoch;
 
     // Clear any pending reconnect before connecting
     if (reconnectTimeoutRef.current) {
@@ -1707,6 +1716,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
       console.log('[OperationHandler] Connected');
       setIsConnected(true);
+      setConnectionReplaced(false);
       intentionalCloseRef.current = false; // Reset flag on successful connect
 
       // Set up ping interval to keep connection alive
@@ -1749,7 +1759,8 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
       const replacedByAnotherTab = event.reason === 'Connection replaced';
       if (replacedByAnotherTab) {
-        console.log('[OperationHandler] Another tab took over the live notebook connection');
+        console.log('[OperationHandler] Another window/page instance took over the live notebook connection');
+        setConnectionReplaced(true);
       }
 
       // Clear ping interval
@@ -1770,6 +1781,40 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
       }
     };
   }, [filePath]);
+
+  /**
+   * Reclaim the live connection when this is the page the user is actually
+   * looking at. Another window (or, in dev, a stale HMR ghost) may have taken
+   * the registration; agent operations apply wherever the live connection
+   * lives, so the focused, newest page instance must win or agent edits land
+   * in state the user cannot see.
+   */
+  useEffect(() => {
+    if (!connectionReplaced) return;
+    const isNewestEpoch = () =>
+      wsEpochRef.current === ((window as unknown as { __nebulaNotebookWsEpoch?: number }).__nebulaNotebookWsEpoch ?? 0);
+
+    const reclaim = () => {
+      if (!isNewestEpoch()) return; // stale HMR generation — never steal back
+      console.log('[OperationHandler] Reclaiming live notebook connection (window active)');
+      connect();
+    };
+
+    // Already visible and focused (e.g. a same-window ghost stole the
+    // registration): reclaim after a short settle delay.
+    if (document.visibilityState === 'visible' && document.hasFocus()) {
+      const timer = setTimeout(reclaim, 800);
+      return () => clearTimeout(timer);
+    }
+
+    // Otherwise reclaim when the user returns to this window.
+    window.addEventListener('focus', reclaim);
+    document.addEventListener('pointerdown', reclaim);
+    return () => {
+      window.removeEventListener('focus', reclaim);
+      document.removeEventListener('pointerdown', reclaim);
+    };
+  }, [connectionReplaced, connect]);
 
   /**
    * Disconnect from WebSocket
