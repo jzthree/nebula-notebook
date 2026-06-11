@@ -1,14 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Folder, Bot, Check, Palette, Bell, Volume2, AlignLeft, Hash, Key, Eye, EyeOff, AlertTriangle, Settings, Sparkles, Cpu, MousePointerClick } from 'lucide-react';
+import { X, Folder, Palette, Bell, Volume2, AlignLeft, Hash, Settings, Cpu, MousePointerClick } from 'lucide-react';
 import {
   getSettings,
   saveSettings,
-  getAvailableProviders,
-  LLMProvider,
   NebulaSettings,
-  DEFAULT_MODELS,
-  IndentationPreference
-} from '../services/llmService';
+  IndentationPreference,
+} from '../services/settingsService';
 import { getRootDirectory, setRootDirectory } from '../services/fileService';
 import { useNotification } from './NotificationSystem';
 
@@ -18,13 +15,11 @@ interface Props {
   onRefresh: () => void;
 }
 
-type SettingsTab = 'general' | 'ai' | 'appearance' | 'notifications';
+type SettingsTab = 'general' | 'appearance' | 'notifications';
 
 export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) => {
   const [settings, setSettings] = useState<NebulaSettings>(getSettings());
-  const [providers, setProviders] = useState<Record<string, string[]>>({});
   const [isSaving, setIsSaving] = useState(false);
-  const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [serverRoot, setServerRoot] = useState<string | null>(null);
   const { toast } = useNotification();
@@ -56,7 +51,6 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
   useEffect(() => {
     if (isOpen) {
       setSettings(getSettings());
-      loadProviders();
       getRootDirectory()
         .then((root) => {
           setServerRoot(root);
@@ -68,21 +62,6 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
         });
     }
   }, [isOpen]);
-
-  const loadProviders = async () => {
-    try {
-      const response = await getAvailableProviders();
-      setProviders(response.providers);
-    } catch (error) {
-      console.error('Failed to load providers:', error);
-      // Fallback to default providers
-      setProviders({
-        google: ['gemini-2.5-flash', 'gemini-2.5-pro'],
-        openai: ['gpt-4o', 'gpt-4o-mini'],
-        anthropic: ['claude-sonnet-4-5-20250929', 'claude-sonnet-4-20250514']
-      });
-    }
-  };
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -111,15 +90,6 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
       onRefresh();
       onClose();
     }, 300);
-  };
-
-  const handleProviderChange = (provider: LLMProvider) => {
-    const models = providers[provider] || [];
-    setSettings({
-      ...settings,
-      llmProvider: provider,
-      llmModel: models[0] || DEFAULT_MODELS[provider]
-    });
   };
 
   const handleToggleLongRunNotifications = async () => {
@@ -154,12 +124,8 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
 
   if (!isOpen) return null;
 
-  const availableProviders = Object.keys(providers) as LLMProvider[];
-  const availableModels = providers[settings.llmProvider] || [];
-
   const tabs: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
     { id: 'general', label: 'General', icon: <Settings className="w-4 h-4" /> },
-    { id: 'ai', label: 'AI', icon: <Sparkles className="w-4 h-4" /> },
     { id: 'appearance', label: 'Appearance', icon: <Palette className="w-4 h-4" /> },
     { id: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
   ];
@@ -361,135 +327,6 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                         }`}
                       />
                     </button>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* AI Tab */}
-            {activeTab === 'ai' && (
-              <>
-                {/* LLM Provider */}
-                <div>
-                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                    <Bot className="w-4 h-4" />
-                    AI Provider
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(['google', 'openai', 'anthropic'] as LLMProvider[]).map((provider) => {
-                      // Provider is available if server has env var OR user has configured API key in settings
-                      const hasServerKey = availableProviders.includes(provider);
-                      const hasClientKey = !!settings.apiKeys?.[provider];
-                      const isAvailable = hasServerKey || hasClientKey;
-                      const isSelected = settings.llmProvider === provider;
-
-                      return (
-                        <button
-                          key={provider}
-                          onClick={() => handleProviderChange(provider)}
-                          className={`
-                            relative px-3 py-2 rounded-lg text-xs font-medium transition-all
-                            ${isSelected
-                              ? 'bg-blue-600 text-white ring-2 ring-blue-200'
-                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                            }
-                          `}
-                        >
-                          {isSelected && (
-                            <Check className="absolute top-1 right-1 w-3 h-3" />
-                          )}
-                          {provider === 'google' && 'Google'}
-                          {provider === 'openai' && 'OpenAI'}
-                          {provider === 'anthropic' && 'Anthropic'}
-                          {!isAvailable && (
-                            <span className="ml-1 text-amber-500" title="No API key configured">⚠</span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {availableProviders.length === 0 && !Object.values(settings.apiKeys || {}).some(k => k) && (
-                    <p className="mt-2 text-xs text-amber-600">
-                      No API keys configured. Add keys below or in the server .env file.
-                    </p>
-                  )}
-                </div>
-
-                {/* Model Selection */}
-                <div>
-                  <label className="text-sm font-medium text-slate-700 mb-2 block">
-                    Model
-                  </label>
-                  <select
-                    value={settings.llmModel}
-                    onChange={(e) => setSettings({ ...settings, llmModel: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-                  >
-                    {availableModels.map((model) => (
-                      <option key={model} value={model}>
-                        {model}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* API Keys */}
-                <div>
-                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                    <Key className="w-4 h-4" />
-                    API Keys
-                  </label>
-                  <div className="space-y-3">
-                    {(['google', 'openai', 'anthropic'] as const).map((provider) => {
-                      const providerNames = { google: 'Google (Gemini)', openai: 'OpenAI', anthropic: 'Anthropic' };
-                      const apiKey = settings.apiKeys?.[provider] || '';
-                      const isVisible = showApiKeys[provider];
-
-                      return (
-                        <div key={provider} className="relative">
-                          <label className="text-xs text-slate-500 mb-1 block">{providerNames[provider]}</label>
-                          <div className="flex gap-2">
-                            <div className="relative flex-1">
-                              <input
-                                type={isVisible ? 'text' : 'password'}
-                                value={apiKey}
-                                onChange={(e) => setSettings({
-                                  ...settings,
-                                  apiKeys: { ...settings.apiKeys, [provider]: e.target.value }
-                                })}
-                                placeholder={`Enter ${providerNames[provider]} API key`}
-                                className="w-full px-3 py-2 pr-10 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => setShowApiKeys({ ...showApiKeys, [provider]: !isVisible })}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
-                              >
-                                {isVisible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                              </button>
-                            </div>
-                            {apiKey && (
-                              <button
-                                onClick={() => setSettings({
-                                  ...settings,
-                                  apiKeys: { ...settings.apiKeys, [provider]: '' }
-                                })}
-                                className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded"
-                              >
-                                Clear
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded-lg flex gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-                    <p className="text-xs text-amber-700">
-                      API keys are stored in your browser's local storage. Avoid using on shared computers.
-                      Keys configured here override server environment variables.
-                    </p>
                   </div>
                 </div>
               </>

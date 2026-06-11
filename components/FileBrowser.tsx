@@ -32,7 +32,7 @@ import {
   FileItem,
   DirectoryListing
 } from '../services/fileService';
-import { saveSettings } from '../services/llmService';
+import { saveSettings } from '../services/settingsService';
 import { useNotification } from './NotificationSystem';
 import { DIRECTORY_POLL_INTERVAL_MS } from '../config';
 

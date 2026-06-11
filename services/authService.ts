@@ -144,7 +144,7 @@ export const authService = new AuthService();
 
 // ── Global fetch interceptor ────────────────────────────────────────────────
 // Automatically adds Authorization header to all /api/* requests.
-// This ensures all services (fileService, terminalService, llmService, etc.)
+// This ensures all services (fileService, terminalService, etc.)
 // send auth tokens without needing to individually patch each fetch call.
 if (typeof window !== 'undefined') {
   const _originalFetch = window.fetch;

@@ -26,7 +26,6 @@ import { randomUUID } from 'crypto';
 
 // Import routes
 import kernelRoutes, { setupKernelWebSocket, kernelService } from './routes/kernel';
-import llmRoutes, { llmService } from './routes/llm';
 import fsRoutes from './routes/fs';
 import notebookRoutes from './routes/notebook';
 import pythonRoutes from './routes/python';
@@ -279,7 +278,6 @@ async function createApp(): Promise<FastifyInstance> {
       status: 'ok',
       version: '1.0.0',
       ready: kernelService.isReady,
-      llm_providers: Object.keys(llmService.getAvailableProviders()),
       cwd: rootDir,
     });
   });
@@ -318,7 +316,6 @@ async function createApp(): Promise<FastifyInstance> {
 
   // API routes (protected)
   await fastify.register(kernelRoutes, { prefix: '/api' });
-  await fastify.register(llmRoutes, { prefix: '/api' });
   await fastify.register(fsRoutes, { prefix: '/api' });
   await fastify.register(notebookRoutes, { prefix: '/api' });
   await fastify.register(pythonRoutes, { prefix: '/api' });

@@ -5,7 +5,6 @@ interface BackendHealth {
   status: string;
   version: string;
   ready: boolean;
-  llm_providers: string[];
 }
 
 type ConnectionState = 'connecting' | 'initializing' | 'ready' | 'error';

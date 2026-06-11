@@ -81,20 +81,11 @@ vi.mock('../../services/fileService', () => ({
   }),
 }));
 
-vi.mock('../../services/llmService', () => ({
+vi.mock('../../services/settingsService', () => ({
   getSettings: vi.fn().mockReturnValue({
-    llmProvider: 'anthropic',
-    llmModel: 'claude-sonnet-4-5-20250929',
     lastKernel: 'python3'
   }),
   saveSettings: vi.fn(),
-  generateCellContent: vi.fn().mockResolvedValue('generated code'),
-  fixCellError: vi.fn().mockResolvedValue('fixed code'),
-  getAvailableProviders: vi.fn().mockResolvedValue({
-    anthropic: ['claude-sonnet-4-5-20250929'],
-    google: ['gemini-2.5-flash'],
-    openai: ['gpt-4o'],
-  }),
 }));
 
 vi.mock('../../hooks/useAutosave', () => ({
@@ -123,10 +114,7 @@ vi.mock('../VirtualCellList', () => ({
   ),
 }));
 
-// Mock AIChatSidebar to avoid its internal complexity
-vi.mock('../AIChatSidebar', () => ({
-  AIChatSidebar: () => <div data-testid="ai-chat-sidebar">Mock AI Sidebar</div>,
-}));
+
 
 // Mock FileBrowser to avoid its internal complexity
 vi.mock('../FileBrowser', () => ({

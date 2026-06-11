@@ -8,11 +8,7 @@ import { Cell as ICell } from '../../types';
 import { NotificationProvider } from '../NotificationSystem';
 
 // Mock the services
-vi.mock('../../services/llmService', () => ({
-  getSettings: vi.fn().mockReturnValue({ llmProvider: 'anthropic', llmModel: 'claude-sonnet-4-5-20250929' }),
-  generateCellContent: vi.fn().mockResolvedValue('generated code'),
-  fixCellError: vi.fn().mockResolvedValue('fixed code'),
-}));
+
 
 // Helper to render Cell with required providers
 const renderCell = (props: React.ComponentProps<typeof Cell>) => {

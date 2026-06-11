@@ -4,7 +4,7 @@ import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment, KernelProvisionError } from '../services/kernelService';
 import { getClusterInfo, ClusterServer, ClusterInfo } from '../services/clusterService';
-import { getSettings, saveSettings, IndentationPreference } from '../services/llmService';
+import { getSettings, saveSettings, IndentationPreference } from '../services/settingsService';
 import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server, Clock, Maximize2, Minimize2 } from 'lucide-react';
 import { CellListHandle } from './VirtualCellList';
 import { EditorView } from '@codemirror/view';
