@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 640" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="space" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1020"/>
+      <stop offset="55%" stop-color="#141433"/>
+      <stop offset="100%" stop-color="#1e1b4b"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="0.25" cy="0.2" r="0.5">
+      <stop offset="0%" stop-color="#7c3aed" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.85" cy="0.85" r="0.55">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="windowShadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- Backdrop -->
+  <rect width="980" height="640" fill="url(#space)"/>
+  <rect width="980" height="640" fill="url(#glow1)"/>
+  <rect width="980" height="640" fill="url(#glow2)"/>
+  <g fill="#ffffff">
+    <circle cx="92" cy="78" r="1.3" opacity="0.7"/><circle cx="180" cy="42" r="1" opacity="0.5"/>
+    <circle cx="320" cy="26" r="1.4" opacity="0.8"/><circle cx="540" cy="20" r="1" opacity="0.5"/>
+    <circle cx="720" cy="38" r="1.5" opacity="0.7"/><circle cx="870" cy="64" r="1" opacity="0.6"/>
+    <circle cx="930" cy="160" r="1.3" opacity="0.6"/><circle cx="40" cy="300" r="1.2" opacity="0.5"/>
+    <circle cx="950" cy="420" r="1.1" opacity="0.5"/><circle cx="60" cy="540" r="1.4" opacity="0.6"/>
+    <circle cx="420" cy="620" r="1" opacity="0.5"/><circle cx="820" cy="612" r="1.2" opacity="0.6"/>
+  </g>
+
+  <!-- App window -->
+  <g filter="url(#windowShadow)">
+    <rect x="60" y="36" width="860" height="552" rx="12" fill="#f8fafc"/>
+  </g>
+
+  <!-- Title bar -->
+  <path d="M60 48 a12 12 0 0 1 12 -12 h836 a12 12 0 0 1 12 12 v24 h-860 z" fill="#eef2f7"/>
+  <circle cx="84" cy="54" r="5.5" fill="#ff5f57"/>
+  <circle cx="102" cy="54" r="5.5" fill="#febc2e"/>
+  <circle cx="120" cy="54" r="5.5" fill="#28c840"/>
+  <text x="490" y="58" text-anchor="middle" font-size="12" fill="#64748b">results.ipynb — Nebula Notebook</text>
+
+  <!-- Toolbar -->
+  <g>
+    <rect x="60" y="72" width="860" height="40" fill="#f8fafc"/>
+    <line x1="60" y1="112" x2="920" y2="112" stroke="#e2e8f0" stroke-width="1"/>
+    <!-- Run All -->
+    <rect x="80" y="80" width="84" height="24" rx="6" fill="#ffffff" stroke="#e2e8f0"/>
+    <polygon points="92,86 92,98 102,92" fill="#16a34a"/>
+    <text x="108" y="96" font-size="11.5" fill="#334155">Run All</text>
+    <!-- Kernel pill -->
+    <rect x="174" y="80" width="172" height="24" rx="6" fill="#ffffff" stroke="#e2e8f0"/>
+    <circle cx="188" cy="92" r="4" fill="#22c55e"/>
+    <text x="198" y="96" font-size="11.5" fill="#334155">Python 3.12 (Nebula) · idle</text>
+    <!-- Agent button (active) -->
+    <rect x="724" y="80" width="78" height="24" rx="6" fill="#9333ea"/>
+    <g transform="translate(736,86)">
+      <rect x="0" y="2" width="11" height="9" rx="2.5" fill="none" stroke="#ffffff" stroke-width="1.4"/>
+      <line x1="5.5" y1="2" x2="5.5" y2="0" stroke="#ffffff" stroke-width="1.4"/>
+      <circle cx="3.4" cy="6.5" r="1" fill="#ffffff"/>
+      <circle cx="7.6" cy="6.5" r="1" fill="#ffffff"/>
+    </g>
+    <text x="754" y="96" font-size="11.5" fill="#ffffff" font-weight="600">Agent</text>
+    <!-- Save -->
+    <rect x="810" y="80" width="60" height="24" rx="6" fill="#ffffff" stroke="#e2e8f0"/>
+    <text x="840" y="96" text-anchor="middle" font-size="11.5" fill="#334155">Save</text>
+  </g>
+
+  <!-- Notebook cells -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">
+    <!-- Cell 1 -->
+    <rect x="92" y="124" width="776" height="52" rx="8" fill="#ffffff" stroke="#e2e8f0"/>
+    <text x="106" y="146" fill="#94a3b8" font-size="10.5">[1]</text>
+    <text x="138" y="145"><tspan fill="#7c3aed">import</tspan><tspan fill="#1e293b" xml:space="preserve"> pandas </tspan><tspan fill="#7c3aed">as</tspan><tspan fill="#1e293b" xml:space="preserve"> pd</tspan></text>
+    <text x="138" y="163"><tspan fill="#1e293b">df = pd.read_csv(</tspan><tspan fill="#16a34a">"results.csv"</tspan><tspan fill="#1e293b">)</tspan></text>
+
+    <!-- Cell 2 with chart output -->
+    <rect x="92" y="186" width="776" height="118" rx="8" fill="#ffffff" stroke="#e2e8f0"/>
+    <text x="106" y="208" fill="#94a3b8" font-size="10.5">[2]</text>
+    <text x="138" y="207"><tspan fill="#1e293b">df.groupby(</tspan><tspan fill="#16a34a">"model"</tspan><tspan fill="#1e293b">).accuracy.mean().plot.bar()</tspan></text>
+    <line x1="138" y1="218" x2="838" y2="218" stroke="#f1f5f9"/>
+    <!-- mini bar chart output -->
+    <g>
+      <line x1="160" y1="294" x2="420" y2="294" stroke="#cbd5e1" stroke-width="1"/>
+      <line x1="160" y1="294" x2="160" y2="228" stroke="#cbd5e1" stroke-width="1"/>
+      <rect x="180" y="258" width="36" height="36" fill="#93c5fd"/>
+      <rect x="236" y="244" width="36" height="50" fill="#60a5fa"/>
+      <rect x="292" y="252" width="36" height="42" fill="#93c5fd"/>
+      <rect x="348" y="232" width="36" height="62" fill="#8b5cf6"/>
+      <text x="196" y="305" font-size="8.5" fill="#94a3b8" text-anchor="middle">gpt</text>
+      <text x="252" y="305" font-size="8.5" fill="#94a3b8" text-anchor="middle">gemini</text>
+      <text x="308" y="305" font-size="8.5" fill="#94a3b8" text-anchor="middle">llama</text>
+      <text x="364" y="305" font-size="8.5" fill="#94a3b8" text-anchor="middle">claude</text>
+    </g>
+
+    <!-- Cell 3 with error + Fix with agent -->
+    <rect x="92" y="314" width="776" height="74" rx="8" fill="#ffffff" stroke="#e2e8f0"/>
+    <text x="106" y="336" fill="#94a3b8" font-size="10.5">[3]</text>
+    <text x="138" y="335"><tspan fill="#1e293b">print(acuracy.max())</tspan></text>
+    <rect x="138" y="344" width="520" height="20" rx="4" fill="#fef2f2"/>
+    <text x="146" y="358" fill="#dc2626" font-size="11">NameError: name 'acuracy' is not defined</text>
+    <rect x="670" y="344" width="116" height="20" rx="10" fill="#fee2e2"/>
+    <g transform="translate(680,348)">
+      <rect x="0" y="2" width="10" height="8" rx="2" fill="none" stroke="#b91c1c" stroke-width="1.2"/>
+      <line x1="5" y1="2" x2="5" y2="0.2" stroke="#b91c1c" stroke-width="1.2"/>
+      <circle cx="3.2" cy="6" r="0.9" fill="#b91c1c"/>
+      <circle cx="6.8" cy="6" r="0.9" fill="#b91c1c"/>
+    </g>
+    <text x="696" y="358" fill="#b91c1c" font-size="10.5" font-family="-apple-system, BlinkMacSystemFont, sans-serif">Fix with agent</text>
+  </g>
+
+  <!-- Agent terminal panel -->
+  <g>
+    <line x1="60" y1="402" x2="920" y2="402" stroke="#e2e8f0"/>
+    <!-- tab bar -->
+    <rect x="60" y="403" width="860" height="26" fill="#f1f5f9"/>
+    <rect x="74" y="406" width="76" height="20" rx="5" fill="none"/>
+    <text x="88" y="420" font-size="11" fill="#64748b" font-family="ui-monospace, Menlo, monospace">&gt;_ results</text>
+    <rect x="158" y="406" width="78" height="20" rx="5" fill="#ffffff"/>
+    <g transform="translate(168,410)">
+      <rect x="0" y="2" width="11" height="9" rx="2.5" fill="none" stroke="#7c3aed" stroke-width="1.4"/>
+      <line x1="5.5" y1="2" x2="5.5" y2="0" stroke="#7c3aed" stroke-width="1.4"/>
+      <circle cx="3.4" cy="6.5" r="1" fill="#7c3aed"/>
+      <circle cx="7.6" cy="6.5" r="1" fill="#7c3aed"/>
+    </g>
+    <text x="186" y="420" font-size="11" fill="#7c3aed" font-weight="600">Agent</text>
+    <circle cx="228" cy="416" r="3" fill="#22c55e"/>
+    <!-- agent active bar -->
+    <rect x="60" y="429" width="860" height="22" fill="#f0fdf4"/>
+    <line x1="60" y1="451" x2="920" y2="451" stroke="#dcfce7"/>
+    <circle cx="80" cy="440" r="3.5" fill="#22c55e"/>
+    <text x="92" y="444" font-size="11" fill="#166534">Agent active (claude) · driving results — type instructions, or use “Fix with agent” on a failing cell</text>
+    <!-- terminal content -->
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">
+      <text x="80" y="474" fill="#64748b">❯ In notebook results.ipynb, cell 3 (id a3f2) failed with: NameError: name 'acuracy' is not defined —</text>
+      <text x="92" y="490" fill="#64748b">use the nebula-notebook MCP tools to read the cell, fix it, and re-run to verify.</text>
+      <text x="80" y="514" fill="#1e293b"><tspan fill="#9333ea">⏺</tspan> read_cell(3) → found typo: <tspan fill="#dc2626">acuracy</tspan> → <tspan fill="#16a34a">accuracy</tspan></text>
+      <text x="80" y="534" fill="#1e293b"><tspan fill="#9333ea">⏺</tspan> update_cell(3) · execute_cell(3)</text>
+      <text x="80" y="554" fill="#16a34a">✓ Cell 3 fixed and re-run — output verified: 0.94</text>
+      <rect x="80" y="562" width="7" height="13" fill="#334155"/>
+    </g>
+  </g>
+
+  <!-- Caption -->
+  <text x="490" y="620" text-anchor="middle" font-size="13" fill="#a5b4fc">
+    Real Jupyter kernels  ·  agents drive the notebook via MCP  ·  one-click fixes from any cell
+  </text>
+</svg>

@@ -1,6 +1,8 @@
 # Nebula Notebook
 
-Nebula is an AI-native notebook computing environment built for what's coming next. It also comes with an optimized user experience even if you use no AI features at all.
+Nebula is an agent-native notebook computing environment built for what's coming next: real Jupyter kernels, real filesystem access, and a notebook that agents (Claude Code, Codex, …) can drive end-to-end through MCP — while staying a fast, polished notebook even if you never touch the AI features.
+
+![Nebula Notebook — agents drive the notebook via MCP](docs/assets/nebula-hero.svg)
 
 ## Quick Start
 
@@ -20,7 +22,9 @@ npx nebula-notebook-mcp setup-mcp
 
 Then open a notebook, click **Agent**, and launch Claude Code or Codex right in the notebook's terminal.
 
-### From source
+### From source (latest)
+
+npm releases are point-in-time snapshots — to get the latest changes, install from source:
 
 ```bash
 git clone https://github.com/jzthree/nebula-notebook.git
@@ -53,10 +57,11 @@ This root is used for the file browser and terminals. You can also change it fro
 - Search & replace across all cells (Cmd/Ctrl+F)
 - Keyboard shortcuts (Shift+Enter to run, Cmd+S to save, etc.)
 
-**AI Assistant**
-- Multi-provider support: Gemini, OpenAI, Anthropic
-- Code generation and error fixing
-- Context-aware suggestions
+**Agents**
+- Agent terminal built into every notebook — one click launches Claude Code or Codex, pre-briefed with the server URL and notebook path
+- "Fix with agent" on any failing cell, and per-cell prompts, injected straight into the agent's terminal
+- Full MCP toolset ([`nebula-notebook-mcp`](https://www.npmjs.com/package/nebula-notebook-mcp)): read/edit/execute cells, manage kernels and files — from any agent on any machine
+- Agent sessions lock the notebook during edits and sync live into the UI
 
 **Editor**
 - Syntax highlighting with CodeMirror
@@ -229,9 +234,9 @@ Terminals persist as long as the server runs. Bookmark different terminals for q
 ## Tech Stack
 
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, CodeMirror
-- **Backend**: Node.js, Express, ZeroMQ (Jupyter kernel protocol)
+- **Backend**: Node.js, Fastify, ZeroMQ (Jupyter kernel protocol)
 - **Auth**: TOTP (otplib), JWT (jsonwebtoken)
-- **AI**: OpenAI, Anthropic, Google GenAI SDKs
+- **Agents**: MCP (`nebula-notebook-mcp`) driven by Claude Code, Codex, and other agent CLIs
 
 ## License
 
