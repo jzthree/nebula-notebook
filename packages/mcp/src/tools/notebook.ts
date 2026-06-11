@@ -81,7 +81,7 @@ export const readNotebookTool: Tool<ReadNotebookParams, ReadNotebookResult> = {
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Path to the notebook file (.ipynb)' },
+        path: { type: 'string', description: 'Path to the notebook file (.ipynb, or text formats: jupytext percent .py / Quarto .qmd)' },
         // NOTE: "brief" is intentionally omitted from schema to hide it from tool UIs.
         // It remains supported in code for backward compatibility and is likely to be deprecated.
         format: { type: 'string', enum: ['content', 'detailed', 'placeholder'], description: 'Output format: content (full code), detailed (code + inline images, default), placeholder (code + image placeholders, recommended for Gemini)' },
@@ -684,7 +684,7 @@ export const createNotebookTool: Tool<CreateNotebookParams, CreateNotebookResult
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Path for the new notebook file (.ipynb)' },
+        path: { type: 'string', description: 'Path for the new notebook file (.ipynb, or text formats: .py percent / .qmd — these never store outputs)' },
         overwrite: { type: 'boolean', description: 'Allow overwriting existing file (default: false)' },
         kernel_name: { type: 'string', description: 'Kernel name (default: python3)' },
         kernel_display_name: { type: 'string', description: 'Display name for kernel (default: Python 3)' },

@@ -1,6 +1,7 @@
 /**
  * File Service - Real filesystem operations via backend API
  */
+import { isNotebookExtension, stripNotebookExtension, getPathExtension } from '../utils/notebookFormats';
 import { Cell, NotebookMetadata } from '../types';
 import { TimestampedOperation } from '../hooks/useUndoRedo';
 const API_BASE = '/api';
@@ -437,13 +438,13 @@ export const getFiles = async (): Promise<NotebookMetadata[]> => {
   try {
     const listing = await listDirectory('~');
     return listing.items
-      .filter(item => item.extension === '.ipynb')
+      .filter(item => isNotebookExtension(item.extension))
       .map(item => ({
         id: item.path,
-        name: item.name.replace('.ipynb', ''),
+        name: stripNotebookExtension(item.name),
         lastModified: item.modified * 1000,
         fileType: 'notebook' as const,
-        extension: '.ipynb',
+        extension: item.extension || '.ipynb',
         size: item.size
       }));
   } catch (e) {
@@ -567,7 +568,9 @@ export const deleteNotebook = async (id: string): Promise<void> => {
 export const updateNotebookMetadata = async (id: string, updates: Partial<NotebookMetadata>): Promise<void> => {
   if (updates.name) {
     const dir = id.substring(0, id.lastIndexOf('/'));
-    const newPath = `${dir}/${updates.name}.ipynb`;
+    // Preserve the file's actual extension (.ipynb, .qmd, .py)
+    const ext = getPathExtension(id) || '.ipynb';
+    const newPath = `${dir}/${updates.name}${ext}`;
     await renameFile(id, newPath);
   }
 };

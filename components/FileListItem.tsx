@@ -4,6 +4,7 @@
  * Used by both FileBrowser and Dashboard for consistent UX.
  */
 
+import { isNotebookExtension } from '../utils/notebookFormats';
 import React, { useRef, useEffect, memo } from 'react';
 import {
   Folder,
@@ -62,6 +63,7 @@ function formatRelativeTime(timestamp: number): string {
 function getFileIcon(item: FileItem) {
   if (item.isDirectory) return <Folder className="w-4 h-4 text-blue-500" />;
   if (item.extension === '.ipynb') return <Book className="w-4 h-4 text-orange-500" />;
+  if (item.extension === '.qmd') return <Book className="w-4 h-4 text-violet-500" />;
   if (item.extension === '.py') return <FileCode className="w-4 h-4 text-blue-500" />;
   if (item.extension === '.csv') return <FileText className="w-4 h-4 text-green-500" />;
   if (item.extension === '.json') return <FileCode className="w-4 h-4 text-yellow-500" />;
@@ -89,7 +91,7 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
   onConfirmEdit,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
-  const isNotebook = item.extension === '.ipynb';
+  const isNotebook = isNotebookExtension(item.extension);
   const isHtml = item.extension === '.html' || item.extension === '.htm';
   const isImageFile = item.fileType === 'image'
     || ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(item.extension || '');
@@ -209,6 +211,15 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
             {/* File-specific actions */}
             {!item.isDirectory && (
               <>
+                {item.extension === '.py' && onSelect && (
+                  <button
+                    onClick={(e) => handleAction(e, () => onSelect(item.path))}
+                    className="p-1 text-slate-400 hover:text-orange-500 hover:bg-slate-100"
+                    title="Open as notebook"
+                  >
+                    <Book className="w-3.5 h-3.5" />
+                  </button>
+                )}
                 {isOpenableInTab && onOpenNewTab && (
                   <>
                     <button

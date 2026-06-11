@@ -508,8 +508,15 @@ export class HeadlessUndoRedoManager {
   /**
    * Clear state for a notebook (e.g., when closing).
    */
-  clearState(notebookPath: string): void {
-    this.states.delete(notebookPath);
+  /** Drop in-memory state so the next access rebuilds from the persisted
+   *  history file (the file/history may have changed underneath us: UI save,
+   *  external-edit reconciliation). Omit the path to clear all. */
+  clearState(notebookPath?: string): void {
+    if (notebookPath) {
+      this.states.delete(notebookPath);
+    } else {
+      this.states.clear();
+    }
   }
 
   /**

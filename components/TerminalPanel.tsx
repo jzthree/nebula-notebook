@@ -251,7 +251,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   // Get notebook name for display
   const notebookName = notebookPath
-    ? notebookPath.split('/').pop()?.replace('.ipynb', '') || 'Terminal'
+    ? notebookPath.split('/').pop()?.replace(/\.(ipynb|qmd)$/i, '') || 'Terminal'
     : 'Terminal';
 
   return (

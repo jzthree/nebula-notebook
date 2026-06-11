@@ -1,0 +1,6 @@
+Just prose first.
+
+```{python}
+#| id: solo1
+1 + 1
+```

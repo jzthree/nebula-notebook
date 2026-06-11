@@ -4,6 +4,7 @@
  * Uses FileBrowser component in inline mode for file browsing.
  */
 
+import { stripNotebookExtension } from '../utils/notebookFormats';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Terminal,
@@ -250,14 +251,14 @@ export const Dashboard: React.FC = () => {
 
   // Open a notebook
   const handleOpenNotebook = (path: string) => {
-    const name = getFilename(path).replace('.ipynb', '');
+    const name = stripNotebookExtension(getFilename(path));
     addRecentNotebook(path, name);
     window.location.href = `/?file=${encodeURIComponent(path)}`;
   };
 
   // Open notebook in new tab
   const handleOpenNotebookNewTab = (path: string) => {
-    const name = getFilename(path).replace('.ipynb', '');
+    const name = stripNotebookExtension(getFilename(path));
     addRecentNotebook(path, name);
     setRecentNotebooks(getRecentNotebooks());
     window.open(`/?file=${encodeURIComponent(path)}`, '_blank');
@@ -493,7 +494,7 @@ export const Dashboard: React.FC = () => {
                       }`} />
                       <div className="flex-1 min-w-0">
                         <div className="text-sm text-slate-700 truncate">
-                          {getFilename(session.file_path!).replace('.ipynb', '')}
+                          {stripNotebookExtension(getFilename(session.file_path!))}
                         </div>
                         <div className="text-xs text-slate-400 flex gap-2">
                           <span>{session.kernel_name}</span>

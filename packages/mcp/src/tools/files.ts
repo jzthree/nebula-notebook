@@ -24,7 +24,7 @@ export interface ReadFileResult {
 export const readFileTool: Tool<ReadFileParams, ReadFileResult> = {
   definition: {
     name: 'read_file',
-    description: 'Read the contents of a text file from the server. Returns file content as string. For notebooks (.ipynb), returns JSON string.',
+    description: 'Read the contents of a text file from the server. Returns file content as string. For .ipynb notebooks, returns JSON string; .py/.qmd notebooks are plain text.',
     inputSchema: {
       type: 'object',
       properties: {

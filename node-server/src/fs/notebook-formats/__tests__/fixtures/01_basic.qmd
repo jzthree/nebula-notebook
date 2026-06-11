@@ -1,0 +1,17 @@
+---
+title: "Exoplanets"
+jupyter: python3
+---
+
+# Survey
+
+Some prose about worlds.
+
+```{python}
+#| id: chunk1
+import math
+
+x = math.pi
+```
+
+Final thoughts.

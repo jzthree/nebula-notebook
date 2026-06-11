@@ -26,6 +26,8 @@ import {
   NebulaConfig,
 } from './types';
 import { getDefaultKernelName } from '../kernel/default-kernel';
+import { getFormatAdapter, isNotebookPath } from './notebook-formats/registry';
+import { NotebookFormatAdapter } from './notebook-formats/types';
 import { buildDisplayOutput, convertMimeBundleToJupyter } from '../output/display-data';
 
 const NEBULA_DIR = path.join(os.homedir(), '.nebula');
@@ -397,7 +399,7 @@ export class FilesystemService {
    */
   getFileType(extension: string): FileType {
     const ext = extension.toLowerCase();
-    if (ext === '.ipynb') {
+    if (ext === '.ipynb' || ext === '.qmd') {
       return 'notebook';
     } else if (['.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.yaml', '.yml', '.toml', '.md', '.txt'].includes(ext)) {
       return 'code';
@@ -635,6 +637,18 @@ export class FilesystemService {
           nbformat_minor: 5,
         };
         this.writeJsonAtomicSync(normalizedPath, notebook);
+      } else if (extension === '.qmd') {
+        // Text-format notebook template (NOT .py: creating a .py must stay a
+        // plain empty script — percent parsing only applies when one is
+        // opened as a notebook)
+        const adapter = getFormatAdapter(normalizedPath)!;
+        this.atomicWriteFileSync(
+          normalizedPath,
+          adapter.serialize([], {
+            kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' },
+            __qmd_language: 'python',
+          })
+        );
       } else {
         // Create empty file
         fs.writeFileSync(normalizedPath, '', 'utf-8');
@@ -651,6 +665,32 @@ export class FilesystemService {
   private getHistoryPath(notebookPath: string): string {
     const { nebulaDir, nameWithoutExt } = this.getNebulaPaths(notebookPath);
     return path.join(nebulaDir, `${nameWithoutExt}.history.json`);
+  }
+
+  /**
+   * Last-Nebula-save record for text-format notebooks: the canonical cell
+   * state (id/type/content) as of the last save THROUGH Nebula. At history
+   * load, divergence between this record and the file means the notebook was
+   * edited externally (vim, git checkout, ...) — the difference is
+   * reconciled into history as a synthesized external-edit operation so
+   * undo/redo stays infinite across external edits.
+   */
+  private getLastSavePath(notebookPath: string): string {
+    const { nebulaDir, nameWithoutExt } = this.getNebulaPaths(notebookPath);
+    return path.join(nebulaDir, `${nameWithoutExt}.lastsave.json`);
+  }
+
+  private writeTextNotebookLastSave(notebookPath: string, serializedText: string, adapter: NotebookFormatAdapter): void {
+    try {
+      // Record the POST-round-trip identity (parse of what was written), so
+      // positional ids (qmd markdown cells) never read as false divergence.
+      const canonical = adapter.parse(serializedText).cells;
+      this.writeJsonAtomicSync(this.getLastSavePath(notebookPath), {
+        cells: canonical.map((c) => ({ id: c.id, type: c.type, content: c.content })),
+      });
+    } catch (e) {
+      console.warn('[FilesystemService] Failed to write lastsave record:', e);
+    }
   }
 
   /**
@@ -689,7 +729,13 @@ export class FilesystemService {
     const normalizedPath = this.normalizePath(notebookPath);
     const parentDir = path.dirname(normalizedPath);
     const notebookName = path.basename(normalizedPath);
-    const nameWithoutExt = path.basename(notebookName, path.extname(notebookName));
+    // .ipynb sidecar names are extension-stripped (unchanged, pre-existing
+    // files keep working). Text-format notebooks keep their full basename so
+    // foo.py and foo.ipynb in one directory never share sidecars.
+    const ext = path.extname(notebookName).toLowerCase();
+    const nameWithoutExt = ext === '.ipynb'
+      ? path.basename(notebookName, path.extname(notebookName))
+      : notebookName;
     const nebulaDir = path.join(parentDir, '.nebula');
 
     return { nebulaDir, nameWithoutExt };
@@ -702,6 +748,11 @@ export class FilesystemService {
     const historyPath = this.getHistoryPath(notebookPath);
     const sessionPath = this.getSessionPath(notebookPath);
     const journalPath = this.getJournalPath(notebookPath);
+    const lastSavePath = this.getLastSavePath(notebookPath);
+
+    if (fs.existsSync(lastSavePath)) {
+      fs.unlinkSync(lastSavePath);
+    }
 
     if (fs.existsSync(historyPath)) {
       fs.unlinkSync(historyPath);
@@ -725,9 +776,8 @@ export class FilesystemService {
     }
 
     // For notebooks, also delete history and session files
-    const ext = path.extname(normalizedPath).toLowerCase();
     const stat = fs.statSync(normalizedPath);
-    if (ext === '.ipynb' && !stat.isDirectory()) {
+    if (isNotebookPath(normalizedPath) && !stat.isDirectory()) {
       this.deleteNotebookMetadata(normalizedPath);
     }
 
@@ -766,6 +816,10 @@ export class FilesystemService {
       // Journal files are ephemeral; remove any stale commit record on rename
       fs.unlinkSync(oldJournal);
     }
+    const oldLastSave = this.getLastSavePath(oldPath);
+    if (fs.existsSync(oldLastSave)) {
+      fs.renameSync(oldLastSave, this.getLastSavePath(newPath));
+    }
   }
 
   /**
@@ -784,8 +838,7 @@ export class FilesystemService {
     }
 
     // For notebooks, also rename history and session files
-    const ext = path.extname(normalizedOld).toLowerCase();
-    if (ext === '.ipynb') {
+    if (isNotebookPath(normalizedOld)) {
       this.renameNotebookMetadata(normalizedOld, normalizedNew);
     }
 
@@ -802,6 +855,15 @@ export class FilesystemService {
     const destHistory = this.getHistoryPath(destPath);
     const srcSession = this.getSessionPath(srcPath);
     const destSession = this.getSessionPath(destPath);
+    const srcLastSave = this.getLastSavePath(srcPath);
+
+    if (fs.existsSync(srcLastSave)) {
+      const destNebulaDirForLastSave = path.dirname(destHistory);
+      if (!fs.existsSync(destNebulaDirForLastSave)) {
+        fs.mkdirSync(destNebulaDirForLastSave, { recursive: true });
+      }
+      fs.copyFileSync(srcLastSave, this.getLastSavePath(destPath));
+    }
 
     // Create destination .nebula directory if needed
     const destNebulaDir = path.dirname(destHistory);
@@ -836,7 +898,7 @@ export class FilesystemService {
         }
         fs.copyFileSync(srcPath, destPath);
         // For notebooks, also duplicate history and session files
-        if (entry.name.toLowerCase().endsWith('.ipynb')) {
+        if (isNotebookPath(entry.name)) {
           this.duplicateNotebookMetadata(srcPath, destPath);
         }
       }
@@ -878,7 +940,7 @@ export class FilesystemService {
       fs.copyFileSync(normalizedPath, newPath);
 
       // For notebooks, also duplicate history and session files
-      if (ext.toLowerCase() === '.ipynb') {
+      if (isNotebookPath(normalizedPath)) {
         this.duplicateNotebookMetadata(normalizedPath, newPath);
       }
     }
@@ -1064,6 +1126,21 @@ export class FilesystemService {
       throw new Error(`Notebook not found: ${normalizedPath}`);
     }
 
+    // Text notebook formats (.py percent / .qmd): adapter path. The .ipynb
+    // body below is untouched.
+    const formatAdapter = getFormatAdapter(normalizedPath);
+    if (formatAdapter) {
+      const parsed = formatAdapter.parse(fs.readFileSync(normalizedPath, 'utf-8'));
+      const textStat = fs.statSync(normalizedPath);
+      return {
+        cells: parsed.cells,
+        metadata: parsed.metadata,
+        kernelspec: parsed.kernelspecName || 'python3',
+        kernelspecSource: parsed.kernelspecName ? 'metadata' : 'default',
+        mtime: textStat.mtimeMs / 1000,
+      };
+    }
+
     const notebook: JupyterNotebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8'));
 
     const metadataKernel = notebook.metadata?.kernelspec?.name;
@@ -1153,6 +1230,11 @@ export class FilesystemService {
     notebookMetadata?: Record<string, unknown>
   ): SaveNotebookResult {
     const normalizedPath = this.normalizePath(notebookPath);
+
+    const formatAdapter = getFormatAdapter(normalizedPath);
+    if (formatAdapter) {
+      return this.saveTextNotebookCells(formatAdapter, normalizedPath, cells, kernelName, notebookMetadata);
+    }
 
     // Load existing notebook metadata if file exists.
     // Prefer a fast scan for the top-level metadata object so we avoid
@@ -1328,6 +1410,44 @@ export class FilesystemService {
   }
 
   /**
+   * Save cells to a text-format notebook (.py percent / .qmd).
+   * Outputs and execution counts are never serialized — by format design.
+   */
+  private saveTextNotebookCells(
+    adapter: NotebookFormatAdapter,
+    normalizedPath: string,
+    cells: NebulaCell[],
+    kernelName?: string,
+    notebookMetadata?: Record<string, unknown>
+  ): SaveNotebookResult {
+    let existingMetadata: Record<string, unknown> = {};
+    if (fs.existsSync(normalizedPath)) {
+      try {
+        existingMetadata = adapter.parse(fs.readFileSync(normalizedPath, 'utf-8')).metadata;
+      } catch {
+        // Start fresh — metadata extraction failed
+      }
+    }
+
+    const finalMetadata: Record<string, unknown> = { ...existingMetadata };
+    if (notebookMetadata) {
+      for (const [key, value] of Object.entries(notebookMetadata)) {
+        if (typeof value === 'object' && value !== null && typeof finalMetadata[key] === 'object' && finalMetadata[key] !== null) {
+          finalMetadata[key] = { ...(finalMetadata[key] as Record<string, unknown>), ...(value as Record<string, unknown>) };
+        } else {
+          finalMetadata[key] = value;
+        }
+      }
+    }
+
+    const text = adapter.serialize(cells, finalMetadata, kernelName);
+    this.atomicWriteFileSync(normalizedPath, text);
+    this.writeTextNotebookLastSave(normalizedPath, text, adapter);
+    const stat = fs.statSync(normalizedPath);
+    return { success: true, mtime: stat.mtimeMs / 1000 };
+  }
+
+  /**
    * Get notebook-level metadata
    */
   getNotebookMetadata(notebookPath: string): Record<string, unknown> {
@@ -1335,6 +1455,15 @@ export class FilesystemService {
 
     if (!fs.existsSync(normalizedPath)) {
       return {};
+    }
+
+    const formatAdapter = getFormatAdapter(normalizedPath);
+    if (formatAdapter) {
+      try {
+        return formatAdapter.parse(fs.readFileSync(normalizedPath, 'utf-8')).metadata;
+      } catch {
+        return {};
+      }
     }
 
     try {
@@ -1357,6 +1486,34 @@ export class FilesystemService {
 
       if (!fs.existsSync(normalizedPath)) {
         return { success: false, error: `Notebook not found: ${normalizedPath}` };
+      }
+
+      const formatAdapter = getFormatAdapter(normalizedPath);
+      if (formatAdapter) {
+        try {
+          const parsed = formatAdapter.parse(fs.readFileSync(normalizedPath, 'utf-8'));
+          const existingMetadata = parsed.metadata;
+          const nextMetadata: Record<string, unknown> = { ...existingMetadata };
+          for (const [key, value] of Object.entries(metadataUpdates)) {
+            if (typeof value === 'object' && value !== null && typeof nextMetadata[key] === 'object' && nextMetadata[key] !== null) {
+              nextMetadata[key] = {
+                ...(nextMetadata[key] as Record<string, unknown>),
+                ...(value as Record<string, unknown>),
+              };
+            } else {
+              nextMetadata[key] = value;
+            }
+          }
+          if (isDeepStrictEqual(existingMetadata, nextMetadata)) {
+            const stat = fs.statSync(normalizedPath);
+            return { success: true, changed: false, mtime: stat.mtimeMs / 1000 };
+          }
+          this.atomicWriteFileSync(normalizedPath, formatAdapter.serialize(parsed.cells, nextMetadata));
+          const stat = fs.statSync(normalizedPath);
+          return { success: true, changed: true, mtime: stat.mtimeMs / 1000 };
+        } catch (e) {
+          return { success: false, error: `Failed to update notebook: ${e}` };
+        }
       }
 
       try {
@@ -1430,6 +1587,35 @@ export class FilesystemService {
 
       if (!fs.existsSync(normalizedPath)) {
         return { success: false, error: `Notebook not found: ${normalizedPath}` };
+      }
+
+      const formatAdapter = getFormatAdapter(normalizedPath);
+      if (formatAdapter) {
+        try {
+          const parsed = formatAdapter.parse(fs.readFileSync(normalizedPath, 'utf-8'));
+          const nebula = ((parsed.metadata.nebula as Record<string, unknown> | undefined) || {});
+          const nextMetadata = {
+            ...parsed.metadata,
+            nebula: { ...nebula, agent_permitted: permitted },
+          };
+          this.atomicWriteFileSync(normalizedPath, formatAdapter.serialize(parsed.cells, nextMetadata));
+
+          if (permitted && !this.hasHistory(notebookPath)) {
+            const historyPath = this.getHistoryPath(notebookPath);
+            const nebulaDir = path.dirname(historyPath);
+            if (!fs.existsSync(nebulaDir)) {
+              fs.mkdirSync(nebulaDir, { recursive: true });
+            }
+            this.writeJsonAtomicSync(historyPath, this.buildInitialHistory(notebookPath));
+          }
+
+          return {
+            success: true,
+            status: this.getAgentPermissionStatus(notebookPath),
+          };
+        } catch (e) {
+          return { success: false, error: `Failed to set agent permission: ${e}` };
+        }
       }
 
       try {
@@ -1549,11 +1735,144 @@ export class FilesystemService {
       return [];
     }
 
+    let history: unknown[];
     try {
-      return JSON.parse(fs.readFileSync(historyPath, 'utf-8'));
+      history = JSON.parse(fs.readFileSync(historyPath, 'utf-8'));
     } catch {
       return [];
     }
+
+    // Text-format notebooks can be edited outside Nebula (that is their
+    // point); reconcile any divergence into history so undo/redo stays
+    // infinite across external edits. No-op for .ipynb.
+    return this.reconcileExternalTextEdits(notebookPath, history);
+  }
+
+  /**
+   * Compare the file's current cells against the last-Nebula-save record.
+   * On divergence, append ONE synthesized batch operation describing the
+   * external edit (updateContent / insertCell / deleteCell, source
+   * 'external') — both undo systems replay these, so a single undo step
+   * reverts the external edit and redo reapplies it. Falls back to a plain
+   * snapshot entry if synthesis fails (undo then bottoms out there instead
+   * of corrupting).
+   */
+  private reconcileExternalTextEdits(notebookPath: string, history: unknown[]): unknown[] {
+    const adapter = getFormatAdapter(notebookPath);
+    if (!adapter || history.length === 0) return history;
+    const normalizedPath = this.normalizePath(notebookPath);
+    const lastSavePath = this.getLastSavePath(notebookPath);
+    if (!fs.existsSync(normalizedPath) || !fs.existsSync(lastSavePath)) return history;
+
+    let currentCells: NebulaCell[];
+    try {
+      currentCells = adapter.parse(fs.readFileSync(normalizedPath, 'utf-8')).cells;
+    } catch {
+      return history;
+    }
+
+    try {
+      const record = JSON.parse(fs.readFileSync(lastSavePath, 'utf-8')) as {
+        cells: Array<{ id: string; type: 'code' | 'markdown'; content: string }>;
+      };
+      const before = record.cells ?? [];
+      const unchanged =
+        before.length === currentCells.length &&
+        before.every(
+          (b, i) =>
+            currentCells[i].id === b.id &&
+            currentCells[i].type === b.type &&
+            currentCells[i].content === b.content
+        );
+      if (unchanged) return history;
+
+      const operations = this.synthesizeExternalEditOps(before, currentCells);
+      if (operations.length === 0) return history;
+      const mtime = fs.statSync(normalizedPath).mtimeMs;
+      const entry = {
+        type: 'batch',
+        operations,
+        source: 'external',
+        operationId: `external-${crypto.randomBytes(6).toString('hex')}`,
+        timestamp: mtime,
+        external: true,
+      };
+      const next = [...history, entry];
+      this.writeJsonAtomicSync(this.getHistoryPath(notebookPath), next);
+      this.writeJsonAtomicSync(lastSavePath, {
+        cells: currentCells.map((c) => ({ id: c.id, type: c.type, content: c.content })),
+      });
+      console.log(`[FilesystemService] Reconciled external edit into history for ${notebookPath} (${operations.length} ops)`);
+      return next;
+    } catch (e) {
+      console.warn('[FilesystemService] External-edit reconciliation failed; appending snapshot:', e);
+      try {
+        const snapshot = {
+          type: 'snapshot',
+          cells: currentCells.map((c) => this.stripOutputsForHistorySnapshot(c)),
+          timestamp: fs.statSync(normalizedPath).mtimeMs,
+          source: 'external',
+        };
+        const next = [...history, snapshot];
+        this.writeJsonAtomicSync(this.getHistoryPath(notebookPath), next);
+        this.writeJsonAtomicSync(lastSavePath, {
+          cells: currentCells.map((c) => ({ id: c.id, type: c.type, content: c.content })),
+        });
+        return next;
+      } catch {
+        return history;
+      }
+    }
+  }
+
+  private synthesizeExternalEditOps(
+    before: Array<{ id: string; type: 'code' | 'markdown'; content: string }>,
+    after: NebulaCell[]
+  ): Array<Record<string, unknown>> {
+    const toCell = (c: { id: string; type: 'code' | 'markdown'; content: string }): NebulaCell => ({
+      id: c.id,
+      type: c.type,
+      content: c.content,
+      outputs: [],
+      executionCount: null,
+      isExecuting: false,
+    });
+    const afterById = new Map(after.map((c, i) => [c.id, i] as const));
+    const beforeById = new Map(before.map((c, i) => [c.id, i] as const));
+    const ops: Array<Record<string, unknown>> = [];
+
+    // Deletions (and type changes) — descending index so replay indices hold
+    for (let i = before.length - 1; i >= 0; i--) {
+      const b = before[i];
+      const aIdx = afterById.get(b.id);
+      const a = aIdx !== undefined ? after[aIdx] : null;
+      if (!a || a.type !== b.type) {
+        ops.push({ type: 'deleteCell', index: i, cell: toCell(b), source: 'external' });
+      }
+    }
+    // Insertions (and the insert half of type changes) — ascending index
+    for (let i = 0; i < after.length; i++) {
+      const a = after[i];
+      const bIdx = beforeById.get(a.id);
+      const b = bIdx !== undefined ? before[bIdx] : null;
+      if (!b || b.type !== a.type) {
+        ops.push({
+          type: 'insertCell',
+          index: i,
+          cell: { ...a, outputs: [], executionCount: null, isExecuting: false },
+          source: 'external',
+        });
+      } else if (b.content !== a.content) {
+        ops.push({
+          type: 'updateContent',
+          cellId: a.id,
+          oldContent: b.content,
+          newContent: a.content,
+          source: 'external',
+        });
+      }
+    }
+    return ops;
   }
 
   /**

@@ -10,6 +10,7 @@ import { hashCellContent } from './cell-hash';
 import * as path from 'path';
 import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
+import { getFormatAdapter } from '../fs/notebook-formats/registry';
 import { FilesystemService } from '../fs/fs-service';
 import { NebulaCell, CellOutput } from '../fs/types';
 import { validateMetadataValue } from './cell-metadata';
@@ -134,24 +135,43 @@ export class HeadlessOperationHandler {
     const paths = notebookPath ? [notebookPath] : Array.from(this.cache.keys());
 
     for (const p of paths) {
-      const notebook = this.cache.get(p);
-      if (notebook?.dirty) {
+      // A scheduled persist may have already cleared the dirty flag but not
+      // finished writing — flush must wait for it, or callers read a stale
+      // file. The persist loop keeps writing while dirty, so awaiting the
+      // in-flight run covers later mutations too.
+      const inFlight = this.persisting.get(p);
+      if (inFlight) {
+        await inFlight;
+      }
+      if (this.cache.get(p)?.dirty) {
         await this.asyncPersist(p);
       }
     }
   }
 
-  private async asyncPersist(notebookPath: string): Promise<void> {
-    const notebook = this.cache.get(notebookPath);
-    if (!notebook) return;
+  /** In-flight persist per notebook path (single-flight). */
+  private persisting = new Map<string, Promise<void>>();
 
-    // Keep writing while dirty
-    while (notebook.dirty) {
-      const cells = JSON.parse(JSON.stringify(notebook.cells));
-      notebook.dirty = false;
-      const history = this.undoRedoManager.getHistory(notebookPath, cells);
-      await this.fsService.saveNotebookBundle(notebookPath, cells, undefined, history);
-    }
+  private asyncPersist(notebookPath: string): Promise<void> {
+    const existing = this.persisting.get(notebookPath);
+    if (existing) return existing;
+
+    const run = (async () => {
+      const notebook = this.cache.get(notebookPath);
+      if (!notebook) return;
+
+      // Keep writing while dirty
+      while (notebook.dirty) {
+        const cells = JSON.parse(JSON.stringify(notebook.cells));
+        notebook.dirty = false;
+        const history = this.undoRedoManager.getHistory(notebookPath, cells);
+        await this.fsService.saveNotebookBundle(notebookPath, cells, undefined, history);
+      }
+    })().finally(() => {
+      this.persisting.delete(notebookPath);
+    });
+    this.persisting.set(notebookPath, run);
+    return run;
   }
 
   private schedulePersist(notebookPath: string): void {
@@ -170,6 +190,10 @@ export class HeadlessOperationHandler {
     } else {
       this.cache.clear();
     }
+    // Undo/redo state is derived from the persisted history file; when the
+    // notebook may have changed underneath us (UI save, external edit
+    // reconciliation), rebuild it from disk on next access.
+    this.undoRedoManager.clearState(notebookPath);
   }
 
   /**
@@ -909,6 +933,28 @@ export class HeadlessOperationHandler {
       return {
         success: false,
         error: `Notebook already exists: ${notebookPath}. Use overwrite=true to replace.`,
+      };
+    }
+
+    // Text notebook formats (.py percent / .qmd): create through the format
+    // adapter — agent flags live in the file's own metadata like .ipynb.
+    const formatAdapter = getFormatAdapter(normalizedPath);
+    if (formatAdapter) {
+      const dir = path.dirname(normalizedPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const metadata: Record<string, unknown> = {
+        kernelspec: { name: kernelName, display_name: kernelDisplayName },
+        nebula: { agent_created: true, agent_permitted: true },
+      };
+      if (formatAdapter.name === 'qmd') metadata.__qmd_language = 'python';
+      fs.writeFileSync(normalizedPath, formatAdapter.serialize([], metadata), 'utf-8');
+      this.invalidate(notebookPath);
+      return {
+        success: true,
+        path: notebookPath,
+        mtime: fs.statSync(normalizedPath).mtimeMs / 1000,
       };
     }
 

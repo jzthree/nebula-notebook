@@ -1,3 +1,4 @@
+import { isNotebookExtension } from '../utils/notebookFormats';
 import React, { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { NotebookMetadata } from '../types';
 import {
@@ -580,7 +581,7 @@ const FileBrowserComponent: React.FC<Props> = ({
   const filteredItems = useMemo(() => {
     return items
       .filter(item => {
-        if (showNotebooksOnly && !item.isDirectory && item.extension !== '.ipynb') return false;
+        if (showNotebooksOnly && !item.isDirectory && !isNotebookExtension(item.extension)) return false;
         if (searchQuery && !item.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
         return true;
       })
@@ -595,8 +596,8 @@ const FileBrowserComponent: React.FC<Props> = ({
           return b.modified - a.modified;
         } else {
           // Notebooks first, then alphabetically
-          if (a.extension === '.ipynb' && b.extension !== '.ipynb') return -1;
-          if (a.extension !== '.ipynb' && b.extension === '.ipynb') return 1;
+          if (isNotebookExtension(a.extension) && !isNotebookExtension(b.extension)) return -1;
+          if (!isNotebookExtension(a.extension) && isNotebookExtension(b.extension)) return 1;
           return a.name.localeCompare(b.name);
         }
       });

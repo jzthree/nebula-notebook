@@ -1,4 +1,5 @@
 
+import { getPathExtension, stripNotebookExtension, isTextNotebookExtension } from '../utils/notebookFormats';
 import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo, startTransition } from 'react';
 import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
@@ -2024,7 +2025,7 @@ export const Notebook: React.FC = () => {
 
   // Get current notebook filename (without extension)
   const currentFilename = currentFileId
-    ? getFilenameFromPath(currentFileId).replace(/\.ipynb$/, '')
+    ? stripNotebookExtension(getFilenameFromPath(currentFileId))
     : 'Untitled';
 
   // Start renaming the notebook
@@ -2048,9 +2049,10 @@ export const Notebook: React.FC = () => {
       return;
     }
 
-    // Build new path
+    // Build new path, preserving the file's actual extension
     const dir = currentFileId.substring(0, currentFileId.lastIndexOf('/'));
-    const newPath = `${dir}/${newName}.ipynb`;
+    const currentExt = getPathExtension(currentFileId) || '.ipynb';
+    const newPath = `${dir}/${newName}${currentExt}`;
 
     try {
       await renameFile(currentFileId, newPath);
@@ -2128,7 +2130,7 @@ export const Notebook: React.FC = () => {
     saveActiveFileId(id);
 
     // Track in recently opened notebooks
-    const fileName = id.split('/').pop()?.replace('.ipynb', '') || id;
+    const fileName = stripNotebookExtension(id.split('/').pop() || '') || id;
     addRecentNotebook(id, fileName);
     setActiveCellId(content.length > 0 ? content[0].id : null);
     setIsLoadingFile(false);
@@ -2383,9 +2385,10 @@ export const Notebook: React.FC = () => {
     const lastSlash = originalPath.lastIndexOf('/');
     const dir = lastSlash >= 0 ? originalPath.slice(0, lastSlash) : '';
     const filename = lastSlash >= 0 ? originalPath.slice(lastSlash + 1) : originalPath;
-    const baseName = filename.replace(/\.ipynb$/, '');
+    const restoreExt = getPathExtension(filename) || '.ipynb';
+    const baseName = stripNotebookExtension(filename).replace(/\.py$/i, '');
 
-    return `${dir}/${baseName}_restored_${dateStr}_${timeStr}.ipynb`;
+    return `${dir}/${baseName}_restored_${dateStr}_${timeStr}${restoreExt}`;
   }, []);
 
   // Handle "Restore Here" - generates new operations to transform current to target state
@@ -3806,8 +3809,13 @@ export const Notebook: React.FC = () => {
                           {currentFilename || "Untitled"}
                         </span>
                       )}
-                      <span className="text-xs font-normal text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
-                        .ipynb
+                      <span
+                        className="text-xs font-normal text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200"
+                        title={isTextNotebookExtension(getPathExtension(currentFileId || ''))
+                          ? 'Text notebook format — outputs are not saved to the file'
+                          : undefined}
+                      >
+                        {getPathExtension(currentFileId || '') || '.ipynb'}
                       </span>
                     </h1>
 

@@ -1,0 +1,23 @@
+---
+title: "Options"
+jupyter: python3
+---
+
+```{python}
+#| id: opt1
+#| echo: false
+y = 41 + 1
+```
+
+A fenced example that is prose, not code:
+
+````
+```{python}
+not_code = True
+```
+````
+
+```{python}
+#| id: opt2
+print(y)
+```
