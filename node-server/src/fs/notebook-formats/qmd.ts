@@ -10,15 +10,20 @@
  *
  * No Quarto rendering, no chunk-option semantics, one kernel per document.
  *
- * Known unrepresentables (documented v1 limits, inherent to the format):
- *   - markdown cells cannot persist ids (prose has no metadata slot) — they
- *     get the positional `cell-${i}` fallback
- *   - an empty markdown cell is dropped on save
- *   - adjacent markdown cells merge into one on the next load (prose blocks
- *     are delimited only by code fences — jupytext/Quarto behave the same)
+ * Markdown cells are delimited by an HTML-comment marker mirroring the
+ * chunk-option syntax: `<!-- #| id: abc -->`. HTML comments are invisible in
+ * rendered Quarto output, so this is notebook-first without rendering cost:
+ * adjacent markdown cells stay distinct, empty markdown cells survive, and
+ * markdown ids persist (no positional fallback for Nebula-written files).
+ * Foreign .qmd files without markers still parse (one implicit markdown cell
+ * per prose block, positional ids); markers appear on first Nebula save.
+ *
+ * Known unrepresentables (inherent):
  *   - markdown content containing a bare ```{lang} fence-open line outside a
  *     wrapping plain fence is indistinguishable from a real code chunk (in
  *     Quarto itself too) and will re-parse as one
+ *   - a markdown content line that is itself a `<!-- #| id: ... -->` marker
+ *     will re-parse as a cell boundary
  */
 
 import * as YAML from 'yaml';
@@ -28,6 +33,7 @@ import { NotebookFormatAdapter, ParsedTextNotebook } from './types';
 const CODE_FENCE_OPEN_RE = /^(`{3,})\{(\w+)([^}]*)\}\s*$/;
 const PLAIN_FENCE_RE = /^(`{3,})(?!\{)/;
 const ID_OPTION_RE = /^#\|\s*id:\s*(\S+)\s*$/;
+const MD_MARKER_RE = /^<!--\s*#\|\s*id:\s*(\S+)\s*-->\s*$/;
 
 const LANG_TO_KERNEL: Record<string, string> = {
   python: 'python3',
@@ -83,14 +89,20 @@ function parseFrontMatter(lines: string[]): FrontMatterParse {
   return { metadata, kernelspecName, bodyStart };
 }
 
-function makeMarkdownCell(index: number, bodyLines: string[]): NebulaCell | null {
+function makeMarkdownCell(
+  index: number,
+  bodyLines: string[],
+  explicitId: string | null
+): NebulaCell | null {
   // Trim one leading and one trailing blank line (block separators)
   const body = [...bodyLines];
   if (body[0] === '') body.shift();
   if (body[body.length - 1] === '') body.pop();
-  if (body.length === 0) return null;
+  // Implicit (marker-less, foreign-file) prose blocks that are empty are
+  // just whitespace between chunks; marker-delimited cells survive empty.
+  if (body.length === 0 && explicitId === null) return null;
   return {
-    id: `cell-${index}`,
+    id: explicitId ?? `cell-${index}`,
     type: 'markdown',
     content: body.join('\n'),
     outputs: [],
@@ -107,12 +119,14 @@ function parse(text: string): ParsedTextNotebook {
 
   const cells: NebulaCell[] = [];
   let prose: string[] = [];
+  let proseId: string | null = null;
   let firstLanguage: string | null = null;
 
   const flushProse = () => {
-    const cell = makeMarkdownCell(cells.length, prose);
+    const cell = makeMarkdownCell(cells.length, prose, proseId);
     if (cell) cells.push(cell);
     prose = [];
+    proseId = null;
   };
 
   let i = bodyStart;
@@ -157,6 +171,14 @@ function parse(text: string): ParsedTextNotebook {
       cells.push(cell);
       // Skip one blank separator after the closing fence
       if (lines[i] === '') i++;
+      continue;
+    }
+
+    const mdMarker = line.match(MD_MARKER_RE);
+    if (mdMarker) {
+      flushProse();
+      proseId = mdMarker[1];
+      i++;
       continue;
     }
 
@@ -228,10 +250,10 @@ function serialize(
   const language = typeof metadata.__qmd_language === 'string' ? metadata.__qmd_language : 'python';
   const out: string[] = serializeFrontMatter(metadata, kernelName);
   for (const cell of cells) {
-    if (cell.type === 'markdown' && cell.content === '') continue; // unrepresentable
     if (out.length > 0) out.push('');
     if (cell.type === 'markdown') {
-      out.push(...cell.content.split('\n'));
+      out.push(`<!-- #| id: ${cell.id} -->`);
+      if (cell.content !== '') out.push(...cell.content.split('\n'));
     } else {
       const meta = (cell as NebulaCell & { _metadata?: Record<string, unknown> })._metadata ?? {};
       const fenceInner = typeof meta.qmd_fence_attrs === 'string' ? meta.qmd_fence_attrs : language;
@@ -255,7 +277,7 @@ function serialize(
 export const qmdAdapter: NotebookFormatAdapter = {
   name: 'qmd',
   extensions: ['.qmd'],
-  capabilities: { storesOutputs: false, storesCellIds: false },
+  capabilities: { storesOutputs: false, storesCellIds: true },
   parse,
   serialize,
 };

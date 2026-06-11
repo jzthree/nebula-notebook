@@ -15,13 +15,17 @@ import {
   RefreshCw,
   ArrowDownAZ,
   Clock,
-  Upload
+  Upload,
+  Book,
+  FileCode,
+  File as FileIcon
 } from 'lucide-react';
 import { FileListItem } from './FileListItem';
 import {
   listDirectory,
   getDirectoryMtime,
   createNotebook,
+  createFile,
   createFolder,
   deleteFile,
   duplicateFile,
@@ -357,11 +361,15 @@ const FileBrowserComponent: React.FC<Props> = ({
     }
   };
 
-  const handleCreate = async () => {
-    const name = prompt('Enter notebook name:');
+  const [showCreateMenu, setShowCreateMenu] = useState(false);
+
+  const handleCreate = async (extension: '.ipynb' | '.qmd' = '.ipynb') => {
+    setShowCreateMenu(false);
+    const label = extension === '.qmd' ? 'Quarto notebook' : 'notebook';
+    const name = prompt(`Enter ${label} name:`);
     if (name) {
       try {
-        const result = await createNotebook(name, [], currentPath);
+        const result = await createNotebook(name, [], currentPath, extension);
         loadDirectory(currentPath);
         onRefresh();
         // Open the newly created notebook in a new browser tab
@@ -372,6 +380,21 @@ const FileBrowserComponent: React.FC<Props> = ({
         }
       } catch (err: any) {
         toast(err.message || 'Failed to create notebook', 'error');
+      }
+    }
+  };
+
+  const handleCreatePlainFile = async (extension?: string) => {
+    setShowCreateMenu(false);
+    const name = prompt(extension ? `Enter ${extension} file name:` : 'Enter file name (with extension):');
+    if (name) {
+      try {
+        const fileName = extension && !name.endsWith(extension) ? `${name}${extension}` : name;
+        await createFile(`${currentPath}/${fileName}`);
+        loadDirectory(currentPath);
+        onRefresh();
+      } catch (err: any) {
+        toast(err.message || 'Failed to create file', 'error');
       }
     }
   };
@@ -628,13 +651,54 @@ const FileBrowserComponent: React.FC<Props> = ({
           Explorer
         </h2>
         <div className="flex items-center gap-1">
-          <button
-            onClick={handleCreate}
-            className="p-1.5 hover:bg-slate-100 rounded text-slate-600"
-            title="New Notebook"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowCreateMenu((v) => !v)}
+              className={`p-1.5 hover:bg-slate-100 rounded text-slate-600 ${showCreateMenu ? 'bg-slate-100' : ''}`}
+              title="New…"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+            {showCreateMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowCreateMenu(false)} />
+                <div className="absolute right-0 top-full mt-1 z-50 w-52 bg-white border border-slate-200 rounded-lg shadow-lg py-1">
+                  <button
+                    onClick={() => handleCreate('.ipynb')}
+                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    <Book className="w-4 h-4 text-orange-500" />
+                    Notebook
+                    <span className="ml-auto text-xs text-slate-400">.ipynb</span>
+                  </button>
+                  <button
+                    onClick={() => handleCreate('.qmd')}
+                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    <Book className="w-4 h-4 text-violet-500" />
+                    Quarto notebook
+                    <span className="ml-auto text-xs text-slate-400">.qmd</span>
+                  </button>
+                  <div className="my-1 border-t border-slate-100" />
+                  <button
+                    onClick={() => handleCreatePlainFile('.py')}
+                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    <FileCode className="w-4 h-4 text-blue-500" />
+                    Python script
+                    <span className="ml-auto text-xs text-slate-400">.py</span>
+                  </button>
+                  <button
+                    onClick={() => handleCreatePlainFile()}
+                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    <FileIcon className="w-4 h-4 text-slate-400" />
+                    Text file
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
           <button
             onClick={handleCreateFolder}
             className="p-1.5 hover:bg-slate-100 rounded text-slate-600"

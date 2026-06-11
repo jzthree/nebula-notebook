@@ -511,11 +511,15 @@ export const saveFileContent = async (id: string, cells: Cell[]): Promise<boolea
 /**
  * Create a new notebook
  */
-export const createNotebook = async (name: string, initialCells: Cell[], directory?: string): Promise<NotebookMetadata> => {
+export const createNotebook = async (
+  name: string,
+  initialCells: Cell[],
+  directory?: string,
+  extension: '.ipynb' | '.qmd' = '.ipynb'
+): Promise<NotebookMetadata> => {
   const dir = directory || '~';
 
-  // Expand ~ if present
-  const fullPath = dir.startsWith('~') ? `${dir}/${name}.ipynb` : `${dir}/${name}.ipynb`;
+  const fullPath = `${dir}/${name}${extension}`;
 
   const response = await fetch(`${API_BASE}/notebook/operation`, {
     method: 'POST',
@@ -550,7 +554,7 @@ export const createNotebook = async (name: string, initialCells: Cell[], directo
     name,
     lastModified: Date.now(),
     fileType: 'notebook',
-    extension: '.ipynb',
+    extension,
     size: '1KB'
   };
 };

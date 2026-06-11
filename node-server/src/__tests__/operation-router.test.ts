@@ -18,6 +18,26 @@ describe('OperationRouter', () => {
     vi.useRealTimers();
   });
 
+  it('routes text-format createNotebook to headless even when a UI is connected', async () => {
+    const router = new OperationRouter();
+    const applyOperation = vi.fn(async () => ({ success: true, path: '/tmp/new.qmd' }));
+    router.setHeadlessHandler({
+      applyOperation,
+      readNotebook: vi.fn(async () => ({ success: true, data: { cells: [] } })),
+      invalidate: vi.fn(),
+    } as any);
+
+    const send = vi.fn();
+    const ws = { readyState: WebSocket.OPEN, close: vi.fn(), send } as unknown as WebSocket;
+    await router.registerUI(ws, '/tmp/open-tab.ipynb');
+
+    // .qmd creation must bypass the UI (its create handler only builds .ipynb)
+    const result = await router.applyOperation({ type: 'createNotebook', notebookPath: '/tmp/new.qmd' });
+    expect(result.backend).toBe('headless');
+    expect(applyOperation).toHaveBeenCalledWith(expect.objectContaining({ type: 'createNotebook' }));
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('treats stale UI connections as unavailable for routing', async () => {
     const router = new OperationRouter();
     const applyOperation = vi.fn(async () => ({ success: true, backend: 'headless', routed: 'applyOperation' }));

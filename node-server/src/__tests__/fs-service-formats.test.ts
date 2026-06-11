@@ -59,11 +59,10 @@ describe('text notebook formats through FilesystemService', () => {
       expect(raw).toContain('bb2'); // id persisted in-file
 
       const loaded = service.getNotebookCells(p);
-      // qmd markdown cells cannot persist ids (positional fallback, documented);
-      // percent persists ids for all cell types.
-      const mdId = filename.endsWith('.qmd') ? 'cell-0' : 'aa1';
+      // ids persist for ALL cell types in both formats (qmd markdown cells
+      // use <!-- #| id: --> markers)
       expect(loaded.cells.map((c) => ({ id: c.id, type: c.type, content: c.content }))).toEqual([
-        { id: mdId, type: 'markdown', content: '# Title' },
+        { id: 'aa1', type: 'markdown', content: '# Title' },
         { id: 'bb2', type: 'code', content: 'x = 1\nprint(x)' },
       ]);
       expect(loaded.cells[1].outputs).toEqual([]);

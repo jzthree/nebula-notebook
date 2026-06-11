@@ -88,9 +88,25 @@ describe('qmd format: parsing', () => {
     expect(cells[0].content).toBe('x = 1');
   });
 
-  it('assigns positional ids to markdown cells and id-less chunks', () => {
+  it('assigns positional ids to marker-less (foreign) markdown and id-less chunks', () => {
     const { cells } = qmdAdapter.parse('prose\n\n```{python}\n1\n```\n');
     expect(cells.map((c) => c.id)).toEqual(['cell-0', 'cell-1']);
+  });
+
+  it('markdown markers carry ids and delimit adjacent cells', () => {
+    const text = [
+      '<!-- #| id: md1 -->',
+      'First block.',
+      '',
+      '<!-- #| id: md2 -->',
+      'Second block, distinct cell.',
+      '',
+    ].join('\n');
+    const { cells } = qmdAdapter.parse(text);
+    expect(cells.map((c) => ({ id: c.id, content: c.content }))).toEqual([
+      { id: 'md1', content: 'First block.' },
+      { id: 'md2', content: 'Second block, distinct cell.' },
+    ]);
   });
 
   it('normalizes CRLF', () => {
@@ -103,9 +119,9 @@ describe('qmd format: round-trip', () => {
   const roundtrip = (cells: NebulaCell[], metadata: Record<string, unknown> = {}) =>
     qmdAdapter.parse(qmdAdapter.serialize(cells, metadata));
 
-  it('round-trips a mixed notebook semantically', () => {
+  it('round-trips a mixed notebook semantically (md ids persist)', () => {
     const cells = [
-      cell({ id: 'cell-0', type: 'markdown', content: '# Title\n\nProse.' }),
+      cell({ id: 'mdx', type: 'markdown', content: '# Title\n\nProse.' }),
       cell({ id: 'k1', type: 'code', content: 'import numpy as np\n\nprint(np.pi)' }),
       cell({ id: 'k2', type: 'code', content: '' }),
     ];
@@ -117,7 +133,7 @@ describe('qmd format: round-trip', () => {
 
   it('serialize∘parse∘serialize is byte-stable', () => {
     const cells = [
-      cell({ id: 'cell-0', type: 'markdown', content: 'Intro prose.' }),
+      cell({ id: 'mdy', type: 'markdown', content: 'Intro prose.' }),
       cell({ id: 'a', content: 'x = 1' }),
     ];
     const meta = {
@@ -152,14 +168,17 @@ describe('qmd format: round-trip', () => {
     expect(cells[0].content).toBe(c.content);
   });
 
-  it('drops empty markdown cells (unrepresentable) and keeps empty code cells', () => {
+  it('keeps empty markdown cells and adjacent markdown cells distinct', () => {
     const cells = [
-      cell({ id: 'cell-0', type: 'markdown', content: '' }),
+      cell({ id: 'm1', type: 'markdown', content: '' }),
+      cell({ id: 'm2', type: 'markdown', content: 'second' }),
+      cell({ id: 'm3', type: 'markdown', content: 'third' }),
       cell({ id: 'a', content: '' }),
     ];
     const { cells: back } = roundtrip(cells);
-    expect(back).toHaveLength(1);
-    expect(back[0]).toMatchObject({ id: 'a', type: 'code', content: '' });
+    expect(back.map((c) => ({ id: c.id, type: c.type, content: c.content }))).toEqual(
+      cells.map((c) => ({ id: c.id, type: c.type, content: c.content }))
+    );
   });
 
   it('never serializes outputs or execution counts', () => {

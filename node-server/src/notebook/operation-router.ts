@@ -14,6 +14,7 @@ import * as os from 'os';
 import { WebSocket } from 'ws';
 import { HeadlessOperationHandler } from './headless-handler';
 import { hashCellContent } from './cell-hash';
+import { isTextNotebookPath } from '../fs/notebook-formats/registry';
 import type { UpdateSummary } from './undoRedoManager';
 
 interface PendingRequest {
@@ -368,9 +369,13 @@ export class OperationRouter {
     const agentId = operation.agentId as string | undefined;
 
     // For createNotebook, route to ANY connected UI (not path-specific)
-    // This allows the UI to open the new notebook in a new tab
+    // This allows the UI to open the new notebook in a new tab.
+    // EXCEPT text notebook formats (.py/.qmd): the UI's create handler only
+    // builds Jupyter JSON, so those are always created headless through the
+    // format adapters.
     const isCreateNotebook = opType === 'createNotebook';
-    const anyUI = isCreateNotebook ? this.getAnyUIConnection() : null;
+    const isTextFormatCreate = isCreateNotebook && isTextNotebookPath((operation.notebookPath as string) || '');
+    const anyUI = isCreateNotebook && !isTextFormatCreate ? this.getAnyUIConnection() : null;
     const hasUI = isCreateNotebook ? (anyUI !== null) : (this.getResponsiveUIConnection(normalizedPath) !== null);
     const backend: Backend = hasUI ? 'ui' : 'headless';
 

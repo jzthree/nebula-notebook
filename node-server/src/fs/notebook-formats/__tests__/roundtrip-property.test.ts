@@ -7,14 +7,10 @@
  *
  * Documented unrepresentables are excluded by the generator (they are format
  * limits, not adapter bugs):
- *  - qmd: empty markdown cells; ADJACENT markdown cells (prose blocks are
- *    delimited only by code fences, so consecutive markdown cells merge —
- *    true in jupytext/Quarto too); markdown content with bare ```{lang}
- *    fence opens or leading/trailing blank lines; content starting with
- *    `#| id:`
- *  - qmd: markdown cell ids (positional by design — generator uses cell-N ids
- *    matching their position)
- *  - percent: none beyond outputs/executionCount (ids fully persist)
+ *  - qmd: markdown content with bare ```{lang} fence opens, lines that are
+ *    themselves `<!-- #| id: ... -->` markers, leading/trailing blank lines,
+ *    or a first line matching `#| id:` (consumed as id by the code parser)
+ *  - percent: none beyond outputs/executionCount
  */
 
 import { describe, it, expect } from 'vitest';
@@ -67,7 +63,8 @@ const isLegalQmdCodeLine = (l: string) => true;
 // Markdown bodies: percent escapes everything; qmd cannot hold fence opens
 // or blank boundary lines.
 const isLegalPercentMdLine = (_l: string) => true;
-const isLegalQmdMdLine = (l: string) => !/^`{3,}/.test(l) && !/^#\|\s*id:/.test(l);
+const isLegalQmdMdLine = (l: string) =>
+  !/^`{3,}/.test(l) && !/^#\|\s*id:/.test(l) && !/^<!--\s*#\|/.test(l);
 
 function genContent(rnd: () => number, legal: (l: string) => boolean, allowBlankEdges: boolean): string {
   const n = Math.floor(rnd() * 6); // 0..5 lines
@@ -90,19 +87,12 @@ function genCells(
   const count = 1 + Math.floor(rnd() * 6);
   const cells: NebulaCell[] = [];
   for (let i = 0; i < count; i++) {
-    let isMd = rnd() < 0.4;
-    // qmd cannot represent adjacent markdown cells (they merge) — generator
-    // never produces them
-    if (format === 'qmd' && isMd && cells[cells.length - 1]?.type === 'markdown') {
-      isMd = false;
-    }
+    const isMd = rnd() < 0.4;
     if (format === 'qmd' && isMd) {
-      const content = genContent(rnd, isLegalQmdMdLine, false);
-      if (content === '') continue; // unrepresentable
       cells.push({
-        id: `cell-${cells.length}`, // positional by design for qmd markdown
+        id: `qm${i}d`,
         type: 'markdown',
-        content,
+        content: genContent(rnd, isLegalQmdMdLine, false),
         outputs: [],
         executionCount: null,
         isExecuting: false,
