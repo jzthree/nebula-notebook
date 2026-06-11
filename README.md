@@ -2,7 +2,7 @@
 
 Nebula is an agent-native notebook computing environment built for what's coming next: real Jupyter kernels, real filesystem access, and a notebook that agents (Claude Code, Codex, …) can drive end-to-end through MCP — while staying a fast, polished notebook even if you never touch the AI features.
 
-![Nebula Notebook — agents drive the notebook via MCP](docs/assets/nebula-hero.svg)
+![Nebula Notebook — agents drive the notebook via MCP](https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/nebula-hero.svg)
 
 ## Quick Start
 
