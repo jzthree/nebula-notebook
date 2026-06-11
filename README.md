@@ -21,6 +21,8 @@ Nebula is an agent-native notebook computing environment built for what's coming
 npx nebula-notebook
 ```
 
+Nebula itself is pure Node — but running notebooks needs a Python (3.10+) with `ipykernel` on the server machine. If none is found, the kernel menu detects your Python environments (venv, conda, uv, pixi, system) and shows the exact setup command for each; environments that already have `ipykernel` register with one click.
+
 On first start, a QR code will appear in the terminal. Scan it with an authenticator app (Google Authenticator, Authy, etc.) to set up 2FA.
 
 Open http://localhost:3000 and enter your 6-digit code.
@@ -98,8 +100,10 @@ See [docs/RICH_OUTPUTS.md](docs/RICH_OUTPUTS.md) for examples, payload format, s
 
 ## Prerequisites
 
-- Node.js 18+
-- Python 3.10+ with Jupyter kernels (`pip install ipykernel`)
+- Node.js 20+
+- Python 3.10+ with `ipykernel`, on the machine running the server (other Jupyter kernels — Julia, R, … — work too)
+
+No ipykernel yet? Open the kernel menu in the UI: it detects your Python environments (venv, conda, uv, pixi, Homebrew, system), registers ready ones with one click, and shows the exact install command for the rest — including the PEP 668 "externally managed" cases (uv/Homebrew/system Python) where `pip install` is blocked and an isolated env is the right move.
 
 ## Project Structure
 
