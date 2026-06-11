@@ -101,7 +101,9 @@ describe('MCP Tool Execution Integration', () => {
     beforeAll(async () => {
       const kernels = await client.listKernels();
       hasKernels = kernels.success && (kernels.data?.length ?? 0) > 0;
-      await executeToolForMCP('start_agent_session', { path: TEST_NOTEBOOK_PATH }, client);
+      // exclusive: these tests exercise tool plumbing (incl. index-addressed deletes),
+      // not collaborative-session OCC semantics
+      await executeToolForMCP('start_agent_session', { path: TEST_NOTEBOOK_PATH, exclusive: true }, client);
     });
 
     it('should execute list_kernels with display names', async () => {

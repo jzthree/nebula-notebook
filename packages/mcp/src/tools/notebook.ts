@@ -1082,6 +1082,7 @@ start_agent_session is required for notebook mutations; read-only operations do 
 // =============================================================================
 
 export interface StartAgentSessionParams {
+  exclusive?: boolean;
   path: string;
   agent_id?: string;
   force?: boolean;
@@ -1096,7 +1097,11 @@ export interface StartAgentSessionResult {
 export const startAgentSessionTool: Tool<StartAgentSessionParams, StartAgentSessionResult> = {
   definition: {
     name: 'start_agent_session',
-    description: `Start an agent session, locking the notebook for agent use. The UI will show a locked indicator and prevent user edits. Always call end_agent_session when done.
+    description: `Start an agent session for notebook write operations. Always call end_agent_session when done.
+
+Sessions are COLLABORATIVE by default: the user can keep editing while you work. Your destructive writes (update_cell, delete_cell, …) are protected by per-cell optimistic concurrency — if the user changed a cell after you last read it, the write is rejected with the current content so you can re-apply your intent. Address cells by id (indices shift when the user edits), and re-read cells you haven't read recently.
+
+Pass exclusive=true only for large multi-cell refactors that need atomicity: it locks the UI read-only for the duration (the legacy behavior). Prefer collaborative sessions otherwise.
 
 See connect_server for required MCP workflow.
 
@@ -1122,6 +1127,10 @@ If a previous agent session was not properly ended (e.g., due to a crash or time
           type: 'number',
           description: 'Optional timestamp (ms since epoch) to fetch updates since last agent session',
         },
+        exclusive: {
+          type: 'boolean',
+          description: 'Lock the notebook read-only for the user (legacy behavior). Use only for large refactors needing atomicity. Default: false (collaborative).',
+        },
       },
       required: ['path'],
     },
@@ -1133,7 +1142,8 @@ If a previous agent session was not properly ended (e.g., due to a crash or time
       params.path,
       params.agent_id,
       params.force,
-      params.last_session_timestamp
+      params.last_session_timestamp,
+      params.exclusive
     );
     if (!result.success) {
       return { success: false, error: result.error };

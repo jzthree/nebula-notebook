@@ -6,6 +6,7 @@
  */
 
 import * as fs from 'fs';
+import { hashCellContent } from './cell-hash';
 import * as path from 'path';
 import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
@@ -205,6 +206,55 @@ export class HeadlessOperationHandler {
   }
 
   /**
+   * Compare expectedHash/expectedHashes stamped by the operation router
+   * against current cell content. Returns a conflict result, or null to
+   * proceed. The conflict message carries the current content so the agent
+   * can re-apply its intent without an extra read.
+   */
+  private checkExpectedHashes(operation: Record<string, unknown>, notebookPath: string): OperationResult | null {
+    const expectedHash = operation.expectedHash as string | undefined;
+    const expectedHashes = operation.expectedHashes as Record<string, string> | undefined;
+    if (!expectedHash && !expectedHashes) return null;
+    if (!notebookPath) return null;
+
+    const cells = this.getCells(notebookPath);
+    const checks: Array<{ cellId: string; expected: string }> = [];
+    if (expectedHash && typeof operation.cellId === 'string') {
+      checks.push({ cellId: operation.cellId, expected: expectedHash });
+    }
+    if (expectedHashes) {
+      for (const [cellId, expected] of Object.entries(expectedHashes)) {
+        checks.push({ cellId, expected });
+      }
+    }
+
+    for (const { cellId, expected } of checks) {
+      const cell = cells.find(c => c.id === cellId);
+      if (!cell) {
+        return {
+          success: false,
+          conflict: true,
+          error: `Conflict: cell ${cellId} no longer exists (it changed since you last read it). Re-read the notebook and retry.`,
+        };
+      }
+      const current = hashCellContent(cell.content ?? '');
+      if (current !== expected) {
+        const preview = (cell.content ?? '').slice(0, 2000);
+        return {
+          success: false,
+          conflict: true,
+          error:
+            `Conflict: cell ${cellId} was modified (likely by the user) after you last read it. ` +
+            `Current content:\n${preview}${(cell.content ?? '').length > 2000 ? '\n…(truncated)' : ''}\n` +
+            `Re-apply your intent against this content and retry.`,
+          currentContent: cell.content,
+        };
+      }
+    }
+    return null;
+  }
+
+  /**
    * Apply a notebook operation.
    */
   async applyOperation(operation: Record<string, unknown>): Promise<OperationResult> {
@@ -221,6 +271,14 @@ export class HeadlessOperationHandler {
       if (permissionError) {
         return permissionError;
       }
+    }
+
+    // Optimistic concurrency: collaborative agent sessions stamp destructive
+    // writes with the content hash the agent last saw (see operation-router).
+    // Verify against current content before applying.
+    const occConflict = this.checkExpectedHashes(operation, notebookPath);
+    if (occConflict) {
+      return occConflict;
     }
 
     try {

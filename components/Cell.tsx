@@ -23,6 +23,7 @@ interface Props {
   index: number;
   isActive: boolean;
   isHighlighted?: boolean; // Visual feedback for undo/redo
+  agentActive?: boolean; // Agent recently touched this cell (collaborative session presence)
   isLocked?: boolean; // When true, cell is read-only (e.g., during agent session)
   allCellsRef: React.RefObject<ICell[]>; // Ref to avoid holding the entire cells array in fiber props
   cellIndexMapRef: React.RefObject<Map<string, number>>; // cellId → index, updated each render
@@ -60,6 +61,7 @@ const CellComponent: React.FC<Props> = ({
   index,
   isActive,
   isHighlighted = false,
+  agentActive = false,
   isLocked = false,
   allCellsRef,
   cellIndexMapRef,
@@ -453,7 +455,7 @@ const CellComponent: React.FC<Props> = ({
       onFocus={handleCellFocus}
       onBlur={handleCellBlur}
       tabIndex={isActive ? 0 : -1}
-      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()} ${isHighlighted ? 'cell-highlight-animation' : ''} ${focusState === 'cell' ? 'outline-none' : ''}`}
+      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()} ${isHighlighted ? 'cell-highlight-animation' : ''} ${agentActive ? 'ring-2 ring-purple-300 ring-offset-1' : ''} ${focusState === 'cell' ? 'outline-none' : ''}`}
     >
       {/* Top Toolbar - click here to enter command mode */}
       <div
@@ -670,6 +672,7 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     // index excluded — CSS counter handles "#N" label, no re-render needed
     prevProps.isActive === nextProps.isActive &&
     prevProps.isHighlighted === nextProps.isHighlighted &&
+    prevProps.agentActive === nextProps.agentActive &&
     prevProps.isLocked === nextProps.isLocked &&
     prevProps.searchHighlight === nextProps.searchHighlight &&
     prevProps.searchCurrentMatch === nextProps.searchCurrentMatch &&

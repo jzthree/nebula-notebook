@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { WebSocket } from 'ws';
 import { HeadlessOperationHandler } from './headless-handler';
+import { hashCellContent } from './cell-hash';
 import type { UpdateSummary } from './undoRedoManager';
 
 interface PendingRequest {
@@ -49,6 +50,15 @@ interface AgentLock {
   expiresAt: number;
   notebookPath: string;
   lockedAt: number;       // When lock was first acquired
+  // Collaborative session support:
+  // exclusive=true reproduces the legacy behavior (UI fully locked, no OCC).
+  // exclusive=false (default) leaves the user free to edit; agent writes are
+  // protected by per-cell optimistic concurrency instead of the lock.
+  exclusive: boolean;
+  // cellId -> hash of the cell content as this agent last saw it. Populated
+  // from read results and the agent's own writes; consulted to stamp write
+  // operations with expectedHash for compare-and-swap at the applier.
+  cellHashes: Map<string, string>;
 }
 
 const AGENT_LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -172,7 +182,7 @@ export class OperationRouter {
   startAgentSession(
     notebookPath: string,
     agentId: string,
-    metadata?: { clientName?: string; clientVersion?: string }
+    metadata?: { clientName?: string; clientVersion?: string; exclusive?: boolean }
   ): { success: boolean; error?: string; lock?: AgentLock } {
     const normalizedPath = normalizeNotebookPath(notebookPath);
     try {
@@ -190,8 +200,12 @@ export class OperationRouter {
     const existingLock = this.agentLocks.get(normalizedPath);
     if (existingLock) {
       if (existingLock.agentId === agentId) {
-        // Same agent re-acquiring lock - refresh timeout
+        // Same agent re-acquiring lock - refresh timeout (and allow it to
+        // upgrade/downgrade exclusivity)
         existingLock.expiresAt = Date.now() + AGENT_LOCK_TIMEOUT_MS;
+        if (metadata?.exclusive !== undefined) {
+          existingLock.exclusive = metadata.exclusive;
+        }
         console.log(`[OperationRouter] Agent session refreshed for: ${normalizedPath} (agent: ${agentId})`);
         return { success: true, lock: existingLock };
       } else {
@@ -215,6 +229,8 @@ export class OperationRouter {
       expiresAt: now + AGENT_LOCK_TIMEOUT_MS,
       notebookPath: normalizedPath,
       lockedAt: now,
+      exclusive: metadata?.exclusive === true,
+      cellHashes: new Map(),
     };
     this.agentLocks.set(normalizedPath, newLock);
     console.log(`[OperationRouter] Agent session started for: ${normalizedPath} (agent: ${agentId}, client: ${metadata?.clientName || 'unknown'})`);
@@ -359,7 +375,8 @@ export class OperationRouter {
       const clientName = operation.clientName as string | undefined;
       const clientVersion = operation.clientVersion as string | undefined;
       const lastSessionTimestamp = operation.lastSessionTimestamp as number | undefined;
-      const result = this.startAgentSession(notebookPath, reqAgentId, { clientName, clientVersion });
+      const exclusive = operation.exclusive === true;
+      const result = this.startAgentSession(notebookPath, reqAgentId, { clientName, clientVersion, exclusive });
 
       // Also forward to UI for UI state update (badge display)
       if (result.success && hasUI) {
@@ -427,16 +444,179 @@ export class OperationRouter {
       lock.expiresAt = Date.now() + AGENT_LOCK_TIMEOUT_MS;
     }
 
+    // Collaborative sessions: stamp destructive writes with the content hash
+    // the agent last saw, to be compared against live content at the applier
+    // (the UI when connected — the only place with a freshness-window-free
+    // view, since user edits reach the server only on autosave).
+    if (isWrite && lock && !lock.exclusive && agentId && lock.agentId === agentId) {
+      const occError = this.prepareCollaborativeWrite(lock, operation, opType);
+      if (occError) {
+        console.log(`  -> BLOCKED (OCC): ${occError}`);
+        return { success: false, error: occError, conflict: true, backend };
+      }
+    }
+
+    let result: OperationResult;
     if (hasUI) {
       // For createNotebook, use any available UI connection
       const uiPath = isCreateNotebook && anyUI ? anyUI.path : normalizedPath;
       console.log(`  -> Routing to UI (via ${uiPath})`);
-      const result = await this.forwardToUI(uiPath, operation);
-      return { ...result, backend: 'ui' as Backend };
+      result = { ...(await this.forwardToUI(uiPath, operation)), backend: 'ui' as Backend };
     } else {
       console.log(`  -> Routing to HEADLESS`);
-      const result = await this.applyHeadless(operation);
-      return { ...result, backend: 'headless' as Backend };
+      result = { ...(await this.applyHeadless(operation)), backend: 'headless' as Backend };
+    }
+
+    // Keep the session's view of cell content fresh from reads and the
+    // agent's own successful writes.
+    if (result.success) {
+      this.recordSessionHashes(normalizedPath, opType, operation, result);
+    }
+
+    return result;
+  }
+
+  /**
+   * OCC preparation for a destructive write in a collaborative session.
+   * Returns an error string to reject the operation, or null to proceed
+   * (with `expectedHash`/`expectedHashes` stamped onto the operation).
+   *
+   * Policy:
+   * - updateContent / updateMetadata / deleteCell / deleteCells: the agent
+   *   must have read the cell this session (hash known), and the applier
+   *   verifies the content still matches before applying.
+   * - executeCell: verified only when the hash is known (running slightly
+   *   stale content is recoverable; destroying user edits is not).
+   * - clearNotebook: requires an exclusive session.
+   * - Index-addressed destructive writes are rejected: user edits shift
+   *   indices, so collaborative writes must address cells by id.
+   */
+  private prepareCollaborativeWrite(
+    lock: AgentLock,
+    operation: Record<string, unknown>,
+    opType: string
+  ): string | null {
+    const requireHash = (cellId: unknown): string | null => {
+      if (typeof cellId !== 'string' || !cellId) {
+        return `${opType} in a collaborative session must address the cell by cell_id (indices shift when the user edits). Re-read the notebook and use ids.`;
+      }
+      const hash = lock.cellHashes.get(cellId);
+      if (!hash) {
+        return `You haven't read cell ${cellId} in this session — read it first (read_cell), then retry. In collaborative sessions the user may edit while you work.`;
+      }
+      return null;
+    };
+
+    switch (opType) {
+      case 'updateContent':
+      case 'updateMetadata':
+      case 'deleteCell': {
+        const cellId = operation.cellId ?? null;
+        const err = requireHash(cellId);
+        if (err) return err;
+        operation.expectedHash = lock.cellHashes.get(cellId as string);
+        return null;
+      }
+      case 'deleteCells': {
+        const cellIds = Array.isArray(operation.cellIds) ? operation.cellIds : [];
+        const hashes: Record<string, string> = {};
+        for (const cellId of cellIds) {
+          const err = requireHash(cellId);
+          if (err) return err;
+          hashes[cellId as string] = lock.cellHashes.get(cellId as string)!;
+        }
+        operation.expectedHashes = hashes;
+        return null;
+      }
+      case 'executeCell': {
+        const cellId = operation.cellId;
+        if (typeof cellId === 'string' && lock.cellHashes.has(cellId)) {
+          operation.expectedHash = lock.cellHashes.get(cellId);
+        }
+        return null;
+      }
+      case 'clearNotebook':
+        return 'clearNotebook requires an exclusive session (start_agent_session with exclusive=true) — it would destroy any concurrent user edits.';
+      case 'undo':
+      case 'redo':
+        // Content shifts unpredictably — force re-reads afterwards.
+        lock.cellHashes.clear();
+        return null;
+      default:
+        return null; // insert/move/duplicate/outputs/kernel ops: not destructive to user content
+    }
+  }
+
+  /**
+   * Record the session's view of cell content from operation results.
+   * Keyed to the notebook's active lock: the lock guarantees a single writing
+   * agent per notebook, so reads from any source refreshing it is sound.
+   */
+  private recordSessionHashes(
+    normalizedPath: string,
+    opType: string,
+    operation: Record<string, unknown>,
+    result: OperationResult
+  ): void {
+    const lock = this.agentLocks.get(normalizedPath);
+    if (!lock || lock.expiresAt <= Date.now()) return;
+
+    const record = (cellId: unknown, content: unknown) => {
+      if (typeof cellId === 'string' && typeof content === 'string') {
+        lock.cellHashes.set(cellId, hashCellContent(content));
+      }
+    };
+
+    switch (opType) {
+      case 'readCell': {
+        const cell = result.cell as { id?: string; content?: string } | undefined;
+        record(cell?.id, cell?.content);
+        break;
+      }
+      case 'updateContent':
+        record(operation.cellId, operation.content);
+        break;
+      case 'insertCell': {
+        const cell = operation.cell as { content?: string } | undefined;
+        record(result.cellId, cell?.content ?? '');
+        break;
+      }
+      case 'insertCells': {
+        const cells = operation.cells as Array<{ content?: string }> | undefined;
+        const insertedIds = result.cellIds as string[] | undefined;
+        if (cells && insertedIds && cells.length === insertedIds.length) {
+          insertedIds.forEach((id, i) => record(id, cells[i]?.content ?? ''));
+        }
+        break;
+      }
+      case 'deleteCell':
+        if (typeof operation.cellId === 'string') lock.cellHashes.delete(operation.cellId);
+        break;
+      case 'deleteCells':
+        if (Array.isArray(operation.cellIds)) {
+          for (const id of operation.cellIds) {
+            if (typeof id === 'string') lock.cellHashes.delete(id);
+          }
+        }
+        break;
+      case 'clearNotebook':
+        lock.cellHashes.clear();
+        break;
+    }
+  }
+
+  /**
+   * Record hashes for a full-notebook read (used by router.readNotebook,
+   * which serves the MCP read_notebook tool outside applyOperation).
+   */
+  recordNotebookReadHashes(notebookPath: string, cells: Array<{ id?: string; content?: string }>): void {
+    const normalizedPath = normalizeNotebookPath(notebookPath);
+    const lock = this.agentLocks.get(normalizedPath);
+    if (!lock || lock.expiresAt <= Date.now()) return;
+    for (const cell of cells) {
+      if (typeof cell?.id === 'string' && typeof cell?.content === 'string') {
+        lock.cellHashes.set(cell.id, hashCellContent(cell.content));
+      }
     }
   }
 
@@ -558,6 +738,8 @@ export class OperationRouter {
     if (this.getResponsiveUIConnection(normalizedPath)) {
       const result = await this.readFromUI(normalizedPath);
       if (result.success) {
+        const data = result.data as { cells?: Array<{ id?: string; content?: string }> } | undefined;
+        if (data?.cells) this.recordNotebookReadHashes(normalizedPath, data.cells);
         const truncated = this.applyOutputTruncation(result, includeOutputs, maxLines, maxChars, maxLinesError, maxCharsError);
         if (!truncated.backend) {
           truncated.backend = 'ui' as Backend;
@@ -570,6 +752,10 @@ export class OperationRouter {
       return result;
     } else {
       const result = await this.readFromFile(notebookPath, includeOutputs, maxLines, maxChars, maxLinesError, maxCharsError);
+      if (result.success) {
+        const data = result.data as { cells?: Array<{ id?: string; content?: string }> } | undefined;
+        if (data?.cells) this.recordNotebookReadHashes(normalizedPath, data.cells);
+      }
       if (!result.backend) {
         result.backend = 'headless' as Backend;
       }

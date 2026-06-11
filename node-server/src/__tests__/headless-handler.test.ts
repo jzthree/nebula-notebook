@@ -1251,4 +1251,50 @@ describe('HeadlessOperationHandler', () => {
       expect(updates.some(update => update.source === 'mcp')).toBe(true);
     });
   });
+
+  describe('OCC expectedHash enforcement', () => {
+    it('rejects a stamped write when content changed, returning current content', async () => {
+      const notebookPath = createTestNotebook('occ.ipynb', [
+        { id: 'c1', content: 'current user content' },
+      ]);
+
+      const result = await handler.applyOperation({
+        type: 'updateContent',
+        notebookPath,
+        cellId: 'c1',
+        content: 'agent version',
+        expectedHash: 'deadbeef', // hash of content the agent saw — stale
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.conflict).toBe(true);
+      expect(result.error).toContain('modified');
+      expect(result.error).toContain('current user content');
+      expect(result.currentContent).toBe('current user content');
+
+      // content untouched
+      const read = await handler.applyOperation({ type: 'readCell', notebookPath, cellId: 'c1' });
+      expect((read.cell as any).content).toBe('current user content');
+    });
+
+    it('applies a stamped write when the hash matches', async () => {
+      const notebookPath = createTestNotebook('occ-ok.ipynb', [
+        { id: 'c1', content: 'known content' },
+      ]);
+      const { hashCellContent } = await import('../notebook/cell-hash');
+
+      const result = await handler.applyOperation({
+        type: 'updateContent',
+        notebookPath,
+        cellId: 'c1',
+        content: 'agent update',
+        expectedHash: hashCellContent('known content'),
+      });
+
+      expect(result.success).toBe(true);
+      const read = await handler.applyOperation({ type: 'readCell', notebookPath, cellId: 'c1' });
+      expect((read.cell as any).content).toBe('agent update');
+    });
+  });
+
 });

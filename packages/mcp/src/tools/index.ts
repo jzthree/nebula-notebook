@@ -119,9 +119,9 @@ export async function executeToolForMCP(
 
   // Query updates BEFORE executing the tool (to capture what happened since last call)
   let updatesSince: Array<{ type: string; cellId?: string; cellIndex?: number; timestamp: number; description: string }> = [];
-  const shouldCheckUpdates = isNotebookTool && (
-    name === 'start_agent_session' || !hasActiveSession
-  );
+  // Sessions are collaborative by default — the user may edit mid-session,
+  // so always surface their changes between tool calls.
+  const shouldCheckUpdates = isNotebookTool;
   if (shouldCheckUpdates) {
     try {
       const updatesResult = await client.getUpdatesSinceOp(notebookPath as string);

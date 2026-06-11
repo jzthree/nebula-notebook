@@ -77,6 +77,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Cell, CellType } from '../types';
+import { hashCellContent } from '../lib/cellHash';
 import { validateMetadataValue, CELL_METADATA_SCHEMA } from '../lib/cellMetadata';
 import { authService } from '../services/authService';
 import { EditSource, UpdateSummary } from './useUndoRedo';
@@ -381,6 +382,34 @@ export interface AgentOperationInfo {
   timestamp: number;
 }
 
+
+/**
+ * Optimistic-concurrency check for collaborative agent sessions: the router
+ * stamps destructive agent writes with the content hash the agent last saw;
+ * we compare against the LIVE cell content (this is the only place without
+ * an autosave freshness window). Returns a conflict result or null.
+ */
+function occConflict(
+  operation: unknown,
+  cell: { id: string; content: string },
+  expectedOverride?: string
+): { success: false; conflict: true; error: string; currentContent: string } | null {
+  const expected = expectedOverride ?? (operation as { expectedHash?: string }).expectedHash;
+  if (!expected) return null;
+  const content = cell.content ?? '';
+  if (hashCellContent(content) === expected) return null;
+  const preview = content.slice(0, 2000);
+  return {
+    success: false,
+    conflict: true,
+    error:
+      `Conflict: cell ${cell.id} was modified (likely by the user) after you last read it. ` +
+      `Current content:\n${preview}${content.length > 2000 ? '\n…(truncated)' : ''}\n` +
+      `Re-apply your intent against this content and retry.`,
+    currentContent: content,
+  };
+}
+
 /** Info about active agent session */
 export interface AgentSessionInfo {
   agentId?: string;
@@ -388,6 +417,8 @@ export interface AgentSessionInfo {
   clientVersion?: string;
   startedAt: number;
   lastActivityAt: number;  // Updated on each operation
+  /** true = legacy hard lock (UI read-only); false/undefined = collaborative */
+  exclusive?: boolean;
 }
 
 /** Session timeout in milliseconds (5 minutes of inactivity) */
@@ -685,6 +716,11 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             return { success: false, error: 'Must provide cellId or cellIndex' };
           }
 
+          {
+            const conflict = occConflict(operation, currentCells[targetIndex]);
+            if (conflict) return conflict;
+          }
+
           deleteCellRef.current(targetIndex, 'ai');
 
           // Update cellsRef immediately to avoid stale reads before re-render
@@ -700,6 +736,9 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           if (!cell) {
             return { success: false, error: `Cell with ID "${cellId}" not found` };
           }
+
+          const conflict = occConflict(operation, cell);
+          if (conflict) return conflict;
 
           // Use AI update function if available (marks operation source)
           if (updateContentAIRef.current) {
@@ -724,6 +763,9 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
           }
 
           const cell = currentCells[cellIndex];
+
+          const conflict = occConflict(operation, cell);
+          if (conflict) return conflict;
 
           // Validate all changes against schema before applying any
           const errors: string[] = [];
@@ -846,6 +888,16 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
               deletedIds.push(cellId);
             } else {
               notFound.push(cellId);
+            }
+          }
+
+          // OCC: verify every target cell before deleting any (all-or-nothing)
+          const expectedHashes = (operation as unknown as { expectedHashes?: Record<string, string> }).expectedHashes;
+          if (expectedHashes) {
+            for (const idx of indicesToDelete) {
+              const target = currentCells[idx];
+              const conflict = occConflict(operation, target, expectedHashes[target.id]);
+              if (conflict) return conflict;
             }
           }
 
@@ -1271,6 +1323,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
 
         case 'startAgentSession': {
           const { agentId, clientName, clientVersion, force } = operation as StartAgentSessionOp;
+          const exclusive = (operation as unknown as { exclusive?: boolean }).exclusive === true;
           const now = Date.now();
 
           // Check if there's already an active session
@@ -1285,6 +1338,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
                 clientVersion,
                 startedAt: now,
                 lastActivityAt: now,
+                exclusive,
               });
               return {
                 success: true,
@@ -1305,6 +1359,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             clientVersion,
             startedAt: now,
             lastActivityAt: now,
+            exclusive,
           });
 
           return { success: true };
@@ -1399,6 +1454,11 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             targetCellId = currentCells[cellIndex].id;
           } else {
             return { success: false, error: 'Must provide cellId or cellIndex' };
+          }
+
+          {
+            const conflict = occConflict(operation, currentCells[targetIndex!]);
+            if (conflict) return conflict;
           }
 
           // Check if executeCell callback is available

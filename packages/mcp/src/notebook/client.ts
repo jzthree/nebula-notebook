@@ -2000,7 +2000,8 @@ export class NebulaClient {
     path: string,
     agentId?: string,
     force?: boolean,
-    lastSessionTimestamp?: number
+    lastSessionTimestamp?: number,
+    exclusive?: boolean
   ): Promise<ToolResult<{
     warning?: string;
     previousSessionDuration?: number;
@@ -2014,6 +2015,7 @@ export class NebulaClient {
       clientVersion: this.clientVersion,
       force,
       lastSessionTimestamp,
+      exclusive,
     };
 
     const result = await this.applyOperation(operation);

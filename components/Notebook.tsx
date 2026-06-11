@@ -848,6 +848,30 @@ export const Notebook: React.FC = () => {
   }, []);
   const syncKernelFromBackendRef = useRef<((kernelName: string, serverId?: string | null) => Promise<void>) | null>(null);
 
+  // Cells the agent recently touched (collaborative sessions show presence
+  // instead of locking the notebook). Entries fade after a few seconds.
+  const [agentActiveCellIds, setAgentActiveCellIds] = useState<Set<string>>(new Set());
+  const agentActiveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const markAgentActive = useCallback((cellId: string) => {
+    setAgentActiveCellIds(prev => {
+      if (prev.has(cellId)) return prev;
+      const next = new Set(prev);
+      next.add(cellId);
+      return next;
+    });
+    const timers = agentActiveTimersRef.current;
+    const existing = timers.get(cellId);
+    if (existing) clearTimeout(existing);
+    timers.set(cellId, setTimeout(() => {
+      timers.delete(cellId);
+      setAgentActiveCellIds(prev => {
+        const next = new Set(prev);
+        next.delete(cellId);
+        return next;
+      });
+    }, 5000));
+  }, []);
+
   // Operation handler - receives operations routed from backend OperationRouter
   const { activeOperation: agentOperation, agentSession, forceEndAgentSession } = useOperationHandler({
     filePath: currentFileId,
@@ -875,6 +899,17 @@ export const Notebook: React.FC = () => {
     canRedo,
     getUpdatesSince,
     onAgentOperation: useCallback((operation, result) => {
+      // Presence: mark cells the agent touches (reads included — it shows
+      // where the agent is working so the user can steer around it)
+      {
+        const op = operation as { cellId?: string; cellIds?: string[] };
+        const resultIds = result as { cellId?: string };
+        const touched = [op.cellId, resultIds.cellId, ...(op.cellIds ?? [])].filter(
+          (id): id is string => typeof id === 'string'
+        );
+        touched.forEach(markAgentActive);
+      }
+
       // Skip read-only operations
       if (operation.type === 'readCell' || operation.type === 'readCellOutput') return;
 
@@ -4413,7 +4448,8 @@ export const Notebook: React.FC = () => {
                   index={idx}
                   isActive={!isPreviewMode && activeCellId === cell.id}
                   isHighlighted={highlightedCellIds.has(cell.id)}
-                  isLocked={agentSession !== null || isPreviewMode}
+                  agentActive={agentActiveCellIds.has(cell.id)}
+                  isLocked={agentSession?.exclusive === true || isPreviewMode}
                   allCellsRef={displayCellsRef}
                   cellIndexMapRef={cellIndexMapRef}
                   onUpdate={handleUpdateCell}

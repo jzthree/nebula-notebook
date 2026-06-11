@@ -633,6 +633,7 @@ describe('Notebook Routes', () => {
         url: '/api/notebook/operation',
         payload: {
           type: 'startAgentSession',
+          exclusive: true, // plumbing tests, not collaborative OCC
           notebookPath,
           agentId,
         },
@@ -674,6 +675,7 @@ describe('Notebook Routes', () => {
         url: '/api/notebook/operation',
         payload: {
           type: 'startAgentSession',
+          exclusive: true, // plumbing tests, not collaborative OCC
           notebookPath,
           agentId,
         },
@@ -714,6 +716,7 @@ describe('Notebook Routes', () => {
         url: '/api/notebook/operation',
         payload: {
           type: 'startAgentSession',
+          exclusive: true, // plumbing tests, not collaborative OCC
           notebookPath,
           agentId,
         },

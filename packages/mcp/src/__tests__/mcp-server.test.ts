@@ -84,7 +84,7 @@ describe('MCP Server', () => {
       const result = await sendRequest('initialize', {});
       expect(result).toBeDefined();
       expect(result.protocolVersion).toBe('2024-11-05');
-      expect(result.serverInfo.name).toBe('nebula-mcp');
+      expect(result.serverInfo.name).toBe('nebula-notebook-mcp');
       expect(result.serverInfo.version).toBe('0.1.0');
       expect(result.capabilities.tools).toBeDefined();
     });

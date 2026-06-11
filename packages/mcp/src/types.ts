@@ -251,6 +251,8 @@ export interface StartAgentSessionOp {
   force?: boolean;
   /** Optional timestamp to return updates since last agent session (ms since epoch). */
   lastSessionTimestamp?: number;
+  /** Lock the UI read-only (legacy). Default false = collaborative. */
+  exclusive?: boolean;
 }
 
 /**
