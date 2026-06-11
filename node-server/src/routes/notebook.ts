@@ -92,6 +92,13 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
         history
       );
 
+      // The UI just wrote newer content than whatever the headless handler may
+      // have cached. Drop the cache so headless ops (an agent working after the
+      // user closes the tab) reload from disk instead of serving — or worse,
+      // OCC-validating against — stale cells.
+      headlessHandler.invalidate(filePath);
+      headlessHandler.invalidate(fsService.normalizePath(filePath));
+
       return reply.send({ status: 'ok', path: filePath, mtime: result.mtime });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';

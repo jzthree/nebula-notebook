@@ -821,4 +821,50 @@ describe('Notebook Routes - Response Format Parity', () => {
       expect(body).toHaveProperty('can_agent_modify');
     });
   });
+
+  describe('headless cache invalidation on UI save', () => {
+    it('serves fresh content after /notebook/save overwrites a cached notebook', async () => {
+      const notebookPath = path.join(testDir, 'cache-refresh.ipynb');
+      fs.writeFileSync(notebookPath, JSON.stringify({
+        cells: [{
+          cell_type: 'code',
+          source: ['version one'],
+          metadata: { nebula_id: 'c1' },
+          outputs: [],
+          execution_count: null,
+        }],
+        metadata: { kernelspec: { name: 'python3', display_name: 'Python 3' }, nebula: {} },
+        nbformat: 4,
+        nbformat_minor: 5,
+      }));
+
+      // Populate the headless cache
+      const read1 = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/operation',
+        payload: { type: 'readCell', notebookPath, cellId: 'c1' },
+      });
+      expect(JSON.parse(read1.body).cell.content).toBe('version one');
+
+      // UI autosave writes newer content
+      const save = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/save',
+        payload: {
+          path: notebookPath,
+          cells: [{ id: 'c1', type: 'code', content: 'version two', outputs: [] }],
+        },
+      });
+      expect(save.statusCode).toBe(200);
+
+      // Headless reads must now see the saved content, not the stale cache
+      const read2 = await app.inject({
+        method: 'POST',
+        url: '/api/notebook/operation',
+        payload: { type: 'readCell', notebookPath, cellId: 'c1' },
+      });
+      expect(JSON.parse(read2.body).cell.content).toBe('version two');
+    });
+  });
+
 });

@@ -113,6 +113,12 @@ export class OperationRouter {
       lastActivityAt: Date.now(),
     });
 
+    // The UI is now the source of truth for this notebook; any headless cache
+    // is potentially stale (and would be consulted again if this connection
+    // goes stale or closes).
+    this.headlessHandler?.invalidate(notebookPath);
+    this.headlessHandler?.invalidate(normalizedPath);
+
     console.log(`[OperationRouter] UI registered for: ${normalizedPath}`);
   }
 
@@ -133,6 +139,10 @@ export class OperationRouter {
         request.reject(new Error('UI disconnected'));
       }
       this.uiConnections.delete(normalizedPath);
+      // Subsequent ops route headless — make sure they reload from disk (which
+      // has the UI's autosaves) rather than a cache predating the UI session.
+      this.headlessHandler?.invalidate(notebookPath);
+      this.headlessHandler?.invalidate(normalizedPath);
       console.log(`[OperationRouter] UI unregistered for: ${normalizedPath}`);
     }
   }

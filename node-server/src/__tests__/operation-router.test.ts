@@ -24,6 +24,7 @@ describe('OperationRouter', () => {
     router.setHeadlessHandler({
       applyOperation,
       readNotebook: vi.fn(async () => ({ success: true, backend: 'headless', data: { cells: [] } })),
+      invalidate: vi.fn(),
     } as any);
 
     const ws = {
@@ -118,6 +119,7 @@ describe('OperationRouter collaborative OCC', () => {
         data: { cells: [{ id: 'cell-1', content: 'original content' }, { id: 'cell-2', content: 'other' }] },
       })),
       getUpdatesSince: vi.fn(() => []),
+      invalidate: vi.fn(),
     } as any);
     return { router, seen, applyOperation };
   }
