@@ -2,7 +2,18 @@
 
 Nebula is an agent-native notebook computing environment built for what's coming next: real Jupyter kernels, real filesystem access, and a notebook that agents (Claude Code, Codex, …) can drive end-to-end through MCP — while staying a fast, polished notebook even if you never touch the AI features.
 
-![Nebula Notebook — agents drive the notebook via MCP](https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/nebula-hero.svg)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/nebula-hero.svg" alt="Nebula Notebook driving an exoplanets analysis: a code cell with a discovery-method-colored period–radius scatter, habitable-zone candidates ringed in violet, Kepler-452b annotated, and the built-in agent terminal where Claude narrates the analysis" width="940">
+</p>
+
+## Highlights
+
+- **Agent-native** — Claude Code, Codex, Cursor & friends drive notebooks through MCP (`npx nebula-notebook-mcp setup-mcp`); an agent terminal is built into every notebook, with one-click launch pre-briefed on your server and notebook
+- **Edit while the agent edits** — collaborative sessions with per-cell optimistic concurrency: a conflicting agent write is rejected with your current content and self-heals on retry; nothing is silently overwritten
+- **"Fix with agent"** on any failing cell, plus per-cell prompts — both inject straight into the agent's terminal, context included
+- **Real Jupyter kernels** over ZeroMQ (Python, Julia, R, …), with kernels that survive dev-server restarts and reattach
+- **Rich outputs** — Plotly MIME rendering and Nebula-native interactive JS outputs, in a virtualized cell list that stays fast on large notebooks
+- **Runs anywhere** — `npx nebula-notebook`, real filesystem access, TOTP 2FA, and multi-server clusters behind a single UI
 
 ## Quick Start
 

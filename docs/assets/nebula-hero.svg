@@ -5,7 +5,7 @@
     </filter>
   </defs>
   <g filter="url(#cardShadow)">
-    <rect x="6" y="6" width="928" height="1074" rx="12" fill="#ffffff" stroke="#e5e9f0"/>
+    <rect x="6" y="6" width="928" height="1074" rx="12" fill="#f8fafc" stroke="#e5e9f0"/>
   </g>
   <g transform="translate(36.0,35.0) scale(0.8333)" fill="none" stroke="#334155" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M4 5h16"/>
@@ -13,7 +13,7 @@
       <path d="M4 19h16"/>
     </g>
   <text x="74" y="53" font-size="22" font-weight="700" fill="#0f172a">exoplanets</text>
-  <rect x="196" y="34" width="60" height="24" rx="6" fill="#f1f5f9"/>
+  <rect x="196" y="34" width="60" height="24" rx="6" fill="#eef2f6"/>
   <text x="226" y="50" text-anchor="middle" font-size="12" fill="#94a3b8">.ipynb</text>
   <circle cx="82" cy="81" r="4.5" fill="#22c55e"/>
   <text x="93" y="86" font-size="13.5" fill="#334155">Python 3.12 (Nebula)</text>
@@ -479,7 +479,7 @@
     <polygon points="41,1009 41,1017 47,1013" fill="#dc2626"/>
     <text x="52" y="1017" fill="#dc2626">bypass permissions on <tspan fill="#64748b">(shift+tab to cycle) · ← for agents</tspan></text>
   </g>
-  <path d="M6 1048 h928 v14 a12 12 0 0 1 -12 12 h-904 a12 12 0 0 1 -12 -12 z" fill="#f8fafc"/>
+  <path d="M6 1048 h928 v14 a12 12 0 0 1 -12 12 h-904 a12 12 0 0 1 -12 -12 z" fill="#f1f5f9"/>
   <line x1="6" y1="1048" x2="934" y2="1048" stroke="#e5e9f0"/>
   <rect x="22" y="1053" width="92" height="22" rx="5" fill="#e9edf3"/>
   <text x="36" y="1068" font-size="12" fill="#475569" font-family="ui-monospace, Menlo, monospace">&gt;_ Terminal</text>
