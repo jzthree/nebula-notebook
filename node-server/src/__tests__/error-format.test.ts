@@ -20,7 +20,6 @@ import kernelRoutes from '../routes/kernel';
 import fsRoutes from '../routes/fs';
 import notebookRoutes from '../routes/notebook';
 import pythonRoutes from '../routes/python';
-import llmRoutes from '../routes/llm';
 
 describe('Error Format - FastAPI Parity', () => {
   let app: FastifyInstance;
@@ -32,7 +31,6 @@ describe('Error Format - FastAPI Parity', () => {
     await app.register(fsRoutes, { prefix: '/api' });
     await app.register(notebookRoutes, { prefix: '/api' });
     await app.register(pythonRoutes, { prefix: '/api' });
-    await app.register(llmRoutes, { prefix: '/api' });
     await app.ready();
   });
 
