@@ -32,6 +32,10 @@ interface UIConnection {
 interface KernelChangedPayload {
   kernelName: string;
   serverId?: string | null;
+  // mtime (seconds) of the notebook after kernel metadata was persisted to
+  // disk — lets the UI update its lastKnownMtime instead of later mistaking
+  // the server-side write for an external change ("file on disk is newer").
+  mtime?: number;
 }
 
 type Backend = 'ui' | 'headless';
@@ -78,6 +82,11 @@ export class OperationRouter {
   private headlessHandler: HeadlessOperationHandler | null = null;
   private operationTimeout = 30000; // 30 seconds
   private agentLocks: Map<string, AgentLock> = new Map(); // path -> lock
+  // Content hashes from reads that happen OUTSIDE a session (agents read to
+  // orient themselves before calling start_agent_session). Seeds the session's
+  // cellHashes on start so the first write doesn't hit "read it first".
+  // Keyed per path — the per-notebook lock already serializes writing agents.
+  private preSessionReadHashes: Map<string, Map<string, string>> = new Map();
 
   setHeadlessHandler(handler: HeadlessOperationHandler): void {
     this.headlessHandler = handler;
@@ -159,6 +168,7 @@ export class OperationRouter {
         type: 'kernelChanged',
         kernelName: payload.kernelName,
         serverId: payload.serverId ?? null,
+        mtime: payload.mtime,
       }));
     } catch (err) {
       console.warn(`[OperationRouter] Failed to notify UI about kernel change for ${normalizedPath}:`, err);
@@ -230,7 +240,8 @@ export class OperationRouter {
       }
     }
 
-    // Acquire new lock
+    // Acquire new lock — seeded with hashes from any pre-session reads, so the
+    // standard orient-then-edit agent flow doesn't trip "read it first".
     const now = Date.now();
     const newLock: AgentLock = {
       agentId,
@@ -240,7 +251,7 @@ export class OperationRouter {
       notebookPath: normalizedPath,
       lockedAt: now,
       exclusive: metadata?.exclusive === true,
-      cellHashes: new Map(),
+      cellHashes: new Map(this.preSessionReadHashes.get(normalizedPath) ?? []),
     };
     this.agentLocks.set(normalizedPath, newLock);
     console.log(`[OperationRouter] Agent session started for: ${normalizedPath} (agent: ${agentId}, client: ${metadata?.clientName || 'unknown'})`);
@@ -569,11 +580,13 @@ export class OperationRouter {
     result: OperationResult
   ): void {
     const lock = this.agentLocks.get(normalizedPath);
-    if (!lock || lock.expiresAt <= Date.now()) return;
+    const hashes = (lock && lock.expiresAt > Date.now())
+      ? lock.cellHashes
+      : this.getPreSessionStore(normalizedPath); // pre-session reads arm OCC too
 
     const record = (cellId: unknown, content: unknown) => {
       if (typeof cellId === 'string' && typeof content === 'string') {
-        lock.cellHashes.set(cellId, hashCellContent(content));
+        hashes.set(cellId, hashCellContent(content));
       }
     };
 
@@ -600,17 +613,17 @@ export class OperationRouter {
         break;
       }
       case 'deleteCell':
-        if (typeof operation.cellId === 'string') lock.cellHashes.delete(operation.cellId);
+        if (typeof operation.cellId === 'string') hashes.delete(operation.cellId);
         break;
       case 'deleteCells':
         if (Array.isArray(operation.cellIds)) {
           for (const id of operation.cellIds) {
-            if (typeof id === 'string') lock.cellHashes.delete(id);
+            if (typeof id === 'string') hashes.delete(id);
           }
         }
         break;
       case 'clearNotebook':
-        lock.cellHashes.clear();
+        hashes.clear();
         break;
     }
   }
@@ -622,12 +635,28 @@ export class OperationRouter {
   recordNotebookReadHashes(notebookPath: string, cells: Array<{ id?: string; content?: string }>): void {
     const normalizedPath = normalizeNotebookPath(notebookPath);
     const lock = this.agentLocks.get(normalizedPath);
-    if (!lock || lock.expiresAt <= Date.now()) return;
+    const target = (lock && lock.expiresAt > Date.now())
+      ? lock.cellHashes
+      : this.getPreSessionStore(normalizedPath);
     for (const cell of cells) {
       if (typeof cell?.id === 'string' && typeof cell?.content === 'string') {
-        lock.cellHashes.set(cell.id, hashCellContent(cell.content));
+        target.set(cell.id, hashCellContent(cell.content));
       }
     }
+  }
+
+  private getPreSessionStore(normalizedPath: string): Map<string, string> {
+    let store = this.preSessionReadHashes.get(normalizedPath);
+    if (!store) {
+      store = new Map();
+      this.preSessionReadHashes.set(normalizedPath, store);
+      // Bound total memory: keep at most a handful of notebooks' worth.
+      if (this.preSessionReadHashes.size > 16) {
+        const oldest = this.preSessionReadHashes.keys().next().value;
+        if (oldest && oldest !== normalizedPath) this.preSessionReadHashes.delete(oldest);
+      }
+    }
+    return store;
   }
 
   private async forwardToUI(notebookPath: string, operation: Record<string, unknown>): Promise<OperationResult> {

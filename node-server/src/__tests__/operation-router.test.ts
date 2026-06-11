@@ -127,6 +127,22 @@ describe('OperationRouter collaborative OCC', () => {
   const start = (router: OperationRouter, exclusive = false) =>
     router.applyOperation({ type: 'startAgentSession', notebookPath: nbPath, agentId: 'a1', exclusive });
 
+
+  it('arms OCC from reads made before the session starts (orient-then-edit flow)', async () => {
+    const { router, seen } = makeRouter();
+
+    // Agent reads to orient itself BEFORE starting a session
+    await router.readNotebook(nbPath);
+    await start(router);
+
+    const result = await router.applyOperation({
+      type: 'updateContent', notebookPath: nbPath, agentId: 'a1', cellId: 'cell-1', content: 'edit',
+    });
+    expect(result.success).toBe(true);
+    const write = seen.find(op => op.type === 'updateContent');
+    expect(write?.expectedHash).toBe(hashCellContent('original content'));
+  });
+
   it('rejects collaborative writes to cells the agent has not read', async () => {
     const { router } = makeRouter();
     await start(router);

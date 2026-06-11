@@ -370,6 +370,7 @@ interface KernelChangedMessage {
   type: 'kernelChanged';
   kernelName: string;
   serverId?: string | null;
+  mtime?: number;
 }
 
 type IncomingMessage = OperationMessage | ReadNotebookMessage | KernelChangedMessage | { type: 'pong' };
@@ -508,7 +509,7 @@ interface UseOperationHandlerOptions {
   }>;
 
   /** Callback when backend reports a kernel change initiated outside the UI */
-  onKernelChanged?: (kernelName: string, serverId?: string | null) => Promise<void> | void;
+  onKernelChanged?: (kernelName: string, serverId?: string | null, mtime?: number) => Promise<void> | void;
 
   /** Callback when an agent operation is applied (for toasts/notifications) */
   onAgentOperation?: (operation: NotebookOperation, result: OperationResult) => void;
@@ -1573,7 +1574,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     }
 
     if (data.type === 'kernelChanged') {
-      await onKernelChangedRef.current?.(data.kernelName, data.serverId);
+      await onKernelChangedRef.current?.(data.kernelName, data.serverId, (data as { mtime?: number }).mtime);
       return;
     }
 

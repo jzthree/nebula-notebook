@@ -405,7 +405,7 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
           const metadataResult = await persistNotebookKernelMetadata(file_path, kernel_name);
           notebookMtime = metadataResult.mtime;
           if (client_origin !== 'ui') {
-            operationRouter.notifyKernelChanged(file_path, { kernelName: kernel_name, serverId: server_id });
+            operationRouter.notifyKernelChanged(file_path, { kernelName: kernel_name, serverId: server_id, mtime: metadataResult.mtime });
           }
         }
         return reply.send({ session_id: result.sessionId, kernel_name, server_id, mtime: notebookMtime });
@@ -423,7 +423,7 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
         const metadataResult = await persistNotebookKernelMetadata(file_path, kernel_name);
         notebookMtime = metadataResult.mtime;
         if (client_origin !== 'ui') {
-          operationRouter.notifyKernelChanged(file_path, { kernelName: kernel_name, serverId: localServerId });
+          operationRouter.notifyKernelChanged(file_path, { kernelName: kernel_name, serverId: localServerId, mtime: metadataResult.mtime });
         }
       }
       return reply.send({ session_id: sessionId, kernel_name, server_id: localServerId, mtime: notebookMtime });
@@ -494,6 +494,7 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
           operationRouter.notifyKernelChanged(normalizedFilePath, {
             kernelName: effectiveKernelName,
             serverId: effectiveServerId,
+            mtime: metadataResult.mtime,
           });
         }
         return reply.send({
@@ -516,6 +517,7 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
         operationRouter.notifyKernelChanged(normalizedFilePath, {
           kernelName: effectiveKernelName,
           serverId: localServerId,
+          mtime: metadataResult.mtime,
         });
       }
       return reply.send({

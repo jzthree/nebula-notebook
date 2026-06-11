@@ -890,7 +890,13 @@ export const Notebook: React.FC = () => {
     shutdownKernel: shutdownKernelForAgent,
     restartKernel: restartKernelForAgent,
     interruptKernel: interruptKernelForAgent,
-    onKernelChanged: async (kernelName, serverId) => {
+    onKernelChanged: async (kernelName, serverId, mtime) => {
+      // The server persisted kernel metadata into the .ipynb on the agent's
+      // behalf — adopt the new mtime so autosave doesn't mistake that write
+      // for an external change ("file on disk is newer").
+      if (typeof mtime === 'number') {
+        setLastKnownMtime(mtime);
+      }
       await syncKernelFromBackendRef.current?.(kernelName, serverId);
     },
     undo: rawUndo,
