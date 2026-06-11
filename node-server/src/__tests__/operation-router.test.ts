@@ -143,6 +143,46 @@ describe('OperationRouter collaborative OCC', () => {
     expect(write?.expectedHash).toBe(hashCellContent('original content'));
   });
 
+
+  it('re-baselines from conflict errors so the corrected retry succeeds (self-healing)', async () => {
+    const router = new OperationRouter();
+    const seen: Record<string, unknown>[] = [];
+    let conflictOnce = true;
+    router.setHeadlessHandler({
+      applyOperation: vi.fn(async (op: Record<string, unknown>) => {
+        seen.push(op);
+        if (op.type === 'readCell') {
+          return { success: true, cell: { id: 'cell-1', content: 'agent-known content' } };
+        }
+        if (op.type === 'updateContent' && conflictOnce) {
+          conflictOnce = false;
+          // Applier rejects: the user changed the cell; current content returned
+          return { success: false, conflict: true, error: 'Conflict', currentContent: 'user-edited content' };
+        }
+        return { success: true, cellId: op.cellId };
+      }),
+      readNotebook: vi.fn(async () => ({ success: true, data: { cells: [] } })),
+      invalidate: vi.fn(),
+    } as any);
+
+    await router.applyOperation({ type: 'startAgentSession', notebookPath: nbPath, agentId: 'a1' });
+    await router.applyOperation({ type: 'readCell', notebookPath: nbPath, agentId: 'a1', cellId: 'cell-1' });
+
+    // First write: stamped with the read-time hash, applier reports conflict
+    const first = await router.applyOperation({
+      type: 'updateContent', notebookPath: nbPath, agentId: 'a1', cellId: 'cell-1', content: 'agent v2',
+    });
+    expect(first.conflict).toBe(true);
+
+    // Retry WITHOUT re-reading: must be stamped against the conflict-provided content
+    const second = await router.applyOperation({
+      type: 'updateContent', notebookPath: nbPath, agentId: 'a1', cellId: 'cell-1', content: 'agent v2 on top of user',
+    });
+    expect(second.success).toBe(true);
+    const retryOp = seen.filter(op => op.type === 'updateContent')[1];
+    expect(retryOp?.expectedHash).toBe(hashCellContent('user-edited content'));
+  });
+
   it('rejects collaborative writes to cells the agent has not read', async () => {
     const { router } = makeRouter();
     await start(router);

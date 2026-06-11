@@ -406,7 +406,7 @@ function occConflict(
     error:
       `Conflict: cell ${cell.id} was modified (likely by the user) after you last read it. ` +
       `Current content:\n${preview}${content.length > 2000 ? '\n…(truncated)' : ''}\n` +
-      `Re-apply your intent against this content and retry.`,
+      `Re-apply your intent against this content and retry — your next write to this cell is validated against the content shown above, so no re-read is needed.`,
     currentContent: content,
   };
 }

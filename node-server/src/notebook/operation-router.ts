@@ -492,6 +492,16 @@ export class OperationRouter {
     // agent's own successful writes.
     if (result.success) {
       this.recordSessionHashes(normalizedPath, opType, operation, result);
+    } else if (result.conflict && typeof result.currentContent === 'string' && typeof operation.cellId === 'string') {
+      // Self-healing conflicts: the error hands the agent the current content,
+      // so re-baseline the session to the same content. The agent's corrected
+      // retry then validates against what it was just told — without this, the
+      // stale stored hash rejects every retry until an explicit re-read.
+      const lock2 = this.agentLocks.get(normalizedPath);
+      const hashes = (lock2 && lock2.expiresAt > Date.now())
+        ? lock2.cellHashes
+        : this.getPreSessionStore(normalizedPath);
+      hashes.set(operation.cellId, hashCellContent(result.currentContent));
     }
 
     return result;

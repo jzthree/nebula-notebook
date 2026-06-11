@@ -979,6 +979,14 @@ export const Notebook: React.FC = () => {
         return;
       }
 
+      // OCC conflicts are normal collaboration, not failures: the agent was
+      // just handed your newer version and will retry on top of it. Show a
+      // brief note instead of the full error (which embeds cell content).
+      if (!result.success && (result as { conflict?: boolean }).conflict) {
+        toast('Agent edit held off — you changed that cell; it will retry with your version', 'info', 2500);
+        return;
+      }
+
       const msg = formatAgentOperation(operation.type, result);
       toast(msg, result.success ? 'info' : 'error', 2000);
     }, [formatAgentOperation, toast]),
