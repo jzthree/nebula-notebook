@@ -13,7 +13,7 @@ npm run build
 
 # Test the package locally
 npm pack
-npm install -g nebula-tools-0.1.0.tgz
+npm install -g nebula-notebook-mcp-0.1.0.tgz
 
 # Test that the binary works
 nebula-mcp --help
@@ -35,7 +35,7 @@ npm publish --access public
 
 Users install globally:
 ```bash
-npm install -g nebula-tools
+npm install -g nebula-notebook-mcp
 ```
 
 Then add to `~/.claude.json`:
@@ -57,7 +57,7 @@ Users don't need to install, just add to `~/.claude.json`:
   "mcpServers": {
     "nebula-notebook": {
       "command": "npx",
-      "args": ["-y", "nebula-tools"]
+      "args": ["-y", "nebula-notebook-mcp"]
     }
   }
 }
@@ -68,7 +68,7 @@ Users don't need to install, just add to `~/.claude.json`:
 Submit to https://smithery.ai/submit:
 
 1. Go to https://smithery.ai/submit
-2. Enter your npm package name: `nebula-tools`
+2. Enter your npm package name: `nebula-notebook-mcp`
 3. Fill in the form with:
    - **Name**: Nebula Notebook
    - **Description**: MCP server for Nebula Notebook - Jupyter alternative with AI integration
@@ -77,7 +77,7 @@ Submit to https://smithery.ai/submit:
 
 Users can then install with:
 ```bash
-smithery install nebula-tools
+smithery install nebula-notebook-mcp
 ```
 
 ### Method 4: GitHub Direct Install
@@ -88,7 +88,7 @@ Users can install directly from GitHub:
   "mcpServers": {
     "nebula-notebook": {
       "command": "npx",
-      "args": ["-y", "github:jzthree/nebula-tools"]
+      "args": ["-y", "github:jzthree/nebula-notebook-mcp"]
     }
   }
 }
@@ -107,7 +107,7 @@ Nebula Notebook provides an MCP server that allows Claude Code to interact with 
 
 **Option 1: NPM**
 \`\`\`bash
-npm install -g nebula-tools
+npm install -g nebula-notebook-mcp
 \`\`\`
 
 **Option 2: npx (no install required)**
@@ -134,7 +134,7 @@ Or for npx (zero install):
   "mcpServers": {
     "nebula-notebook": {
       "command": "npx",
-      "args": ["-y", "nebula-tools"]
+      "args": ["-y", "nebula-notebook-mcp"]
     }
   }
 }
@@ -196,5 +196,5 @@ npm publish
 - [ ] LICENSE file exists
 - [ ] `bin/nebula-mcp.js` has proper shebang (`#!/usr/bin/env node`)
 - [ ] Test locally with `npm link`
-- [ ] Test with `npx` from tarball: `npm pack && npx ./nebula-tools-0.1.0.tgz`
+- [ ] Test with `npx` from tarball: `npm pack && npx ./nebula-notebook-mcp-0.1.0.tgz`
 - [ ] Commit and tag: `git tag v0.1.0 && git push --tags`

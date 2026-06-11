@@ -69,9 +69,9 @@ describe('agentTerminalService prompt injection', () => {
 
   it('uses the machine-agnostic npx setup command, with server repo path as context', () => {
     agentTerminalService.setRepoRoot('/srv/my nebula');
-    expect(agentTerminalService.buildSetupMcpCommand()).toBe('npx nebula-tools setup-mcp');
+    expect(agentTerminalService.buildSetupMcpCommand()).toBe('npx nebula-notebook-mcp setup-mcp');
     const prompt = agentTerminalService.buildBootstrapPrompt();
-    expect(prompt).toContain('npx nebula-tools setup-mcp');
+    expect(prompt).toContain('npx nebula-notebook-mcp setup-mcp');
     expect(prompt).toContain('/srv/my nebula');
   });
 

@@ -37,12 +37,12 @@ const CONFIG_PATHS = {
 };
 
 // When running from an npm install (node_modules, including the npx cache),
-// write configs that invoke `npx -y nebula-tools` — stable across npx cache
-// evictions and package updates. A repo checkout keeps the absolute path
-// (works offline and tracks local edits).
+// write configs that invoke `npx -y nebula-notebook-mcp` — stable across npx
+// cache evictions and package updates. A repo checkout keeps the absolute
+// path (works offline and tracks local edits).
 const IS_NPM_INSTALL = __dirname.split(path.sep).includes('node_modules');
 const MCP_COMMAND = IS_NPM_INSTALL ? 'npx' : 'node';
-const MCP_ARGS = IS_NPM_INSTALL ? ['-y', 'nebula-tools'] : [MCP_SERVER_PATH];
+const MCP_ARGS = IS_NPM_INSTALL ? ['-y', 'nebula-notebook-mcp'] : [MCP_SERVER_PATH];
 
 // Nebula MCP server configuration
 const NEBULA_MCP_CONFIG = {

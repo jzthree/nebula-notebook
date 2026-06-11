@@ -137,7 +137,7 @@ export class NebulaMCPServer {
 
             result = {
               protocolVersion,
-              serverInfo: { name: 'nebula-mcp', version: '0.1.0' },
+              serverInfo: { name: 'nebula-notebook-mcp', version: '0.1.0' },
               capabilities: { tools: {} },
             };
           }

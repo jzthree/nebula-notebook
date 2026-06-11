@@ -1,12 +1,12 @@
 {
-  "name": "nebula-tools",
+  "name": "nebula-notebook-mcp",
   "version": "0.1.0",
-  "description": "MCP server for Nebula Notebook - Jupyter alternative with AI integration",
+  "description": "MCP server for Nebula Notebook \u2014 lets agents (Claude Code, Codex, etc.) read, edit, and execute notebooks on a running Nebula server",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "nebula-mcp": "./bin/nebula-mcp.js"
+    "nebula-notebook-mcp": "./bin/nebula-mcp.js"
   },
   "files": [
     "dist",

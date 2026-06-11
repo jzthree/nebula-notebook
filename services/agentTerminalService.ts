@@ -133,10 +133,10 @@ class AgentTerminalService {
   /**
    * Command that registers the Nebula MCP with the agent CLIs. The npx form
    * works on any machine with Node (no repo checkout, no paths) — the
-   * nebula-tools package is published exactly for this.
+   * nebula-notebook-mcp package is published exactly for this.
    */
   buildSetupMcpCommand(): string {
-    return 'npx nebula-tools setup-mcp';
+    return 'npx nebula-notebook-mcp setup-mcp';
   }
 
   /**
