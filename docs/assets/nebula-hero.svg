@@ -1,162 +1,210 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 768" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 1186" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
   <defs>
-    <filter id="canvasShadow" x="-4%" y="-4%" width="108%" height="110%">
-      <feDropShadow dx="0" dy="6" stdDeviation="14" flood-color="#0f172a" flood-opacity="0.18"/>
+    <filter id="cardShadow" x="-3%" y="-3%" width="106%" height="107%">
+      <feDropShadow dx="0" dy="4" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.14"/>
     </filter>
   </defs>
 
-  <!-- App canvas (light, like the real UI; transparent page bg adapts to GitHub themes) -->
-  <g filter="url(#canvasShadow)">
-    <rect x="14" y="10" width="972" height="730" rx="14" fill="#ffffff" stroke="#e2e8f0"/>
+  <!-- App canvas: window width ≈ editor width -->
+  <g filter="url(#cardShadow)">
+    <rect x="6" y="6" width="928" height="1174" rx="12" fill="#ffffff" stroke="#e5e9f0"/>
   </g>
 
   <!-- ===== Header ===== -->
   <g>
-    <!-- hamburger -->
+    <g stroke="#334155" stroke-width="1.8" stroke-linecap="round">
+      <line x1="36" y1="38" x2="56" y2="38"/><line x1="36" y1="45" x2="56" y2="45"/><line x1="36" y1="52" x2="56" y2="52"/>
+    </g>
+    <text x="74" y="53" font-size="22" font-weight="700" fill="#0f172a">test</text>
+    <rect x="128" y="34" width="60" height="24" rx="6" fill="#f1f5f9"/>
+    <text x="158" y="50" text-anchor="middle" font-size="12" fill="#94a3b8">.ipynb</text>
+
+    <circle cx="82" cy="79" r="4.5" fill="#22c55e"/>
+    <text x="93" y="84" font-size="13.5" fill="#334155">Python 3.12 (Nebula)</text>
+    <path d="M232 76 l5 6 5 -6" fill="none" stroke="#94a3b8" stroke-width="1.5"/>
+    <path d="M258 78 l4 4 7 -8" fill="none" stroke="#16a34a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="275" y="84" font-size="13.5" fill="#94a3b8">42m ago</text>
+    <circle cx="352" cy="79" r="6" fill="none" stroke="#16a34a" stroke-width="1.5"/>
+    <path d="M349.5 79 l2 2 3.5 -4" fill="none" stroke="#16a34a" stroke-width="1.4" stroke-linecap="round"/>
+    <text x="364" y="84" font-size="13.5" fill="#16a34a">#1 0.0s</text>
+
+    <!-- right cluster -->
+    <text x="468" y="51" font-size="17" fill="#64748b">↶</text>
+    <text x="496" y="51" font-size="17" fill="#64748b">↷</text>
+    <line x1="526" y1="32" x2="526" y2="56" stroke="#e2e8f0"/>
+    <g stroke="#475569" stroke-width="1.5" fill="none" stroke-linecap="round">
+      <rect x="540" y="35" width="24" height="16" rx="3"/>
+      <line x1="546" y1="43" x2="548" y2="43"/><line x1="553" y1="43" x2="555" y2="43"/><line x1="558" y1="43" x2="560" y2="43"/>
+    </g>
+    <!-- agent permission (pencil-off, green) -->
+    <rect x="578" y="31" width="28" height="25" rx="7" fill="#f0fdf4" stroke="#4ade80" stroke-width="1.3"/>
+    <g stroke="#16a34a" stroke-width="1.5" fill="none" stroke-linecap="round">
+      <path d="M586 49 l3 -0.8 9 -9 -2.3 -2.3 -9 9 z"/>
+      <line x1="585" y1="36" x2="601" y2="51"/>
+    </g>
+    <!-- expand -->
+    <g stroke="#475569" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="630,34 638,34 638,42"/>
+      <line x1="638" y1="34" x2="630" y2="42"/>
+      <polyline points="624,53 616,53 616,45"/>
+      <line x1="616" y1="53" x2="624" y2="45"/>
+    </g>
+    <!-- gear -->
+    <circle cx="664" cy="44" r="7" fill="none" stroke="#475569" stroke-width="1.6"/>
+    <circle cx="664" cy="44" r="2.2" fill="#475569"/>
     <g stroke="#475569" stroke-width="1.6" stroke-linecap="round">
-      <line x1="248" y1="32" x2="266" y2="32"/><line x1="248" y1="38" x2="266" y2="38"/><line x1="248" y1="44" x2="266" y2="44"/>
+      <line x1="664" y1="34" x2="664" y2="36.5"/><line x1="664" y1="51.5" x2="664" y2="54"/>
+      <line x1="654" y1="44" x2="656.5" y2="44"/><line x1="671.5" y1="44" x2="674" y2="44"/>
     </g>
-    <!-- title -->
-    <text x="288" y="42" font-size="19" font-weight="700" fill="#0f172a">test</text>
-    <rect x="330" y="27" width="52" height="20" rx="5" fill="#f1f5f9"/>
-    <text x="356" y="41" text-anchor="middle" font-size="11" fill="#64748b">.ipynb</text>
-    <!-- kernel line -->
-    <circle cx="293" cy="62" r="4" fill="#22c55e"/>
-    <text x="302" y="66" font-size="12" fill="#475569">Python 3.12 (Nebula)</text>
-    <path d="M428 60 l4 5 4-5" fill="none" stroke="#94a3b8" stroke-width="1.4"/>
-    <text x="448" y="66" font-size="12" fill="#16a34a">✓ 33m ago</text>
-    <text x="522" y="66" font-size="12" fill="#16a34a">#1 0.0s</text>
+    <!-- save -->
+    <g stroke="#475569" stroke-width="1.5" fill="none" stroke-linejoin="round">
+      <path d="M694 36 h13 l4 4 v13 h-17 z"/>
+      <rect x="698" y="45" width="9" height="8"/>
+      <line x1="699" y1="36" x2="699" y2="41"/><line x1="706" y1="36" x2="706" y2="41"/>
+    </g>
+    <text x="718" y="50" font-size="14.5" fill="#334155">Save</text>
 
-    <!-- right icon cluster -->
-    <text x="622" y="41" font-size="16" fill="#64748b">↶</text>
-    <text x="646" y="41" font-size="16" fill="#64748b">↷</text>
-    <g stroke="#64748b" stroke-width="1.4" fill="none" stroke-linecap="round">
-      <rect x="676" y="28" width="20" height="13" rx="2.5"/> <!-- keyboard -->
-      <line x1="681" y1="34.5" x2="683" y2="34.5"/><line x1="687" y1="34.5" x2="689" y2="34.5"/><line x1="692" y1="34.5" x2="694" y2="34.5"/>
+    <!-- Run All -->
+    <rect x="762" y="29" width="92" height="32" rx="9" fill="#0f172a"/>
+    <polygon points="776,38 776,52 787,45" fill="#ffffff"/>
+    <text x="793" y="50" font-size="14" fill="#ffffff" font-weight="600">Run All</text>
+    <!-- Agent -->
+    <rect x="824" y="29" width="84" height="32" rx="9" fill="#9d2ce8"/>
+    <g transform="translate(836,37)">
+      <rect x="0" y="2.4" width="13" height="10.5" rx="3" fill="none" stroke="#ffffff" stroke-width="1.5"/>
+      <line x1="6.5" y1="2.4" x2="6.5" y2="0" stroke="#ffffff" stroke-width="1.5"/>
+      <circle cx="4" cy="7.6" r="1.15" fill="#ffffff"/>
+      <circle cx="9" cy="7.6" r="1.15" fill="#ffffff"/>
     </g>
-    <!-- agent-permission (green outlined) -->
-    <rect x="708" y="25" width="22" height="20" rx="5" fill="#f0fdf4" stroke="#22c55e"/>
-    <line x1="714" y1="39" x2="724" y2="31" stroke="#16a34a" stroke-width="1.5" stroke-linecap="round"/>
-    <!-- expand (Maximize2-style) -->
-    <g stroke="#64748b" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="750,27 757,27 757,34"/>
-      <polyline points="746,43 739,43 739,36"/>
-      <line x1="757" y1="27" x2="750" y2="34"/>
-      <line x1="739" y1="43" x2="746" y2="36"/>
-    </g>
-    <!-- settings gear (simple) -->
-    <circle cx="770" cy="35" r="6.5" fill="none" stroke="#64748b" stroke-width="1.5"/>
-    <circle cx="770" cy="35" r="2" fill="#64748b"/>
-    <!-- Save -->
-    <text x="790" y="40" font-size="13" fill="#475569">Save</text>
-    <!-- Run All (dark) -->
-    <rect x="826" y="22" width="76" height="26" rx="7" fill="#0f172a"/>
-    <polygon points="838,29 838,41 848,35" fill="#ffffff"/>
-    <text x="853" y="39" font-size="12.5" fill="#ffffff" font-weight="600">Run All</text>
-    <!-- Agent (purple) -->
-    <rect x="930" y="22" width="72" height="26" rx="7" fill="#9333ea" transform="translate(-22,0)"/>
-    <g transform="translate(916,29)">
-      <rect x="0" y="2" width="12" height="9.5" rx="2.5" fill="none" stroke="#ffffff" stroke-width="1.4"/>
-      <line x1="6" y1="2" x2="6" y2="0" stroke="#ffffff" stroke-width="1.4"/>
-      <circle cx="3.6" cy="6.8" r="1.05" fill="#ffffff"/>
-      <circle cx="8.4" cy="6.8" r="1.05" fill="#ffffff"/>
-    </g>
-    <text x="934" y="39" font-size="12.5" fill="#ffffff" font-weight="600">Agent</text>
+    <text x="856" y="50" font-size="14" fill="#ffffff" font-weight="600">Agent</text>
   </g>
 
-  <!-- ===== Notebook cell card (centered column, like the real app) ===== -->
+  <!-- ===== Cell card ===== -->
+  <rect x="30" y="104" width="880" height="764" rx="11" fill="#ffffff" stroke="#e5e9f0"/>
+  <!-- cell toolbar -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+    <text x="50" y="132" font-size="12" fill="#94a3b8">#1</text>
+    <text x="72" y="132" font-size="12" fill="#16a34a">[1]</text>
+  </g>
+  <g stroke="#64748b" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <polygon points="102,121 102,134 112,127.5"/>
+    <rect x="126" y="121" width="11" height="11" rx="2"/>
+    <polyline points="152,131 158,123 164,131"/>
+    <polyline points="178,123 184,131 190,123"/>
+    <rect x="203" y="123" width="10" height="11" rx="1.5"/><line x1="201" y1="123" x2="217" y2="123"/>
+    <line x1="230" y1="127.5" x2="241" y2="127.5"/><line x1="235.5" y1="122" x2="235.5" y2="133"/>
+  </g>
+  <rect x="752" y="115" width="72" height="25" rx="6" fill="#ffffff" stroke="#dde3ec"/>
+  <text x="788" y="132" text-anchor="middle" font-size="12" fill="#1e293b">&lt;&gt; Code</text>
+  <text x="858" y="132" text-anchor="middle" font-size="12" fill="#94a3b8">▤ Text</text>
+
+  <!-- code (8-space indents, the notebook's real current state) -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
+    <text x="56" y="170" fill="#c2563c"># The Mandelbrot set, rendered as ASCII art — pure standard library.</text>
+    <text x="56" y="190" fill="#c2563c"># Each point c = x + yi is iterated under z -&gt; z^2 + c; the character</text>
+    <text x="56" y="210" fill="#c2563c"># shows how many steps it takes to escape the disk of radius 2.</text>
+    <text x="56" y="250"><tspan fill="#1e293b">WIDTH, HEIGHT, MAX_ITER = </tspan><tspan fill="#0d9488">80</tspan><tspan fill="#1e293b">, </tspan><tspan fill="#0d9488">32</tspan><tspan fill="#1e293b">, </tspan><tspan fill="#0d9488">100</tspan></text>
+    <text x="56" y="270"><tspan fill="#1e293b">SHADES = </tspan><tspan fill="#b3403a">" .:-=+*#%@"</tspan><tspan x="240" fill="#c2563c"># darker = escapes slower (deeper in the set)</tspan></text>
+    <text x="56" y="310"><tspan fill="#a626a4">def</tspan><tspan fill="#4078f2"> escape_time</tspan><tspan fill="#1e293b">(c):</tspan></text>
+    <text x="118" y="330"><tspan fill="#1e293b">z = </tspan><tspan fill="#0d9488">0j</tspan></text>
+    <text x="118" y="350"><tspan fill="#a626a4">for</tspan><tspan fill="#1e293b"> n </tspan><tspan fill="#a626a4">in</tspan><tspan fill="#1e293b"> range(MAX_ITER):</tspan></text>
+    <text x="181" y="370"><tspan fill="#1e293b">z = z * z + c</tspan></text>
+    <text x="181" y="390"><tspan fill="#a626a4">if</tspan><tspan fill="#1e293b"> abs(z) &gt; </tspan><tspan fill="#0d9488">2.0</tspan><tspan fill="#1e293b">:</tspan></text>
+    <text x="243" y="410"><tspan fill="#a626a4">return</tspan><tspan fill="#1e293b"> n</tspan></text>
+    <text x="118" y="430"><tspan fill="#a626a4">return</tspan><tspan fill="#1e293b"> MAX_ITER</tspan></text>
+    <text x="56" y="470"><tspan fill="#a626a4">for</tspan><tspan fill="#1e293b"> row </tspan><tspan fill="#a626a4">in</tspan><tspan fill="#1e293b"> range(HEIGHT):</tspan></text>
+    <text x="118" y="490"><tspan fill="#1e293b">y = (row / HEIGHT) * </tspan><tspan fill="#0d9488">2.0</tspan><tspan fill="#1e293b"> - </tspan><tspan fill="#0d9488">1.0</tspan><tspan x="470" fill="#c2563c"># imaginary axis: -1 .. 1</tspan></text>
+    <text x="118" y="510"><tspan fill="#1e293b">line = []</tspan></text>
+    <text x="118" y="530"><tspan fill="#a626a4">for</tspan><tspan fill="#1e293b"> col </tspan><tspan fill="#a626a4">in</tspan><tspan fill="#1e293b"> range(WIDTH):</tspan></text>
+    <text x="181" y="550"><tspan fill="#1e293b">x = (col / WIDTH) * </tspan><tspan fill="#0d9488">3.0</tspan><tspan fill="#1e293b"> - </tspan><tspan fill="#0d9488">2.0</tspan><tspan x="470" fill="#c2563c"># real axis: -2 .. 1</tspan></text>
+    <text x="181" y="570"><tspan fill="#1e293b">t = escape_time(complex(x, y))</tspan></text>
+    <text x="181" y="590"><tspan fill="#a626a4">if</tspan><tspan fill="#1e293b"> t == MAX_ITER:</tspan></text>
+    <text x="243" y="610"><tspan fill="#1e293b">line.append(</tspan><tspan fill="#b3403a">"@"</tspan><tspan fill="#1e293b">)</tspan><tspan x="470" fill="#c2563c"># inside the set</tspan></text>
+    <text x="181" y="630"><tspan fill="#a626a4">else</tspan><tspan fill="#1e293b">:</tspan></text>
+    <text x="243" y="650"><tspan fill="#1e293b">line.append(SHADES[t * (len(SHADES) - </tspan><tspan fill="#0d9488">1</tspan><tspan fill="#1e293b">) // MAX_ITER])</tspan></text>
+    <text x="118" y="670"><tspan fill="#1e293b">print(</tspan><tspan fill="#b3403a">""</tspan><tspan fill="#1e293b">.join(line))</tspan></text>
+    <text x="56" y="710" fill="#c2563c">#this is user action here</text>
+    <text x="56" y="730" fill="#c2563c">#test test</text>
+    <text x="56" y="750" fill="#c2563c">#i will be editing while the agent act</text>
+    <text x="56" y="770" fill="#c2563c">#let's see what will happen when i am editing while the agent works</text>
+    <text x="56" y="790" fill="#c2563c"># i am still typing typing typ</text>
+    <text x="56" y="810" fill="#c2563c">#</text>
+  </g>
+
+  <!-- output strip -->
+  <line x1="30" y1="826" x2="910" y2="826" stroke="#eef2f7"/>
+  <path d="M48 838 l6 6 6 -6" fill="none" stroke="#94a3b8" stroke-width="1.5"/>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#334155">
+    <text x="464" y="844">.</text>
+    <text x="461" y="857">..</text>
+  </g>
+  <text x="852" y="850" font-size="12.5" fill="#94a3b8">69ms</text>
+  <g stroke="#94a3b8" stroke-width="1.3" fill="none" stroke-linecap="round">
+    <line x1="888" y1="841" x2="900" y2="841"/><line x1="888" y1="846" x2="897" y2="846"/><line x1="888" y1="851" x2="900" y2="851"/>
+  </g>
+
+  <!-- ===== Agent panel ===== -->
+  <line x1="6" y1="880" x2="934" y2="880" stroke="#e5e9f0"/>
   <g>
-    <rect x="252" y="86" width="496" height="438" rx="10" fill="#ffffff" stroke="#e2e8f0"/>
-    <!-- cell toolbar -->
-    <rect x="252" y="86" width="496" height="28" rx="10" fill="#f8fafc"/>
-    <rect x="252" y="104" width="496" height="10" fill="#f8fafc"/>
-    <line x1="252" y1="114" x2="748" y2="114" stroke="#eef2f7"/>
-    <text x="266" y="104" font-size="10.5" fill="#94a3b8" font-family="ui-monospace, Menlo, monospace">#1</text>
-    <text x="284" y="104" font-size="10.5" fill="#16a34a" font-family="ui-monospace, Menlo, monospace">[1]</text>
-    <polygon points="306,96 306,106 314,101" fill="#64748b"/>
-    <g stroke="#94a3b8" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="324,103 328,97 332,103"/>           <!-- up -->
-      <polyline points="340,98 344,104 348,98"/>            <!-- down -->
-      <rect x="357" y="97" width="8" height="9" rx="1.5"/>  <!-- trash -->
-      <line x1="356" y1="97" x2="366" y2="97"/>
-      <line x1="376" y1="100.5" x2="384" y2="100.5"/><line x1="380" y1="96.5" x2="380" y2="104.5"/> <!-- plus -->
+    <text x="34" y="903" font-size="12.5" fill="#64748b" font-family="ui-monospace, Menlo, monospace">&gt;_ test</text>
+    <rect x="104" y="886" width="86" height="24" rx="7" fill="#ffffff" stroke="#dde3ec"/>
+    <g transform="translate(116,891)">
+      <rect x="0" y="2.4" width="12" height="9.6" rx="2.8" fill="none" stroke="#9d2ce8" stroke-width="1.4"/>
+      <line x1="6" y1="2.4" x2="6" y2="0.4" stroke="#9d2ce8" stroke-width="1.4"/>
+      <circle cx="3.7" cy="7" r="1" fill="#9d2ce8"/>
+      <circle cx="8.3" cy="7" r="1" fill="#9d2ce8"/>
     </g>
-    <!-- Code/Text chips -->
-    <rect x="648" y="92" width="52" height="17" rx="4" fill="#ffffff" stroke="#e2e8f0"/>
-    <text x="674" y="104" text-anchor="middle" font-size="10" fill="#334155">&lt;&gt; Code</text>
-    <text x="722" y="104" text-anchor="middle" font-size="10" fill="#94a3b8">Text</text>
-
-    <!-- code -->
-    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.4">
-      <text x="272" y="136" fill="#c2410c"># The Mandelbrot set, rendered as ASCII art — pure standard library.</text>
-      <text x="272" y="153" fill="#c2410c"># Each point c = x + yi is iterated under z -&gt; z^2 + c.</text>
-      <text x="272" y="178"><tspan fill="#1e293b">WIDTH, HEIGHT, MAX_ITER = </tspan><tspan fill="#0d9488">80, 32, 100</tspan></text>
-      <text x="272" y="195"><tspan fill="#1e293b">SHADES = </tspan><tspan fill="#16a34a">" .:-=+*#%@"</tspan><tspan fill="#c2410c" xml:space="preserve">  # darker = escapes slower</tspan></text>
-      <text x="272" y="220"><tspan fill="#9333ea">def</tspan><tspan fill="#2563eb"> escape_time</tspan><tspan fill="#1e293b">(c):</tspan></text>
-      <text x="272" y="237" xml:space="preserve"><tspan fill="#1e293b">  z = </tspan><tspan fill="#0d9488">0j</tspan></text>
-      <text x="272" y="254" xml:space="preserve"><tspan fill="#1e293b">  </tspan><tspan fill="#9333ea">for</tspan><tspan fill="#1e293b"> n </tspan><tspan fill="#9333ea">in</tspan><tspan fill="#1e293b"> range(MAX_ITER):</tspan></text>
-      <text x="272" y="271" xml:space="preserve"><tspan fill="#1e293b">    z = z * z + c</tspan></text>
-      <text x="272" y="288" xml:space="preserve"><tspan fill="#1e293b">    </tspan><tspan fill="#9333ea">if</tspan><tspan fill="#1e293b"> abs(z) &gt; </tspan><tspan fill="#0d9488">2.0</tspan><tspan fill="#1e293b">:</tspan></text>
-      <text x="272" y="305" xml:space="preserve"><tspan fill="#1e293b">      </tspan><tspan fill="#9333ea">return</tspan><tspan fill="#1e293b"> n</tspan></text>
-      <text x="272" y="322" xml:space="preserve"><tspan fill="#1e293b">  </tspan><tspan fill="#9333ea">return</tspan><tspan fill="#1e293b"> MAX_ITER</tspan></text>
-      <text x="272" y="347"><tspan fill="#9333ea">for</tspan><tspan fill="#1e293b"> row </tspan><tspan fill="#9333ea">in</tspan><tspan fill="#1e293b"> range(HEIGHT):</tspan></text>
-      <text x="272" y="364" xml:space="preserve"><tspan fill="#1e293b">  y = (row / HEIGHT) * </tspan><tspan fill="#0d9488">2.0</tspan><tspan fill="#1e293b"> - </tspan><tspan fill="#0d9488">1.0</tspan><tspan fill="#c2410c" xml:space="preserve">   # imaginary axis</tspan></text>
-      <text x="272" y="381" xml:space="preserve"><tspan fill="#1e293b">  …</tspan></text>
-      <!-- the live-collaboration comments, exactly as they happened -->
-      <text x="272" y="406" fill="#c2410c">#this is user action here</text>
-      <text x="272" y="423" fill="#c2410c">#i will be editing while the agent act</text>
-      <text x="272" y="440" fill="#c2410c"># i am still typing typing typ</text>
-      <rect x="466" y="431" width="6.5" height="12" fill="#334155"/>
-    </g>
-
-    <!-- output area -->
-    <line x1="252" y1="456" x2="748" y2="456" stroke="#eef2f7"/>
-    <g font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#334155">
-      <text x="448" y="474">.   .@=.</text>
-      <text x="448" y="486">==@@@+:.</text>
-      <text x="440" y="498">.@@@@@@@@:.</text>
-    </g>
-    <path d="M262 470 l5 5 5-5" fill="none" stroke="#94a3b8" stroke-width="1.4"/>
-    <text x="706" y="514" font-size="10.5" fill="#94a3b8">69ms</text>
+    <text x="134" y="903" font-size="12.5" fill="#9d2ce8" font-weight="600">Agent</text>
+    <circle cx="178" cy="898" r="3.2" fill="#22c55e"/>
+    <text x="912" y="904" text-anchor="end" font-size="15" fill="#94a3b8">×</text>
   </g>
 
-  <!-- ===== Agent terminal panel ===== -->
-  <g>
-    <line x1="14" y1="546" x2="986" y2="546" stroke="#e2e8f0"/>
-    <!-- tab bar -->
-    <rect x="14" y="547" width="972" height="26" fill="#f1f5f9"/>
-    <text x="34" y="564" font-size="11" fill="#64748b" font-family="ui-monospace, Menlo, monospace">&gt;_ test</text>
-    <rect x="92" y="550" width="74" height="20" rx="5" fill="#ffffff"/>
-    <g transform="translate(102,554)">
-      <rect x="0" y="2" width="11" height="9" rx="2.5" fill="none" stroke="#7c3aed" stroke-width="1.3"/>
-      <line x1="5.5" y1="2" x2="5.5" y2="0" stroke="#7c3aed" stroke-width="1.3"/>
-      <circle cx="3.4" cy="6.5" r="0.95" fill="#7c3aed"/>
-      <circle cx="7.6" cy="6.5" r="0.95" fill="#7c3aed"/>
-    </g>
-    <text x="119" y="564" font-size="11" fill="#7c3aed" font-weight="600">Agent</text>
-    <circle cx="158" cy="560" r="3" fill="#22c55e"/>
-    <text x="972" y="564" text-anchor="end" font-size="12" fill="#94a3b8">×</text>
+  <rect x="6" y="916" width="928" height="27" fill="#f0fdf4"/>
+  <circle cx="32" cy="929" r="4" fill="#22c55e"/>
+  <text x="46" y="934" font-size="13" fill="#166534">Agent active (claude) · driving <tspan font-weight="700">test</tspan> — type instructions here, or use “Fix with agent” on a failing cell</text>
+  <text x="912" y="934" text-anchor="end" font-size="12.5" fill="#16a34a" text-decoration="underline">agent exited?</text>
+  <line x1="6" y1="943" x2="934" y2="943" stroke="#dcfce7"/>
 
-    <!-- agent active bar -->
-    <rect x="14" y="573" width="972" height="22" fill="#f0fdf4"/>
-    <circle cx="32" cy="584" r="3.5" fill="#22c55e"/>
-    <text x="44" y="588" font-size="11" fill="#166534">Agent active (claude) · driving <tspan font-weight="700">test</tspan> — type instructions here, or use “Fix with agent” on a failing cell</text>
-    <line x1="14" y1="595" x2="986" y2="595" stroke="#dcfce7"/>
-
-    <!-- terminal content: the real collaborative-editing exchange -->
-    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">
-      <text x="34" y="618" fill="#1e293b">The cell changed since I last read it — each rejection returned your current content, so I</text>
-      <text x="34" y="635" fill="#1e293b">re-applied the re-indentation against the latest version and landed it during a pause in your typing.</text>
-      <text x="34" y="657" fill="#1e293b"><tspan font-weight="700">Nothing of yours was clobbered.</tspan> The optimistic-locking conflict check forces a re-read and</text>
-      <text x="34" y="674" fill="#1e293b">retry — that’s the safety net working as intended.</text>
-      <text x="34" y="699" fill="#94a3b8">✻ Worked for 1m 43s</text>
-      <text x="34" y="722" fill="#334155">❯ revert it back to 2 spaces</text>
-      <rect x="232" y="712" width="7" height="13" fill="#334155"/>
-    </g>
+  <!-- claude transcript -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">
+    <text x="34" y="970" fill="#1e293b">…your comment block exactly as it stood when the write succeeded (ending at <tspan fill="#67b7f7"># i am still typing</tspan></text>
+    <text x="34" y="990" fill="#1e293b"><tspan fill="#67b7f7">typing typ</tspan>). If you've typed more since, that's still there — my edit didn't touch it.</text>
+    <text x="34" y="1022" fill="#1e293b">So the takeaway from your experiment: simultaneous edits don't silently overwrite each other here —</text>
+    <text x="34" y="1042" fill="#1e293b">the optimistic-locking conflict check forces a re-read and retry. The safety net working as intended.</text>
+    <text x="34" y="1070" fill="#94a3b8">✻ Worked for 1m 43s</text>
+  </g>
+  <line x1="30" y1="1082" x2="910" y2="1082" stroke="#e5e9f0"/>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="12.5">
+    <text x="34" y="1101" fill="#334155">❯ </text>
+    <rect x="49" y="1090" width="7.5" height="14" fill="#334155"/>
+    <text x="50" y="1101" fill="#ffffff">r</text>
+    <text x="57" y="1101" fill="#334155">evert it back to 2 spaces</text>
+  </g>
+  <line x1="30" y1="1108" x2="910" y2="1108" stroke="#e5e9f0"/>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="12">
+    <polygon points="34,1117 34,1125 40,1121" fill="#dc2626"/>
+    <polygon points="41,1117 41,1125 47,1121" fill="#dc2626"/>
+    <text x="52" y="1125" fill="#dc2626">bypass permissions on <tspan fill="#64748b">(shift+tab to cycle) · ← for agents</tspan></text>
   </g>
 
-  <!-- caption -->
-  <text x="500" y="762" text-anchor="middle" font-size="12.5" fill="#8b95a9">
-    Edit while the agent edits — per-cell conflict checks keep both of you safe · real Jupyter kernels · agents drive via MCP
-  </text>
+  <!-- bottom status bar -->
+  <path d="M6 1148 h928 v20 a12 12 0 0 1 -12 12 h-904 a12 12 0 0 1 -12 -12 z" fill="#f8fafc"/>
+  <line x1="6" y1="1148" x2="934" y2="1148" stroke="#e5e9f0"/>
+  <rect x="22" y="1153" width="92" height="22" rx="5" fill="#e9edf3"/>
+  <text x="36" y="1168" font-size="12" fill="#475569" font-family="ui-monospace, Menlo, monospace">&gt;_ Terminal</text>
+  <g stroke="#64748b" stroke-width="1.3" fill="none">
+    <circle cx="134" cy="1164" r="6"/>
+    <polyline points="134,1160 134,1164 137,1166"/>
+  </g>
+  <text x="146" y="1168" font-size="12" fill="#64748b">History</text>
+  <g stroke="#64748b" stroke-width="1.3" fill="none" stroke-linejoin="round">
+    <polyline points="772,1162 778,1159 784,1162 778,1165 772,1162"/>
+    <polyline points="772,1165 778,1168 784,1165"/>
+  </g>
+  <text x="790" y="1168" font-size="12" fill="#64748b">1 cells</text>
+  <g stroke="#64748b" stroke-width="1.3" fill="none">
+    <rect x="846" y="1158" width="18" height="12" rx="2"/>
+    <line x1="850" y1="1164" x2="852" y2="1164"/><line x1="855" y1="1164" x2="857" y2="1164"/>
+  </g>
+  <text x="870" y="1168" font-size="12" fill="#64748b">49 MB</text>
 </svg>
