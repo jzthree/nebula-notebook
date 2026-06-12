@@ -237,6 +237,15 @@ function serialize(
   return out.join('\n') + '\n';
 }
 
+/** Content-based discrimination (the VS Code/jupytext convention): a .py
+ *  file IS a percent notebook iff it has a `# %%` cell marker or a jupytext
+ *  header. Marker-less files are plain scripts — Nebula must never write
+ *  metadata into them as a side effect of merely opening them. */
+export function isPercentNotebookText(text: string): boolean {
+  if (/^#\s*%%/m.test(text)) return true;
+  return text.startsWith('# ---\n');
+}
+
 export const percentAdapter: NotebookFormatAdapter = {
   name: 'percent',
   extensions: ['.py'],

@@ -5,6 +5,7 @@
  */
 
 import { isNotebookExtension } from '../utils/notebookFormats';
+import { readFile } from '../services/fileService';
 import React, { useRef, useEffect, memo } from 'react';
 import {
   Folder,
@@ -213,7 +214,27 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
               <>
                 {item.extension === '.py' && onSelect && (
                   <button
-                    onClick={(e) => handleAction(e, () => onSelect(item.path))}
+                    onClick={(e) =>
+                      handleAction(e, async () => {
+                        // Content-based discrimination: marker/header-bearing
+                        // .py files ARE notebooks and open silently; plain
+                        // scripts get an informed-consent confirm first.
+                        try {
+                          const result = await readFile(item.path);
+                          const text = typeof result.content === 'string' ? result.content : '';
+                          const isPercent = /^#\s*%%/m.test(text) || text.startsWith('# ---\n');
+                          if (!isPercent) {
+                            const ok = window.confirm(
+                              'This looks like a plain Python script. Opening it as a notebook will add # %% cell markers and cell ids when you save. Continue?'
+                            );
+                            if (!ok) return;
+                          }
+                        } catch {
+                          // If the sniff fails, fall through and open anyway
+                        }
+                        onSelect(item.path);
+                      })
+                    }
                     className="p-1 text-slate-400 hover:text-orange-500 hover:bg-slate-100"
                     title="Open as notebook"
                   >

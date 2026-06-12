@@ -515,7 +515,7 @@ export const createNotebook = async (
   name: string,
   initialCells: Cell[],
   directory?: string,
-  extension: '.ipynb' | '.qmd' = '.ipynb'
+  extension: '.ipynb' | '.qmd' | '.py' = '.ipynb'
 ): Promise<NotebookMetadata> => {
   const dir = directory || '~';
 

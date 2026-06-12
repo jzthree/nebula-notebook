@@ -3778,7 +3778,15 @@ export const Notebook: React.FC = () => {
         {textEditorPath && (
           <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-6 overflow-hidden">
             <div className="w-full h-full max-w-5xl max-h-[85vh] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
-              <TextFileEditor filePath={textEditorPath} variant="modal" onClose={() => setTextEditorPath(null)} />
+              <TextFileEditor
+                filePath={textEditorPath}
+                variant="modal"
+                onClose={() => setTextEditorPath(null)}
+                onOpenAsNotebook={(p) => {
+                  setTextEditorPath(null);
+                  handleFileBrowserSelect(p);
+                }}
+              />
             </div>
           </div>
         )}

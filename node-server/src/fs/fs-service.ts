@@ -27,6 +27,7 @@ import {
 } from './types';
 import { getDefaultKernelName } from '../kernel/default-kernel';
 import { getFormatAdapter, isNotebookPath } from './notebook-formats/registry';
+import { isPercentNotebookText } from './notebook-formats/percent';
 import { NotebookFormatAdapter } from './notebook-formats/types';
 import { buildDisplayOutput, convertMimeBundleToJupyter } from '../output/display-data';
 
@@ -1491,7 +1492,16 @@ export class FilesystemService {
       const formatAdapter = getFormatAdapter(normalizedPath);
       if (formatAdapter) {
         try {
-          const parsed = formatAdapter.parse(fs.readFileSync(normalizedPath, 'utf-8'));
+          const rawText = fs.readFileSync(normalizedPath, 'utf-8');
+          // A plain .py script (no markers, no header) must not be
+          // Nebula-fied by metadata side effects — kernel attach and
+          // settings writes are skipped until a content save makes the
+          // file a notebook on purpose.
+          if (formatAdapter.name === 'percent' && !isPercentNotebookText(rawText)) {
+            const stat = fs.statSync(normalizedPath);
+            return { success: true, changed: false, mtime: stat.mtimeMs / 1000 };
+          }
+          const parsed = formatAdapter.parse(rawText);
           const existingMetadata = parsed.metadata;
           const nextMetadata: Record<string, unknown> = { ...existingMetadata };
           for (const [key, value] of Object.entries(metadataUpdates)) {

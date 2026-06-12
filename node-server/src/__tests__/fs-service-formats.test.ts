@@ -125,6 +125,30 @@ describe('text notebook formats through FilesystemService', () => {
     });
   });
 
+  it('does not Nebula-fy a plain .py script via metadata side effects', async () => {
+    const p = path.join(dir, 'pristine-script.py');
+    const original = 'import os\n\nprint(os.name)\n';
+    fs.writeFileSync(p, original, 'utf-8');
+
+    // Kernel attach / settings changes route through updateNotebookMetadata —
+    // for a marker-less script this must be a NO-OP, not a header injection.
+    const res = await service.updateNotebookMetadata(p, {
+      kernelspec: { name: 'python3', display_name: 'Python 3' },
+    });
+    expect(res.success).toBe(true);
+    expect(res.changed).toBe(false);
+    expect(fs.readFileSync(p, 'utf-8')).toBe(original);
+
+    // But a file WITH markers is a real notebook: metadata writes apply.
+    const nb = path.join(dir, 'marked-notebook.py');
+    fs.writeFileSync(nb, '# %% id="a"\nx = 1\n', 'utf-8');
+    const res2 = await service.updateNotebookMetadata(nb, {
+      kernelspec: { name: 'python3' },
+    });
+    expect(res2.changed).toBe(true);
+    expect(fs.readFileSync(nb, 'utf-8')).toContain('kernelspec');
+  });
+
   it('setAgentPermission returns the post-write mtime for .ipynb too', async () => {
     const p = path.join(dir, 'perm-mtime.ipynb');
     await service.saveNotebookCells(p, [cell({ id: 'a', content: '1' })], 'python3');

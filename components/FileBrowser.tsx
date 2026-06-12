@@ -363,9 +363,9 @@ const FileBrowserComponent: React.FC<Props> = ({
 
   const [showCreateMenu, setShowCreateMenu] = useState(false);
 
-  const handleCreate = async (extension: '.ipynb' | '.qmd' = '.ipynb') => {
+  const handleCreate = async (extension: '.ipynb' | '.qmd' | '.py' = '.ipynb') => {
     setShowCreateMenu(false);
-    const label = extension === '.qmd' ? 'Quarto notebook' : 'notebook';
+    const label = extension === '.qmd' ? 'Quarto notebook' : extension === '.py' ? 'Python notebook' : 'notebook';
     const name = prompt(`Enter ${label} name:`);
     if (name) {
       try {
@@ -678,6 +678,14 @@ const FileBrowserComponent: React.FC<Props> = ({
                     <Book className="w-4 h-4 text-violet-500" />
                     Quarto notebook
                     <span className="ml-auto text-xs text-slate-400">.qmd</span>
+                  </button>
+                  <button
+                    onClick={() => handleCreate('.py')}
+                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    <Book className="w-4 h-4 text-blue-500" />
+                    Python notebook
+                    <span className="ml-auto text-xs text-slate-400">.py</span>
                   </button>
                   <div className="my-1 border-t border-slate-100" />
                   <button

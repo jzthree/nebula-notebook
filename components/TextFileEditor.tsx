@@ -10,6 +10,8 @@ interface TextFileEditorProps {
   filePath: string;
   variant?: 'full' | 'modal';
   onClose?: () => void;
+  /** Offered when a .py file sniffs as a percent notebook (# %% markers). */
+  onOpenAsNotebook?: (path: string) => void;
 }
 
 const editorTheme = EditorView.theme({
@@ -51,7 +53,7 @@ const getLanguageExtensions = (path: string) => {
   return [];
 };
 
-export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath, variant = 'full', onClose }) => {
+export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath, variant = 'full', onClose, onOpenAsNotebook }) => {
   const [content, setContent] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -162,6 +164,17 @@ export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath, varian
           )}
         </div>
       </header>
+      {onOpenAsNotebook && filePath.toLowerCase().endsWith('.py') && /^#\s*%%/m.test(content) && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2 bg-violet-50 border-b border-violet-100 text-xs text-violet-800">
+          <span>This file has <code className="font-mono"># %%</code> notebook cell markers.</span>
+          <button
+            onClick={() => onOpenAsNotebook(filePath)}
+            className="px-2.5 py-1 rounded border border-violet-200 bg-white font-medium text-violet-700 hover:bg-violet-100"
+          >
+            Open as notebook
+          </button>
+        </div>
+      )}
       <div className="flex-1 overflow-hidden">
         <CodeMirror
           value={content}
