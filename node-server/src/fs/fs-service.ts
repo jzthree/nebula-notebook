@@ -1581,7 +1581,7 @@ export class FilesystemService {
   async setAgentPermission(
     notebookPath: string,
     permitted: boolean
-  ): Promise<{ success: boolean; error?: string; status?: AgentPermissionSnapshot }> {
+  ): Promise<{ success: boolean; error?: string; status?: AgentPermissionSnapshot; mtime?: number }> {
     return await this.withWriteLock(notebookPath, async () => {
       const normalizedPath = this.normalizePath(notebookPath);
 
@@ -1612,6 +1612,7 @@ export class FilesystemService {
           return {
             success: true,
             status: this.getAgentPermissionStatus(notebookPath),
+            mtime: fs.statSync(normalizedPath).mtimeMs / 1000,
           };
         } catch (e) {
           return { success: false, error: `Failed to set agent permission: ${e}` };
@@ -1644,6 +1645,10 @@ export class FilesystemService {
         return {
           success: true,
           status: this.getAgentPermissionStatus(notebookPath),
+          // The permission flag was just written INTO the notebook file; the
+          // caller must adopt this mtime or its next autosave will mistake
+          // our own write for an external change ("changed on server").
+          mtime: fs.statSync(normalizedPath).mtimeMs / 1000,
         };
       } catch (e) {
         return { success: false, error: `Failed to set agent permission: ${e}` };

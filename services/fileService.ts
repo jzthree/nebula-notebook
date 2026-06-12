@@ -739,6 +739,8 @@ export interface AgentPermissionStatus {
   has_history: boolean;
   can_agent_modify: boolean;
   reason: string;
+  /** File mtime after the permission write (the flag lives in the notebook file). */
+  mtime?: number;
 }
 
 /**

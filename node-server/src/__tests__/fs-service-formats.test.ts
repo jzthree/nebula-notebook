@@ -102,6 +102,10 @@ describe('text notebook formats through FilesystemService', () => {
       await service.saveNotebookCells(p, cells, 'python3');
       const res = await service.setAgentPermission(p, true);
       expect(res.success).toBe(true);
+      // The flag is written INTO the notebook file — callers must get the new
+      // mtime to adopt, or their next autosave sees a false 'changed on
+      // server' conflict.
+      expect(res.mtime).toBeGreaterThan(0);
       const status = service.getAgentPermissionStatus(p);
       expect(status.agent_permitted).toBe(true);
       expect(status.has_history).toBe(true);
@@ -119,6 +123,17 @@ describe('text notebook formats through FilesystemService', () => {
       expect(service.loadHistory(p)).toHaveLength(1);
       expect(service.getNotebookCells(p).cells).toHaveLength(2);
     });
+  });
+
+  it('setAgentPermission returns the post-write mtime for .ipynb too', async () => {
+    const p = path.join(dir, 'perm-mtime.ipynb');
+    await service.saveNotebookCells(p, [cell({ id: 'a', content: '1' })], 'python3');
+    const before = fs.statSync(p).mtimeMs / 1000;
+    await new Promise((r) => setTimeout(r, 20));
+    const res = await service.setAgentPermission(p, true);
+    expect(res.success).toBe(true);
+    expect(res.mtime).toBeGreaterThanOrEqual(before);
+    expect(res.mtime).toBe(fs.statSync(p).mtimeMs / 1000);
   });
 
   it('foo.py and foo.ipynb in one directory get distinct sidecars', async () => {

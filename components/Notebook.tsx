@@ -319,6 +319,19 @@ export const Notebook: React.FC = () => {
     lastKnownMtimeRef.current = mtime;  // Update ref immediately (source of truth)
     setLastKnownMtimeState(mtime);      // Update state for re-render
   }, []);
+
+  // Monotonic adoption for mtimes carried by EVENTS (kernelChanged, settings
+  // responses, permission toggles, kernel attach). Events can arrive late or
+  // out of order; regressing the baseline below a newer save's mtime would
+  // make the next conflict check see our own write as "changed on server".
+  // Loads/reloads still use setLastKnownMtime directly (they must override).
+  const adoptServerMtime = useCallback((mtime: number | undefined | null) => {
+    if (typeof mtime !== 'number') return;
+    const current = lastKnownMtimeRef.current;
+    if (current !== null && current >= mtime) return;
+    lastKnownMtimeRef.current = mtime;
+    setLastKnownMtimeState(mtime);
+  }, []);
   const [pendingSave, setPendingSave] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -621,7 +634,7 @@ export const Notebook: React.FC = () => {
 
         // Update our mtime tracking if this is the current file
         if (path === currentFileId) {
-          setLastKnownMtime(mtime);
+          adoptServerMtime(mtime);
         }
       }
 
@@ -895,9 +908,7 @@ export const Notebook: React.FC = () => {
       // The server persisted kernel metadata into the .ipynb on the agent's
       // behalf — adopt the new mtime so autosave doesn't mistake that write
       // for an external change ("file on disk is newer").
-      if (typeof mtime === 'number') {
-        setLastKnownMtime(mtime);
-      }
+      adoptServerMtime(mtime);
       await syncKernelFromBackendRef.current?.(kernelName, serverId);
     },
     undo: rawUndo,
@@ -2281,9 +2292,7 @@ export const Notebook: React.FC = () => {
         preferredServerId,
       );
       setKernelSessionId(sessionId);
-      if (mtime !== undefined) {
-        setLastKnownMtime(mtime);
-      }
+      adoptServerMtime(mtime);
       if (createdAt) setKernelCreatedAt(createdAt);
       if (resolvedServerId && resolvedServerId !== selectedServerId) {
         setSelectedServerId(resolvedServerId);
@@ -2590,6 +2599,9 @@ export const Notebook: React.FC = () => {
     const result = await setAgentPermission(currentFileId, newPermitted);
     if (result) {
       setAgentPermissionStatus(result);
+      // The flag was written into the notebook file on the server — adopt
+      // the new mtime or the next autosave shows a false conflict dialog.
+      adoptServerMtime(result.mtime);
       toast(
         newPermitted ? 'Agent can now modify this notebook' : 'Agent access revoked',
         'info',
@@ -2607,9 +2619,7 @@ export const Notebook: React.FC = () => {
     const result = await updateNotebookSettings(currentFileId, { output_logging: newMode });
     if (result) {
       setOutputLoggingMode(result.output_logging);
-      if (result.mtime !== undefined) {
-        setLastKnownMtime(result.mtime);
-      }
+      adoptServerMtime(result.mtime);
       toast(
         newMode === 'full' ? 'Full output logging enabled' : 'Minimal output logging enabled',
         'info',
@@ -2629,9 +2639,7 @@ export const Notebook: React.FC = () => {
     const result = await updateNotebookSettings(currentFileId, { full_width: nextFullWidth });
     if (result) {
       setIsFullWidth(result.full_width);
-      if (result.mtime !== undefined) {
-        setLastKnownMtime(result.mtime);
-      }
+      adoptServerMtime(result.mtime);
       return;
     }
 
@@ -2670,9 +2678,7 @@ export const Notebook: React.FC = () => {
         );
         startedSessionId = newSessionId;
         setKernelSessionId(newSessionId);
-        if (mtime !== undefined) {
-          setLastKnownMtime(mtime);
-        }
+        adoptServerMtime(mtime);
         if (createdAt) setKernelCreatedAt(createdAt);
         if (resolvedServerId && resolvedServerId !== selectedServerId) {
           setSelectedServerId(resolvedServerId);
@@ -2838,9 +2844,7 @@ export const Notebook: React.FC = () => {
           if (currentFileId) {
             const result = await kernelService.getOrCreateKernelForFile(currentFileId, kernelToUse, selectedServerId);
             newSessionId = result.sessionId;
-            if (result.mtime !== undefined) {
-              setLastKnownMtime(result.mtime);
-            }
+            adoptServerMtime(result.mtime);
             if (result.createdAt) setKernelCreatedAt(result.createdAt);
             if (result.serverId && result.serverId !== selectedServerId) {
               setSelectedServerId(result.serverId);

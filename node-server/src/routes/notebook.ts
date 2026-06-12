@@ -193,6 +193,7 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
       return reply.send({
         status: 'ok',
         notebook_path,
+        mtime: result.mtime,
         ...(result.status || fsService.getAgentPermissionStatus(notebook_path)),
       });
     } catch (err) {
