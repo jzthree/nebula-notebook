@@ -110,7 +110,7 @@ interface SessionState {
 
 // Reconnection callback type
 type ReconnectCallback = (sessionId: string, filePath?: string) => void;
-type StatusCallback = (sessionId: string, status: 'idle' | 'busy' | 'starting', cellId?: string | null) => void;
+type StatusCallback = (sessionId: string, status: 'idle' | 'busy' | 'starting' | 'dead', cellId?: string | null) => void;
 
 class KernelService {
   // Multi-session state: sessionId -> SessionState
@@ -404,7 +404,7 @@ class KernelService {
     // Handle status updates first - these don't require a pending handler
     // This is important for receiving initial status on WebSocket connect
     if (data.type === 'status') {
-      const status = data.status as 'idle' | 'busy' | 'starting';
+      const status = data.status as 'idle' | 'busy' | 'starting' | 'dead';
       const cellId = data.cell_id ?? null;
       for (const callback of this.onStatusCallbacks) {
         try {

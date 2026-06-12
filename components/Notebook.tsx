@@ -374,7 +374,7 @@ export const Notebook: React.FC = () => {
   const [currentKernel, setCurrentKernel] = useState<string>('python3');
   const [kernelSelectionRequired, setKernelSelectionRequired] = useState(false);
   const [kernelSessionId, setKernelSessionId] = useState<string | null>(null);
-  const [kernelStatus, setKernelStatus] = useState<'idle' | 'busy' | 'starting' | 'disconnected'>('disconnected');
+  const [kernelStatus, setKernelStatus] = useState<'idle' | 'busy' | 'starting' | 'disconnected' | 'dead'>('disconnected');
   const [kernelCreatedAt, setKernelCreatedAt] = useState<number | null>(null);
   const [isDiscoveringPythons, setIsDiscoveringPythons] = useState(false);
   const [isInstallingKernel, setIsInstallingKernel] = useState<string | null>(null);
@@ -1446,6 +1446,15 @@ export const Notebook: React.FC = () => {
           setIsKernelReady(true);
         } else if (status === 'starting') {
           setKernelStatus('starting');
+        } else if (status === 'dead') {
+          // Kernel process died (crash/OOM). Stop pretending: clear the
+          // queue and executing flags, tell the user, point at restart.
+          setKernelStatus('dead');
+          setIsKernelReady(false);
+          executionQueueRef.current = [];
+          setExecutionQueue([]);
+          setCells(prev => prev.map(c => (c.isExecuting ? { ...c, isExecuting: false } : c)));
+          toast('Kernel died — use the kernel menu to restart it', 'error', 6000);
         }
         // If kernel is busy with a specific cell (reconnect scenario),
         // mark that cell as executing so the spinner shows and output streams.
@@ -1576,8 +1585,10 @@ export const Notebook: React.FC = () => {
           }
         } else if (response.status === 404) {
           notFoundCount++;
-          // After 2 consecutive 404s, clear stale session (server probably restarted)
-          if (notFoundCount >= 2) {
+          // A 404 for our own session id is unambiguous (server restarted or
+          // session pruned) — act on the first one instead of waiting another
+          // 10s poll cycle for a second.
+          if (notFoundCount >= 1) {
             console.log('[Notebook] Kernel session not found on server, clearing stale session');
             toast('Kernel session was lost on the server. Reconnect to start a new kernel.', 'warning', 4000);
             setKernelSessionId(null);
@@ -2785,10 +2796,18 @@ export const Notebook: React.FC = () => {
     // Menu stays open so user can choose a kernel on the new server
   };
 
+  const isRestartingKernelRef = useRef(false);
+
   const restartKernel = async (
     source: EditSource = 'user'
   ): Promise<{ success: boolean; sessionId?: string; error?: string }> => {
     setIsKernelMenuOpen(false);
+    // Pending flag: rapid clicks would queue overlapping restarts, each
+    // killing the other's freshly spawned kernel.
+    if (isRestartingKernelRef.current) {
+      return { success: false, error: 'Restart already in progress' };
+    }
+    isRestartingKernelRef.current = true;
     setKernelStatus('starting');
 
     if (!kernelSessionId) {
@@ -2841,7 +2860,11 @@ export const Notebook: React.FC = () => {
         }
       }
       setKernelStatus('disconnected');
-      return { success: false, error: error instanceof Error ? error.message : String(error) };
+      const message = error instanceof Error ? error.message : String(error);
+      toast(`Kernel restart failed: ${message}`, 'error', 5000);
+      return { success: false, error: message };
+    } finally {
+      isRestartingKernelRef.current = false;
     }
   };
 
@@ -2887,7 +2910,9 @@ export const Notebook: React.FC = () => {
       return { success: true, sessionId: kernelSessionId ?? undefined };
     } catch (error) {
       console.error('Failed to interrupt kernel:', error);
-      return { success: false, error: error instanceof Error ? error.message : String(error) };
+      const message = error instanceof Error ? error.message : String(error);
+      toast(`Kernel interrupt failed: ${message}`, 'error', 4000);
+      return { success: false, error: message };
     }
   };
 
@@ -3309,6 +3334,25 @@ export const Notebook: React.FC = () => {
       return newContent !== cell.content ? { ...cell, content: newContent } : cell;
     }));
   }, [saveCheckpoint, setCells]);
+
+  // Queue-stall watchdog: cells queued while the kernel isn't ready used to
+  // sit silently forever ("I clicked run and nothing happened"). If the
+  // stall persists for 10s, tell the user once per episode.
+  const stallToastShownRef = useRef(false);
+  useEffect(() => {
+    const stalled = executionQueue.length > 0 && (!isKernelReady || !kernelSessionId);
+    if (!stalled) {
+      stallToastShownRef.current = false;
+      return;
+    }
+    if (stallToastShownRef.current) return;
+    const timer = setTimeout(() => {
+      stallToastShownRef.current = true;
+      const reason = !kernelSessionId ? 'no kernel is attached' : `kernel is ${kernelStatusRef.current}`;
+      toast(`${executionQueue.length} cell${executionQueue.length === 1 ? '' : 's'} waiting to run, but ${reason} — check the kernel menu`, 'warning', 6000);
+    }, 10000);
+    return () => clearTimeout(timer);
+  }, [executionQueue.length, isKernelReady, kernelSessionId, toast]);
 
   // Execution Processor
   useEffect(() => {

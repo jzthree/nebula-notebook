@@ -1102,4 +1102,117 @@ describe('KernelService', () => {
       waitForReadySpy.mockRestore();
     });
   });
+
+  describe('kernel reliability fixes', () => {
+    it('single-flights concurrent getOrCreateKernel calls (no double spawn)', async () => {
+      const filePath = '/tmp/single-flight.ipynb';
+      let startCalls = 0;
+      const startSpy = vi.spyOn(service as any, 'startKernel').mockImplementation(async () => {
+        startCalls++;
+        await new Promise((r) => setTimeout(r, 30));
+        const now = Date.now() / 1000;
+        (service as any).sessions.set('sf-1', {
+          id: 'sf-1', kernelName: 'python3', filePath, status: 'idle',
+          executionCount: 0, pid: 4242, createdAt: now, lastActivity: now,
+        });
+        (service as any).fileToSession.set(filePath, 'sf-1');
+        return 'sf-1';
+      });
+
+      const [a, b, c] = await Promise.all([
+        service.getOrCreateKernel(filePath, 'python3'),
+        service.getOrCreateKernel(filePath, 'python3'),
+        service.getOrCreateKernel(filePath, 'python3'),
+      ]);
+      expect(startCalls).toBe(1);
+      expect(a.sessionId).toBe('sf-1');
+      expect(b.sessionId).toBe('sf-1');
+      expect(c.sessionId).toBe('sf-1');
+      startSpy.mockRestore();
+      (service as any).sessions.delete('sf-1');
+      (service as any).fileToSession.delete(filePath);
+    });
+
+    it('notifies onSessionDead when the kernel process exits unexpectedly', async () => {
+      const sessionId = 'death-notify';
+      const proc = createMockChildProcess(3333);
+      const now = Date.now() / 1000;
+      const session = {
+        id: sessionId, kernelName: 'python3', filePath: '/tmp/death.ipynb',
+        status: 'busy' as const, executionCount: 1, pid: 3333,
+        createdAt: now, lastActivity: now,
+      };
+      (service as any).sessions.set(sessionId, session);
+      (service as any).kernelProcesses.set(sessionId, proc);
+      (service as any).attachProcessLifecycle(sessionId, proc, session);
+
+      const dead: string[] = [];
+      service.onSessionDead((id) => dead.push(id));
+      proc.emit('exit', 137); // OOM-killed
+      expect(dead).toEqual([sessionId]);
+      expect(session.status).toBe('dead');
+    });
+
+    it('liveness sweep notices a dead reattached kernel (pid only, no handle)', () => {
+      const sessionId = 'reattached-dead';
+      const now = Date.now() / 1000;
+      // PID 1 check via signal 0 would succeed; use an absurd unallocated pid
+      const session = {
+        id: sessionId, kernelName: 'python3', filePath: '/tmp/reattach.ipynb',
+        status: 'idle' as const, executionCount: 0, pid: 2 ** 21,
+        createdAt: now, lastActivity: now,
+      };
+      (service as any).sessions.set(sessionId, session);
+      // NOTE: no kernelProcesses handle — this is the reattached case
+
+      const dead: string[] = [];
+      service.onSessionDead((id) => dead.push(id));
+      service.sweepLiveness();
+      expect(dead).toEqual([sessionId]);
+      expect(session.status).toBe('dead');
+    });
+
+    it('restart clears buffered outputs from the old process', async () => {
+      const sessionId = 'restart-buffers';
+      const filePath = '/tmp/restart-buffers.ipynb';
+      const oldConnFile = path.join(os.tmpdir(), `nebula-buf-conn-${Date.now()}.json`);
+      fs.writeFileSync(oldConnFile, '{}');
+      const oldProc = createMockChildProcess(5111);
+      const newProc = createMockChildProcess(5222);
+      const now = Date.now() / 1000;
+      const connectionConfig = {
+        ip: '127.0.0.1', transport: 'tcp', signatureScheme: 'hmac-sha256', key: 'k',
+        shellPort: 22345, stdinPort: 22346, controlPort: 22347, iopubPort: 22348, hbPort: 22349,
+      };
+      const session = {
+        id: sessionId, kernelName: 'python3', filePath, status: 'idle' as const,
+        executionCount: 3, pid: 5111, connectionFile: oldConnFile, connectionConfig,
+        createdAt: now, lastActivity: now,
+      };
+      (service as any).sessions.set(sessionId, session);
+      (service as any).kernelProcesses.set(sessionId, oldProc);
+      // stale outputs from the old kernel
+      (service as any).cellOutputBuffers.set(sessionId, new Map([['cell-1', [{ type: 'stdout', content: 'old' }]]]));
+      (service as any).cellOutputTracking.set(sessionId, new Map());
+
+      vi.mocked(childProcess.spawn).mockReturnValue(newProc as unknown as ReturnType<typeof childProcess.spawn>);
+      vi.spyOn(service as any, 'sleep').mockResolvedValue(undefined);
+      vi.spyOn(service as any, 'waitForReady').mockResolvedValue('idle');
+      vi.spyOn(service as any, 'generateConnectionFile').mockResolvedValue({
+        config: connectionConfig,
+        filePath: path.join(os.tmpdir(), `nebula-buf-new-${Date.now()}.json`),
+      });
+      vi.spyOn(service as any, 'getProcessStartTime').mockResolvedValue('456');
+      vi.spyOn(kernelspecModule, 'getKernelSpec').mockReturnValue({
+        name: 'python3', displayName: 'Python 3', language: 'python',
+        path: '/tmp/python3', argv: ['python', '-m', 'ipykernel_launcher', '-f', '{connection_file}'],
+      });
+
+      const ok = await service.restartKernel(sessionId);
+      expect(ok).toBe(true);
+      expect((service as any).cellOutputBuffers.has(sessionId)).toBe(false);
+      expect((service as any).cellOutputTracking.has(sessionId)).toBe(false);
+    });
+  });
+
 });

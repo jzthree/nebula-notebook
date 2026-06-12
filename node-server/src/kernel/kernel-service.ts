@@ -83,6 +83,57 @@ export class KernelService {
     this.sessionStore = sessionStore || new SessionStore();
     this.serverId = process.env.NEBULA_SERVER_ID || 'local';
     this.serverInstanceId = process.env.NEBULA_SERVER_INSTANCE_ID || uuidv4();
+    this.startLivenessSweep();
+  }
+
+  // ---- Kernel death notification --------------------------------------
+  // Process exit/error handlers (and the liveness sweep below) notify
+  // listeners so the route layer can broadcast status to WebSocket clients.
+  // Without this, a crashed kernel leaves every client showing 'busy'.
+  private deadListeners: Array<(sessionId: string) => void> = [];
+
+  onSessionDead(cb: (sessionId: string) => void): void {
+    this.deadListeners.push(cb);
+  }
+
+  private notifySessionDead(sessionId: string): void {
+    for (const cb of this.deadListeners) {
+      try {
+        cb(sessionId);
+      } catch (err) {
+        console.error('[Kernel] onSessionDead listener failed:', err);
+      }
+    }
+  }
+
+  // ---- Liveness sweep ---------------------------------------------------
+  // ChildProcess handles get 'exit' events, but REATTACHED sessions only
+  // have a PID — nothing fires when that process dies. Sweep PIDs so a dead
+  // reattached kernel is noticed within ~15s instead of at the next execute.
+  private livenessTimer: NodeJS.Timeout | null = null;
+
+  private startLivenessSweep(): void {
+    this.livenessTimer = setInterval(() => this.sweepLiveness(), 15000);
+    // Never keep the process alive just for the sweep
+    this.livenessTimer.unref?.();
+  }
+
+  /** One liveness pass (exposed for tests; normally driven by the timer). */
+  sweepLiveness(): void {
+    for (const [sessionId, session] of this.sessions.entries()) {
+      if (session.status === 'dead') continue;
+      // Sessions with a live ChildProcess handle are covered by 'exit'
+      if (this.kernelProcesses.has(sessionId)) continue;
+      if (!session.pid) continue;
+      try {
+        process.kill(session.pid, 0);
+      } catch {
+        console.log(`[Kernel] Liveness sweep: reattached kernel ${sessionId} (pid ${session.pid}) is gone`);
+        session.status = 'dead';
+        this.cleanupKernelResources(sessionId);
+        this.notifySessionDead(sessionId);
+      }
+    }
   }
 
   setServerIdentity(serverId: string, serverInstanceId?: string): void {
@@ -111,6 +162,7 @@ export class KernelService {
       }
       console.error(`Kernel ${sessionId} error:`, err);
       session.status = 'dead';
+      this.notifySessionDead(sessionId);
     };
 
     const onExit = (code: number | null) => {
@@ -120,6 +172,7 @@ export class KernelService {
       console.log(`Kernel ${sessionId} exited with code ${code}`);
       session.status = 'dead';
       this.cleanupKernelResources(sessionId);
+      this.notifySessionDead(sessionId);
     };
 
     this.processLifecycleHandlers.set(proc, { onError, onExit });
@@ -744,7 +797,26 @@ export class KernelService {
    * Get or create kernel for a file (one notebook = one kernel).
    * Returns whether a new session was created.
    */
+  /** In-flight create/attach per normalized file path (single-flight).
+   *  Without this, two near-simultaneous requests (UI re-render + agent op,
+   *  double-click) both miss the fileToSession check and spawn TWO kernel
+   *  processes — the second overwrites the mapping and the first leaks. */
+  private inflightKernelCreates = new Map<string, Promise<{ sessionId: string; created: boolean }>>();
+
   async getOrCreateKernel(filePath: string, kernelName: string = 'python3'): Promise<{ sessionId: string; created: boolean }> {
+    const key = this.normalizePath(filePath);
+    const inflight = this.inflightKernelCreates.get(key);
+    if (inflight) {
+      return inflight;
+    }
+    const run = this.getOrCreateKernelInternal(key, kernelName).finally(() => {
+      this.inflightKernelCreates.delete(key);
+    });
+    this.inflightKernelCreates.set(key, run);
+    return run;
+  }
+
+  private async getOrCreateKernelInternal(filePath: string, kernelName: string): Promise<{ sessionId: string; created: boolean }> {
     const normalizedPath = this.normalizePath(filePath);
 
     // Check for existing session in fileToSession map
@@ -1053,6 +1125,16 @@ export class KernelService {
 
       return { status: 'ok', executionCount: execCount };
     } catch (err) {
+      // A restart closes the old sockets while we may be mid-receive: surface
+      // that as a clean cancellation, and never clobber 'starting'/'dead'
+      // status set concurrently by the restart/exit paths (re-read through
+      // the map — TS narrowing can't see cross-async mutation).
+      const currentStatus = this.sessions.get(sessionId)?.status;
+      if (currentStatus === 'starting' || currentStatus === 'dead') {
+        const msg = currentStatus === 'dead' ? 'Kernel died during execution' : 'Kernel was restarted — execution cancelled';
+        await onOutput({ type: 'error', content: msg });
+        return { status: 'error', executionCount: null, error: msg };
+      }
       session.status = 'idle';
       const errorMsg = this.formatExecutionError(err);
       await onOutput({ type: 'error', content: errorMsg });
@@ -1585,6 +1667,16 @@ export class KernelService {
     // Set status to restarting
     session.status = 'starting';
 
+    // Restart hygiene: drop buffered outputs from the old process (otherwise
+    // stale outputs resurface on the next sync), and reset execution queues
+    // so nothing chains onto promises from the old kernel. In-flight executes
+    // fail when the old sockets close below; executeCode surfaces that as a
+    // clean 'Kernel was restarted' error because status is 'starting'.
+    this.cellOutputBuffers.delete(sessionId);
+    this.cellOutputTracking.delete(sessionId);
+    this.executionQueues.delete(sessionId);
+    this.shellRequestQueues.delete(sessionId);
+
     // Close ZeroMQ sockets
     const sockets = this.zmqSockets.get(sessionId);
     if (sockets) {
@@ -1860,6 +1952,10 @@ export class KernelService {
    * If preserveKernels is true, keep kernel processes running and close the session store.
    */
   async shutdown(options?: { preserveKernels?: boolean }): Promise<void> {
+    if (this.livenessTimer) {
+      clearInterval(this.livenessTimer);
+      this.livenessTimer = null;
+    }
     if (options?.preserveKernels) {
       try {
         this.sessionStore.markAllOrphaned(this.serverId, this.serverInstanceId);

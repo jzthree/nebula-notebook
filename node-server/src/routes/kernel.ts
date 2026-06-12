@@ -30,6 +30,7 @@ import { serverRegistry } from '../cluster/server-registry';
 
 // Track all WebSocket connections per kernel session for broadcasting
 const sessionWebSockets: Map<string, Set<WebSocket>> = new Map();
+
 // Only send streaming outputs to sockets after they've performed an initial output sync.
 // This prevents a race where live `output` messages arrive before `sync_outputs`, causing
 // the frontend to advance its seq watermark and skip replayed outputs on refresh/reconnect.
@@ -37,6 +38,21 @@ const outputSubscribedSockets: WeakSet<WebSocket> = new WeakSet();
 
 // Shared kernel service instance - exported for use by headless handler
 const kernelService = new KernelService();
+// When a kernel dies (crash, OOM, reattached PID gone), push the status to
+// every client immediately — otherwise the UI shows 'busy' until the next
+// poll or failed execute.
+kernelService.onSessionDead((sessionId: string) => {
+  const sockets = sessionWebSockets.get(sessionId);
+  if (!sockets || sockets.size === 0) return;
+  const msg = JSON.stringify({ type: 'status', status: 'dead' });
+  for (const socket of sockets) {
+    try {
+      if (socket.readyState === WebSocket.OPEN) socket.send(msg);
+    } catch {
+      // Socket already closing — the reconnect loop will handle it
+    }
+  }
+});
 
 // Initialize kernel service on module load
 kernelService.initialize().catch(err => {

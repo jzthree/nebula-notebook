@@ -55,7 +55,7 @@ export interface Tab {
   isLoading: boolean;      // Loading state
 }
 
-export type KernelStatus = 'idle' | 'busy' | 'starting' | 'disconnected';
+export type KernelStatus = 'idle' | 'busy' | 'starting' | 'disconnected' | 'dead';
 
 // Per-notebook state - everything needed to manage a notebook's context
 export interface NotebookState {
