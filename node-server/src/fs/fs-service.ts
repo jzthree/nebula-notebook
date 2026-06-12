@@ -189,6 +189,20 @@ function extractTopLevelObjectField(source: string, fieldName: string): Record<s
  * Load root directory from config files if they exist.
  * Priority: env -> user config -> project config.
  */
+/** A system temp dir is almost never an intended workspace root — it's
+ *  wiped on reboot and clutters /tmp. Warn loudly (don't block: a user may
+ *  genuinely want a scratch root) so a silently-persisted temp root like the
+ *  one this guards against can't go unnoticed again. */
+function warnIfTempRoot(resolvedRoot: string, when: string): void {
+  const tmp = path.resolve(os.tmpdir());
+  if (resolvedRoot === tmp || resolvedRoot.startsWith(tmp + path.sep)) {
+    console.warn(
+      `[FilesystemService] Workspace root is set to a system temp directory (${resolvedRoot}) at ${when}. ` +
+      `Files here are wiped on reboot. Fix it in ~/.nebula/config.json or via the root-directory picker.`
+    );
+  }
+}
+
 function loadNebulaConfig(): string | null {
   const envRoot = process.env.NEBULA_WORKDIR || process.env.NEBULA_ROOT;
   if (envRoot) {
@@ -250,6 +264,7 @@ export class FilesystemService {
     // Priority: explicit arg > config file > home directory
     const configuredRoot = defaultRoot || loadNebulaConfig() || os.homedir();
     this.defaultRoot = this.expandRootDirectory(configuredRoot);
+    warnIfTempRoot(this.defaultRoot, 'startup');
   }
 
   /**
@@ -272,6 +287,7 @@ export class FilesystemService {
     }
 
     this.defaultRoot = resolved;
+    warnIfTempRoot(resolved, 'setRootDirectory');
     if (options?.persist !== false) {
       this.saveRootDirectory(resolved);
     }
