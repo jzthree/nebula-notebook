@@ -52,9 +52,9 @@ Establish familiarity and rack up the delighters fast. Quick cuts, ~5s each.
    `content-visibility` + progressive batching (`VirtualCellList.tsx`); the
    explicit contrast: Jupyter/Virtuoso stalls the main thread on large notebooks.
 
-2. **Run All, with a pulse.** Click Run All → cells show **`Q1` `Q2`** queue
-   badges (pulsing amber), each finishes with an inline **execution time**
-   ("412ms"). *Caption: "See exactly what's running, and how long it took."* —
+2. **Run All, with a pulse.** Click Run All → pending cells show a pulsing amber
+   **`[*]`** queue marker (hover shows position), each finishes with an inline
+   **execution time** ("412ms"). *Caption: "See exactly what's running, and how long it took."* —
    execution queue position + timing (`Cell.tsx`, `CellOutput.tsx`).
 
 3. **Outputs that are actually alive.** The Plotly cell renders → pan / zoom /
@@ -90,7 +90,7 @@ Establish familiarity and rack up the delighters fast. Quick cuts, ~5s each.
 The trust-builder. Make undo feel like a superpower.
 
 1. **Infinite undo with a memory.** Delete a cell, mangle another, then `⌘Z`
-   `⌘Z` `⌘Z` — each undo **flashes the affected cell** yellow-green and scrolls
+   `⌘Z` `⌘Z` — each undo **pulses the affected cell blue** and scrolls
    it into view. *Caption: "Undo anything. Watch it happen."* — dual undo
    (per-cell text + structural) + visual feedback (`useUndoRedo.ts`,
    `Notebook.tsx`).
@@ -98,7 +98,7 @@ The trust-builder. Make undo feel like a superpower.
 2. **Time travel.** Open the **History** panel (status bar) → operations grouped
    by time. Click one three steps back → the notebook **previews that moment**
    with diff highlighting (orange = changed, red = deleted). Click **Restore
-   here**. *Caption: "Scrub through your entire edit history."* —
+   Here**. *Caption: "Scrub through your entire edit history."* —
    `HistoryPanel.tsx`, time-travel preview, `RestoreDialog.tsx`.
 
 3. **Always saved.** Pan to the status bar: *"Saved 12s ago."* *Caption:
