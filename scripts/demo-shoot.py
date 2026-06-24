@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""
+Nebula product-demo shoot — fully headless, invisible capture.
+
+Drives a headless Chrome (DevTools Protocol) rendering the live notebook
+off-screen: scrolls, injects captions, clicks, types, screenshots. Cell
+execution happens in the page's own kernel (clicking run) or via the Nebula
+operation API (agent scenes). PIL assembles frames into GIFs in
+docs/assets/demo/. No tunnel, no Screen-Recording/Accessibility permission,
+no focus stealing — runs while you use the machine.
+
+Prereqs (see docs/DEMO-CAPTURE.md):
+  - fixtures built (scripts/demo-fixtures.py), kernel libs installed
+  - server up on :3000/:8000
+  - headless Chrome launched with:
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+        --headless=new --remote-debugging-port=9222 --remote-allow-origins='*' \
+        --user-data-dir=/tmp/nebula-shoot-profile \
+        --window-size=1440,1000 --force-device-scale-factor=2 --hide-scrollbars \
+        "http://localhost:3000/?file=/Users/jianzhou/demo/exoplanets.ipynb"
+
+Usage:  python demo-shoot.py <scene|all>
+  scenes: runall  scatter  widget  search  history  money
+"""
+import json, urllib.request, base64, time, os, sys, glob, shutil
+import websocket
+from PIL import Image
+
+NB = "/Users/jianzhou/demo/exoplanets.ipynb"
+OUT = os.path.join(os.path.dirname(__file__), "..", "docs", "assets", "demo")
+OUT = os.path.abspath(OUT)
+API = "http://localhost:8000"
+PORT = 9222
+
+
+def api_op(op):
+    body = json.dumps({"operation": op}).encode()
+    req = urllib.request.Request(f"{API}/api/notebook/operation", data=body,
+                                 headers={"Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(req, timeout=30))
+
+
+class CDP:
+    def __init__(self, port=PORT):
+        targets = json.load(urllib.request.urlopen(f"http://localhost:{port}/json"))
+        page = next(t for t in targets if t.get("type") == "page")
+        self.ws = websocket.create_connection(page["webSocketDebuggerUrl"], max_size=None,
+                                               header=[f"Origin: http://localhost:{port}"])
+        self._id = 0
+        self.cmd("Page.enable"); self.cmd("Runtime.enable")
+
+    def cmd(self, m, p=None):
+        self._id += 1
+        self.ws.send(json.dumps({"id": self._id, "method": m, "params": p or {}}))
+        while True:
+            r = json.loads(self.ws.recv())
+            if r.get("id") == self._id:
+                return r.get("result", {})
+
+    def ev(self, js):
+        return self.cmd("Runtime.evaluate", {"expression": js, "returnByValue": True}).get("result", {}).get("value")
+
+    def shot(self):
+        return base64.b64decode(self.cmd("Page.captureScreenshot", {"format": "png"})["data"])
+
+    def caption(self, text):
+        self.ev('(()=>{let c=document.getElementById("demo-cap")||document.body.appendChild('
+                'Object.assign(document.createElement("div"),{id:"demo-cap"}));'
+                f'c.textContent={json.dumps(text)};'
+                'Object.assign(c.style,{position:"fixed",left:0,right:0,bottom:0,padding:"16px 28px",'
+                'font:"600 22px -apple-system,system-ui,sans-serif",color:"#fff",textAlign:"center",'
+                'zIndex:2147483647,pointerEvents:"none",'
+                'background:"linear-gradient(transparent,rgba(15,23,42,.85))"});return 1;})()')
+
+    def scroll_cell(self, cid, block="center", output=False):
+        target = ("c.querySelector('img')||c.querySelector('canvas')||"
+                  "[...c.querySelectorAll('*')].find(e=>e.shadowRoot)||c") if output else "c"
+        self.ev(f"(()=>{{const c=document.querySelector('[data-cell-id=\"{cid}\"]');"
+                f"if(!c)return 0;({target}).scrollIntoView({{block:'{block}'}});return 1;}})()")
+
+    def click_text(self, txt):
+        return self.ev('(()=>{const b=[...document.querySelectorAll("button")]'
+                       f'.find(b=>b.textContent.trim()==={json.dumps(txt)});'
+                       'if(b){b.click();return 1;}return 0;})()')
+
+    def click_title(self, t):
+        return self.ev('(()=>{const b=[...document.querySelectorAll("button")]'
+                       f'.find(b=>(b.getAttribute("title")||b.getAttribute("aria-label")||"").includes({json.dumps(t)}));'
+                       'if(b){b.click();return 1;}return 0;})()')
+
+    def click_cell_run(self, cid):
+        return self.ev(f"(()=>{{const c=document.querySelector('[data-cell-id=\"{cid}\"]');"
+                       "const b=[...c.querySelectorAll('button')].find(b=>/Run Cell/i.test(b.getAttribute('title')||''));"
+                       "if(b){b.click();return 1;}return 0;})()")
+
+    def type_text(self, text):
+        self.cmd("Input.insertText", {"text": text})
+
+
+def frames_dir(name):
+    d = f"/tmp/shoot-{name}"
+    shutil.rmtree(d, ignore_errors=True); os.makedirs(d)
+    return d
+
+
+def assemble(name, fdir, crop=(0.05, 0.13, 0.95, 0.985), width=920, duration=180, boomerang=False, hold_last=0):
+    files = sorted(glob.glob(f"{fdir}/f*.png"))
+    ims = [Image.open(f).convert("RGB") for f in files]
+    w, h = ims[0].size
+    box = (int(w*crop[0]), int(h*crop[1]), int(w*crop[2]), int(h*crop[3]))
+    out = [im.crop(box).resize((width, int((box[3]-box[1])/(box[2]-box[0])*width))) for im in ims]
+    seq = out[:]
+    if hold_last:
+        seq += [out[-1]] * hold_last
+    if boomerang:
+        seq += out[::-1][1:]
+    os.makedirs(OUT, exist_ok=True)
+    path = os.path.join(OUT, f"scene-{name}.gif")
+    seq[0].save(path, save_all=True, append_images=seq[1:], duration=duration, loop=0, optimize=True)
+    print(f"  -> {path}  ({os.path.getsize(path)//1024} KB, {len(seq)} frames)")
+    return path
+
+
+# ---------------------------------------------------------------- scenes ----
+def scene_runall(c):
+    c.caption("Run the whole notebook — watch it come alive.")
+    c.scroll_cell("title", "start")
+    time.sleep(0.4)
+    c.click_text("Run All")
+    time.sleep(7)  # let all cells execute (tqdm ~1.7s + plot/widget)
+    fd = frames_dir("runall")
+    panels = ["load", "scatter", "plotly", "widget"]
+    i = 0
+    # hold top briefly
+    for _ in range(3):
+        open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    for cid in panels:
+        c.scroll_cell(cid, "center", output=True)
+        for _ in range(4):
+            time.sleep(0.12)
+            open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    assemble("runall", fd, duration=160)
+
+
+def scene_scatter(c):
+    c.caption("Run a cell — the hero plot renders instantly.")
+    c.scroll_cell("scatter", "center", output=True)
+    time.sleep(0.3)
+    fd = frames_dir("scatter")
+    i = 0
+    # a couple of pre-frames, then run, then catch the render
+    for _ in range(2):
+        open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    c.click_cell_run("scatter")
+    for _ in range(12):
+        time.sleep(0.07)
+        c.scroll_cell("scatter", "center", output=True)
+        open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    assemble("scatter", fd, duration=120, hold_last=6)
+
+
+def scene_widget(c):
+    # ensure rendered
+    c.click_cell_run("widget"); time.sleep(0.4)
+    c.caption("Interactive outputs — click, and they respond.")
+    c.scroll_cell("widget", "center", output=True)
+    time.sleep(0.3)
+    click = ("(()=>{const c=document.querySelector('[data-cell-id=\"widget\"]');"
+             "for(const h of c.querySelectorAll('*')){if(h.shadowRoot){"
+             "const b=h.shadowRoot.querySelector('[data-randomize]');if(b){b.click();return 1;}}}return 0;})()")
+    fd = frames_dir("widget")
+    for i in range(14):
+        if i > 0:
+            c.ev(click)
+        time.sleep(0.16)
+        open(f"{fd}/f{i:03d}.png", "wb").write(c.shot())
+    assemble("widget", fd, crop=(0.05, 0.28, 0.95, 0.99), duration=200, boomerang=True)
+
+
+def scene_search(c):
+    c.caption("Find & replace — across the whole notebook, regex included.")
+    c.scroll_cell("scatter", "start")
+    time.sleep(0.3)
+    c.click_title("Toggle search")
+    time.sleep(0.5)
+    fd = frames_dir("search")
+    i = 0
+    open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    for ch in "radius":
+        c.type_text(ch)
+        time.sleep(0.18)
+        open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    for _ in range(4):
+        time.sleep(0.2)
+        open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    assemble("search", fd, duration=170, hold_last=5)
+
+
+SCENES = {
+    "runall": scene_runall, "scatter": scene_scatter, "widget": scene_widget,
+    "search": scene_search,
+}
+
+
+def main():
+    which = sys.argv[1] if len(sys.argv) > 1 else "all"
+    c = CDP()
+    names = list(SCENES) if which == "all" else [which]
+    for n in names:
+        print(f"[scene] {n}")
+        try:
+            SCENES[n](c)
+        except Exception as e:
+            print(f"  !! {n} failed: {e}")
+        c.ev('document.getElementById("demo-cap")?.remove()')
+        time.sleep(0.3)
+    c.ws.close()
+
+
+if __name__ == "__main__":
+    main()
