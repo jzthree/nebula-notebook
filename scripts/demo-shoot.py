@@ -196,9 +196,57 @@ def scene_search(c):
     assemble("search", fd, duration=170, hold_last=5)
 
 
+OCC_2SPACE = (
+    "# Mandelbrot escape time — reindented live by the agent.\n"
+    "def escape_time(c):\n"
+    "  z = 0j\n"
+    "  for n in range(100):\n"
+    "    z = z * z + c\n"
+    "    if abs(z) > 2.0:\n"
+    "      return n\n"
+    "  return 100"
+)
+
+
+OCC_4SPACE = (
+    "# Mandelbrot escape time — the agent will reindent this 4-space block to 2.\n"
+    "def escape_time(c):\n    z = 0j\n    for n in range(100):\n"
+    "        z = z * z + c\n        if abs(z) > 2.0:\n            return n\n    return 100"
+)
+AID = "claude-code"  # one consistent agent id (end must match start to release)
+
+
+def scene_agent(c):
+    # one clean session for the whole scene; always pass the same agentId
+    api_op({"type": "endAgentSession", "notebookPath": NB, "agentId": AID})  # clear any prior
+    api_op({"type": "startAgentSession", "notebookPath": NB, "agentId": AID})
+    api_op({"type": "readCell", "notebookPath": NB, "cellId": "occ", "agentId": AID})
+    api_op({"type": "updateContent", "notebookPath": NB, "cellId": "occ", "agentId": AID, "content": OCC_4SPACE})
+    time.sleep(0.6)
+
+    c.caption("An agent, editing your notebook live.")
+    c.scroll_cell("occ", "center")
+    time.sleep(0.4)
+    fd = frames_dir("agent")
+    i = 0
+    for _ in range(5):  # hold the 4-space "before"
+        time.sleep(0.12)
+        open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    # the agent reindents 4 -> 2; UI updates live + purple presence ring
+    api_op({"type": "readCell", "notebookPath": NB, "cellId": "occ", "agentId": AID})
+    r = api_op({"type": "updateContent", "notebookPath": NB, "cellId": "occ", "agentId": AID, "content": OCC_2SPACE})
+    print("   edit:", r.get("success"), r.get("error", ""))
+    for _ in range(14):  # capture the change landing + the ring
+        time.sleep(0.12)
+        c.scroll_cell("occ", "center")
+        open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    api_op({"type": "endAgentSession", "notebookPath": NB, "agentId": AID})
+    assemble("agent", fd, duration=150, hold_last=6)
+
+
 SCENES = {
     "runall": scene_runall, "scatter": scene_scatter, "widget": scene_widget,
-    "search": scene_search,
+    "search": scene_search, "agent": scene_agent,
 }
 
 
