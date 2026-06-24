@@ -71,13 +71,14 @@ Remove with `document.getElementById('demo-cap')?.remove()`.
 
 1. **Fresh server on current code** — the running instance is stale. Build + run:
    `npm run stop && npm --prefix node-server run build && NO_AUTH=true NEBULA_PRESERVE_KERNELS=true NEBULA_REATTACH_KERNELS=true npm run start`. Confirm `:3000` and a real API path (e.g. `GET /api/notebook/cells?path=…`) both answer.
-2. **Install fixture libs into the kernel — BLOCKER (verified missing).** The
-   `nebula` kernel python (`~/.venvs/nebula/bin/python`) has numpy + matplotlib
-   but **not pandas, plotly, tqdm**. Run once:
-   `~/.venvs/nebula/bin/python -m pip install pandas plotly tqdm`. Without this,
-   fixture cells 2–6 won't execute.
-3. **Build the fixtures script** (§3) — `scripts/demo-fixtures.*` does not exist
-   yet; it must be authored (MCP-driven) and run to create the demo notebooks.
+2. **Install fixture libs into the kernel.** The `nebula` kernel is a uv venv
+   (no `pip`); use uv:
+   `uv pip install --python ~/.venvs/nebula/bin/python pandas plotly tqdm nbformat`
+   (numpy + matplotlib already present; `nbformat` is required for Plotly's MIME
+   output). *Done.*
+3. **Build the fixtures** (§3) — `~/.venvs/nebula/bin/python scripts/demo-fixtures.py`.
+   Creates `~/demo/{exoplanets.csv,.ipynb,.py,.qmd, bug.ipynb}` + a git commit.
+   *Done; all cells verified through the real kernel.*
 4. **Kernel idle** — `nebula` kernel attached, green pill.
 5. **Decide deliverable** — GIF set (default) or `brew install ffmpeg` for a
    stitched `.mp4`.
@@ -113,12 +114,21 @@ A small setup pass (`scripts/demo-fixtures.*`, MCP-driven) creates:
 `resetScene()` rewrites the specific cells a scene touches back to these known
 states between takes.
 
-**Cell addressing — build a `cell# → cell_id` map.** The MCP tools address cells
-by `cell_id` (stable string) or `cell_index` (**0-based**), *not* the 1-based cell
-numbers used in the beat sheets. Collaborative agent ops **must** use `cell_id`
-(indices shift when the user edits). After building the fixtures, read the
-notebook once and record each fixture cell's id (referenced below as `C2…C7`,
-`Cbug`); every agent MCP call uses those ids.
+**Cell addressing — the ids are stable and readable.** The MCP tools address
+cells by `cell_id` (string) or `cell_index` (**0-based**), *not* by the 1-based
+scene numbers. Collaborative ops **must** use `cell_id` (indices shift under user
+edits). The fixtures bake in these ids, so the beats reference them directly:
+
+| scene cell | `cell_id` | what it is |
+|---|---|---|
+| title | `title` | markdown intro |
+| C2 | `load` | pandas read_csv |
+| C3 | `scatter` | matplotlib hero plot |
+| C4 | `plotly` | interactive Plotly |
+| C5 | `widget` | nebula-web widget |
+| C6 | `tqdm` | progress-bar loop |
+| C7 | `occ` | the money-shot cell (4-space → 2-space) |
+| (bug.ipynb) | `bug` | the `KeyError` cell |
 
 ---
 
@@ -136,9 +146,9 @@ Caption: *"Your notebook. Your agent. At the same time."*
 | 0.0 | D | reset cell 7 to 4-space version; scroll so cells 6–7 fill viewport; start_recording 📸 |
 | 0.4 | A | `start_agent_session(exclusive:false)` → purple "Agent" badge appears 📸 |
 | 0.8 | U | click into cell 6, begin typing a comment `# exploring the habitable zone…` |
-| 1.6 | A | `update_cell(cell_id=C7, <2-space reindent>)` → cell 7 text rewrites, **purple ring** blooms 📸 |
+| 1.6 | A | `update_cell(cell_id="occ", <2-space reindent>)` → cell 7 text rewrites, **purple ring** blooms 📸 |
 | 2.4 | U | keep typing in cell 6 (both cursors visibly active) 📸 |
-| 3.2 | A | `execute_cell(cell_id=C7)` → output refreshes green 📸 |
+| 3.2 | A | `execute_cell(cell_id="occ")` → output refreshes green 📸 |
 | 4.2 | D | hold final frame 📸; stop_recording; export `scene-00-hook.gif` |
 
 ### Scene 01 — INSTANT OPEN · 4 s
@@ -179,7 +189,7 @@ Caption: *"Progress bars, done right."*
 | t | actor | beat |
 |---|---|---|
 | 0.0 | D | reset cell 6; scroll into view; start_recording 📸 |
-| 0.4 | A | `execute_cell(cell_id=C6)` (tqdm loop) |
+| 0.4 | A | `execute_cell(cell_id="tqdm")` (tqdm loop) |
 | 0.6–3.0 | — | a single clean bar advances 0→100% (no `\r` wall) 📸📸📸 |
 | 3.4 | D | stop; export `scene-04-tqdm.gif` |
 
@@ -229,8 +239,8 @@ Caption: *"One click. It reads, fixes, and re-runs."*
 |---|---|---|
 | 0.0 | U | navigate to `bug.ipynb`; the failing cell shows red error; start_recording 📸 |
 | 0.6 | U | click **Fix with agent** on the error → Agent terminal panel slides up, prompt injected, "Agent" badge 📸 |
-| 1.8 | A | (harness MCP) `start_agent_session` → `read_cell(cell_id=Cbug)` → `update_cell(cell_id=Cbug, <fixed code>)` → cell rewrites 📸📸 |
-| 4.5 | A | `execute_cell(cell_id=Cbug)` → red turns green, output correct 📸 |
+| 1.8 | A | (harness MCP) `start_agent_session` → `read_cell(cell_id="bug")` → `update_cell(cell_id="bug", <fixed code>)` → cell rewrites 📸📸 |
+| 4.5 | A | `execute_cell(cell_id="bug")` → red turns green, output correct 📸 |
 | 6.0 | — | purple ring on the fixed cell 📸 |
 | 7.4 | D | stop; export `scene-08-fix.gif` |
 
@@ -239,11 +249,11 @@ Caption: *"Edit the same cell. Nothing gets clobbered."*
 | t | actor | beat |
 |---|---|---|
 | 0.0 | D | reset cell 7 → 4-space; scroll cells 6–7 into view; start_recording 📸 |
-| 0.5 | A | `start_agent_session(exclusive:false)`; `read_cell(cell_id=C7)` (arms OCC at 4-space hash) 📸 |
+| 0.5 | A | `start_agent_session(exclusive:false)`; `read_cell(cell_id="occ")` (arms OCC at 4-space hash) 📸 |
 | 1.5 | U | click into cell 7 and **type** a new comment line + tweak indentation (changes the cell *the agent is about to write*) 📸📸 |
-| 3.0 | A | `update_cell(cell_id=C7, <2-space version built on the OLD read>)` → **conflict**: returns user's current content 📸 |
+| 3.0 | A | `update_cell(cell_id="occ", <2-space version built on the OLD read>)` → **conflict**: returns user's current content 📸 |
 | 4.0 | — | soft **blue (info) toast**, exact text: *"Agent edit held off — you changed that cell; it will retry with your version"* 📸 |
-| 4.8 | A | re-`read_cell(cell_id=C7)` → re-apply 2-space reindent **on top of** the user's new line → `update_cell` succeeds 📸📸 |
+| 4.8 | A | re-`read_cell(cell_id="occ")` → re-apply 2-space reindent **on top of** the user's new line → `update_cell` succeeds 📸📸 |
 | 7.0 | — | cell 7 shows: user's comment preserved **and** 2-space indentation; purple ring 📸 |
 | 8.5 | U | scroll to show nothing was lost 📸 |
 | 9.6 | D | stop; export `scene-09-money-shot.gif` |
@@ -329,9 +339,12 @@ spec against the real code and environment. Applied above:
 - **Scene 11** targets the **kernel selector dropdown** in the header (where
   detected envs + Register + install hints render), not the Kernel Manager panel.
 - **+ menu** labels corrected to the real entries.
-- **Pre-flight blockers**: install `pandas plotly tqdm` into the kernel; author
-  `scripts/demo-fixtures.*` (absent); lift the nebula-web widget from
-  `interactive-output-demo.ipynb`.
+- **Pre-flight blockers — now resolved**: installed `pandas plotly tqdm nbformat`
+  into the kernel (uv venv, no pip); authored + ran `scripts/demo-fixtures.py`
+  (reuses the nebula-web widget from `interactive-output-demo.ipynb`); all 7 code
+  cells verified through the real `nebula` kernel (load→html, scatter→png,
+  plotly→`vnd.plotly.v1+json`, widget→`vnd.nebula.web+json`, tqdm→CR text bar,
+  occ→fn, bug→`KeyError`). Server restarted fresh; `~/demo` git-committed.
 
 Confirmed correct as written: `exclusive:false` collaborative mode; session
 required for writes; OCC arm-on-read + conflict-returns-currentContent +
