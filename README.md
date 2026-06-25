@@ -15,6 +15,34 @@ Nebula is an agent-native notebook computing environment built for what's coming
 - **Rich outputs** — Plotly MIME rendering and Nebula-native interactive JS outputs, in a virtualized cell list that stays fast on large notebooks
 - **Runs anywhere** — `npx nebula-notebook`, real filesystem access, TOTP 2FA, and multi-server clusters behind a single UI
 
+## See it in action
+
+**An agent edits your notebook live** — reindenting a cell while you watch, with a presence ring on the cell it's touching:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/demo/scene-agent.gif" alt="An agent reindents a code cell from 4-space to 2-space live in the UI, with a purple presence ring around the cell" width="760">
+</p>
+
+**Interactive outputs, no widget plumbing** — `application/vnd.nebula.web+json` widgets respond to clicks:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/demo/scene-widget.gif" alt="A Nebula-native interactive web output: clicking Resample re-rolls the bar chart live" width="760">
+</p>
+
+**Time-travel through your edit history** — preview any past moment with diff highlighting, then restore:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/demo/scene-history.gif" alt="The History panel: clicking a past edit previews the notebook at that moment with an orange modified-cell highlight and a Restore option" width="760">
+</p>
+
+**Find across the whole notebook** — regex search with live match counts:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/demo/scene-search.gif" alt="Notebook-wide search: typing a query highlights every match across cells with a running match count" width="760">
+</p>
+
+<sub>All clips captured headlessly from the running app — regenerate with <code>python scripts/demo-shoot.py all</code>.</sub>
+
 ## Quick Start
 
 ```bash
