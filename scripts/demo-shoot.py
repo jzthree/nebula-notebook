@@ -96,6 +96,11 @@ class CDP:
     def type_text(self, text):
         self.cmd("Input.insertText", {"text": text})
 
+    def key_combo(self, key, code, vk, modifiers=0):
+        for ty in ("keyDown", "keyUp"):
+            self.cmd("Input.dispatchKeyEvent", {"type": ty, "modifiers": modifiers,
+                     "key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk})
+
 
 def frames_dir(name):
     d = f"/tmp/shoot-{name}"
@@ -178,22 +183,59 @@ def scene_widget(c):
 
 
 def scene_search(c):
-    c.caption("Find & replace — across the whole notebook, regex included.")
+    c.caption("Find anything — across the whole notebook, regex included.")
     c.scroll_cell("scatter", "start")
     time.sleep(0.3)
-    c.click_title("Toggle search")
-    time.sleep(0.5)
+    c.key_combo("f", "KeyF", 70, modifiers=4)  # Cmd+F opens the search bar
+    time.sleep(0.6)
     fd = frames_dir("search")
     i = 0
-    open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
-    for ch in "radius":
+    for _ in range(2):
+        open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    for ch in "radius":           # type the query → live highlights + match count
         c.type_text(ch)
-        time.sleep(0.18)
+        time.sleep(0.2)
         open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
     for _ in range(4):
         time.sleep(0.2)
         open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
-    assemble("search", fd, duration=170, hold_last=5)
+    c.key_combo("Escape", "Escape", 27)
+    assemble("search", fd, duration=190, hold_last=6)
+
+
+def scene_history(c):
+    # make a couple of edits so the timeline has entries (idempotent-ish)
+    api_op({"type": "endAgentSession", "notebookPath": NB, "agentId": AID})
+    api_op({"type": "startAgentSession", "notebookPath": NB, "agentId": AID})
+    for txt in (OCC_4SPACE, OCC_2SPACE):
+        api_op({"type": "readCell", "notebookPath": NB, "cellId": "occ", "agentId": AID})
+        api_op({"type": "updateContent", "notebookPath": NB, "cellId": "occ", "agentId": AID, "content": txt})
+        time.sleep(0.2)
+    api_op({"type": "endAgentSession", "notebookPath": NB, "agentId": AID})
+    time.sleep(0.5)
+
+    c.caption("Scrub through your entire edit history.")
+    is_open = "(()=>[...document.querySelectorAll('*')].some(e=>/^History \\(\\d+\\)/.test((e.textContent||'').trim())&&e.children.length<4))()"
+    if not c.ev(is_open):
+        c.click_text("History")
+        time.sleep(0.8)
+    fd = frames_dir("history")
+    i = 0
+    for _ in range(4):
+        time.sleep(0.12)
+        open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    # click an "Edit" entry a few steps back to preview that moment (diff highlight)
+    clicked = c.ev("(()=>{const rows=[...document.querySelectorAll('div')]"
+                   ".filter(e=>/\\bgroup\\b/.test(''+e.className)&&/px-2/.test(''+e.className)"
+                   "&&/edit/i.test(e.textContent||'')&&(e.textContent||'').length<70);"
+                   "const r=rows[Math.min(2, rows.length-1)]; if(r){r.click();return rows.length;}return 0;})()")
+    print("   history edit rows:", clicked)
+    time.sleep(0.4)
+    c.scroll_cell("occ", "center")   # show the previewed cell with its diff highlight
+    for _ in range(9):
+        time.sleep(0.14)
+        open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    assemble("history", fd, crop=(0.02, 0.13, 0.98, 0.985), duration=200, hold_last=6)
 
 
 OCC_2SPACE = (
@@ -246,7 +288,7 @@ def scene_agent(c):
 
 SCENES = {
     "runall": scene_runall, "scatter": scene_scatter, "widget": scene_widget,
-    "search": scene_search, "agent": scene_agent,
+    "search": scene_search, "agent": scene_agent, "history": scene_history,
 }
 
 
