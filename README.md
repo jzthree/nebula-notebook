@@ -1,19 +1,27 @@
 # Nebula Notebook
 
-Nebula is an agent-native notebook computing environment built for what's coming next: real Jupyter kernels, real filesystem access, and a notebook that agents (Claude Code, Codex, …) can drive end-to-end through MCP — while staying a fast, polished notebook even if you never touch the AI features.
+Nebula is an agent-native notebook — built for you and your AI to work in the same cells, and a fast, polished one even if you never touch the AI.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/nebula-hero.svg" alt="Nebula Notebook driving an exoplanets analysis: a code cell with a discovery-method-colored period–radius scatter, habitable-zone candidates ringed in violet, Kepler-452b annotated, and the built-in agent terminal where Claude narrates the analysis" width="940">
+  <!-- 2½-min product tour. Uploaded into the `demo-assets` release description, so GitHub
+       transcodes it and streams it inline via the user-attachments URL below (video/mp4,
+       range requests, no attachment disposition). The 12 MB original also stays attached to
+       that release as a downloadable asset. Neither is committed to the repo, so clones stay
+       lean. Renderers that strip <video> (npm, some mirrors) fall back to the link inside. -->
+  <video src="https://github.com/user-attachments/assets/77d794be-cdcc-4285-ba2d-c3779b9141ed" controls muted width="940" poster="https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/nebula-hero.svg">
+    <a href="https://github.com/jzthree/nebula-notebook/releases/download/demo-assets/nebula-demo-16x9.mp4">Watch the 2½-minute product tour</a>
+  </video>
 </p>
+<p align="center"><sub>▶ <a href="https://github.com/user-attachments/assets/77d794be-cdcc-4285-ba2d-c3779b9141ed">Watch the 2½-minute tour</a> · or skim the autoplay clips below</sub></p>
 
 ## Highlights
 
-- **Agent-native** — Claude Code, Codex, Cursor & friends drive notebooks through MCP (`npx nebula-notebook-mcp setup-mcp`); an agent terminal is built into every notebook, with one-click launch pre-briefed on your server and notebook
-- **Edit while the agent edits** — collaborative sessions with per-cell optimistic concurrency: a conflicting agent write is rejected with your current content and self-heals on retry; nothing is silently overwritten
+- **Agent-native** — Claude Code, Codex, Cursor & friends operate notebooks through MCP (`npx nebula-notebook-mcp setup-mcp`); an agent terminal is built into every notebook, with one-click launch pre-briefed on your server and notebook
+- **Edit while the agent edits** — per-cell optimistic concurrency: if an agent's write conflicts with yours, it's rejected and handed your current content to retry against — nothing is silently overwritten
 - **"Fix with agent"** on any failing cell, plus per-cell prompts — both inject straight into the agent's terminal, context included
-- **Real Jupyter kernels** over ZeroMQ (Python, Julia, R, …), with kernels that survive dev-server restarts and reattach
+- **Jupyter kernels** over ZeroMQ (Python, Julia, R, …) that survive dev-server restarts and reattach
 - **Rich outputs** — Plotly MIME rendering and Nebula-native interactive JS outputs, in a virtualized cell list that stays fast on large notebooks
-- **Runs anywhere** — `npx nebula-notebook`, real filesystem access, TOTP 2FA, and multi-server clusters behind a single UI
+- **Runs anywhere** — `npx nebula-notebook`, TOTP 2FA, and multi-server clusters behind a single UI
 
 ## See it in action
 
@@ -55,7 +63,7 @@ On first start, a QR code will appear in the terminal. Scan it with an authentic
 
 Open http://localhost:3000 and enter your 6-digit code.
 
-To let agents (Claude Code, Codex, Cursor, Gemini CLI, …) drive your notebooks, register the Nebula MCP on the machine where your agent runs:
+To let agents (Claude Code, Codex, Cursor, Gemini CLI, …) operate your notebooks, register the Nebula MCP on the machine where your agent runs:
 
 ```bash
 npx nebula-notebook-mcp setup-mcp
@@ -88,8 +96,8 @@ This root is used for the file browser and terminals. You can also change it fro
 ## Features
 
 **Core**
-- Real Jupyter kernel execution (Python, Julia, R, etc.)
-- Real filesystem access - open notebooks from anywhere
+- Jupyter kernel execution (Python, Julia, R, etc.)
+- Built-in file browser — open notebooks anywhere on disk
 - Autosave with crash recovery
 - Undo/redo with full edit history
 
@@ -279,7 +287,7 @@ Terminals persist as long as the server runs. Bookmark different terminals for q
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, CodeMirror
 - **Backend**: Node.js, Fastify, ZeroMQ (Jupyter kernel protocol)
 - **Auth**: TOTP (otplib), JWT (jsonwebtoken)
-- **Agents**: MCP (`nebula-notebook-mcp`) driven by Claude Code, Codex, and other agent CLIs
+- **Agents**: MCP (`nebula-notebook-mcp`), used by Claude Code, Codex, and other agent CLIs
 
 ## License
 
