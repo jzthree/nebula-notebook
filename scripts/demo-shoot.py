@@ -204,10 +204,10 @@ def scene_search(c):
 
 
 def scene_history(c):
-    # make a couple of edits so the timeline has entries (idempotent-ish)
+    # make several distinct edits so the timeline has entries to scrub through
     api_op({"type": "endAgentSession", "notebookPath": NB, "agentId": AID})
     api_op({"type": "startAgentSession", "notebookPath": NB, "agentId": AID})
-    for txt in (OCC_4SPACE, OCC_2SPACE):
+    for txt in reindent_steps(OCC_4SPACE)[::2] + [OCC_2SPACE]:
         api_op({"type": "readCell", "notebookPath": NB, "cellId": "occ", "agentId": AID})
         api_op({"type": "updateContent", "notebookPath": NB, "cellId": "occ", "agentId": AID, "content": txt})
         time.sleep(0.2)
@@ -224,18 +224,26 @@ def scene_history(c):
     for _ in range(4):
         time.sleep(0.12)
         open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
-    # click an "Edit" entry a few steps back to preview that moment (diff highlight)
-    clicked = c.ev("(()=>{const rows=[...document.querySelectorAll('div')]"
-                   ".filter(e=>/\\bgroup\\b/.test(''+e.className)&&/px-2/.test(''+e.className)"
-                   "&&/edit/i.test(e.textContent||'')&&(e.textContent||'').length<70);"
-                   "const r=rows[Math.min(2, rows.length-1)]; if(r){r.click();return rows.length;}return 0;})()")
-    print("   history edit rows:", clicked)
-    time.sleep(0.4)
-    c.scroll_cell("occ", "center")   # show the previewed cell with its diff highlight
-    for _ in range(9):
-        time.sleep(0.14)
+    # scrub down the timeline and back — each "Edit" entry previews a different
+    # past state (diff highlight on the cell), so the capture shows real motion
+    def click_edit_row(n):
+        return c.ev("(()=>{const rows=[...document.querySelectorAll('div')]"
+                    ".filter(e=>/\\bgroup\\b/.test(''+e.className)&&/px-2/.test(''+e.className)"
+                    "&&/edit/i.test(e.textContent||'')&&(e.textContent||'').length<70);"
+                    f"const r=rows[Math.min({n}, rows.length-1)]; if(r){{r.click();return rows.length;}}return 0;}})()")
+    rows = 0
+    for n in (1, 2, 3, 2, 1):
+        rows = click_edit_row(n)
+        time.sleep(0.28)
+        c.scroll_cell("occ", "center")   # show the previewed cell with its diff highlight
+        for _ in range(2):
+            time.sleep(0.08)
+            open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    print("   history edit rows:", rows)
+    for _ in range(3):
+        time.sleep(0.12)
         open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
-    assemble("history", fd, crop=(0.02, 0.13, 0.98, 0.985), duration=200, hold_last=6)
+    assemble("history", fd, crop=(0.02, 0.13, 0.98, 0.985), duration=130, hold_last=6)
 
 
 OCC_2SPACE = (
@@ -258,6 +266,22 @@ OCC_4SPACE = (
 AID = "claude-code"  # one consistent agent id (end must match start to release)
 
 
+def reindent_steps(src4):
+    """Progressive 4->2-space reindent, halving one indented line at a time
+    (top-down). Each returned string is a real cell state the agent drives the
+    notebook through, so the capture shows the block visibly *tightening* live
+    instead of flipping between a single before/after pair."""
+    lines = src4.split("\n")
+    steps = ["\n".join(lines)]
+    for idx, ln in enumerate(lines):
+        stripped = ln.lstrip(" ")
+        indent = len(ln) - len(stripped)
+        if indent >= 2 and indent % 2 == 0:
+            lines[idx] = " " * (indent // 2) + stripped
+            steps.append("\n".join(lines))
+    return steps
+
+
 def scene_agent(c):
     # one clean session for the whole scene; always pass the same agentId
     api_op({"type": "endAgentSession", "notebookPath": NB, "agentId": AID})  # clear any prior
@@ -271,19 +295,28 @@ def scene_agent(c):
     time.sleep(0.4)
     fd = frames_dir("agent")
     i = 0
-    for _ in range(5):  # hold the 4-space "before"
+    for _ in range(4):  # hold the 4-space "before"
         time.sleep(0.12)
         open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
-    # the agent reindents 4 -> 2; UI updates live + purple presence ring
-    api_op({"type": "readCell", "notebookPath": NB, "cellId": "occ", "agentId": AID})
+    # the agent reindents 4 -> 2 one line at a time; every step is a real OCC
+    # operation, so the block visibly tightens live (purple presence ring stays on)
+    for st in reindent_steps(OCC_4SPACE)[1:]:
+        api_op({"type": "readCell", "notebookPath": NB, "cellId": "occ", "agentId": AID})
+        api_op({"type": "updateContent", "notebookPath": NB, "cellId": "occ", "agentId": AID, "content": st})
+        time.sleep(0.16)
+        c.scroll_cell("occ", "center")
+        for _ in range(2):
+            time.sleep(0.06)
+            open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
+    # settle on the canonical 2-space "after" (nicer comment) + hold the ring
     r = api_op({"type": "updateContent", "notebookPath": NB, "cellId": "occ", "agentId": AID, "content": OCC_2SPACE})
     print("   edit:", r.get("success"), r.get("error", ""))
-    for _ in range(14):  # capture the change landing + the ring
-        time.sleep(0.12)
+    for _ in range(6):
+        time.sleep(0.1)
         c.scroll_cell("occ", "center")
         open(f"{fd}/f{i:03d}.png", "wb").write(c.shot()); i += 1
     api_op({"type": "endAgentSession", "notebookPath": NB, "agentId": AID})
-    assemble("agent", fd, duration=150, hold_last=6)
+    assemble("agent", fd, duration=110, hold_last=6)
 
 
 SCENES = {

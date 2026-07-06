@@ -188,17 +188,23 @@ export function addRecentNotebook(path: string, name: string): void {
 /**
  * Fetch server's working directory from health endpoint
  */
-async function getServerCwd(): Promise<string> {
+interface ServerUpdateInfo {
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+}
+
+async function getServerHealth(): Promise<{ cwd: string; update: ServerUpdateInfo | null }> {
   try {
     const response = await fetch('/api/health');
     if (response.ok) {
       const data = await response.json();
-      return data.cwd || '~';
+      return { cwd: data.cwd || '~', update: data.update ?? null };
     }
   } catch {
     // Fall back to home
   }
-  return '~';
+  return { cwd: '~', update: null };
 }
 
 /**
@@ -227,6 +233,7 @@ export const Dashboard: React.FC = () => {
 
   // Server working directory
   const [serverCwd, setServerCwd] = useState<string>('~');
+  const [updateInfo, setUpdateInfo] = useState<ServerUpdateInfo | null>(null);
   const [browsedPath, setBrowsedPath] = useState<string>('~');
 
   // First-run welcome card: shown until dismissed, and only while there is
@@ -341,8 +348,9 @@ export const Dashboard: React.FC = () => {
   // Initial load
   useEffect(() => {
     const init = async () => {
-      const cwd = await getServerCwd();
+      const { cwd, update } = await getServerHealth();
       setServerCwd(cwd);
+      setUpdateInfo(update);
       loadSessions();
       setRecentNotebooks(getRecentNotebooks());
       checkDeadSessions();
@@ -546,6 +554,25 @@ export const Dashboard: React.FC = () => {
       )}
 
       <div className="max-w-6xl mx-auto px-4 py-6">
+        {/* Notify-only update pill (server checks npm daily; NEBULA_NO_UPDATE_CHECK disables) */}
+        {updateInfo?.update_available && (
+          <div className="flex items-center gap-2 mb-4 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+            <Sparkles className="w-4 h-4 text-blue-600 flex-shrink-0" />
+            <span className="text-blue-800">
+              Nebula <span className="font-semibold">v{updateInfo.latest}</span> is available (you're on v{updateInfo.current}) —{' '}
+              restart with <code className="bg-blue-100 px-1 rounded">npx nebula-notebook@latest</code>, or <code className="bg-blue-100 px-1 rounded">git pull</code> for source installs.
+            </span>
+            <a
+              href="https://github.com/jzthree/nebula-notebook/releases"
+              target="_blank"
+              rel="noreferrer"
+              className="ml-auto text-blue-600 hover:text-blue-800 underline decoration-dotted flex-shrink-0"
+            >
+              release notes
+            </a>
+          </div>
+        )}
+
         {/* Event-driven "Get started" checklist (welcome card takes precedence on true first run) */}
         {!showWelcome && <GetStartedCard />}
 

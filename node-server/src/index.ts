@@ -32,15 +32,23 @@ import pythonRoutes from './routes/python';
 import authRoutes from './routes/auth';
 import clusterRoutes from './routes/cluster';
 import resourceRoutes from './routes/resources';
+import computeRoutes from './routes/compute';
 
 // Import cluster
 import { serverRegistry } from './cluster/server-registry';
 import { getOrCreateClusterSecret } from './cluster/cluster-secret';
 import { clientRegistration } from './cluster/client-registration';
 
+// Import scheduler (SLURM-backed compute allocations)
+import { allocationService } from './scheduler/allocation-service';
+import { SlurmScheduler } from './scheduler/slurm-scheduler';
+import { MockScheduler } from './scheduler/mock-scheduler';
+import type { LaunchContext } from './scheduler/job-template';
+
 // Import auth
 import { authService, authMiddleware, authWebSocketMiddleware } from './auth';
 import { fsService } from './fs/fs-service';
+import { getUpdateInfo, startUpdateChecker } from './update-check';
 
 // Import terminal routes (existing)
 import { setupTerminalRoutes, setupTerminalWebSocket, cleanupTerminals } from './terminal/server';
@@ -274,11 +282,13 @@ async function createApp(): Promise<FastifyInstance> {
   fastify.get('/api/health', async (_request: FastifyRequest, reply: FastifyReply) => {
     // Use configured root directory (from .nebula-config.json or fallback to cwd)
     const rootDir = fsService.normalizePath('~');
+    const update = getUpdateInfo();
     return reply.send({
       status: 'ok',
-      version: '1.0.0',
+      version: update.current,
       ready: kernelService.isReady,
       cwd: rootDir,
+      update,
     });
   });
 
@@ -320,6 +330,7 @@ async function createApp(): Promise<FastifyInstance> {
   await fastify.register(notebookRoutes, { prefix: '/api' });
   await fastify.register(pythonRoutes, { prefix: '/api' });
   await fastify.register(clusterRoutes, { prefix: '/api' });
+  await fastify.register(computeRoutes, { prefix: '/api' });
   await fastify.register(resourceRoutes, { prefix: '/api/resources' });
 
   // Terminal routes (registered directly on the app, not under /api prefix)
@@ -473,8 +484,9 @@ async function main(): Promise<void> {
     console.log('[Auth] 2FA configured and ready');
   }
 
-  // Set local server ID from hostname
-  const localServerId = `${os.hostname()}:${PORT}`;
+  // Set local server ID from hostname (NEBULA_HOST overrides the advertised name
+  // when the OS hostname isn't the reachable/desired identity — e.g. demos).
+  const localServerId = `${process.env.NEBULA_HOST || os.hostname()}:${PORT}`;
   serverRegistry.setLocalServerId(localServerId);
   console.log(`[Cluster] Local server ID: ${localServerId}`);
   const serverInstanceId = randomUUID();
@@ -503,6 +515,34 @@ async function main(): Promise<void> {
   // Setup notebook operations WebSocket
   setupNotebookWebSocket(server);
 
+  // Scheduler-backed compute allocations (main server only; detection-gated)
+  let schedulerDetected = false;
+  if (!CLIENT_MODE) {
+    try {
+      // NEBULA_SCHEDULER=mock enables a fabricated-data scheduler (no real cluster)
+      // for demos/tests; otherwise use the real SLURM scheduler (detection-gated).
+      const scheduler = process.env.NEBULA_SCHEDULER === 'mock' ? new MockScheduler() : new SlurmScheduler();
+      if (await scheduler.detect()) {
+        schedulerDetected = true;
+        const ctx: LaunchContext = {
+          mainUrl: process.env.NEBULA_SCHEDULER_MAIN_URL || `http://${os.hostname()}:${PORT}`,
+          secret: process.env.NEBULA_CLUSTER_SECRET,
+          nodeBin: process.execPath,
+          execArgv: process.execArgv,
+          scriptPath: process.argv[1],
+          cwd: process.cwd(),
+          stateDir: process.env.NEBULA_SCHEDULER_STATE_DIR || path.join(os.homedir(), '.nebula', 'allocations'),
+        };
+        allocationService.init(scheduler, ctx);
+        console.log('[Scheduler] SLURM detected — compute allocations enabled');
+      } else {
+        console.log('[Scheduler] No batch scheduler detected — compute allocations disabled');
+      }
+    } catch (err) {
+      console.warn('[Scheduler] Init failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   if (REATTACH_KERNELS) {
     try {
       const result = await kernelService.reattachOrphanedSessions();
@@ -514,6 +554,39 @@ async function main(): Promise<void> {
       console.warn(`[Kernel] Reattach failed: ${message}`);
     }
   }
+
+  // Final "you're up" banner — the one part of startup written for humans.
+  // Everything a first-time user needs: where to point the browser, where the
+  // files live, whether cluster compute is on, and how to reach a remote
+  // server from a laptop. Client-mode servers skip it (no user is watching).
+  if (!CLIENT_MODE) {
+    const host = os.hostname();
+    let rootDir = '~';
+    try { rootDir = fsService.getRootDirectory(); } catch { /* keep default */ }
+    const lines = [
+      '',
+      '  ──────────────────────────────────────────────────────',
+      '   Nebula Notebook is running',
+      '',
+      `   Open:      http://localhost:${PORT}`,
+      `   Network:   http://${host}:${PORT}`,
+      `   Files:     ${rootDir}`,
+      `   Compute:   ${schedulerDetected
+        ? 'SLURM detected — allocate compute nodes from the kernel menu'
+        : 'no batch scheduler here — kernels run on this machine'}`,
+      ...(setupNeeded ? ['   Sign-in:   scan the QR code above with an authenticator app'] : []),
+      '',
+      '   On a remote machine? From your laptop:',
+      `     ssh -L ${PORT}:localhost:${PORT} ${host}    then open http://localhost:${PORT}`,
+      '   Cluster guide: https://github.com/jzthree/nebula-notebook/blob/main/docs/CLUSTER_SETUP.md',
+      '  ──────────────────────────────────────────────────────',
+      '',
+    ];
+    console.log(lines.join('\n'));
+  }
+
+  // Daily notify-only update check (NEBULA_NO_UPDATE_CHECK=1 to disable)
+  if (!CLIENT_MODE) startUpdateChecker();
 
   // Graceful shutdown
   let shuttingDown = false;
@@ -544,10 +617,11 @@ async function main(): Promise<void> {
       console.error('[Server] Error during kernel cleanup:', err);
     }
 
-    // Cleanup cluster registration
+    // Cleanup cluster registration + scheduler polling
     try {
       await clientRegistration.shutdown();
       serverRegistry.shutdown();
+      allocationService.shutdown();
     } catch (err) {
       console.error('[Server] Error during cluster cleanup:', err);
     }
@@ -580,9 +654,16 @@ async function main(): Promise<void> {
   console.log(`[Server] Terminal WebSocket: ${wsProtocol}://localhost:${PORT}/ws?id={terminal_id}`);
   console.log(`[Server] Root directory: ${fsService.getRootDirectory()} (change with --workdir)`);
 
-  // Initialize client registration (explicit client mode only)
+  // Initialize client registration (explicit client mode only). With PORT=0
+  // (scheduler-launched jobs pick an ephemeral port), register the *actual* bound
+  // port so the main server proxies kernels to the right place.
   if (CLIENT_MODE) {
-    clientRegistration.initFromEnv(Number(PORT));
+    const addr = fastify.server.address();
+    const boundPort = addr && typeof addr === 'object' && addr ? addr.port : Number(PORT);
+    const clientServerId = `${os.hostname()}:${boundPort}`;
+    serverRegistry.setLocalServerId(clientServerId);
+    kernelService.setServerIdentity(clientServerId, serverInstanceId);
+    clientRegistration.initFromEnv(boundPort);
   }
 }
 

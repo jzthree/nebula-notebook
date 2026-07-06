@@ -174,7 +174,26 @@ Knock down the two adoption objections: "will it run with my Python?" and "I hat
 
 ---
 
-## ACT 5 — Get started (2:55–3:05)
+## ACT 4½ — One more thing (2:55–3:12)
+
+The film feels finished — then the capstone. The *same* notebook, now on a compute
+cluster, with no batch script and no SSH tunnel. Play it as a reveal: a beat of
+quiet, then the menu.
+
+| | |
+|---|---|
+| **On screen** | Kernel menu → **Server** section → **+ New compute allocation**. A modal opens next to a **live cluster-load panel**: partitions and QoS filtered to only what this account may actually submit to, each row showing idle CPUs, idle GPUs **by type**, and queue backlog (your own jobs called out). A recommendation banner points at the queue you'll land on soonest. Set CPUs / memory / GPUs / walltime; choose a GPU queue → the GPU-type list narrows to the models that queue really has. **Submit.** The allocation drops into the Server list as **"Queued · waiting…"** (live elapsed), then turns into a green online server the moment the job starts. Pick it, run a cell — `!hostname` prints the compute node, `nvidia-smi` shows the card. Same notebook, same agent, same history — now on a cluster node. |
+| **Caption** | *"One more thing — it runs where your compute lives."* |
+| **Why it lands** | The whole HPC ritual — write an sbatch script, queue, find the node, forward a port, point Jupyter at it — collapses into one menu entry. And it's **detection-gated**: invisible unless a scheduler is present, so nothing changes for laptop users. One allocation hosts *many* kernels — queue once, run several notebooks in it. |
+| **Features** | scheduler-backed allocations (`scheduler/SlurmScheduler`, `allocation-service.ts`); allowed-partition/QoS + GPU-type-by-queue picker with a live capacity-based load monitor and soonest-queue recommendation (`ComputeAllocationModal.tsx`, `ComputeDashboardCard.tsx`); browser⇄compute-node kernels proxied over WS, ZeroMQ never crossing the network (`kernel-proxy.ts`). Full design in [`SLURM_COMPUTE.md`](./SLURM_COMPUTE.md). |
+
+**Shooting note:** this beat needs a **live scheduler** — capture it presenter-driven
+against a real SLURM login node (like the authentic option in Act 3). Off-cluster the
+feature is hidden by design, so there's nothing to mock; don't fake it.
+
+---
+
+## ACT 5 — Get started (3:12–3:22)
 
 | | |
 |---|---|
@@ -213,8 +232,9 @@ for crisp, repeatable README clips even if the final film is a single screen
 recording.
 
 **Music/pacing:** Acts 1–2 fast and rhythmic; Act 3 slows ~30% for the money
-shot; Act 5 resolves. Target 3:00–3:15 total.
+shot; Act 4½ is a beat of quiet, then the reveal; Act 5 resolves. Target ~3:20 total.
 
 **Distribution:** the README hero SVG already exists; embed the money-shot GIF
 (Act 3, scene 4) near the top of the README, link the full film, and reuse Act-1
-GIFs inline next to the Highlights bullets.
+GIFs inline next to the Highlights bullets. The Act-4½ compute capstone gets its
+own clip next to the cluster/scheduler section of the README.
