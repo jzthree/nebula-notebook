@@ -27,6 +27,7 @@ import {
   createWebSocketProxy,
 } from '../cluster/kernel-proxy';
 import { serverRegistry } from '../cluster/server-registry';
+import { allocationService } from '../scheduler/allocation-service';
 
 // Track all WebSocket connections per kernel session for broadcasting
 const sessionWebSockets: Map<string, Set<WebSocket>> = new Map();
@@ -45,6 +46,31 @@ kernelService.onSessionDead((sessionId: string) => {
   const sockets = sessionWebSockets.get(sessionId);
   if (!sockets || sockets.size === 0) return;
   const msg = JSON.stringify({ type: 'status', status: 'dead' });
+  for (const socket of sockets) {
+    try {
+      if (socket.readyState === WebSocket.OPEN) socket.send(msg);
+    } catch {
+      // Socket already closing — the reconnect loop will handle it
+    }
+  }
+});
+
+// Broadcast kernel-originated comm messages (ipywidgets state sync, etc.) to
+// every client attached to the session. This includes idle-time traffic from
+// widget observers — comm messages are demuxed regardless of parent request.
+kernelService.onComm((sessionId: string, comm) => {
+  const sockets = sessionWebSockets.get(sessionId);
+  if (!sockets || sockets.size === 0) return;
+  const msg = JSON.stringify({
+    type: 'comm',
+    comm: {
+      msg_type: comm.msgType,
+      comm_id: comm.commId,
+      ...(comm.targetName !== undefined && { target_name: comm.targetName }),
+      data: comm.data,
+      ...(comm.buffers && { buffers: comm.buffers }),
+    },
+  });
   for (const socket of sockets) {
     try {
       if (socket.readyState === WebSocket.OPEN) socket.send(msg);
@@ -209,6 +235,41 @@ export function setupKernelWebSocket(wss: WebSocketServer): void {
 
           const result = await kernelService.complete(sessionId, code, cursorPos);
           ws.send(JSON.stringify({ type: 'complete_reply', result }));
+        } else if (message.type === 'comm') {
+          // Client -> kernel comm message (ipywidgets interaction):
+          // { type: 'comm', comm: { msg_type, comm_id, target_name?, data, buffers? } }
+          const comm = (message.comm && typeof message.comm === 'object') ? message.comm : {};
+          const msgType = comm.msg_type;
+          if (msgType !== 'comm_open' && msgType !== 'comm_msg' && msgType !== 'comm_close') {
+            ws.send(JSON.stringify({ type: 'error', error: `Invalid comm msg_type: ${String(msgType)}` }));
+            return;
+          }
+          if (typeof comm.comm_id !== 'string' || comm.comm_id.length === 0) {
+            ws.send(JSON.stringify({ type: 'error', error: 'comm.comm_id is required' }));
+            return;
+          }
+
+          const content: Record<string, unknown> = {
+            comm_id: comm.comm_id,
+            data: (comm.data && typeof comm.data === 'object') ? comm.data : {},
+          };
+          if (msgType === 'comm_open') {
+            content.target_name = typeof comm.target_name === 'string' ? comm.target_name : '';
+          }
+          const buffers = Array.isArray(comm.buffers)
+            ? (comm.buffers as unknown[]).filter((b): b is string => typeof b === 'string')
+            : undefined;
+
+          await kernelService.sendCommMessage(sessionId, msgType, content, buffers);
+        } else if (message.type === 'comm_info') {
+          // Late-joiner support: list open comms known for this session.
+          // Reply only to the requesting socket.
+          const openComms = kernelService.getOpenComms(sessionId);
+          const comms: Record<string, { target_name: string }> = {};
+          for (const [commId, info] of Object.entries(openComms)) {
+            comms[commId] = { target_name: info.targetName };
+          }
+          ws.send(JSON.stringify({ type: 'comm_info_reply', comms }));
         }
       } catch (err) {
         const errMessage = err instanceof Error ? err.message : 'Unknown error';
@@ -367,6 +428,11 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
         return reply.code(500).send({ detail: message });
       }
     }
+
+    // Confirmed-dead rows (process gone) are auto-removed without user
+    // confirmation — only ambiguous leftovers (PID still alive) are reported
+    // for the explicit Clean Up flow.
+    await kernelService.autoCleanupDeadSessions().catch(() => { /* best effort */ });
 
     const deadSessions = kernelService.getDeadSessions();
     const sessions = deadSessions.map(s => ({
@@ -654,9 +720,34 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
     if (isProxiedSession(sessionId)) {
       try {
         const remoteStatus = await getRemoteKernelStatus(sessionId);
-        return reply.send(remoteStatus);
+        // Return the COMPOSITE session id (serverId::remoteId) — the remote
+        // server reports its own local id, and leaking that to clients makes
+        // them reference a session the main server doesn't recognize.
+        return reply.send({ ...remoteStatus, id: sessionId });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
+        // "Server is offline / not found" from the registry is a HEARTBEAT
+        // signal, not ground truth: a compute node saturated by a heavy
+        // execution can miss heartbeats for minutes while its SLURM job (and
+        // kernel) are perfectly alive — then recover. Treating that as
+        // terminal permanently killed live kernels (red kernel, reconnect
+        // loop stopped, only a page refresh recovered).
+        //
+        // The scheduler is the authority: return 410 Gone (terminal) only
+        // when the session's allocation is confirmed ended/failed/cancelled
+        // by squeue polling. Everything else is 503 (transient) so the
+        // client's reconnect loop keeps trying and revives the kernel when
+        // the node recovers.
+        if (/server (is offline|not found)/i.test(message)) {
+          const { serverId } = parseSessionId(sessionId);
+          const allocation = serverId
+            ? allocationService.list().find(a => a.serverId === serverId)
+            : undefined;
+          if (allocation && ['ended', 'failed', 'cancelled'].includes(allocation.state)) {
+            return reply.code(410).send({ detail: `Allocation ${allocation.state} — kernel stopped`, reason: 'server_gone' });
+          }
+          return reply.code(503).send({ detail: `${message} (may be transient — compute node busy or re-registering)`, reason: 'server_unreachable' });
+        }
         return reply.code(500).send({ detail: message });
       }
     }

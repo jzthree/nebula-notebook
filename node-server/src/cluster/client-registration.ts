@@ -15,6 +15,7 @@ interface RegistrationConfig {
   localPort: number;
   serverName?: string;
   secret?: string;
+  allocationToken?: string;
 }
 
 const HEARTBEAT_INTERVAL_MS = 30_000; // 30 seconds
@@ -40,6 +41,7 @@ class ClientRegistration {
     const localHost = process.env.NEBULA_HOST || os.hostname();
     const serverName = process.env.NEBULA_SERVER_NAME || os.hostname();
     const secret = process.env.NEBULA_CLUSTER_SECRET;
+    const allocationToken = process.env.NEBULA_ALLOCATION_TOKEN;
 
     this.config = {
       mainServerUrl: mainServerUrl.replace(/\/$/, ''), // Remove trailing slash
@@ -47,6 +49,7 @@ class ClientRegistration {
       localPort,
       serverName,
       secret,
+      allocationToken,
     };
 
     // Set local server ID
@@ -84,6 +87,7 @@ class ClientRegistration {
           name: this.config.serverName,
           secret: this.config.secret,
           resources, // Include resources in registration
+          allocationToken: this.config.allocationToken,
         }),
       });
 

@@ -20,6 +20,8 @@ export interface PeerServer {
   status: 'online' | 'offline' | 'unknown';
   kernelspecs?: string[]; // Available kernels (cached)
   resources?: ServerResources; // System resources (RAM, GPU)
+  allocationToken?: string; // Scheduler allocation token (correlates a job to its allocation)
+  allocationId?: string;    // Scheduler allocation id (set by the allocation service)
 }
 
 export interface RegisterRequest {
@@ -28,10 +30,12 @@ export interface RegisterRequest {
   name?: string;
   secret?: string;
   resources?: ServerResources;
+  allocationToken?: string;
 }
 
-const HEARTBEAT_TIMEOUT_MS = 90_000; // 90 seconds (3 missed heartbeats at 30s interval)
-const CLEANUP_INTERVAL_MS = 30_000;  // Check for stale servers every 30s
+const HEARTBEAT_TIMEOUT_MS = 90_000;  // 90s (3 missed heartbeats at 30s interval) -> mark offline
+const OFFLINE_REAP_MS = 180_000;      // 3 min without a heartbeat -> remove from the list entirely
+const CLEANUP_INTERVAL_MS = 30_000;   // Check for stale servers every 30s
 
 class ServerRegistry {
   private servers: Map<string, PeerServer> = new Map();
@@ -121,6 +125,9 @@ class ServerRegistry {
       if (request.resources) {
         existing.resources = request.resources;
       }
+      if (request.allocationToken) {
+        existing.allocationToken = request.allocationToken;
+      }
       console.log(`[ServerRegistry] Updated registration for ${serverId}`);
       return { success: true, serverId };
     }
@@ -136,6 +143,7 @@ class ServerRegistry {
       lastHeartbeat: now,
       status: 'online',
       resources: request.resources,
+      allocationToken: request.allocationToken,
     };
 
     this.servers.set(serverId, server);
@@ -186,6 +194,18 @@ class ServerRegistry {
   }
 
   /**
+   * Find a registered server by its scheduler allocation token.
+   * Used by the allocation service to correlate a job's registration.
+   */
+  getServerByAllocationToken(token: string): PeerServer | undefined {
+    if (!token) return undefined;
+    for (const server of this.servers.values()) {
+      if (server.allocationToken === token) return server;
+    }
+    return undefined;
+  }
+
+  /**
    * Get all online peer servers
    */
   getOnlineServers(): PeerServer[] {
@@ -197,12 +217,18 @@ class ServerRegistry {
    */
   private checkServerHealth(): void {
     const now = Date.now();
-    for (const server of this.servers.values()) {
-      if (now - server.lastHeartbeat > HEARTBEAT_TIMEOUT_MS) {
-        if (server.status === 'online') {
-          console.log(`[ServerRegistry] Server ${server.id} marked offline (heartbeat timeout)`);
-          server.status = 'offline';
-        }
+    for (const [id, server] of this.servers) {
+      const stale = now - server.lastHeartbeat;
+      // Reap long-gone servers so dead compute allocations / peers don't linger
+      // in the list forever. A recovered server just re-registers and reappears.
+      if (stale > OFFLINE_REAP_MS) {
+        this.servers.delete(id);
+        console.log(`[ServerRegistry] Server ${id} removed (offline for ${Math.round(stale / 1000)}s)`);
+        continue;
+      }
+      if (stale > HEARTBEAT_TIMEOUT_MS && server.status === 'online') {
+        console.log(`[ServerRegistry] Server ${server.id} marked offline (heartbeat timeout)`);
+        server.status = 'offline';
       }
     }
   }

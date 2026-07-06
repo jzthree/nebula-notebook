@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Cpu, Trash2, RefreshCw, HardDrive, Clock } from 'lucide-react';
 import { kernelService, KernelSessionInfo } from '../services/kernelService';
+import { useModalA11y } from '../hooks/useModalA11y';
 
 interface Props {
   isOpen: boolean;
@@ -35,10 +36,17 @@ function formatUptime(createdAtSeconds: number): string {
   return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
 }
 
-export const KernelManager: React.FC<Props> = ({ isOpen, onClose, currentSessionId, onKernelKilled, serverId }) => {
+export const KernelManager: React.FC<Props> = (props) => {
+  // Mount the panel only while open so useModalA11y attaches/cleans up per open.
+  if (!props.isOpen) return null;
+  return <KernelManagerContent {...props} />;
+};
+
+const KernelManagerContent: React.FC<Props> = ({ isOpen, onClose, currentSessionId, onKernelKilled, serverId }) => {
   const [sessions, setSessions] = useState<KernelSessionInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [killingId, setKillingId] = useState<string | null>(null);
+  const modalRef = useModalA11y<HTMLDivElement>(onClose);
 
   const loadSessions = async () => {
     setIsLoading(true);
@@ -78,7 +86,14 @@ export const KernelManager: React.FC<Props> = ({ isOpen, onClose, currentSession
   return (
     <>
       <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50" onClick={onClose} />
-      <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-2xl z-50 w-full max-w-lg max-h-[80vh] flex flex-col">
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Kernel Manager"
+        tabIndex={-1}
+        className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-2xl z-50 w-full max-w-lg max-h-[80vh] flex flex-col"
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-200">
           <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
@@ -91,10 +106,11 @@ export const KernelManager: React.FC<Props> = ({ isOpen, onClose, currentSession
               disabled={isLoading}
               className="p-1.5 hover:bg-slate-100 rounded text-slate-500"
               title="Refresh"
+              aria-label="Refresh"
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
-            <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded">
+            <button onClick={onClose} aria-label="Close kernel manager" className="p-1.5 hover:bg-slate-100 rounded">
               <X className="w-5 h-5 text-slate-500" />
             </button>
           </div>
@@ -177,6 +193,7 @@ export const KernelManager: React.FC<Props> = ({ isOpen, onClose, currentSession
                   disabled={killingId === session.id}
                   className="ml-2 p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
                   title="Kill kernel"
+                  aria-label="Kill kernel"
                 >
                   {killingId === session.id ? (
                     <RefreshCw className="w-4 h-4 animate-spin" />

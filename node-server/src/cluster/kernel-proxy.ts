@@ -341,6 +341,29 @@ export function createWebSocketProxy(
     headers: getClusterHeaders(),
   });
 
+  // The client (UI) sends its messages as soon as *its* socket is open — which
+  // is before this remote socket finishes connecting. Those early messages
+  // (notably the one-time `sync_outputs` that subscribes to the kernel's output
+  // stream, and the first `execute`) would otherwise be silently dropped,
+  // leaving the cell running with no output. Buffer them and flush on open.
+  const pending: Array<{ data: unknown; isBinary: boolean }> = [];
+  const sendToRemote = (data: unknown, isBinary: boolean) => {
+    if (remoteWs.readyState === WebSocket.OPEN) {
+      remoteWs.send(isBinary ? (data as any) : (typeof data === 'string' ? data : (data as any).toString()));
+    } else {
+      pending.push({ data, isBinary });
+    }
+  };
+
+  remoteWs.on('open', () => {
+    for (const { data, isBinary } of pending) {
+      if (remoteWs.readyState === WebSocket.OPEN) {
+        remoteWs.send(isBinary ? (data as any) : (typeof data === 'string' ? data : (data as any).toString()));
+      }
+    }
+    pending.length = 0;
+  });
+
   // Forward messages from remote to client
   remoteWs.on('message', (data, isBinary) => {
     if (clientWs.readyState !== WebSocket.OPEN) {
@@ -353,16 +376,9 @@ export function createWebSocketProxy(
     clientWs.send(typeof data === 'string' ? data : data.toString());
   });
 
-  // Forward messages from client to remote
+  // Forward messages from client to remote (buffered until remote is open)
   clientWs.on('message', (data, isBinary) => {
-    if (remoteWs.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    if (isBinary) {
-      remoteWs.send(data);
-      return;
-    }
-    remoteWs.send(typeof data === 'string' ? data : data.toString());
+    sendToRemote(data, isBinary);
   });
 
   // Handle remote close

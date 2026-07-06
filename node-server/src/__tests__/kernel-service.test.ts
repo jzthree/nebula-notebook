@@ -728,7 +728,7 @@ describe('KernelService', () => {
         sessionId,
         'print("Hello from Python!")',
         async (entry) => {
-          outputs.push(entry.output.content);
+          outputs.push(entry.content);
         }
       );
 
@@ -753,7 +753,7 @@ describe('KernelService', () => {
         sessionId,
         'raise ValueError("Test error")',
         async (entry) => {
-          outputs.push(entry.output.content);
+          outputs.push(entry.content);
         }
       );
 
@@ -826,9 +826,10 @@ describe('KernelService', () => {
       expect(result.reattached).toBe(0);
       expect(result.failed).toBe(0);
 
-      // Session should be marked as terminated
+      // Confirmed-dead sessions (PID gone) are pure bookkeeping: they are
+      // auto-cleaned right after the reattach pass — no user confirmation.
       const session = testSessionStore.getSession('orphan-dead-pid');
-      expect(session?.status).toBe('terminated');
+      expect(session).toBeNull();
     });
 
     it('should skip sessions with no connection config available', async () => {

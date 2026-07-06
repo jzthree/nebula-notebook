@@ -29,13 +29,13 @@ export default async function clusterRoutes(fastify: FastifyInstance) {
    * Body can include { resources } for initial resource info
    */
   fastify.post('/servers/register', async (request: FastifyRequest, reply: FastifyReply) => {
-    const { host, port, name, secret, resources } = request.body as any;
+    const { host, port, name, secret, resources, allocationToken } = request.body as any;
 
     if (!host || !port) {
       return reply.code(400).send({ error: 'host and port are required' });
     }
 
-    const result = serverRegistry.register({ host, port, name, secret, resources });
+    const result = serverRegistry.register({ host, port, name, secret, resources, allocationToken });
 
     if (!result.success) {
       return reply.code(403).send({ error: result.error });

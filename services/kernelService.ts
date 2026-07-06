@@ -7,6 +7,18 @@ import { authService } from './authService';
 
 export const API_BASE = '/api';
 
+/**
+ * Thrown when a kernel's server/allocation is gone (HTTP 410). Unlike a transient
+ * connection error, this is terminal: the reconnect loop should stop and mark the
+ * kernel dead rather than retrying forever.
+ */
+export class KernelServerGoneError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'KernelServerGoneError';
+  }
+}
+
 export interface KernelSpec {
   name: string;
   display_name: string;
@@ -20,6 +32,16 @@ export interface KernelSession {
   kernel_name: string;
   status: 'idle' | 'busy' | 'starting';
   execution_count: number;
+}
+
+/** Result of an execute round-trip. executionCount is the KERNEL's own
+ * counter (from execute_input) — the authoritative Jupyter [n]. */
+export interface ExecuteCodeResult {
+  status?: string;
+  executionCount?: number | null;
+  error?: string;
+  queuePosition?: number;
+  queueLength?: number;
 }
 
 export interface PythonEnvironment {
@@ -73,6 +95,22 @@ export interface KernelPreference {
   updated_at?: number;
 }
 
+/**
+ * Jupyter comm message relayed over the kernel WebSocket (ipywidgets support).
+ * Mirrors the fixed backend contract: `{ type: 'comm', comm: CommMessage }`.
+ */
+export interface CommMessage {
+  msg_type: 'comm_open' | 'comm_msg' | 'comm_close';
+  comm_id: string;
+  target_name?: string;
+  data: Record<string, unknown>;
+  /** Binary buffers, base64-encoded for JSON transport. */
+  buffers?: string[];
+}
+
+/** Reply payload for `{ type: 'comm_info' }`: comm_id -> { target_name }. */
+export type CommInfoReply = Record<string, { target_name: string }>;
+
 // Completion result from kernel
 export interface CompletionResult {
   status: string;
@@ -103,6 +141,12 @@ interface SessionState {
     resolve: (result: CompletionResult) => void;
     reject: (error: any) => void;
   };
+  // Pending `comm_info` requests. The next `comm_info_reply` resolves all of them
+  // (the reply carries the full comm map, so correlation is unnecessary).
+  pendingCommInfo?: Array<{
+    resolve: (comms: CommInfoReply) => void;
+    timeout: ReturnType<typeof setTimeout>;
+  }>;
   filePath?: string; // Associated notebook file path
   kernelName?: string; // Kernel name for reconnection
   serverId?: string | null; // Server ID for reconnection
@@ -119,10 +163,14 @@ class KernelService {
   // Reconnection state
   private reconnectInterval: NodeJS.Timeout | null = null;
   private disconnectedSessions: Set<string> = new Set();
+  // Consecutive "server/allocation gone" (410) reports per session — a kernel
+  // is only marked terminally dead after the signal persists (see reconnect loop).
+  private serverGoneCounts: Map<string, number> = new Map();
   private onReconnectCallbacks: ReconnectCallback[] = [];
   private onDisconnectCallbacks: ((sessionId: string) => void)[] = [];
   private onStatusCallbacks: StatusCallback[] = [];
   private onBufferedOutputCallbacks: Array<(sessionId: string, output: CellOutput, cellId?: string | null) => void> = [];
+  private onCommCallbacks: Array<(sessionId: string, comm: CommMessage) => void> = [];
   private onSyncReplaceCallbacks: Array<(sessionId: string, cellOutputs: Map<string, CellOutput[]>, executingCellId?: string | null) => void> = [];
 
   /**
@@ -470,6 +518,39 @@ class KernelService {
       return;
     }
 
+    // Comm messages (ipywidgets) can arrive at any time, independent of execution
+    if (data.type === 'comm') {
+      const comm = data.comm as CommMessage | undefined;
+      if (comm && typeof comm.comm_id === 'string' && comm.msg_type) {
+        for (const callback of this.onCommCallbacks) {
+          try {
+            callback(sessionId, comm);
+          } catch (e) {
+            console.error('Comm callback error:', e);
+          }
+        }
+      }
+      return;
+    }
+
+    // Reply to a `comm_info` request — resolve all pending requests with the comm map
+    if (data.type === 'comm_info_reply') {
+      const comms = (data.comms ?? {}) as CommInfoReply;
+      const pending = session.pendingCommInfo;
+      session.pendingCommInfo = undefined;
+      if (pending) {
+        for (const entry of pending) {
+          clearTimeout(entry.timeout);
+          try {
+            entry.resolve(comms);
+          } catch (e) {
+            console.error('Comm info callback error:', e);
+          }
+        }
+      }
+      return;
+    }
+
     // Handle completion replies - also don't require execution handler
     if (data.type === 'complete_reply') {
       if (session.pendingCompletion) {
@@ -546,7 +627,7 @@ class KernelService {
     code: string,
     onOutput: (output: CellOutput) => void,
     cellId?: string | null
-  ): Promise<void> {
+  ): Promise<ExecuteCodeResult | undefined> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
@@ -681,6 +762,11 @@ class KernelService {
 
     const response = await fetch(`${API_BASE}/kernels/${encodeURIComponent(sessionId)}/status`);
     if (response.status === 404) return null;
+    if (response.status === 410) {
+      // The server/allocation hosting this kernel is gone — terminal, not transient.
+      const error = await response.json().catch(() => ({ detail: 'Allocation ended' }));
+      throw new KernelServerGoneError(error.detail || 'Allocation ended — kernel stopped');
+    }
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: 'Failed to get kernel status' }));
       throw new Error(error.detail || 'Failed to get kernel status');
@@ -696,6 +782,29 @@ class KernelService {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
     return session.ws !== null && session.ws.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * True if the session has an execute (or other request) currently in
+   * flight. Used to skip kernel completion requests that would only queue
+   * up behind the execute on the serialized shell channel.
+   */
+  hasPendingRequest(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    return !!session && session.messageQueue.length > 0;
+  }
+
+  /**
+   * True if ANY kernel WebSocket is currently open. Used as a liveness
+   * corroborator by the connection monitor: while a WS is open the server is
+   * clearly reachable, so a transient /api/health timeout (e.g. an SSH-tunnel
+   * latency spike on a login-node deploy) must not be reported as an outage.
+   */
+  hasOpenConnection(): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.ws !== null && session.ws.readyState === WebSocket.OPEN) return true;
+    }
+    return false;
   }
 
   /**
@@ -749,6 +858,68 @@ class KernelService {
   }
 
   /**
+   * Send a comm message (ipywidgets traffic) to the kernel over the session WebSocket.
+   * Comm messages are fire-and-forget: if the socket is not open they are dropped
+   * with a warning (the widget manager re-syncs state via comm_info on reconnect).
+   */
+  sendComm(sessionId: string, comm: CommMessage): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || !session.ws || session.ws.readyState !== WebSocket.OPEN) {
+      console.warn(`[Kernel WS] Dropping ${comm.msg_type} for comm ${comm.comm_id}: session ${sessionId} not connected`);
+      return;
+    }
+    try {
+      session.ws.send(JSON.stringify({ type: 'comm', comm }));
+    } catch (err) {
+      console.warn('[Kernel WS] Failed to send comm message:', err);
+    }
+  }
+
+  /**
+   * Subscribe to incoming comm messages (ipywidgets traffic) from any session.
+   */
+  onComm(callback: (sessionId: string, comm: CommMessage) => void): () => void {
+    this.onCommCallbacks.push(callback);
+    return () => {
+      this.onCommCallbacks = this.onCommCallbacks.filter(cb => cb !== callback);
+    };
+  }
+
+  /**
+   * Request the kernel's open comms (`{type:'comm_info'}` -> `comm_info_reply`).
+   * Resolves with an empty map on timeout or when the socket is not open, so
+   * widget state restoration degrades cleanly instead of throwing.
+   */
+  requestCommInfo(sessionId: string, timeoutMs: number = 5000): Promise<CommInfoReply> {
+    const session = this.sessions.get(sessionId);
+    if (!session || !session.ws || session.ws.readyState !== WebSocket.OPEN) {
+      return Promise.resolve({});
+    }
+
+    return new Promise<CommInfoReply>((resolve) => {
+      const entry = {
+        resolve,
+        timeout: setTimeout(() => {
+          if (session.pendingCommInfo) {
+            session.pendingCommInfo = session.pendingCommInfo.filter(e => e !== entry);
+          }
+          resolve({});
+        }, timeoutMs),
+      };
+      session.pendingCommInfo = [...(session.pendingCommInfo ?? []), entry];
+
+      try {
+        session.ws!.send(JSON.stringify({ type: 'comm_info' }));
+      } catch (err) {
+        console.warn('[Kernel WS] Failed to request comm info:', err);
+        clearTimeout(entry.timeout);
+        session.pendingCommInfo = session.pendingCommInfo?.filter(e => e !== entry);
+        resolve({});
+      }
+    });
+  }
+
+  /**
    * Start the reconnection loop (tries every second)
    */
   private startReconnectLoop(): void {
@@ -775,10 +946,39 @@ class KernelService {
           try {
             status = await this.getStatus(sessionId);
           } catch (statusError) {
-            // If status check fails (e.g. 500), don't recreate yet
+            if (statusError instanceof KernelServerGoneError) {
+              // The kernel's server/allocation is reported gone. Require the
+              // signal to PERSIST across a few loop iterations before treating
+              // it as terminal — a single 410 can race registry/allocation
+              // bookkeeping. (The server already vets this against scheduler
+              // state, so this is defense in depth.)
+              const goneCount = (this.serverGoneCounts.get(sessionId) ?? 0) + 1;
+              this.serverGoneCounts.set(sessionId, goneCount);
+              if (goneCount < 3) {
+                console.log(`Session ${sessionId} server/allocation reported gone (${goneCount}/3): ${statusError.message}`);
+                continue;
+              }
+              // Confirmed terminal — stop reconnecting and mark the kernel
+              // dead so the UI drops the "reconnecting" spinner and tells the
+              // user, instead of retrying forever.
+              console.log(`Session ${sessionId} server/allocation gone: ${statusError.message}`);
+              this.serverGoneCounts.delete(sessionId);
+              this.disconnectedSessions.delete(sessionId);
+              for (const callback of this.onStatusCallbacks) {
+                try {
+                  callback(sessionId, 'dead', null);
+                } catch (e) {
+                  console.error('Status callback error:', e);
+                }
+              }
+              continue;
+            }
+            // If status check fails (e.g. transient 500/503), don't recreate yet
+            this.serverGoneCounts.delete(sessionId);
             console.error(`Failed to check session status for ${sessionId}:`, statusError);
             continue;
           }
+          this.serverGoneCounts.delete(sessionId);
 
           if (!status && session.filePath && session.kernelName) {
             // Session no longer exists on server, recreate it
@@ -790,7 +990,7 @@ class KernelService {
 
             // Create new session - this will call onReconnect with the new session
             try {
-              const newSessionId = await this.getOrCreateKernelForFile(
+              const { sessionId: newSessionId } = await this.getOrCreateKernelForFile(
                 session.filePath,
                 session.kernelName,
                 session.serverId

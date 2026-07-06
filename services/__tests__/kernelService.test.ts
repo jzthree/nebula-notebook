@@ -39,7 +39,10 @@ class MockWebSocket {
 
 // @ts-ignore
 const originalWebSocket = global.WebSocket;
-global.WebSocket = MockWebSocket;
+// The mock intentionally implements only the surface kernelService uses, so it
+// does not satisfy the full DOM WebSocket constructor type (static CONNECTING/
+// CLOSING, addEventListener, etc.).
+global.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 
 // Import after mocks are set up
 import { kernelService } from '../kernelService';
