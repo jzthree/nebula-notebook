@@ -56,13 +56,28 @@ export async function setupTerminalRoutes(fastify: FastifyInstance): Promise<voi
     if (!Number.isInteger(port) || port < 1024 || port > 65535) {
       return reply.status(400).send({ error: 'port must be an integer in 1024-65535' });
     }
-    const up = await new Promise<boolean>((resolve) => {
+    // Two-signal probe at the cost of one connection: `up` = the listener
+    // accepted (fast path, unchanged); `ssh` = an SSH banner arrived within
+    // 700ms of connecting (an sshd greets immediately with "SSH-2.0-...").
+    // ssh=false means the port is forwarded but nothing SSH answers — the
+    // classic Remote-Login-off case; ssh=null means banner unknown (slow
+    // network) and MUST NOT be treated as a failure.
+    const result = await new Promise<{ up: boolean; ssh: boolean | null }>((resolve) => {
       const sock = net.connect({ host: '127.0.0.1', port, timeout: 1200 });
-      sock.once('connect', () => { sock.destroy(); resolve(true); });
-      sock.once('timeout', () => { sock.destroy(); resolve(false); });
-      sock.once('error', () => resolve(false));
+      let bannerTimer: NodeJS.Timeout | null = null;
+      const finish = (up: boolean, ssh: boolean | null) => {
+        if (bannerTimer) clearTimeout(bannerTimer);
+        sock.destroy();
+        resolve({ up, ssh });
+      };
+      sock.once('connect', () => {
+        bannerTimer = setTimeout(() => finish(true, null), 700);
+        sock.once('data', (buf) => finish(true, buf.toString('latin1').startsWith('SSH-')));
+      });
+      sock.once('timeout', () => finish(false, null));
+      sock.once('error', () => finish(false, null));
     });
-    return reply.send({ up });
+    return reply.send({ up: result.up, ssh: result.ssh });
   });
 
   // List all terminals

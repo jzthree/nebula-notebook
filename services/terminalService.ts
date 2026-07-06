@@ -63,14 +63,19 @@ export async function getTerminalServerInfo(): Promise<{ available: boolean; rep
  * Is the user's reverse SSH channel (remote-agent mode) currently connected
  * on the server host? Probes 127.0.0.1:<port> server-side.
  */
-export async function checkReverseTunnel(port: number): Promise<boolean> {
+export interface ReverseTunnelStatus {
+  up: boolean;               // TCP listener accepted on the server host
+  ssh: boolean | null;       // SSH banner seen (false = port up but no sshd — Remote Login off); null = unknown, treat as OK
+}
+
+export async function checkReverseTunnel(port: number): Promise<ReverseTunnelStatus> {
   try {
     const response = await fetch(`${TERMINAL_API_PREFIX}/terminals/reverse-check?port=${port}`);
-    if (!response.ok) return false;
+    if (!response.ok) return { up: false, ssh: null };
     const data = await response.json().catch(() => ({}));
-    return data.up === true;
+    return { up: data.up === true, ssh: typeof data.ssh === 'boolean' ? data.ssh : null };
   } catch {
-    return false;
+    return { up: false, ssh: null };
   }
 }
 

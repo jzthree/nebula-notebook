@@ -77,8 +77,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const [isResizing, setIsResizing] = useState(false);
   const [serverAvailable, setServerAvailable] = useState<boolean | null>(null);
   const [serverHostInfo, setServerHostInfo] = useState<{ hostname: string | null; port: number | null }>({ hostname: null, port: null });
-  // Remote-agent mode: is the user's reverse SSH channel up? null = not applicable / unknown.
-  const [reverseTunnelUp, setReverseTunnelUp] = useState<boolean | null>(null);
+  // Remote-agent mode: reverse channel status. null = not applicable / unknown.
+  // ready = listener up AND nothing said "not ssh" (banner unknown counts as OK).
+  const [reverseTunnel, setReverseTunnel] = useState<{ up: boolean; ssh: boolean | null } | null>(null);
+  const reverseTunnelUp = reverseTunnel === null ? null : (reverseTunnel.up && reverseTunnel.ssh !== false);
   // Bumped when this panel changes agent settings, so remoteAgentCfg recomputes.
   const [, setSettingsNonce] = useState(0);
   // Remote-agent setup dialog (connection details for the reverse channel).
@@ -150,13 +152,13 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const remoteAgentPort = remoteAgentCfg?.port ?? null;
   useEffect(() => {
     if (!isOpen || tab !== 'agent' || !remoteAgentPort) {
-      setReverseTunnelUp(null);
+      setReverseTunnel(null);
       return;
     }
     let stopped = false;
     const check = async () => {
-      const up = await checkReverseTunnel(remoteAgentPort);
-      if (!stopped) setReverseTunnelUp(up);
+      const status = await checkReverseTunnel(remoteAgentPort);
+      if (!stopped) setReverseTunnel(status);
     };
     check();
     const interval = setInterval(check, 5000);
@@ -341,7 +343,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         <div className="flex items-center gap-2 px-2 py-1 bg-amber-50 border-b border-amber-200 flex-shrink-0 text-xs">
           <Bot className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
           <span className="text-amber-800 font-medium flex-shrink-0">
-            Waiting for your machine (reverse port {remoteAgentCfg.port}) — connect the tunnel:
+            {reverseTunnel?.up && reverseTunnel.ssh === false
+              ? <>Tunnel is up, but nothing answered SSH on your machine — enable Remote Login (macOS: System Settings → Sharing).</>
+              : <>Waiting for your machine (reverse port {remoteAgentCfg.port}) — connect the tunnel:</>}
           </span>
           <button
             onClick={async () => {
@@ -386,6 +390,16 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           <span className="text-purple-800 font-medium truncate">
             Drive <span className="font-semibold">{notebookName}</span> with
           </span>
+          {agentTerminalService.getResumableKind() === 'claude' && (
+            <button
+              onClick={() => agentTerminalService.launchAgent('claude', { resume: true })}
+              disabled={!agentConnected}
+              className="px-2 py-0.5 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 disabled:opacity-40 transition-colors"
+              title="claude --continue: reopen the previous conversation in this notebook's directory and keep going"
+            >
+              ⟳ Resume Claude
+            </button>
+          )}
           <button
             onClick={() => agentTerminalService.launchAgent('claude')}
             disabled={!agentConnected}

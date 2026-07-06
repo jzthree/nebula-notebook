@@ -266,14 +266,24 @@ describe('remote-agent mode (agent on the user machine)', () => {
     expect(line).toMatch(/^ssh -t -p 34567 -o ProxyCommand=none -o StrictHostKeyChecking=accept-new jane@localhost '/);
     expect(line).toContain('NEBULA_URL=http://localhost:3000 claude ');
     expect(line).toContain('exec "$SHELL" -l -i -c ');
-    // survives tunnel drops: reattach via tmux when available
-    expect(line).toContain('tmux new -A -s nebula-agent ');
-    expect(line).toContain('command -v tmux');
+    // no tmux/daemons: resume rides `claude --continue` instead
+    expect(line).not.toContain('tmux');
     // bootstrap rides inside: server paths + local-URL guidance, single line
     expect(line).toContain('/data/proj/nb.ipynb');
     expect(line).toContain('paths on the SERVER');
     expect(line).not.toContain('\n');
     expect(agentTerminalService.getState().agentKind).toBe('claude');
+  });
+
+  it('resume launches use claude --continue with a short reorientation prompt', () => {
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t9', (d) => { sent.push(d); return true; });
+    agentTerminalService.setNotebookContext('/data/proj/nb.ipynb');
+    agentTerminalService.launchAgent('claude', { resume: true });
+    const line = sent[0];
+    expect(line).toContain('claude --continue ');
+    expect(line).toContain('/data/proj/nb.ipynb');
+    expect(line).not.toContain('PREFERRED: use the `nebula` CLI'); // short prompt, not the full bootstrap
   });
 
   it('local launch is unchanged when the mode is disabled', () => {

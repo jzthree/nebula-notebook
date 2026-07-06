@@ -60,6 +60,23 @@ function writeAgentFlag(terminalId: string, kind: AgentKind | null): void {
   } catch { /* storage unavailable — degrade to in-memory only */ }
 }
 
+// The kind of the LAST agent that ran in a terminal (set when it stops).
+// Lets the UI offer "Resume" — `claude --continue` reopens that conversation.
+const AGENT_LAST_PREFIX = 'nebula-agent-last:';
+
+function readLastAgentKind(terminalId: string): 'claude' | null {
+  try {
+    return window.sessionStorage.getItem(AGENT_LAST_PREFIX + terminalId) === 'claude' ? 'claude' : null;
+  } catch { return null; }
+}
+
+function writeLastAgentKind(terminalId: string, kind: 'claude' | null): void {
+  try {
+    if (kind) window.sessionStorage.setItem(AGENT_LAST_PREFIX + terminalId, kind);
+    else window.sessionStorage.removeItem(AGENT_LAST_PREFIX + terminalId);
+  } catch { /* storage unavailable */ }
+}
+
 // eslint-disable-next-line no-control-regex
 const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]/g;
 
@@ -192,25 +209,40 @@ class AgentTerminalService {
   }
 
   /**
+   * The agent invocation itself. Fresh launches carry the full bootstrap
+   * prompt; resume launches ride the agent CLI's own session persistence
+   * (`claude --continue` reopens the last conversation in that cwd — no
+   * tmux, no daemons, nothing left running when the agent exits) with a
+   * short reorientation prompt. Codex has no equivalent flag; it relaunches
+   * fresh.
+   */
+  private buildAgentCommand(kind: 'claude' | 'codex', resume: boolean, envPrefix = ''): string {
+    if (resume && kind === 'claude') {
+      const reorient = sanitizePromptText(
+        'We were disconnected — this is the same Nebula notebook session as before. ' +
+        (this.notebookPath ? `Still driving ${this.notebookPath}. ` : '') +
+        'Re-read the notebook if you need to re-orient, then continue where you left off.'
+      );
+      return `${envPrefix}claude --continue ${shellSingleQuote(reorient)}`;
+    }
+    return `${envPrefix}${kind} ${shellSingleQuote(this.buildBootstrapPrompt(envPrefix !== ''))}`;
+  }
+
+  /**
    * The line typed into the Nebula terminal to start the agent on the user's
    * machine: ssh back over the reverse channel, set NEBULA_URL as seen from
    * there, run the agent with the bootstrap prompt as its first argument.
    * accept-new pins the host key on first use without an interactive prompt.
    */
-  buildRemoteLaunchCommand(kind: 'claude' | 'codex'): string | null {
+  buildRemoteLaunchCommand(kind: 'claude' | 'codex', resume = false): string | null {
     const cfg = this.getRemoteAgentConfig();
     if (!cfg) return null;
-    const agentCmd = `NEBULA_URL=${cfg.localUrl} ${kind} ${shellSingleQuote(this.buildBootstrapPrompt(true))}`;
-    // Tunnel drops kill the ssh session — so run the agent inside tmux on the
-    // user's machine when available: `tmux new -A` attaches to a surviving
-    // session on relaunch (the command only runs on CREATE), so a network
-    // blip + clicking the launch button again resumes the same agent.
-    const inner = `if command -v tmux >/dev/null 2>&1; then tmux new -A -s nebula-agent ${shellSingleQuote(agentCmd)}; else ${agentCmd}; fi`;
+    const agentCmd = this.buildAgentCommand(kind, resume, `NEBULA_URL=${cfg.localUrl} `);
     // `ssh host cmd` runs a non-login, non-interactive shell on the user's
     // machine — PATH additions from .zprofile/.zshrc (homebrew, nvm, npm -g)
     // are absent and the agent CLI isn't found. Re-enter the user's own shell
     // as login+interactive so their PATH is what their terminals see.
-    const remoteCmd = `exec "$SHELL" -l -i -c ${shellSingleQuote(inner)}`;
+    const remoteCmd = `exec "$SHELL" -l -i -c ${shellSingleQuote(agentCmd)}`;
     // ProxyCommand=none: IPA/SSSD-managed clusters wrap ALL ssh in
     // sss_ssh_knownhostsproxy via the system ssh_config, which breaks a plain
     // loopback hop — this connection must go straight to 127.0.0.1:<port>.
@@ -268,6 +300,11 @@ class AgentTerminalService {
     return this.state;
   }
 
+  /** 'claude' when the last agent in this terminal can be resumed via --continue. */
+  getResumableKind(): 'claude' | null {
+    return this.state.terminalId ? readLastAgentKind(this.state.terminalId) : null;
+  }
+
   isConnected(): boolean {
     return !!(this.state.terminalId && this.senders.has(this.state.terminalId));
   }
@@ -293,13 +330,15 @@ class AgentTerminalService {
    * CLI's initial prompt argument, so the agent starts by connecting to the
    * right server and reading the right notebook — no guessing across tabs.
    */
-  launchAgent(kind: 'claude' | 'codex'): SendResult {
+  launchAgent(kind: 'claude' | 'codex', opts: { resume?: boolean } = {}): SendResult {
     const send = this.getAgentSender();
     if (!send.ok) return send;
+    const resume = !!opts.resume;
     // Remote-agent mode: the launch line hops back to the user's machine over
     // the reverse SSH channel and runs the agent there instead.
-    const remoteLine = this.buildRemoteLaunchCommand(kind);
-    send.sender(remoteLine ? `${remoteLine}\r` : `${kind} ${shellSingleQuote(this.buildBootstrapPrompt())}\r`);
+    const remoteLine = this.buildRemoteLaunchCommand(kind, resume);
+    send.sender(remoteLine ? `${remoteLine}\r` : `${this.buildAgentCommand(kind, resume)}\r`);
+    if (this.state.terminalId) writeLastAgentKind(this.state.terminalId, null); // consumed
     markOnboardingStep('launchedAgent');
     this.state = { ...this.state, status: 'running', agentKind: kind };
     if (this.state.terminalId) writeAgentFlag(this.state.terminalId, kind);
@@ -324,7 +363,11 @@ class AgentTerminalService {
   markStopped(): void {
     // Always clear the persisted flag — the in-memory status may already have
     // been dropped by a WS close before the pty's exit event reaches us.
-    if (this.state.terminalId) writeAgentFlag(this.state.terminalId, null);
+    if (this.state.terminalId) {
+      const was = readAgentFlag(this.state.terminalId) ?? this.state.agentKind;
+      if (was === 'claude') writeLastAgentKind(this.state.terminalId, 'claude');
+      writeAgentFlag(this.state.terminalId, null);
+    }
     if (this.state.status === 'none') return;
     this.state = { ...this.state, status: 'none', agentKind: null };
     this.notify();

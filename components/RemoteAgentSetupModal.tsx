@@ -33,7 +33,8 @@ export const RemoteAgentSetupModal: React.FC<Props> = ({ onClose }) => {
     return getSettings();
   });
   const [serverInfo, setServerInfo] = useState<{ hostname: string | null; port: number | null }>({ hostname: null, port: null });
-  const [tunnelUp, setTunnelUp] = useState<boolean | null>(null);
+  const [tunnel, setTunnel] = useState<{ up: boolean; ssh: boolean | null } | null>(null);
+  const tunnelUp = tunnel === null ? null : (tunnel.up && tunnel.ssh !== false);
   const [copied, setCopied] = useState<string | null>(null);
 
   const persist = (next: Partial<NebulaSettings>) => {
@@ -51,8 +52,8 @@ export const RemoteAgentSetupModal: React.FC<Props> = ({ onClose }) => {
     if (!settings.remoteAgentPort) return;
     let stopped = false;
     const check = async () => {
-      const up = await checkReverseTunnel(settings.remoteAgentPort!);
-      if (!stopped) setTunnelUp(up);
+      const status = await checkReverseTunnel(settings.remoteAgentPort!);
+      if (!stopped) setTunnel(status);
     };
     check();
     const interval = setInterval(check, 4000);
@@ -93,7 +94,11 @@ export const RemoteAgentSetupModal: React.FC<Props> = ({ onClose }) => {
             <h2 className="text-sm font-semibold text-slate-800">Agent on your machine</h2>
             {tunnelUp !== null && (
               <span className={`text-xs px-1.5 py-0.5 rounded-full ${tunnelUp ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                {tunnelUp ? '✓ tunnel connected' : 'tunnel not detected'}
+                {tunnelUp
+                  ? '✓ tunnel connected'
+                  : tunnel?.up && tunnel.ssh === false
+                    ? 'tunnel up — Remote Login off?'
+                    : 'tunnel not detected'}
               </span>
             )}
           </div>
