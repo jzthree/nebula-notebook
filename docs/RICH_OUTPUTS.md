@@ -171,23 +171,38 @@ You can also provide an explicit library spec:
 
 For the built-in Plotly preset, Nebula loads Plotly.js once per page and reuses it across outputs.
 
-## Current Limitations
+## ipywidgets (Jupyter comm protocol)
 
-Nebula does not yet implement the Jupyter widget comm protocol. That means MIME-based outputs work better than widget-based outputs right now.
+Nebula implements the Jupyter widget comm protocol: `comm_open` / `comm_msg` /
+`comm_close` are relayed both directions (with binary buffers) over the kernel
+WebSocket, and `application/vnd.jupyter.widget-view+json` outputs render via
+`@jupyter-widgets/html-manager` (loaded lazily — it never inflates the base
+bundle). Core `ipywidgets` controls (sliders, buttons, text, `interact`,
+observers, linked widgets) work end to end, including widget-driven updates
+while no cell is executing. Multi-client: comm traffic fans out to every
+browser attached to the kernel session.
+
+Requires `ipywidgets` installed in the kernel environment.
 
 Expected to work:
 
+- `ipywidgets` core controls and `interact()`
 - standard Plotly figures
 - HTML outputs
 - PNG outputs
 - plain rich display MIME bundles
 
-Not supported yet:
+Current widget limitations:
 
-- `ipywidgets`
-- Plotly `FigureWidget`
-- `ipympl`
-- other libraries that depend on Jupyter comms instead of plain MIME output
+- Third-party widget packages that ship their own JS (e.g. `bqplot`, `ipympl`,
+  Plotly `FigureWidget`) are not bundled and surface as error widgets
+- Widgets created before the page loaded are restored via the ipywidgets
+  control comm when possible; otherwise they show a "re-run the cell"
+  placeholder
+- On save, live widget state is written to `metadata.widgets`
+  (`application/vnd.jupyter.widget-state+json`), so saved notebooks render
+  static widgets in Jupyter/nbviewer; widgets become interactive again after
+  their cells re-run against a live kernel
 
 ## Demo Notebook
 

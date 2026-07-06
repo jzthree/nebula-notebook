@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useModalA11y } from '../hooks/useModalA11y';
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 6;
@@ -47,6 +48,9 @@ const getDistance = (first: Point, second: Point): number => {
 };
 
 export const ImageModalViewer: React.FC<Props> = ({ alt, onClose, src }) => {
+  // Escape-to-close, focus trap, initial focus and focus restore. The overlay
+  // is the dialog root here (it contains the Close button and viewport).
+  const overlayRef = useModalA11y<HTMLDivElement>(onClose);
   const viewportRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const clickTimeoutRef = useRef<number | null>(null);
@@ -162,17 +166,6 @@ export const ImageModalViewer: React.FC<Props> = ({ alt, onClose, src }) => {
       document.body.style.overflow = previousOverflow;
     };
   }, []);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -405,6 +398,11 @@ export const ImageModalViewer: React.FC<Props> = ({ alt, onClose, src }) => {
 
   return createPortal(
     <div
+      ref={overlayRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Image preview"
+      tabIndex={-1}
       className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm"
       onClick={onClose}
     >

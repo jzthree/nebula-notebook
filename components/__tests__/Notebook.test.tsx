@@ -220,7 +220,9 @@ describe('Notebook', () => {
       full_width: false,
       mtime: Date.now() / 1000,
     });
-    vi.mocked(kernelService.executeCode).mockResolvedValue({ status: 'ok', execution_count: 1 } as Awaited<ReturnType<typeof kernelService.executeCode>>);
+    // executeCode resolves void (results arrive via output callbacks); the
+    // resolved value here is ignored — cast through unknown for the old shape.
+    vi.mocked(kernelService.executeCode).mockResolvedValue({ status: 'ok', execution_count: 1 } as unknown as Awaited<ReturnType<typeof kernelService.executeCode>>);
     vi.mocked(useOperationHandler).mockReturnValue({
       isConnected: true,
       activeOperation: null,
@@ -464,12 +466,13 @@ describe('Notebook', () => {
         mtime: Date.now() / 1000,
       } as Awaited<ReturnType<typeof fileService.getFileContentWithMtime>>);
 
-      let resolveExecution: ((value: { status: 'ok'; execution_count: number }) => void) | null = null;
+      // The test only controls WHEN the execute resolves (no result payload).
+      let resolveExecution: (() => void) | null = null;
       vi.mocked(kernelService.executeCode).mockImplementation(() => (
-        new Promise(resolve => {
-          resolveExecution = resolve;
+        new Promise<Awaited<ReturnType<typeof kernelService.executeCode>>>(resolve => {
+          resolveExecution = () => resolve(undefined);
         })
-      ) as ReturnType<typeof kernelService.executeCode>);
+      ));
 
       renderNotebook();
 
@@ -484,7 +487,7 @@ describe('Notebook', () => {
       });
 
       await act(async () => {
-        resolveExecution?.({ status: 'ok', execution_count: 1 });
+        resolveExecution?.();
       });
 
       await waitFor(() => {

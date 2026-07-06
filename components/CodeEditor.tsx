@@ -7,7 +7,7 @@ import { Prec, EditorState, StateEffect, StateField } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
 import { indentUnit, syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentOnInput } from '@codemirror/language';
-import { autocompletion, closeBrackets, closeBracketsKeymap, CompletionContext, CompletionResult, Completion } from '@codemirror/autocomplete';
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionStatus, CompletionContext, CompletionResult, Completion } from '@codemirror/autocomplete';
 import { history, defaultKeymap, historyKeymap } from '@codemirror/commands';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
@@ -37,6 +37,8 @@ interface Props {
   onModEnter?: () => void;    // Run current cell (Cmd/Ctrl+Enter)
   onEscape?: () => boolean | void; // Return true to keep focus, false/void to blur
   onSave?: () => void;        // Save notebook (Cmd/Ctrl+S)
+  onNavigateUp?: () => void;   // ArrowUp on the first line → move focus to previous cell
+  onNavigateDown?: () => void; // ArrowDown on the last line → move focus to next cell
   onFocus?: () => void;
   onBlur?: () => void;
   placeholder?: string;
@@ -480,6 +482,12 @@ function createKernelCompletionSource(kernelSessionIdRef: React.RefObject<string
     const sessionId = kernelSessionIdRef.current;
     if (!sessionId) return null;
 
+    // Don't queue completion requests behind an in-flight execute: the shell
+    // channel is serialized, so they'd only delay the execution (and slow
+    // kernels — e.g. R with a huge environment — can hold each completion
+    // for seconds).
+    if (kernelService.hasPendingRequest(sessionId)) return null;
+
     try {
       // Get all text up to cursor
       const doc = context.state.doc;
@@ -574,6 +582,8 @@ export const CodeEditor: React.FC<Props> = ({
   onModEnter,
   onEscape,
   onSave,
+  onNavigateUp,
+  onNavigateDown,
   onFocus,
   onBlur,
   placeholder,
@@ -799,6 +809,38 @@ export const CodeEditor: React.FC<Props> = ({
       });
     }
 
+    // Cross-cell arrow navigation (Jupyter behavior): ArrowUp on the first
+    // line moves to the previous cell, ArrowDown on the last line to the next.
+    // Only fires with an empty selection and no open autocomplete popup, so
+    // completion navigation and in-editor cursor movement keep working.
+    if (onNavigateUp) {
+      keymapEntries.push({
+        key: 'ArrowUp',
+        run: (view) => {
+          if (completionStatus(view.state) === 'active') return false;
+          const sel = view.state.selection.main;
+          if (!sel.empty) return false;
+          if (view.state.doc.lineAt(sel.head).number !== 1) return false;
+          onNavigateUp();
+          return true;
+        },
+      });
+    }
+
+    if (onNavigateDown) {
+      keymapEntries.push({
+        key: 'ArrowDown',
+        run: (view) => {
+          if (completionStatus(view.state) === 'active') return false;
+          const sel = view.state.selection.main;
+          if (!sel.empty) return false;
+          if (view.state.doc.lineAt(sel.head).number !== view.state.doc.lines) return false;
+          onNavigateDown();
+          return true;
+        },
+      });
+    }
+
     // Escape handling: callback decides whether focus should remain in editor.
     if (onEscape) {
       keymapEntries.push({
@@ -865,7 +907,7 @@ export const CodeEditor: React.FC<Props> = ({
 
     return exts;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language, enableInteractiveFeatures, onShiftEnter, onModEnter, onEscape, onSave, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, indentConfig, showLineNumbers]);
+  }, [language, enableInteractiveFeatures, onShiftEnter, onModEnter, onEscape, onSave, onNavigateUp, onNavigateDown, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, indentConfig, showLineNumbers]);
 
   const handleChange = useCallback(
     (val: string) => {

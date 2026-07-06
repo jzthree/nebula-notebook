@@ -325,8 +325,14 @@ export interface OperationResult {
     preview: string;
   }>;
   hasMore?: boolean;
-  // For clearNotebook operation
+  // For clearNotebook / deleteCells operations
   deletedCount?: number;
+  deletedIds?: string[];
+  totalCells?: number;
+  // For insertCells operation
+  insertedCount?: number;
+  insertedIds?: string[];
+  startIndex?: number;
   // For clearOutputs operation
   clearedCount?: number;
   clearedIds?: string[];
@@ -338,7 +344,6 @@ export interface OperationResult {
   // For executeCell operation
   executionStatus?: 'idle' | 'busy' | 'error';
   executionTime?: number;
-  sessionId?: string;
   queuePosition?: number;
   queueLength?: number;
   // For undo/redo operations
@@ -437,6 +442,13 @@ interface UseOperationHandlerOptions {
 
   /** Delete cell callback (from useUndoRedo) */
   deleteCell: (index: number, source?: EditSource) => Cell | null;
+
+  /**
+   * Clear all cells as ONE undoable batch (single Ctrl+Z restores the whole
+   * notebook). Optional — without it, clearNotebook falls back to per-cell
+   * deletes (N undo steps). Returns the number of cells deleted.
+   */
+  clearNotebookBatch?: (source?: EditSource) => number;
 
   /** Move cell callback (from useUndoRedo) */
   moveCell: (fromIndex: number, toIndex: number, source?: EditSource) => void;
@@ -542,6 +554,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
     updateMetadata,
     setCellOutputs,
     isCellQueued,
+    clearNotebookBatch,
     createNotebook,
     executeCell,
     startKernel,
@@ -576,6 +589,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   const updateMetadataRef = useRef(updateMetadata);
   const setCellOutputsRef = useRef(setCellOutputs);
   const isCellQueuedRef = useRef(isCellQueued);
+  const clearNotebookBatchRef = useRef(clearNotebookBatch);
   const createNotebookRef = useRef(createNotebook);
   const executeCellRef = useRef(executeCell);
   const startKernelRef = useRef(startKernel);
@@ -600,6 +614,7 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
   updateMetadataRef.current = updateMetadata;
   setCellOutputsRef.current = setCellOutputs;
   isCellQueuedRef.current = isCellQueued;
+  clearNotebookBatchRef.current = clearNotebookBatch;
   createNotebookRef.current = createNotebook;
   executeCellRef.current = executeCell;
   startKernelRef.current = startKernel;
@@ -1314,9 +1329,14 @@ export function useOperationHandler(options: UseOperationHandlerOptions) {
             return { success: true, deletedCount: 0 };
           }
 
-          // Delete from end to start to avoid index shifting issues
-          for (let i = currentCells.length - 1; i >= 0; i--) {
-            deleteCellRef.current(i);
+          if (clearNotebookBatchRef.current) {
+            // One undoable batch — a single Ctrl+Z restores the whole notebook
+            clearNotebookBatchRef.current('ai');
+          } else {
+            // Fallback: delete from end to start to avoid index shifting issues
+            for (let i = currentCells.length - 1; i >= 0; i--) {
+              deleteCellRef.current(i);
+            }
           }
 
           // Update cellsRef immediately to avoid stale reads before re-render

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
 import { X, AlertCircle, CheckCircle, AlertTriangle, Info } from 'lucide-react';
+import { useModalA11y } from '../hooks/useModalA11y';
 
 // Toast types
 type ToastType = 'success' | 'error' | 'warning' | 'info';
@@ -63,6 +64,7 @@ const ToastItem: React.FC<{ toast: Toast; onDismiss: (id: string) => void }> = (
       <p className="flex-1 text-sm font-medium break-words min-w-0">{toast.message}</p>
       <button
         onClick={() => onDismiss(toast.id)}
+        aria-label="Dismiss notification"
         className="p-0.5 hover:bg-black/5 rounded transition-colors flex-shrink-0"
       >
         <X className="w-4 h-4" />
@@ -71,13 +73,14 @@ const ToastItem: React.FC<{ toast: Toast; onDismiss: (id: string) => void }> = (
   );
 };
 
-// Confirm Dialog component
+// Confirm Dialog component. Rendered only while open (see NotificationProvider)
+// so useModalA11y can live here unconditionally and bind on mount.
 const ConfirmDialog: React.FC<{
   state: ConfirmState;
   onConfirm: () => void;
   onCancel: () => void;
 }> = ({ state, onConfirm, onCancel }) => {
-  if (!state.isOpen) return null;
+  const dialogRef = useModalA11y<HTMLDivElement>(onCancel);
 
   const variantStyles = {
     danger: 'bg-red-600 hover:bg-red-700 focus:ring-red-500',
@@ -94,9 +97,16 @@ const ConfirmDialog: React.FC<{
       />
 
       {/* Dialog */}
-      <div className="relative bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 animate-in zoom-in-95 fade-in">
+      <div
+        ref={dialogRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        tabIndex={-1}
+        className="relative bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 animate-in zoom-in-95 fade-in"
+      >
         <div className="p-6">
-          <h3 className="text-lg font-semibold text-slate-900 mb-2">
+          <h3 id="confirm-dialog-title" className="text-lg font-semibold text-slate-900 mb-2">
             {state.title}
           </h3>
           <p className="text-sm text-slate-600 break-words">
@@ -200,12 +210,14 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         ))}
       </div>
 
-      {/* Confirm dialog */}
-      <ConfirmDialog
-        state={confirmState}
-        onConfirm={handleConfirm}
-        onCancel={handleCancel}
-      />
+      {/* Confirm dialog — mounted only while open so its a11y hook binds per open */}
+      {confirmState.isOpen && (
+        <ConfirmDialog
+          state={confirmState}
+          onConfirm={handleConfirm}
+          onCancel={handleCancel}
+        />
+      )}
     </NotificationContext.Provider>
   );
 };

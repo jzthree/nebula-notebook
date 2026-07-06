@@ -18,8 +18,11 @@ import {
   Upload,
   Book,
   FileCode,
-  File as FileIcon
+  File as FileIcon,
+  Copy,
+  Check
 } from 'lucide-react';
+import { copyTextToClipboard } from '../utils/clipboard';
 import { FileListItem } from './FileListItem';
 import {
   listDirectory,
@@ -54,6 +57,8 @@ interface Props {
   variant?: 'sidebar' | 'inline';
   /** Initial directory path (defaults to server root) */
   initialPath?: string;
+  /** Notified whenever the browsed directory changes (for the host's actions). */
+  onPathChange?: (path: string) => void;
   /** Max height for inline variant (e.g., '60vh') */
   maxHeight?: string;
   /** Class name for the container */
@@ -100,6 +105,7 @@ const FileBrowserComponent: React.FC<Props> = ({
   onClose,
   variant = 'sidebar',
   initialPath,
+  onPathChange,
   maxHeight = '60vh',
   className = '',
 }) => {
@@ -140,7 +146,7 @@ const FileBrowserComponent: React.FC<Props> = ({
   const isEditableTextFile = (filePath: string): boolean => {
     const lower = filePath.toLowerCase();
     return [
-      '.py', '.json', '.txt', '.md', '.yaml', '.yml', '.js', '.ts', '.tsx', '.css', '.csv', '.log', '.toml', '.ini'
+      '.py', '.r', '.jl', '.json', '.txt', '.md', '.yaml', '.yml', '.js', '.ts', '.tsx', '.css', '.csv', '.log', '.toml', '.ini'
     ].some(ext => lower.endsWith(ext));
   };
 
@@ -170,6 +176,12 @@ const FileBrowserComponent: React.FC<Props> = ({
       setCurrentPath(initialPath);
     }
   }, [initialPath]);
+
+  // Notify the host (e.g. Dashboard) of the currently-browsed directory so its
+  // own actions (like "New Notebook") can target it.
+  useEffect(() => {
+    onPathChange?.(currentPath);
+  }, [currentPath, onPathChange]);
 
   // Keep path input in sync with current path
   useEffect(() => {
@@ -291,6 +303,21 @@ const FileBrowserComponent: React.FC<Props> = ({
       loadDirectory(nextPath);
     }
   }, [loadDirectory, pathInput]);
+
+  // Copy the current directory path (e.g. to paste into a terminal or agent prompt)
+  const [copiedCwd, setCopiedCwd] = useState(false);
+  const copiedCwdTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copiedCwdTimeoutRef.current) clearTimeout(copiedCwdTimeoutRef.current); }, []);
+  const handleCopyCwd = useCallback(async () => {
+    const ok = await copyTextToClipboard(currentPath);
+    if (ok) {
+      setCopiedCwd(true);
+      if (copiedCwdTimeoutRef.current) clearTimeout(copiedCwdTimeoutRef.current);
+      copiedCwdTimeoutRef.current = setTimeout(() => setCopiedCwd(false), 1500);
+    } else {
+      toast('Could not copy path to clipboard', 'error');
+    }
+  }, [currentPath, toast]);
 
   const handleSetRoot = useCallback(async () => {
     const nextRoot = pathInput.trim() || currentPath;
@@ -438,6 +465,8 @@ const FileBrowserComponent: React.FC<Props> = ({
 
   // Drag-and-drop upload handlers
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    // Internal file moves are handled by folder rows, not the upload overlay.
+    if (e.dataTransfer.types.includes('application/x-nebula-move')) return;
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(true);
@@ -450,6 +479,8 @@ const FileBrowserComponent: React.FC<Props> = ({
   }, []);
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
+    // Ignore internal move drags (a folder row handles those).
+    if (e.dataTransfer.types.includes('application/x-nebula-move')) return;
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
@@ -552,6 +583,27 @@ const FileBrowserComponent: React.FC<Props> = ({
     // This is called from FileListItem but we use inline editing now
     // Keep for compatibility but actual rename happens in handleConfirmEdit
   }, []);
+
+  // Move a file/folder into a folder (drag-and-drop) — a move is a rename to
+  // <destFolder>/<basename>, which also relocates .nebula sidecars server-side.
+  const handleMoveItem = useCallback(async (sourcePath: string, destFolderPath: string) => {
+    const basename = sourcePath.split('/').filter(Boolean).pop() || sourcePath;
+    const sourceParent = sourcePath.slice(0, sourcePath.lastIndexOf('/'));
+    if (sourceParent === destFolderPath) return; // already there — no-op
+    if (destFolderPath === sourcePath || destFolderPath.startsWith(sourcePath + '/')) {
+      toast('Cannot move a folder into itself', 'error');
+      return;
+    }
+    const newPath = `${destFolderPath}/${basename}`;
+    try {
+      await renameFile(sourcePath, newPath);
+      toast(`Moved ${basename}`, 'success');
+      loadDirectory(currentPath);
+      onRefresh();
+    } catch (err: any) {
+      toast(err.message || `Failed to move ${basename}`, 'error');
+    }
+  }, [currentPath, loadDirectory, onRefresh, toast]);
 
   const handleOpenNewTab = useCallback((path: string) => {
     const baseUrl = window.location.pathname;
@@ -777,11 +829,22 @@ const FileBrowserComponent: React.FC<Props> = ({
             })}
           </div>
           <button
+            onClick={handleCopyCwd}
+            className={`px-1.5 py-1 text-[0.625rem] border rounded flex items-center gap-1 flex-shrink-0 ${
+              copiedCwd ? 'bg-green-50 text-green-700 border-green-200' : 'text-slate-600 border-slate-200 hover:bg-slate-100'
+            }`}
+            title={`Copy current directory path (${currentPath})`}
+            aria-label="Copy current directory path"
+          >
+            {copiedCwd ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          </button>
+          <button
             onClick={() => setShowPathInput((prev) => !prev)}
             className={`px-2 py-1 text-[0.625rem] border rounded flex items-center gap-1 flex-shrink-0 ${
               showPathInput ? 'bg-blue-50 text-blue-700 border-blue-200' : 'text-slate-600 border-slate-200 hover:bg-slate-100'
             }`}
             title="Toggle path entry"
+            aria-label="Toggle path entry"
           >
             <Folder className="w-3 h-3" />
             Path
@@ -912,6 +975,7 @@ const FileBrowserComponent: React.FC<Props> = ({
             onStartEdit={handleStartEdit}
             onCancelEdit={handleCancelEdit}
             onConfirmEdit={handleConfirmEdit}
+            onMoveItem={handleMoveItem}
           />
         ))}
 

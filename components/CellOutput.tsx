@@ -5,6 +5,8 @@ import { encodeHtmlParam, wrapHtmlDocument, MAX_HTML_PARAM_LENGTH } from '../uti
 import AnsiToHtml from 'ansi-to-html';
 import { ImageModalViewer } from './ImageModalViewer';
 import { DisplayDataOutput, HtmlOutputRenderer } from './DisplayDataOutput';
+import { KernelHintBar } from './KernelHintBar';
+import { detectKernelHint } from '../utils/kernelHints';
 import {
   MAX_OUTPUT_LINES,
   MAX_OUTPUT_CHARS,
@@ -14,7 +16,22 @@ import {
   OUTPUT_DEFAULT_HEIGHT_PX,
 } from '../config';
 
-const ansiConverter = new AnsiToHtml({ escapeXML: true });
+// Outputs render on LIGHT backgrounds (white / red-50), but ansi-to-html's
+// default palette targets dark terminals — white (SGR 37) maps to #FFF and is
+// invisible. R's cli/rlang error formatting uses white/bright-white heavily.
+// Remap the light palette entries to readable dark equivalents; other colors
+// keep their (already dark enough) defaults.
+const ansiConverter = new AnsiToHtml({
+  escapeXML: true,
+  colors: {
+    7: '#334155',   // white → slate-700 (matches default output text)
+    10: '#15803d',  // bright green → green-700
+    11: '#b45309',  // bright yellow → amber-700
+    13: '#a21caf',  // bright magenta → fuchsia-700
+    14: '#0e7490',  // bright cyan → cyan-700
+    15: '#1e293b',  // bright white → slate-800
+  },
+});
 
 // Strip autoplay from audio/video elements in HTML output.
 // Prevents all media from playing simultaneously when loading a notebook
@@ -41,6 +58,7 @@ interface Props {
   onScrolledChange?: (scrolled: boolean) => void; // Called when user toggles collapse/expand
   scrolledHeight?: number; // Persisted height of output area in scroll mode
   onScrolledHeightChange?: (height: number) => void; // Called when user resizes the output area
+  kernelSessionId?: string; // Live kernel session for interactive widget outputs (ipywidgets)
 }
 
 function areOutputsEqual(prevOutputs: ICellOutput[], nextOutputs: ICellOutput[]): boolean {
@@ -270,7 +288,7 @@ const HtmlOutput: React.FC<{ content: string; renderedHtml: string; openHtmlInNe
   );
 });
 
-const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage: (src: string) => void; allowAutoplay?: boolean }> = memo(({ output, wrapText, onOpenImage, allowAutoplay }) => {
+const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage: (src: string) => void; allowAutoplay?: boolean; kernelSessionId?: string }> = memo(({ output, wrapText, onOpenImage, allowAutoplay, kernelSessionId }) => {
   const textClass = wrapText ? 'whitespace-pre-wrap break-words' : 'whitespace-pre overflow-x-auto';
   const openHtmlInNewTab = useCallback((html: string) => {
       const encoded = encodeHtmlParam(html);
@@ -357,6 +375,7 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage
           fallbackHtmlRenderer={renderHtmlOutput}
           fallbackImageRenderer={renderImageOutput}
           fallbackTextRenderer={renderPlainText}
+          kernelSessionId={kernelSessionId}
         />
       );
     default:
@@ -367,7 +386,7 @@ const OutputItem: React.FC<{ output: ICellOutput; wrapText: boolean; onOpenImage
 const MIN_HEIGHT = OUTPUT_MIN_HEIGHT_PX;
 const DEFAULT_COLLAPSED_HEIGHT = OUTPUT_DEFAULT_HEIGHT_PX;
 
-const CellOutputComponent: React.FC<Props> = ({ outputs, isUpdating = false, executionMs, scrolled, onScrolledChange, scrolledHeight, onScrolledHeightChange }) => {
+const CellOutputComponent: React.FC<Props> = ({ outputs, isUpdating = false, executionMs, scrolled, onScrolledChange, scrolledHeight, onScrolledHeightChange, kernelSessionId }) => {
   // scrolled prop controls collapse state (Jupyter standard: true = collapsed with scrollbar)
   // Use prop if provided, otherwise default to false (expanded)
   const isCollapsed = scrolled === true;
@@ -514,6 +533,10 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, isUpdating = false, exe
   // Coalesce adjacent same-type text outputs so \r processing works across chunk boundaries.
   // This is done after truncation so limits are applied to raw output count, not coalesced count.
   const coalescedOutputs = useMemo(() => coalesceOutputs(displayOutputs), [displayOutputs]);
+
+  // Recognizable, actionable kernel errors (e.g. headless-R plotting) → an
+  // inline hint with a one-click, session-scoped fix. See utils/kernelHints.ts.
+  const kernelHint = useMemo(() => detectKernelHint(coalescedOutputs), [coalescedOutputs]);
 
   // Check if output is tall enough to warrant collapse option.
   // Seed this from an estimate so tall outputs don't render once as "short"
@@ -682,9 +705,17 @@ const CellOutputComponent: React.FC<Props> = ({ outputs, isUpdating = false, exe
         }}
       >
         {coalescedOutputs.map((out) => (
-          <OutputItem key={out.id} output={out} wrapText={wrapText} onOpenImage={setActiveImageSrc} allowAutoplay={out.timestamp >= mountTimeRef.current} />
+          <OutputItem key={out.id} output={out} wrapText={wrapText} onOpenImage={setActiveImageSrc} allowAutoplay={out.timestamp >= mountTimeRef.current} kernelSessionId={kernelSessionId} />
         ))}
       </div>
+
+      {/* Actionable hint for recognized kernel errors (kept outside the scroll
+          area so it's visible even when the output is collapsed). */}
+      {kernelHint && (
+        <div className={`px-4 ${showCollapseOption ? 'pl-8' : ''}`}>
+          <KernelHintBar hint={kernelHint} kernelSessionId={kernelSessionId} />
+        </div>
+      )}
 
       {/* Resize handle - only show when collapsed */}
       {isCollapsed && (
@@ -713,6 +744,7 @@ export const CellOutput = memo(CellOutputComponent, (prevProps, nextProps) => {
     prevProps.executionMs === nextProps.executionMs &&
     prevProps.scrolled === nextProps.scrolled &&
     prevProps.scrolledHeight === nextProps.scrolledHeight &&
+    prevProps.kernelSessionId === nextProps.kernelSessionId &&
     areOutputsEqual(prevProps.outputs, nextProps.outputs)
   );
 });

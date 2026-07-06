@@ -5,8 +5,11 @@ import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment, KernelProvisionError } from '../services/kernelService';
 import { getClusterInfo, ClusterServer, ClusterInfo } from '../services/clusterService';
+import { getComputeStatus } from '../services/computeService';
+import ComputeAllocationModal from './ComputeAllocationModal';
 import { getSettings, saveSettings, IndentationPreference } from '../services/settingsService';
-import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server, Clock, Maximize2, Minimize2 } from 'lucide-react';
+import { markOnboardingStep } from '../services/onboardingService';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server, Clock, Maximize2, Minimize2, FileText, FolderOpen } from 'lucide-react';
 import { CellListHandle } from './VirtualCellList';
 import { EditorView } from '@codemirror/view';
 import {
@@ -26,8 +29,11 @@ import {
   AgentPermissionStatus,
   getNotebookSettings,
   updateNotebookSettings,
+  saveWidgetState,
   OutputLoggingMode
 } from '../services/fileService';
+import { peekWidgetStateSnapshot } from '../services/widgetManager';
+import { listAllocations } from '../services/computeService';
 import { FileBrowser } from './FileBrowser';
 import { TextFileEditor } from './TextFileEditor';
 import { addRecentNotebook } from './Dashboard';
@@ -37,7 +43,8 @@ import { HistoryPanel } from './HistoryPanel';
 import { RestoreDialog } from './RestoreDialog';
 import { VirtualCellList } from './VirtualCellList';
 import { ImageModalViewer } from './ImageModalViewer';
-import { useUndoRedo, EditSource } from '../hooks/useUndoRedo';
+import { useUndoRedo, EditSource, Operation } from '../hooks/useUndoRedo';
+import { cloneCell } from '../lib/undoRedoCore';
 import { useOperationHandler } from '../hooks/useOperationHandler';
 import { SettingsModal } from './SettingsModal';
 import { KernelManager } from './KernelManager';
@@ -46,6 +53,7 @@ import { NotebookBreadcrumb } from './NotebookBreadcrumb';
 import { ResourceStatusBar } from './ResourceStatusBar';
 import { useAutosave, formatLastSaved } from '../hooks/useAutosave';
 import { useNotification } from './NotificationSystem';
+import { ModalShell } from './ModalShell';
 import { useConflictResolution } from '../hooks/useConflictResolution';
 import { detectIndentationFromCells, IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 import { getNotebookAvatar, updateFavicon, resetFavicon } from '../utils/notebookAvatar';
@@ -109,17 +117,36 @@ function copyCellOutput(output: Cell['outputs'][number]) {
   };
 }
 
-// ─── Cell Navigator (self-contained to avoid Notebook re-renders on typing) ──
+// ─── Command Palette (self-contained to avoid Notebook re-renders on typing) ──
+// One modal, two modes (VS Code convention): a '>' prefix filters commands,
+// plain text searches cells (the original Cell Navigator behavior).
+// Cmd/Ctrl+Shift+P opens it with '>' prefilled so commands are the default;
+// delete the '>' to drop back into cell search.
 interface NavigatorItem { cellId: string; index: number; type: string; preview: string; content: string }
-const CellNavigator: React.FC<{
+export interface PaletteCommand {
+  id: string;
+  title: string;
+  section: string;      // group label shown on the right, e.g. 'Kernel'
+  keywords?: string;    // extra lowercase search terms
+  shortcut?: string;    // display-only hint, e.g. '⌘S'
+  disabled?: boolean;
+  run: () => void;
+}
+
+const CommandPalette: React.FC<{
   items: NavigatorItem[];
+  commands: PaletteCommand[];
+  initialQuery?: string;
   onSelect: (cellId: string, index: number) => void;
   onClose: () => void;
-}> = ({ items, onSelect, onClose }) => {
-  const [query, setQuery] = useState('');
+}> = ({ items, commands, initialQuery = '', onSelect, onClose }) => {
+  const [query, setQuery] = useState(initialQuery);
   const [selection, setSelection] = useState(0);
 
-  const results = useMemo(() => {
+  const commandMode = query.startsWith('>');
+
+  const cellResults = useMemo(() => {
+    if (commandMode) return [];
     if (!query.trim()) return items.map(item => ({ ...item, matchedLine: '' }));
     const q = query.toLowerCase();
     return items
@@ -134,9 +161,29 @@ const CellNavigator: React.FC<{
         const matchedLine = lines.find(line => line.includes(q))?.trim() || '';
         return { ...item, matchedLine };
       });
-  }, [items, query]);
+  }, [items, query, commandMode]);
+
+  const commandResults = useMemo(() => {
+    if (!commandMode) return [];
+    const q = query.slice(1).trim().toLowerCase();
+    if (!q) return commands;
+    return commands.filter(cmd => (
+      cmd.title.toLowerCase().includes(q) ||
+      cmd.section.toLowerCase().includes(q) ||
+      (cmd.keywords || '').includes(q)
+    ));
+  }, [commands, query, commandMode]);
+
+  const resultCount = commandMode ? commandResults.length : cellResults.length;
 
   useEffect(() => { setSelection(0); }, [query]);
+
+  const runCommand = (cmd: PaletteCommand) => {
+    if (cmd.disabled) return;
+    // Close first so focus is released before the command opens another modal
+    onClose();
+    cmd.run();
+  };
 
   return (
     <div
@@ -144,16 +191,24 @@ const CellNavigator: React.FC<{
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
         className="w-full max-w-3xl bg-white rounded-lg shadow-2xl border border-slate-200 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === 'Escape') { e.preventDefault(); onClose(); }
-          else if (e.key === 'ArrowDown') { e.preventDefault(); setSelection(s => Math.min(s + 1, results.length - 1)); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); setSelection(s => Math.min(s + 1, resultCount - 1)); }
           else if (e.key === 'ArrowUp') { e.preventDefault(); setSelection(s => Math.max(s - 1, 0)); }
           else if (e.key === 'Enter') {
             e.preventDefault();
-            const target = results[selection];
-            if (target) { onSelect(target.cellId, target.index); onClose(); }
+            if (commandMode) {
+              const cmd = commandResults[selection];
+              if (cmd) runCommand(cmd);
+            } else {
+              const target = cellResults[selection];
+              if (target) { onSelect(target.cellId, target.index); onClose(); }
+            }
           }
         }}
       >
@@ -163,39 +218,74 @@ const CellNavigator: React.FC<{
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search cells by index, id, or content..."
+            placeholder={commandMode ? 'Type a command…' : "Search cells — or type '>' for commands"}
+            aria-label={commandMode ? 'Search commands' : 'Search cells'}
             className="w-full text-sm bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
           />
           <span className="text-[0.625rem] text-slate-400 whitespace-nowrap tabular-nums">
-            {results.length} / {items.length}
+            {commandMode ? `${commandResults.length} commands` : `${cellResults.length} / ${items.length}`}
           </span>
         </div>
         <div className="max-h-[75vh] overflow-y-auto">
-          {results.length === 0 ? (
-            <div className="px-3 py-5 text-sm text-slate-400 text-center">No matching cells</div>
-          ) : query.trim() ? (
-            <div className="px-3 py-1 text-xs text-blue-600 bg-blue-50 border-b border-blue-100">
-              Showing {results.length} matching cells
-            </div>
-          ) : null}
-          {results.map((item, idx) => (
-            <button
-              key={`${item.index}-${item.cellId}`}
-              className={`w-full text-left px-3 py-1 border-b border-slate-100 transition-colors ${idx === selection ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'}`}
-              onClick={() => { onSelect(item.cellId, item.index); onClose(); }}
-            >
-              <div className="flex items-center justify-between text-[0.6875rem] text-slate-500 leading-tight">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-semibold flex-shrink-0">#{item.index + 1}</span>
-                  <span className="text-[0.625rem] text-slate-500 font-medium truncate">{item.cellId}</span>
+          {commandMode ? (
+            commandResults.length === 0 ? (
+              <div className="px-3 py-5 text-sm text-slate-400 text-center">No matching commands</div>
+            ) : (
+              commandResults.map((cmd, idx) => (
+                <button
+                  key={cmd.id}
+                  disabled={cmd.disabled}
+                  className={`w-full text-left px-3 py-1.5 border-b border-slate-100 transition-colors flex items-center justify-between gap-3 ${
+                    cmd.disabled
+                      ? 'bg-white text-slate-300 cursor-not-allowed'
+                      : idx === selection ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'
+                  }`}
+                  onClick={() => runCommand(cmd)}
+                  onMouseMove={() => { if (!cmd.disabled && idx !== selection) setSelection(idx); }}
+                >
+                  <span className={`text-[0.8125rem] leading-tight truncate ${cmd.disabled ? '' : 'text-slate-700'}`}>
+                    {cmd.title}
+                  </span>
+                  <span className="flex items-center gap-2 flex-shrink-0">
+                    {cmd.shortcut && (
+                      <kbd className={`px-1.5 py-0.5 rounded text-[0.625rem] border ${cmd.disabled ? 'bg-slate-50 border-slate-100 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-500'}`}>
+                        {cmd.shortcut}
+                      </kbd>
+                    )}
+                    <span className="text-[0.625rem] uppercase tracking-wide text-slate-400">{cmd.section}</span>
+                  </span>
+                </button>
+              ))
+            )
+          ) : (
+            <>
+              {cellResults.length === 0 ? (
+                <div className="px-3 py-5 text-sm text-slate-400 text-center">No matching cells</div>
+              ) : query.trim() ? (
+                <div className="px-3 py-1 text-xs text-blue-600 bg-blue-50 border-b border-blue-100">
+                  Showing {cellResults.length} matching cells
                 </div>
-                <span className="text-[0.625rem] uppercase tracking-wide text-slate-400 flex-shrink-0">{item.type}</span>
-              </div>
-              <div className="mt-0.5 text-[0.8125rem] text-slate-700 font-mono truncate leading-tight">
-                {query.trim() && item.matchedLine ? item.matchedLine : (item.preview || <span className="text-slate-400 italic">Empty cell</span>)}
-              </div>
-            </button>
-          ))}
+              ) : null}
+              {cellResults.map((item, idx) => (
+                <button
+                  key={`${item.index}-${item.cellId}`}
+                  className={`w-full text-left px-3 py-1 border-b border-slate-100 transition-colors ${idx === selection ? 'bg-blue-50' : 'bg-white hover:bg-slate-50'}`}
+                  onClick={() => { onSelect(item.cellId, item.index); onClose(); }}
+                >
+                  <div className="flex items-center justify-between text-[0.6875rem] text-slate-500 leading-tight">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-semibold flex-shrink-0">#{item.index + 1}</span>
+                      <span className="text-[0.625rem] text-slate-500 font-medium truncate">{item.cellId}</span>
+                    </div>
+                    <span className="text-[0.625rem] uppercase tracking-wide text-slate-400 flex-shrink-0">{item.type}</span>
+                  </div>
+                  <div className="mt-0.5 text-[0.8125rem] text-slate-700 font-mono truncate leading-tight">
+                    {query.trim() && item.matchedLine ? item.matchedLine : (item.preview || <span className="text-slate-400 italic">Empty cell</span>)}
+                  </div>
+                </button>
+              ))}
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -275,6 +365,10 @@ export const Notebook: React.FC = () => {
   const [terminalTab, setTerminalTab] = useState<'shell' | 'agent'>(() => {
     try { return window.sessionStorage.getItem('nebula-terminal-tab') === 'agent' ? 'agent' : 'shell'; } catch { return 'shell'; }
   });
+  // "Get started" checklist: opening any notebook checks the first step.
+  useEffect(() => {
+    if (currentFileId) markOnboardingStep('openedNotebook');
+  }, [currentFileId]);
   useEffect(() => {
     try {
       window.sessionStorage.setItem('nebula-terminal-open', isTerminalOpen ? '1' : '0');
@@ -353,7 +447,15 @@ export const Notebook: React.FC = () => {
     };
   }, [isNavigatorOpen]);
 
-  const openNavigator = useCallback(() => {
+  // '>' prefilled = command mode by default; deleting it drops into cell search
+  const [navigatorInitialQuery, setNavigatorInitialQuery] = useState('>');
+  // Bumped on every open so the palette remounts with a fresh query, even when
+  // a command (e.g. "Go to cell…") closes and reopens it within the same tick.
+  const [navigatorOpenNonce, setNavigatorOpenNonce] = useState(0);
+
+  const openNavigator = useCallback((initialQuery: string = '>') => {
+    setNavigatorInitialQuery(initialQuery);
+    setNavigatorOpenNonce(n => n + 1);
     setIsNavigatorOpen(true);
   }, []);
 
@@ -394,7 +496,15 @@ export const Notebook: React.FC = () => {
 
   // Cluster State
   const [clusterInfo, setClusterInfo] = useState<ClusterInfo | null>(null);
+  const [computeEnabled, setComputeEnabled] = useState(false);
+  const [showComputeModal, setShowComputeModal] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null); // null = local
+  // On a login node, the pending kernel start we're asking the user to confirm
+  // (run here vs allocate compute). null = no prompt showing.
+  const [loginNodePrompt, setLoginNodePrompt] = useState<{ kernelName: string; serverId?: string | null; keepMenuOpen: boolean; source: EditSource } | null>(null);
+  // Resolves once compute (scheduler) detection completes, so kernel-start gates
+  // don't race the async detection on cold load (e.g. restoring the last file).
+  const computeStatusReadyRef = useRef<Promise<boolean> | null>(null);
 
   // Agent permission state
   const [agentPermissionStatus, setAgentPermissionStatus] = useState<AgentPermissionStatus | null>(null);
@@ -415,6 +525,7 @@ export const Notebook: React.FC = () => {
     changeType,
     setCellScrolled,
     setCellScrolledHeight,
+    batch,
     saveCheckpoint,
     flushCell,
     peekUndo,
@@ -545,12 +656,17 @@ export const Notebook: React.FC = () => {
   const [showCellIds, setShowCellIds] = useState<boolean>(() => getSettings().showCellIds ?? false);
   const [showResourceMonitor, setShowResourceMonitor] = useState<boolean>(() => getSettings().showResourceMonitor ?? false);
   const [smoothAutoScroll, setSmoothAutoScroll] = useState<boolean>(() => getSettings().smoothAutoScroll ?? true);
+  // Jupyter classic keybindings in cell mode (dd delete, z undo, 00 restart, ii interrupt)
+  const [jupyterShortcutsEnabled, setJupyterShortcutsEnabled] = useState<boolean>(() => getSettings().jupyterShortcuts ?? false);
+  const jupyterShortcutsRef = useRef(jupyterShortcutsEnabled);
+  jupyterShortcutsRef.current = jupyterShortcutsEnabled;
 
   // Conflict resolution hook
   // Note: When loading remote version during conflict, we initialize fresh history
   // since we're discarding local changes
   const {
     conflictDialog,
+    resolving: conflictResolving,
     saveWithCheck,
     keepLocal,
     loadRemote,
@@ -887,12 +1003,26 @@ export const Notebook: React.FC = () => {
   }, []);
 
   // Operation handler - receives operations routed from backend OperationRouter
+  // Clear all cells as ONE undoable batch — a single Ctrl+Z restores the
+  // whole notebook instead of one press per deleted cell.
+  const clearNotebookBatch = useCallback((source: EditSource = 'ai'): number => {
+    const currentCells = cellsRef.current;
+    if (currentCells.length === 0) return 0;
+    const ops: Operation[] = currentCells
+      .map((cell, index) => ({ cell, index }))
+      .reverse() // delete from the highest index down so earlier indices stay valid
+      .map(({ cell, index }) => ({ type: 'deleteCell' as const, index, cell: cloneCell(cell), source }));
+    batch(ops);
+    return currentCells.length;
+  }, [batch]);
+
   const { activeOperation: agentOperation, agentSession, forceEndAgentSession } = useOperationHandler({
     filePath: currentFileId,
     cells,
     insertCell: undoableInsertCell,
     deleteCell: undoableDeleteCell,
     moveCell: undoableMoveCell,
+    clearNotebookBatch,
     updateContent,
     updateContentAI,
     updateMetadata,
@@ -1004,8 +1134,8 @@ export const Notebook: React.FC = () => {
     }, [formatAgentOperation, toast]),
   });
 
-  // Clipboard for cut/copy/paste cells
-  const [cellClipboard, setCellClipboard] = useState<CellClipboardItem | null>(null);
+  // Clipboard for cut/copy/paste cells (array: multi-cell selections copy as a block)
+  const [cellClipboard, setCellClipboard] = useState<CellClipboardItem[] | null>(null);
 
   // FIFO queue for cells (separate from clipboard) - enqueue with 'e', dequeue with 'd'
   const [cellQueue, setCellQueue] = useState<CellClipboardItem[]>([]);
@@ -1015,7 +1145,7 @@ export const Notebook: React.FC = () => {
 
   const cellsRef = useRef<Cell[]>(cells);
   const activeCellIdRef = useRef<string | null>(activeCellId);
-  const cellClipboardRef = useRef<CellClipboardItem | null>(cellClipboard);
+  const cellClipboardRef = useRef<CellClipboardItem[] | null>(cellClipboard);
   const getFullHistoryRef = useRef(getFullHistory);
   const loadFileRef = useRef<(id: string) => void>(() => {});
   const refreshFileListRef = useRef<() => void>(() => {});
@@ -1362,6 +1492,23 @@ export const Notebook: React.FC = () => {
           unflushedEdit: unflushedState ?? undefined,
           activeCellId: activeCellIdRef.current ?? undefined,
         });
+
+        // Persist live ipywidgets state to metadata.widgets so the saved
+        // .ipynb renders static widgets in Jupyter/nbviewer. peek… returns
+        // null (and we skip, preserving any previously saved state) unless a
+        // widget manager was actually created this page-load — so this never
+        // pulls the lazy widget chunk on notebooks without widgets.
+        if (kernelSessionId && fileId.endsWith('.ipynb')) {
+          try {
+            const widgetState = await peekWidgetStateSnapshot(kernelSessionId);
+            if (widgetState) {
+              const res = await saveWidgetState(fileId, widgetState);
+              adoptServerMtime(res?.mtime);
+            }
+          } catch (err) {
+            console.warn('Widget state persistence failed (save itself succeeded):', err);
+          }
+        }
       } else if (result.error) {
         throw new Error(result.error);
       }
@@ -1371,16 +1518,28 @@ export const Notebook: React.FC = () => {
       setPendingSave(true);
       throw error; // Re-throw so autosave knows it failed
     }
-  }, [historyReady, getFullHistory, currentKernel, saveWithCheck, getUnflushedState, kernelSessionId, currentFileId]);
+  }, [historyReady, getFullHistory, currentKernel, saveWithCheck, getUnflushedState, kernelSessionId, currentFileId, adoptServerMtime]);
+
+  // Surface save failures loudly — silent autosave loss is the scariest failure
+  // mode a notebook can have. Retries are automatic; toast on the first failure
+  // and then every 5th consecutive one to avoid spamming during an outage.
+  const handleAutosaveError = useCallback((error: Error, info: { isManual: boolean; consecutiveFailures: number }) => {
+    if (info.isManual || info.consecutiveFailures === 1 || info.consecutiveFailures % 5 === 0) {
+      const detail = error.message && error.message !== 'Failed to fetch' ? ` (${error.message})` : '';
+      toast(`Save failed${detail} — your latest changes are not on disk yet. Retrying automatically.`, 'error', 8000);
+    }
+  }, [toast]);
 
   const { status: autosaveStatus, saveNow } = useAutosave({
     fileId: currentFileId,
     cells,
     onSave: performSaveToFile,
-    // Avoid repeated conflict checks / log spam while the conflict modal is open.
-    // Once resolved, autosave resumes and will persist any buffered output changes.
-    enabled: !conflictDialog?.show,
+    // Avoid repeated conflict checks / log spam while the conflict modal is
+    // open OR while a resolution's force-save is still in flight (resuming
+    // early would re-detect the same conflict against the stale mtime).
+    enabled: !conflictDialog?.show && !conflictResolving,
     hasRedoHistory: canRedo, // Block autosave when redo history exists
+    onSaveError: handleAutosaveError,
   });
 
   // Keep saveNow ref updated synchronously (not in useEffect which runs after render)
@@ -1465,7 +1624,17 @@ export const Notebook: React.FC = () => {
           executionQueueRef.current = [];
           setExecutionQueue([]);
           setCells(prev => prev.map(c => (c.isExecuting ? { ...c, isExecuting: false } : c)));
-          toast('Kernel died — use the kernel menu to restart it', 'error', 6000);
+          // Diagnose: if the last memory sample was near the allocation
+          // limit, this was almost certainly a SLURM cgroup OOM kill.
+          if (lastMemPctRef.current != null && lastMemPctRef.current >= 0.8) {
+            toast(
+              `Kernel died at ~${Math.round(lastMemPctRef.current * 100)}% of the allocation memory limit — almost certainly OOM-killed by SLURM. Re-allocate with more memory for this workload.`,
+              'error',
+              15000
+            );
+          } else {
+            toast('Kernel died — use the kernel menu to restart it', 'error', 6000);
+          }
         }
         // If kernel is busy with a specific cell (reconnect scenario),
         // mark that cell as executing so the spinner shows and output streams.
@@ -1571,12 +1740,33 @@ export const Notebook: React.FC = () => {
     setLastExecutionResult(null);
   }, []);
 
+  // Allocation memory limit (bytes) for the kernel's server when it runs on
+  // a scheduler allocation; null otherwise. SLURM OOM-kills the kernel the
+  // instant it crosses this limit (SIGKILL, no warning), so we warn the user
+  // as usage approaches it and diagnose deaths that happen near it.
+  const allocationMemLimitRef = useRef<number | null>(null);
+  const lastMemPctRef = useRef<number | null>(null);
+  const lastMemWarnAtRef = useRef(0);
+
   // Kernel memory usage tracking (only when tab is visible)
   useEffect(() => {
     if (!kernelSessionId) {
       setMemoryUsage(null);
+      allocationMemLimitRef.current = null;
+      lastMemPctRef.current = null;
       return;
     }
+
+    // Resolve the allocation memory limit for this kernel's server (if any)
+    allocationMemLimitRef.current = null;
+    listAllocations()
+      .then(allocs => {
+        const alloc = allocs.find(a => a.serverId && a.serverId === selectedServerId);
+        if (alloc?.spec?.memGb) {
+          allocationMemLimitRef.current = alloc.spec.memGb * 1024 * 1024 * 1024;
+        }
+      })
+      .catch(() => { /* compute disabled or transient — no limit tracking */ });
 
     let notFoundCount = 0;
     const updateMemory = async () => {
@@ -1589,10 +1779,27 @@ export const Notebook: React.FC = () => {
           notFoundCount = 0; // Reset on success
           const status = await response.json();
           if (status.memory_mb != null) {
+            const usedBytes = status.memory_mb * 1024 * 1024;
+            const limitBytes = allocationMemLimitRef.current;
             setMemoryUsage({
-              used: status.memory_mb * 1024 * 1024, // Convert back to bytes for consistent display
-              total: 0 // Not applicable for kernel memory
+              used: usedBytes, // bytes for consistent display
+              total: limitBytes ?? 0, // allocation limit when known
             });
+
+            if (limitBytes) {
+              const pct = usedBytes / limitBytes;
+              lastMemPctRef.current = pct;
+              const now = Date.now();
+              // Warn approaching the cgroup limit — SLURM gives no grace
+              if (pct >= 0.85 && now - lastMemWarnAtRef.current > 5 * 60_000) {
+                lastMemWarnAtRef.current = now;
+                toast(
+                  `Kernel memory at ${Math.round(pct * 100)}% of the ${(limitBytes / 1024 ** 3).toFixed(0)} GB allocation limit — SLURM kills the kernel at the limit with no warning. Save your work or allocate more memory.`,
+                  'warning',
+                  12000
+                );
+              }
+            }
           }
         } else if (response.status === 404) {
           notFoundCount++;
@@ -1615,7 +1822,8 @@ export const Notebook: React.FC = () => {
     updateMemory();
     const interval = setInterval(updateMemory, 10000); // Update every 10 seconds (reduced from 5)
     return () => clearInterval(interval);
-  }, [kernelSessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kernelSessionId, selectedServerId]);
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
@@ -1676,6 +1884,33 @@ export const Notebook: React.FC = () => {
     // Note: We don't stop the kernel on unmount anymore
     // Kernels are tied to notebook files, not browser tabs
     // The kernel stays running on the server until explicitly stopped
+  }, []);
+
+  // Detect scheduler-backed compute (SLURM etc.) — gates the "New compute
+  // allocation" entry in the kernel menu. Optional feature; failure is silent.
+  useEffect(() => {
+    let cancelled = false;
+    const p = getComputeStatus()
+      .then((s) => { if (!cancelled) setComputeEnabled(!!s.enabled); return !!s.enabled; })
+      .catch(() => { if (!cancelled) setComputeEnabled(false); return false; });
+    computeStatusReadyRef.current = p;
+    return () => { cancelled = true; };
+  }, []);
+
+  // Is the local (server) node a scheduler login node? Awaits detection so a
+  // cold-load kernel start doesn't race it. Falls back to current state.
+  const isLoginNodeReady = useCallback(async (): Promise<boolean> => {
+    try { return await (computeStatusReadyRef.current ?? Promise.resolve(computeEnabled)); }
+    catch { return computeEnabled; }
+  }, [computeEnabled]);
+
+  // Re-fetch cluster membership (e.g. after an allocation registers a new server).
+  const refreshClusterInfo = useCallback(async () => {
+    try {
+      setClusterInfo(await getClusterInfo());
+    } catch (err) {
+      console.error('Failed to refresh cluster info:', err);
+    }
   }, []);
 
   useEffect(() => {
@@ -1765,10 +2000,121 @@ export const Notebook: React.FC = () => {
   const kernelStatusRef = useRef<string>(kernelStatus);
   const kernelSessionIdRef = useRef<string | null>(kernelSessionId);
   const interruptKernelRef = useRef<(() => void) | null>(null);
+  const restartKernelFnRef = useRef<(() => void) | null>(null);
+  const undoFnRef = useRef<(() => void) | null>(null);
+  const redoFnRef = useRef<(() => void) | null>(null);
   // Track pending focus for next cell - Cell component handles the actual focusing
   const [pendingFocus, setPendingFocus] = useState<{ cellId: string; mode: 'cell' | 'editor' } | null>(null);
   const clearPendingFocus = useCallback(() => setPendingFocus(null), []);
   pendingFocusRef.current = pendingFocus;
+
+  // ── Multi-cell selection (command mode) ──
+  // Shift+↑/↓ extends from the focused cell, Shift+click selects a range.
+  // Delete/Backspace, C and X then operate on the whole selection.
+  const [selectedCellIds, setSelectedCellIds] = useState<Set<string>>(new Set());
+  const selectedCellIdsRef = useRef(selectedCellIds);
+  selectedCellIdsRef.current = selectedCellIds;
+  // Fixed end of a shift-range selection; the focused cell is the moving tip
+  const selectionAnchorRef = useRef<string | null>(null);
+  const scrollToCellFnRef = useRef<((index: number, opts?: { behavior?: 'smooth' | 'auto'; delay?: number; retryOnce?: boolean }) => void) | null>(null);
+  scrollToCellFnRef.current = scrollToCell;
+  const pasteClipboardCellsRef = useRef<((items: CellClipboardItem[], insertAt: number) => void) | null>(null);
+
+  const clearCellSelection = useCallback(() => {
+    selectionAnchorRef.current = null;
+    setSelectedCellIds(prev => (prev.size === 0 ? prev : new Set<string>()));
+  }, []);
+
+  // Replace the selection with the contiguous range anchor→target (inclusive)
+  const selectCellRange = useCallback((anchorId: string, targetId: string) => {
+    const currentCells = cellsRef.current;
+    const aIdx = currentCells.findIndex(c => c.id === anchorId);
+    const tIdx = currentCells.findIndex(c => c.id === targetId);
+    if (aIdx === -1 || tIdx === -1) return;
+    selectionAnchorRef.current = anchorId;
+    const [lo, hi] = aIdx <= tIdx ? [aIdx, tIdx] : [tIdx, aIdx];
+    setSelectedCellIds(new Set(currentCells.slice(lo, hi + 1).map(c => c.id)));
+  }, []);
+
+  // Delete every selected cell as ONE undoable action (single Ctrl+Z restores
+  // all). If the selection covers the whole notebook, the batch also inserts a
+  // fresh empty cell so the notebook is never left cell-less.
+  const deleteSelectedCells = useCallback(() => {
+    const selected = selectedCellIdsRef.current;
+    if (selected.size === 0) return;
+    flushActiveCell();
+
+    const currentCells = cellsRef.current;
+    const doomed = currentCells
+      .map((cell, index) => ({ cell, index }))
+      .filter(({ cell }) => selected.has(cell.id));
+    if (doomed.length === 0) return;
+
+    const ops: Operation[] = doomed
+      .slice()
+      .reverse() // delete from the highest index down so earlier indices stay valid
+      .map(({ cell, index }) => ({ type: 'deleteCell' as const, index, cell: cloneCell(cell), source: 'user' as EditSource }));
+
+    if (doomed.length === currentCells.length) {
+      const replacement: Cell = { id: generateCellId(), type: 'code', content: '', outputs: [], isExecuting: false };
+      ops.push({ type: 'insertCell', index: 0, cell: replacement, source: 'user' });
+    }
+    batch(ops);
+
+    // Focus the cell that takes the selection's place. doomed[0].index is the
+    // lowest selected index, so it equals the count of surviving cells above it.
+    const remaining = currentCells.filter(c => !selected.has(c.id));
+    clearCellSelection();
+    const focusTarget = remaining.length > 0
+      ? remaining[Math.min(doomed[0].index, remaining.length - 1)]
+      : null;
+    if (focusTarget) {
+      setActiveCellId(focusTarget.id);
+      setPendingFocus({ cellId: focusTarget.id, mode: 'cell' });
+    }
+  }, [flushActiveCell, batch, clearCellSelection]);
+
+  // Copy (or cut) all selected cells to the cell clipboard, in notebook order
+  const copySelectedCells = useCallback((cut: boolean) => {
+    const selected = selectedCellIdsRef.current;
+    if (selected.size === 0) return;
+    const items: CellClipboardItem[] = cellsRef.current
+      .filter(c => selected.has(c.id))
+      .map(c => ({ type: c.type, content: c.content, sourceId: c.id, isCut: cut }));
+    if (items.length === 0) return;
+    cellClipboardRef.current = items;
+    setCellClipboard(items);
+    if (cut) {
+      deleteSelectedCells();
+    }
+  }, [deleteSelectedCells]);
+
+  // Paste clipboard cells (1..n) at a position as ONE undoable action
+  const pasteClipboardCells = useCallback((items: CellClipboardItem[], insertAt: number) => {
+    if (items.length === 0) return;
+    flushActiveCell();
+
+    const currentCells = cellsRef.current;
+    const existingIds = new Set(currentCells.map(c => c.id));
+    const clampedAt = Math.max(0, Math.min(insertAt, currentCells.length));
+
+    const ops: Operation[] = items.map((item, offset) => {
+      let newId = generateCellId();
+      while (existingIds.has(newId)) newId = generateCellId();
+      existingIds.add(newId);
+      const newCell: Cell = { id: newId, type: item.type, content: item.content, outputs: [], isExecuting: false };
+      return { type: 'insertCell' as const, index: clampedAt + offset, cell: newCell, source: 'user' as EditSource };
+    });
+    batch(ops);
+
+    // Focus the last pasted cell
+    const lastOp = ops[ops.length - 1];
+    if (lastOp.type === 'insertCell') {
+      setActiveCellId(lastOp.cell.id);
+      setPendingFocus({ cellId: lastOp.cell.id, mode: 'cell' });
+    }
+  }, [flushActiveCell, batch]);
+  pasteClipboardCellsRef.current = pasteClipboardCells;
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -1869,10 +2215,96 @@ export const Notebook: React.FC = () => {
       // Jupyter-style shortcuts (cell mode only - when cell div itself is focused)
       if (!focusedCellId) return;
 
+      // Shift+↑/↓ — extend the multi-cell selection from the focused cell
+      if (e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        const currentCellsNow = cellsRef.current;
+        const curIdx = currentCellsNow.findIndex(c => c.id === focusedCellId);
+        if (curIdx === -1) return;
+        const anchorId = selectionAnchorRef.current ?? focusedCellId;
+        const nextIdx = e.key === 'ArrowUp'
+          ? Math.max(0, curIdx - 1)
+          : Math.min(currentCellsNow.length - 1, curIdx + 1);
+        const nextId = currentCellsNow[nextIdx].id;
+        selectCellRange(anchorId, nextId);
+        setActiveCellId(nextId);
+        setPendingFocus({ cellId: nextId, mode: 'cell' });
+        scrollToCellFnRef.current?.(nextIdx, { delay: 50, retryOnce: true });
+        return;
+      }
+
+      // Escape — clear the multi-cell selection
+      if (e.key === 'Escape' && selectedCellIdsRef.current.size > 0) {
+        clearCellSelection();
+        return;
+      }
+
       // Skip single-letter shortcuts when Cmd/Ctrl is pressed
       // This allows Cmd+C to work as native copy instead of cell copy
       // Note: Shift is allowed for Shift+V (paste above)
       if (e.metaKey || e.ctrlKey) return;
+
+      // Multi-cell selection operations (only when the focused cell is part of it)
+      const multiSelection = selectedCellIdsRef.current;
+      if (multiSelection.size > 1 && multiSelection.has(focusedCellId)) {
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          e.preventDefault();
+          deleteSelectedCells();
+          return;
+        }
+        if (key === 'c') {
+          e.preventDefault();
+          copySelectedCells(false);
+          return;
+        }
+        if (key === 'x') {
+          e.preventDefault();
+          copySelectedCells(true);
+          return;
+        }
+      }
+
+      // Jupyter classic keybindings (opt-in via Settings): dd delete,
+      // z undo, Shift+Z redo, 00 restart kernel, ii interrupt.
+      // While enabled, single 'd' is consumed (the FIFO dequeue key is
+      // suspended) so 'dd' can't accidentally paste a queued cell first.
+      if (jupyterShortcutsRef.current && !e.altKey) {
+        const doubleKeys = ['d', '0', 'i'];
+        if (key === 'z') {
+          e.preventDefault();
+          lastKeyRef.current = null;
+          if (e.shiftKey) redoFnRef.current?.(); else undoFnRef.current?.();
+          return;
+        }
+        if (doubleKeys.includes(key)) {
+          e.preventDefault();
+          if (e.repeat) return; // holding the key must not fire the double action
+          const now = Date.now();
+          const doubled = lastKeyRef.current !== null &&
+            lastKeyRef.current.key === key &&
+            now - lastKeyRef.current.time < 800;
+          if (!doubled) {
+            lastKeyRef.current = { key, time: now };
+            return;
+          }
+          lastKeyRef.current = null;
+          if (key === 'd') {
+            const selection = selectedCellIdsRef.current;
+            if (selection.size > 1 && selection.has(focusedCellId)) {
+              deleteSelectedCells();
+            } else {
+              deleteCellRef.current?.(focusedCellId);
+            }
+          } else if (key === '0') {
+            restartKernelFnRef.current?.();
+          } else if (key === 'i') {
+            interruptKernelRef.current?.();
+          }
+          return;
+        }
+        // Any other key breaks a pending double-key sequence
+        lastKeyRef.current = null;
+      }
 
       const currentCells = cellsRef.current;
       const currentIndex = currentCells.findIndex(c => c.id === focusedCellId);
@@ -1915,14 +2347,14 @@ export const Notebook: React.FC = () => {
         const cellToCut = currentCells.find(c => c.id === focusedCellId);
         if (cellToCut) {
           // Copy to clipboard first, then delete (last cell will be cleared, not deleted)
-          const clipboardItem: CellClipboardItem = {
+          const clipboardItems: CellClipboardItem[] = [{
             type: cellToCut.type,
             content: cellToCut.content,
             sourceId: cellToCut.id,
             isCut: true
-          };
-          cellClipboardRef.current = clipboardItem;
-          setCellClipboard(clipboardItem);
+          }];
+          cellClipboardRef.current = clipboardItems;
+          setCellClipboard(clipboardItems);
           deleteCellRef.current(focusedCellId);
         }
         return;
@@ -1933,30 +2365,29 @@ export const Notebook: React.FC = () => {
         e.preventDefault();
         const cellToCopy = currentCells.find(c => c.id === focusedCellId);
         if (cellToCopy) {
-          const clipboardItem: CellClipboardItem = {
+          const clipboardItems: CellClipboardItem[] = [{
             type: cellToCopy.type,
             content: cellToCopy.content,
             sourceId: cellToCopy.id,
             isCut: false
-          };
-          cellClipboardRef.current = clipboardItem;
-          setCellClipboard(clipboardItem);
+          }];
+          cellClipboardRef.current = clipboardItems;
+          setCellClipboard(clipboardItems);
         }
         return;
       }
 
-      // V - Paste cell below, Shift+V - Paste cell above
+      // V - Paste cell(s) below, Shift+V - Paste cell(s) above
       const clipboard = cellClipboardRef.current;
-      if (key === 'v' && clipboard && addCellRef.current) {
+      if (key === 'v' && clipboard && clipboard.length > 0) {
         e.preventDefault();
         const pasteAbove = e.shiftKey;
         // Use activeCellId to find current position, fallback to start/end
         const currentIdx = currentCells.findIndex(c => c.id === focusedCellId);
         const baseIdx = currentIdx >= 0 ? currentIdx : (pasteAbove ? -1 : currentCells.length - 1);
-        // For paste below: afterIndex = currentIdx (inserts at currentIdx + 1)
-        // For paste above: afterIndex = currentIdx - 1 (inserts at currentIdx)
-        const afterIdx = pasteAbove ? baseIdx - 1 : baseIdx;
-        addCellRef.current(clipboard.type, clipboard.content, afterIdx);
+        // For paste below: insert at currentIdx + 1; above: at currentIdx
+        const insertAt = pasteAbove ? Math.max(0, baseIdx) : baseIdx + 1;
+        pasteClipboardCellsRef.current?.(clipboard, insertAt);
         return;
       }
 
@@ -2043,6 +2474,7 @@ export const Notebook: React.FC = () => {
     setShowCellIds(settings.showCellIds ?? false);
     setShowResourceMonitor(settings.showResourceMonitor ?? false);
     setSmoothAutoScroll(settings.smoothAutoScroll ?? true);
+    setJupyterShortcutsEnabled(settings.jupyterShortcuts ?? false);
   }, []);
 
   // Get current notebook filename (without extension)
@@ -2244,14 +2676,30 @@ export const Notebook: React.FC = () => {
       console.warn('Failed to load kernel preference:', error);
     }
 
+    // Use FRESH cluster info for the checks below. Right after a page refresh
+    // the clusterInfo state is often still null (fetched async) — rejecting
+    // the preferred server on that race silently sent notebooks back to a
+    // local kernel instead of reattaching to their allocation/remote kernel.
+    let effectiveClusterInfo = clusterInfo;
+    if (!effectiveClusterInfo) {
+      try {
+        effectiveClusterInfo = await getClusterInfo();
+        setClusterInfo(effectiveClusterInfo);
+      } catch (error) {
+        console.warn('Failed to fetch cluster info for kernel preference check:', error);
+      }
+    }
+
     if (preferredServerId) {
-      const knownServers = clusterInfo?.servers ?? [];
+      const knownServers = effectiveClusterInfo?.servers ?? [];
       const isPreferredServerKnown =
         preferredServerId === 'local' ||
-        preferredServerId === clusterInfo?.localServerId ||
+        preferredServerId === effectiveClusterInfo?.localServerId ||
         knownServers.some(server => server.id === preferredServerId);
-      if (!isPreferredServerKnown) {
-        const fallbackServerId = selectedServerId ?? clusterInfo?.localServerId ?? null;
+      if (!isPreferredServerKnown && effectiveClusterInfo) {
+        // Only reject with actual data in hand — the backend re-validates
+        // anyway and falls back to a local kernel if the server is truly gone.
+        const fallbackServerId = selectedServerId ?? effectiveClusterInfo.localServerId ?? null;
         console.warn(`Ignoring unknown preferred server: ${preferredServerId}`);
         preferredServerId = fallbackServerId;
       }
@@ -2281,6 +2729,22 @@ export const Notebook: React.FC = () => {
     // Update current kernel state to reflect what we're actually using
     if (kernelToUse !== currentKernel) {
       setCurrentKernel(kernelToUse);
+    }
+
+    // Login-node guard (see switchKernel): don't silently spin up a kernel on the
+    // shared login node when a notebook opens. Ask once; if declined, the notebook
+    // opens without a kernel and the user allocates compute when ready.
+    {
+      const isLocalTarget = !preferredServerId || preferredServerId === effectiveClusterInfo?.localServerId;
+      const pref = getSettings().allowLoginNodeKernels;
+      if (isLocalTarget && pref !== 'allow' && (computeEnabled || await isLoginNodeReady())) {
+        setKernelStatus('disconnected');
+        setIsKernelReady(false);
+        if (pref !== 'deny') {
+          setLoginNodePrompt({ kernelName: kernelToUse, serverId: preferredServerId, keepMenuOpen: true, source: 'user' });
+        }
+        return;
+      }
     }
 
     // Get or create kernel for this file (one notebook = one kernel)
@@ -2653,8 +3117,29 @@ export const Notebook: React.FC = () => {
     kernelName: string,
     serverId?: string | null,
     keepMenuOpen = false,
-    source: EditSource = 'user'
+    source: EditSource = 'user',
+    bypassLoginNodeGate = false
   ): Promise<{ success: boolean; sessionId?: string; kernelName?: string; error?: string }> => {
+    // Use provided serverId or fall back to currently selected server
+    const targetServerId = serverId !== undefined ? serverId : selectedServerId;
+
+    // Login-node guard: on a scheduler node, a kernel on the shared local (login)
+    // server competes with other users' work. Ask once, remember the choice.
+    if (!bypassLoginNodeGate) {
+      const isLocalTarget = !targetServerId || targetServerId === clusterInfo?.localServerId;
+      const pref = getSettings().allowLoginNodeKernels;
+      if (isLocalTarget && pref !== 'allow' && (computeEnabled || await isLoginNodeReady())) {
+        if (!keepMenuOpen) setIsKernelMenuOpen(false);
+        if (pref === 'deny') {
+          setShowComputeModal(true);
+          toast('This is a login node — allocate compute to run a kernel here.', 'info', 6000);
+        } else {
+          setLoginNodePrompt({ kernelName, serverId, keepMenuOpen, source });
+        }
+        return { success: false, error: 'login-node kernel gated' };
+      }
+    }
+
     if (!keepMenuOpen) {
       setIsKernelMenuOpen(false);
     }
@@ -2663,11 +3148,9 @@ export const Notebook: React.FC = () => {
     setCurrentKernel(kernelName); // Update name immediately so UI shows new kernel with "starting" status
     setKernelSelectionRequired(false);
 
-    // Use provided serverId or fall back to currently selected server
-    const targetServerId = serverId !== undefined ? serverId : selectedServerId;
-
     try {
       let startedSessionId: string | undefined;
+      let startedNewKernel = true;
       // Use getOrCreateKernelForFile which handles kernel switching on the backend
       // (it will stop the old kernel if kernel type differs)
       if (currentFileId) {
@@ -2677,6 +3160,7 @@ export const Notebook: React.FC = () => {
           targetServerId
         );
         startedSessionId = newSessionId;
+        startedNewKernel = created !== false;
         setKernelSessionId(newSessionId);
         adoptServerMtime(mtime);
         if (createdAt) setKernelCreatedAt(createdAt);
@@ -2698,7 +3182,6 @@ export const Notebook: React.FC = () => {
         }
         const newSessionId = await kernelService.startKernel(kernelName, undefined, undefined, targetServerId);
         startedSessionId = newSessionId;
-        resolvedServer = targetServerId ?? undefined;
         setKernelSessionId(newSessionId);
         logKernelEvent('startKernel', {
           sessionId: newSessionId,
@@ -2709,9 +3192,19 @@ export const Notebook: React.FC = () => {
       }
       setIsKernelReady(true);
       setKernelStatus('idle');
-      // Reset execution counter since it's a new kernel
-      setCells(prev => prev.map(c => ({ ...c, executionCount: undefined })));
-      setKernelExecutionCount(0);
+      if (startedNewKernel) {
+        // Reset execution counter since it's a new kernel
+        setCells(prev => prev.map(c => ({ ...c, executionCount: undefined })));
+        setKernelExecutionCount(0);
+      } else if (startedSessionId) {
+        // Reused the existing kernel (e.g. reselecting the same kernel, or a
+        // backend kernelChanged sync after a refresh) — restore its counter
+        // instead of wiping it. Jupyter convention: [n] belongs to the kernel
+        // and only resets when the kernel itself restarts.
+        kernelService.getStatus(startedSessionId)
+          .then(s => { if (s && s.execution_count != null) setKernelExecutionCount(s.execution_count); })
+          .catch(() => { /* transient — the next execute reports the true count */ });
+      }
       saveSettings({ lastKernel: kernelName });
       return { success: true, sessionId: startedSessionId, kernelName: kernelName || undefined, error: undefined };
     } catch (error) {
@@ -3027,6 +3520,21 @@ export const Notebook: React.FC = () => {
 
   // Handle cell click - set as active cell
   const handleCellClick = useCallback((id: string, event: React.MouseEvent) => {
+    // Shift+click — select the contiguous range from the current cell
+    if (event.shiftKey && !(event.target as HTMLElement | null)?.closest('.cm-editor')) {
+      const anchorId = selectionAnchorRef.current ?? activeCellIdRef.current;
+      if (anchorId && anchorId !== id) {
+        event.preventDefault();
+        selectCellRange(anchorId, id);
+        setActiveCellId(id);
+        window.getSelection()?.removeAllRanges();
+        return;
+      }
+    }
+
+    // Plain click — clear any multi-cell selection and reset the range anchor
+    clearCellSelection();
+    selectionAnchorRef.current = id;
     setActiveCellId(id);
 
     // Clicking outside an editor should clear old DOM text ranges from other cells.
@@ -3043,7 +3551,7 @@ export const Notebook: React.FC = () => {
       }
       selection.removeAllRanges();
     }
-  }, [setActiveCellId]);
+  }, [setActiveCellId, selectCellRange, clearCellSelection]);
 
   const handleDeleteCellByIndex = async (index: number) => {
     if (index >= 0 && index < cells.length) {
@@ -3101,6 +3609,9 @@ export const Notebook: React.FC = () => {
   kernelStatusRef.current = kernelStatus;
   kernelSessionIdRef.current = kernelSessionId;
   interruptKernelRef.current = interruptKernel;
+  restartKernelFnRef.current = restartKernel;
+  undoFnRef.current = undo;
+  redoFnRef.current = redo;
 
   const moveCell = (id: string, direction: 'up' | 'down') => {
     // Keyframe: flush active cell before move
@@ -3122,6 +3633,23 @@ export const Notebook: React.FC = () => {
     // race conditions between state updates and scroll calculations.
     // User can manually scroll if needed.
   };
+
+  // Drag-and-drop reorder: move a cell to an arbitrary position (single undo step)
+  const reorderCellTo = useCallback((draggedId: string, targetId: string, position: 'above' | 'below') => {
+    flushActiveCell();
+
+    const currentCells = cellsRef.current;
+    const fromIdx = currentCells.findIndex(c => c.id === draggedId);
+    const targetIdx = currentCells.findIndex(c => c.id === targetId);
+    if (fromIdx === -1 || targetIdx === -1) return;
+
+    let toIdx = position === 'above' ? targetIdx : targetIdx + 1;
+    if (fromIdx < toIdx) toIdx -= 1; // removing the dragged cell shifts later indices
+    if (toIdx === fromIdx) return;
+
+    undoableMoveCell(fromIdx, toIdx);
+    setActiveCellId(draggedId);
+  }, [flushActiveCell, undoableMoveCell]);
 
   const updateCellOutputs = (id: string, newOutputs: any[], isExec: boolean) => {
     setCells(prev => prev.map(c => c.id === id ? { ...c, outputs: newOutputs, isExecuting: isExec } : c));
@@ -3217,9 +3745,27 @@ export const Notebook: React.FC = () => {
     if (targetIndex < 0 || targetIndex >= currentCells.length) return;
 
     const targetCellId = currentCells[targetIndex].id;
+    clearCellSelection(); // plain arrow navigation collapses any multi-cell selection
     setActiveCellId(targetCellId);
     scrollToCell(targetIndex, { delay: 50, retryOnce: true });
     setPendingFocus({ cellId: targetCellId, mode: 'cell' });
+  }, [scrollToCell, clearCellSelection]);
+
+  // Arrow past the first/last line of a cell's editor → continue editing in
+  // the adjacent cell (Jupyter behavior). Code cells get editor focus;
+  // markdown cells in preview stay rendered and get command-mode focus.
+  const handleEditorBoundaryNavigate = useCallback((fromCellId: string, direction: 'up' | 'down') => {
+    const currentCells = cellsRef.current;
+    const currentIndex = currentCells.findIndex(c => c.id === fromCellId);
+    if (currentIndex === -1) return;
+
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= currentCells.length) return;
+
+    const targetCell = currentCells[targetIndex];
+    setActiveCellId(targetCell.id);
+    scrollToCell(targetIndex, { delay: 50, retryOnce: true });
+    setPendingFocus({ cellId: targetCell.id, mode: targetCell.type === 'code' ? 'editor' : 'cell' });
   }, [scrollToCell]);
 
   // Handle search query changes for highlighting
@@ -3427,8 +3973,12 @@ export const Notebook: React.FC = () => {
           lastExecutionMs: undefined,
         } : c));
 
+        // The kernel's own execution_count from the execute round-trip — the
+        // authoritative Jupyter [n], which survives refreshes/server restarts.
+        let kernelReportedCount: number | null = null;
+
         try {
-          await kernelService.executeCode(kernelSessionId, cell.content, (output) => {
+          const execResult = await kernelService.executeCode(kernelSessionId, cell.content, (output) => {
             if (output.type === 'error') {
               hasError = true;
             }
@@ -3470,6 +4020,11 @@ export const Notebook: React.FC = () => {
             scheduleFlush();
           }, cellId);
 
+          markOnboardingStep('ranCell');
+          if (execResult && typeof execResult.executionCount === 'number') {
+            kernelReportedCount = execResult.executionCount;
+          }
+
           // Cancel any pending flush and do final flush
           if (pendingFlush !== null) {
             clearTimeout(pendingFlush);
@@ -3479,6 +4034,37 @@ export const Notebook: React.FC = () => {
         } catch (error) {
           console.error('Execution error:', error);
           hasError = true;
+          const errMsg = error instanceof Error ? error.message : String(error);
+
+          // "Session ... not found" = the server no longer has ANY record of
+          // this session — the kernel died (e.g. SLURM OOM kill) and its
+          // record was cleaned up, or the hosting server restarted without
+          // it. Surface it as a dead kernel with a clear next step instead
+          // of leaking a raw session id error.
+          if (/session .* not found/i.test(errMsg)) {
+            setKernelStatus('dead');
+            setIsKernelReady(false);
+            toast(
+              'Kernel session no longer exists on the server — it likely died (e.g. out-of-memory kill) and was cleaned up. Restart it from the kernel menu.',
+              'error',
+              12000
+            );
+            allOutputs.push({
+              id: `exec-error-${Date.now()}`,
+              type: 'error',
+              content: 'Kernel session no longer exists on the server (the kernel died and was cleaned up). Restart the kernel and re-run.',
+              timestamp: Date.now(),
+            });
+          } else if (allOutputs.length === 0) {
+            // Show the failure in the cell instead of failing silently
+            allOutputs.push({
+              id: `exec-error-${Date.now()}`,
+              type: 'error',
+              content: errMsg,
+              timestamp: Date.now(),
+            });
+          }
+
           // Cancel any pending flush and flush what we have
           if (pendingFlush !== null) {
             clearTimeout(pendingFlush);
@@ -3510,9 +4096,13 @@ export const Notebook: React.FC = () => {
         });
         executionRunIdsRef.current.delete(cellId);
 
-        // Increment global counter and assign to cell
+        // Assign the cell its [n]. Prefer the kernel's authoritative
+        // execution_count (Jupyter convention: the counter belongs to the
+        // kernel — it survives page refreshes and server restarts, and only
+        // resets when the kernel itself restarts). Fall back to a local
+        // increment when the kernel didn't report one (e.g. errors).
         setKernelExecutionCount(prev => {
-          const newCount = prev + 1;
+          const newCount = kernelReportedCount ?? prev + 1;
           setCells(cells => cells.map(c => c.id === cellId ? {
             ...c,
             isExecuting: false,
@@ -3666,15 +4256,25 @@ export const Notebook: React.FC = () => {
 
   const isKernelReconnecting = kernelSessionId !== null && kernelStatus === 'disconnected';
 
+  // Jump to the TOP of a cell (its code) — for "running cell" / queue
+  // indicators, where you want to see what the cell IS. Distinct from
+  // scrollToCellOutput below, which targets what the cell PRODUCED.
+  const jumpToCell = useCallback((cellId: string, cellIndex: number) => {
+    setActiveCellId(cellId);
+    scrollToCell(cellIndex);
+  }, [scrollToCell]);
+
   const scrollToCellOutput = useCallback((cellId: string, _cellIndex: number) => {
     setActiveCellId(cellId);
     // Scroll directly to the output section. Use the cell wrapper as fallback
     // if the output element doesn't exist yet (content-visibility may need to
     // activate first). Retry a few times to handle lazy rendering.
+    // block: 'start' — 'nearest' does nothing when the element is already
+    // partially visible, which left the viewport stranded mid-cell.
     const attemptScroll = (attempt: number) => {
       const outputEl = document.getElementById(`cell-output-${cellId}`);
       if (outputEl) {
-        outputEl.scrollIntoView({ behavior: getDefaultScrollBehavior(), block: 'nearest' });
+        outputEl.scrollIntoView({ behavior: getDefaultScrollBehavior(), block: 'start' });
         return;
       }
       // Fall back to the cell wrapper
@@ -3711,6 +4311,42 @@ export const Notebook: React.FC = () => {
       };
     });
   }, [cells]);
+
+  // Command registry for the palette ('>' mode). Rebuilt per render is fine —
+  // the palette is only mounted while open, and typing in it doesn't re-render
+  // Notebook (query state lives inside CommandPalette).
+  const isMacPlatform = navigator.platform.toLowerCase().includes('mac');
+  const modKeyLabel = isMacPlatform ? '⌘' : 'Ctrl+';
+  const paletteCommands: PaletteCommand[] = [
+    // Run
+    { id: 'run-all', title: 'Run all cells', section: 'Run', keywords: 'execute everything', run: handleRunAllCells },
+    { id: 'interrupt-kernel', title: 'Interrupt kernel', section: 'Kernel', keywords: 'stop cancel execution', disabled: !kernelSessionId, run: () => { interruptKernel(); } },
+    { id: 'restart-kernel', title: 'Restart kernel', section: 'Kernel', keywords: 'reset', disabled: !kernelSessionId, run: () => { restartKernel(); } },
+    { id: 'change-kernel', title: 'Change kernel…', section: 'Kernel', keywords: 'switch select python julia r server', run: () => setIsKernelMenuOpen(true) },
+    { id: 'manage-kernels', title: 'Manage running kernels…', section: 'Kernel', keywords: 'sessions list', run: () => setIsKernelManagerOpen(true) },
+    // File
+    { id: 'save', title: 'Save notebook', section: 'File', keywords: 'write disk', shortcut: `${modKeyLabel}S`, run: () => { handleManualSave(); } },
+    { id: 'open-file-browser', title: 'Open file browser', section: 'File', keywords: 'files sidebar explorer open notebook', run: () => setIsFileBrowserOpen(true) },
+    { id: 'rename-notebook', title: 'Rename notebook…', section: 'File', keywords: 'title filename', disabled: !currentFileId, run: startRenameNotebook },
+    // Edit
+    { id: 'add-code-cell', title: 'Add code cell at end', section: 'Edit', keywords: 'insert new append', run: () => handleAddCell('code') },
+    { id: 'add-markdown-cell', title: 'Add markdown cell at end', section: 'Edit', keywords: 'insert new append text', run: () => handleAddCell('markdown') },
+    { id: 'undo', title: 'Undo', section: 'Edit', keywords: 'revert', shortcut: `${modKeyLabel}Z`, disabled: !canUndo, run: undo },
+    { id: 'redo', title: 'Redo', section: 'Edit', keywords: 'repeat', shortcut: `${modKeyLabel}Y`, disabled: !canRedo, run: redo },
+    { id: 'find', title: 'Find & replace…', section: 'Edit', keywords: 'search regex', shortcut: `${modKeyLabel}F`, run: () => setIsSearchOpen(true) },
+    { id: 'go-to-cell', title: 'Go to cell…', section: 'Edit', keywords: 'jump navigate search cells', shortcut: `${isMacPlatform ? '⇧⌘' : 'Ctrl+Shift+'}P`, run: () => openNavigator('') },
+    // View
+    { id: 'toggle-full-width', title: isFullWidth ? 'Exit full width mode' : 'Enter full width mode', section: 'View', keywords: 'wide layout width', run: () => { handleToggleFullWidth(); } },
+    { id: 'toggle-history', title: isHistoryOpen ? 'Hide history panel' : 'Show history panel', section: 'View', keywords: 'time travel edits undo timeline', run: () => setIsHistoryOpen(open => !open) },
+    { id: 'toggle-terminal', title: isTerminalOpen && terminalTab === 'shell' ? 'Hide terminal' : 'Show terminal', section: 'View', keywords: 'shell console', run: () => {
+      if (!isTerminalOpen) { setIsTerminalOpen(true); setTerminalTab('shell'); }
+      else if (terminalTab === 'shell') setIsTerminalOpen(false);
+      else setTerminalTab('shell');
+    } },
+    { id: 'open-agent', title: 'Open agent terminal', section: 'View', keywords: 'claude code codex ai assistant', run: () => { setIsTerminalOpen(true); setTerminalTab('agent'); } },
+    { id: 'open-settings', title: 'Open settings…', section: 'View', keywords: 'preferences options', run: () => setIsSettingsOpen(true) },
+    { id: 'keyboard-shortcuts', title: 'Keyboard shortcuts', section: 'Help', keywords: 'keys bindings hotkeys help', run: () => setIsKeyboardHelpOpen(true) },
+  ];
 
 
   const handleFileBrowserSelect = useCallback((id: string) => {
@@ -3765,8 +4401,11 @@ export const Notebook: React.FC = () => {
         )}
 
         {isNavigatorOpen && (
-          <CellNavigator
+          <CommandPalette
+            key={navigatorOpenNonce}
             items={navigatorItems}
+            commands={paletteCommands}
+            initialQuery={navigatorInitialQuery}
             onSelect={(cellId, index) => {
               setActiveCellId(cellId);
               scrollToCell(index, { behavior: 'auto', retryOnce: true });
@@ -3807,8 +4446,17 @@ export const Notebook: React.FC = () => {
               </div>
               <div className="flex flex-col gap-2">
                 <button
-                  onClick={keepLocal}
-                  className="w-full px-4 py-2.5 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors"
+                  onClick={() => {
+                    // Dialog closes immediately; the force-save continues in
+                    // the background (can take seconds for large notebooks).
+                    keepLocal().then(result => {
+                      if (!result.success) {
+                        toast('Failed to save your version — will retry via autosave', 'error', 6000);
+                      }
+                    });
+                  }}
+                  disabled={conflictResolving}
+                  className="w-full px-4 py-2.5 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-60"
                 >
                   Keep My Changes
                   <span className="block text-xs font-normal text-blue-200 mt-0.5">
@@ -3816,10 +4464,17 @@ export const Notebook: React.FC = () => {
                   </span>
                 </button>
                 <button
-                  onClick={loadRemote}
-                  className="w-full px-4 py-2.5 text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+                  onClick={() => {
+                    loadRemote().then(result => {
+                      if (!result.success) {
+                        toast('Failed to load the server version — try again', 'error', 6000);
+                      }
+                    });
+                  }}
+                  disabled={conflictResolving}
+                  className="w-full px-4 py-2.5 text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-60"
                 >
-                  Load Server Version
+                  {conflictResolving ? 'Loading…' : 'Load Server Version'}
                   <span className="block text-xs font-normal text-slate-500 mt-0.5">
                     Discard your changes and reload from server
                   </span>
@@ -3920,10 +4575,10 @@ export const Notebook: React.FC = () => {
                                </div>
                              </div>
                              <button
-                               onClick={(e) => { e.stopPropagation(); loadPythonEnvironments(true, selectedServerId); }}
+                               onClick={(e) => { e.stopPropagation(); refreshClusterInfo(); loadPythonEnvironments(true, selectedServerId); }}
                                disabled={isDiscoveringPythons}
                                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors"
-                               title="Refresh Python environments"
+                               title="Refresh servers & Python environments"
                              >
                                <RefreshCw className={`w-3.5 h-3.5 ${isDiscoveringPythons ? 'animate-spin' : ''}`} />
                              </button>
@@ -3967,11 +4622,25 @@ export const Notebook: React.FC = () => {
                                   <Server className="w-3 h-3" />
                                   <span>Server</span>
                                 </div>
-                                {clusterInfo.servers.map(server => (
+                                {clusterInfo.servers.filter(server => {
+                                  // This list exists to pick where kernels run — a login
+                                  // node the user has EXPLICITLY denied kernels on has no
+                                  // business here (re-enable lives in Settings). When the
+                                  // choice is still undecided, keep it listed with the
+                                  // "kernels gated" chip: selecting it asks once.
+                                  if (server.isLocal && computeEnabled && getSettings().allowLoginNodeKernels === 'deny') return false;
+                                  return true;
+                                }).map(server => {
+                                  const loginNodeGated = server.isLocal && computeEnabled &&
+                                    getSettings().allowLoginNodeKernels !== 'allow';
+                                  return (
                                   <button
                                     key={server.id}
                                     onClick={() => switchServer(server.id)}
                                     disabled={server.status !== 'online'}
+                                    title={loginNodeGated
+                                      ? 'Login node — kernels are gated here (change in Settings, or allocate compute)'
+                                      : undefined}
                                     className={`w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 ${
                                       server.id === selectedServerId ? 'bg-blue-50 text-blue-700' : 'text-slate-700'
                                     } ${server.status !== 'online' ? 'opacity-50' : ''}`}
@@ -3984,10 +4653,32 @@ export const Notebook: React.FC = () => {
                                         ? server.resources.hostname
                                         : server.name}
                                     </span>
+                                    {loginNodeGated && (
+                                      <span className="text-[0.625rem] text-amber-600 border border-amber-200 bg-amber-50 rounded px-1">
+                                        kernels gated
+                                      </span>
+                                    )}
                                     {server.isLocal && <span className="text-[0.625rem] text-slate-400">(local)</span>}
                                     {server.status !== 'online' && <span className="text-[0.625rem] text-red-400">offline</span>}
                                   </button>
-                                ))}
+                                  );
+                                })}
+                              </>
+                            )}
+
+                            {/* Compute allocations (scheduler-backed servers) */}
+                            {computeEnabled && (
+                              <>
+                                <div className="px-3 py-1.5 text-[0.625rem] font-semibold text-slate-500 uppercase tracking-wide bg-slate-50 flex items-center gap-1">
+                                  <Cpu className="w-3 h-3" />
+                                  <span>Compute</span>
+                                </div>
+                                <button
+                                  onClick={() => { setIsKernelMenuOpen(false); setShowComputeModal(true); }}
+                                  className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                                >
+                                  <Plus className="w-3 h-3" /> New compute allocation…
+                                </button>
                               </>
                             )}
 
@@ -4193,10 +4884,15 @@ export const Notebook: React.FC = () => {
                           </span>
                         )}
                         {autosaveStatus.status === 'error' && !pendingSave && (
-                          <span className="flex items-center gap-1 text-red-600" title="Save failed">
+                          <button
+                            onClick={() => { saveNow().catch(() => { /* surfaced via onSaveError */ }); }}
+                            className="flex items-center gap-1 text-red-600 hover:text-red-700 hover:underline cursor-pointer"
+                            title="Save failed — click to retry now"
+                            aria-label="Save failed — retry now"
+                          >
                             <AlertCircle className="w-3 h-3" />
-                            <span>Save failed</span>
-                          </span>
+                            <span>Save failed — Retry</span>
+                          </button>
                         )}
                       </span>
 
@@ -4214,10 +4910,10 @@ export const Notebook: React.FC = () => {
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   if (executionIndicator.cellIndex >= 0) {
-                                    scrollToCellOutput(executionIndicator.cellId, executionIndicator.cellIndex);
+                                    jumpToCell(executionIndicator.cellId, executionIndicator.cellIndex);
                                   }
                                 }}
-                                title="Jump to cell"
+                                title="Jump to running cell"
                               >
                                 #{executionIndicator.cellIndex + 1}
                               </span>
@@ -4261,7 +4957,7 @@ export const Notebook: React.FC = () => {
                                             onClick={(e) => {
                                               e.stopPropagation();
                                               if (cellIndex >= 0) {
-                                                scrollToCellOutput(cellId, cellIndex);
+                                                jumpToCell(cellId, cellIndex);
                                                 setIsExecutionQueueOpen(false);
                                               }
                                             }}
@@ -4317,7 +5013,7 @@ export const Notebook: React.FC = () => {
                                 ? 'text-red-600 hover:text-red-700 hover:bg-red-50'
                                 : 'text-green-600 hover:text-green-700 hover:bg-green-50'
                             }`}
-                            title={`${lastExecutionResult.status === 'error' ? 'Error in' : 'Completed'} cell ${lastExecutionResult.cellIndex + 1} - Click to jump and dismiss`}
+                            title={`${lastExecutionResult.status === 'error' ? 'Error in' : 'Completed'} cell ${lastExecutionResult.cellIndex + 1} - Click to jump to its output`}
                           >
                             {lastExecutionResult.status === 'error' ? (
                               <XCircle className="w-3 h-3" />
@@ -4341,6 +5037,7 @@ export const Notebook: React.FC = () => {
                       disabled={!canUndo}
                       className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded disabled:opacity-30 transition-colors"
                       title="Notebook Undo"
+                      aria-label="Notebook undo"
                     >
                       <Undo2 className="w-4 h-4" />
                     </button>
@@ -4349,10 +5046,21 @@ export const Notebook: React.FC = () => {
                       disabled={!canRedo}
                       className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded disabled:opacity-30 transition-colors"
                       title="Notebook Redo"
+                      aria-label="Notebook redo"
                     >
                       <Redo2 className="w-4 h-4" />
                     </button>
                   </div>
+
+                  {/* Multi-cell selection indicator */}
+                  {selectedCellIds.size > 1 && (
+                    <div
+                      className="flex items-center gap-1 px-2 py-1 text-xs text-blue-600 bg-blue-50 rounded-md border border-blue-200"
+                      title="Multi-cell selection — Delete removes all, C copies, X cuts, Esc clears"
+                    >
+                      <span className="font-medium tabular-nums">{selectedCellIds.size} selected</span>
+                    </div>
+                  )}
 
                   {/* Cell Queue Indicator */}
                   {cellQueue.length > 0 && (
@@ -4369,6 +5077,7 @@ export const Notebook: React.FC = () => {
                     onClick={() => setIsKeyboardHelpOpen(true)}
                     className="btn-secondary flex items-center justify-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors"
                     title="Keyboard Shortcuts"
+                    aria-label="Keyboard shortcuts"
                   >
                     <Keyboard className="w-4 h-4" />
                   </button>
@@ -4393,14 +5102,13 @@ export const Notebook: React.FC = () => {
                     title={
                       agentSession
                         ? 'Agent session active - cannot change permission'
-                        : agentPermissionStatus?.agent_created
-                          ? 'Agent-created notebook (always permitted)'
-                          : agentPermissionStatus?.can_agent_modify
-                            ? 'Click to revoke agent access'
-                            : agentPermissionStatus?.agent_permitted && !agentPermissionStatus?.has_history
-                              ? 'Agent permitted but history not enabled yet - make an edit first'
-                              : 'Click to allow agent modifications'
+                        : agentPermissionStatus?.can_agent_modify
+                          ? 'Agent can modify this notebook - click to revoke access'
+                          : agentPermissionStatus?.agent_permitted && !agentPermissionStatus?.has_history
+                            ? 'Agent permitted but history not enabled yet - make an edit first'
+                            : 'Click to allow agent modifications'
                     }
+                    aria-label={agentPermissionStatus?.can_agent_modify ? 'Revoke agent modification access' : 'Allow agent modifications'}
                   >
                     {agentPermissionStatus?.can_agent_modify ? (
                       <ShieldOff className="w-4 h-4" />
@@ -4425,6 +5133,8 @@ export const Notebook: React.FC = () => {
                   <button
                     onClick={() => setIsSettingsOpen(true)}
                     className="btn-secondary flex items-center justify-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors"
+                    title="Settings"
+                    aria-label="Settings"
                   >
                     <Settings className="w-4 h-4" />
                   </button>
@@ -4509,7 +5219,70 @@ export const Notebook: React.FC = () => {
         )}
 
         {/* Virtuoso Scrollable Area */}
-        <div className="flex-1 min-h-0 pt-2">
+        {/* relative: the add-cell pill (and empty-notebook card) anchor to THIS
+            area, so they stay visible above the in-flow terminal/history
+            panels instead of overlapping them or disappearing behind them */}
+        <div className="relative flex-1 min-h-0 pt-2">
+            {/* Empty-notebook first-run panel: shown while the notebook is a
+                single blank cell (or empty); disappears the moment anything is
+                typed or added. Anchored to the cell area, above the pill. */}
+            {!isLoadingFile && !isPreviewMode && currentFileId && (
+              cells.length === 0 ||
+              (cells.length === 1 && !cells[0].content.trim() && cells[0].outputs.length === 0)
+            ) && (
+              <div className="pointer-events-none absolute bottom-24 left-1/2 -translate-x-1/2 z-10 w-max max-w-full px-4">
+                <div className="pointer-events-auto bg-white/95 backdrop-blur border border-slate-200 rounded-xl shadow-lg px-5 py-4 max-w-xl">
+                  <div className="text-sm font-medium text-slate-700 mb-2">Blank notebook — a few ways to start</div>
+                  <div className="flex flex-wrap items-center gap-2 mb-3">
+                    <button
+                      onClick={() => handleAddCell('markdown')}
+                      className="px-2.5 py-1.5 text-xs font-medium rounded-md border border-slate-200 text-slate-600 hover:bg-slate-100 flex items-center gap-1.5"
+                    >
+                      <FileText className="w-3.5 h-3.5" /> Add a markdown cell
+                    </button>
+                    <button
+                      onClick={() => { setIsTerminalOpen(true); setTerminalTab('agent'); }}
+                      className="px-2.5 py-1.5 text-xs font-medium rounded-md border border-purple-200 text-purple-700 bg-purple-50 hover:bg-purple-100 flex items-center gap-1.5"
+                    >
+                      <Bot className="w-3.5 h-3.5" /> Ask an agent to write it
+                    </button>
+                    <button
+                      onClick={() => setIsFileBrowserOpen(true)}
+                      className="px-2.5 py-1.5 text-xs font-medium rounded-md border border-slate-200 text-slate-600 hover:bg-slate-100 flex items-center gap-1.5"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" /> Open another notebook
+                    </button>
+                  </div>
+                  <div className="text-[0.6875rem] text-slate-400">
+                    Type in the cell above · <kbd className="px-1 py-0.5 bg-slate-100 rounded">Shift+Enter</kbd> runs it ·{' '}
+                    <kbd className="px-1 py-0.5 bg-slate-100 rounded">Cmd/Ctrl+Shift+P</kbd> opens the command palette
+                  </div>
+                </div>
+              </div>
+            )}
+            {/* Add-cell pill — floats over the bottom of the cell area */}
+            <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20">
+              <div className={`${notebookContentClass} flex justify-center`}>
+                <div className={`pointer-events-auto flex gap-4 rounded-full border border-slate-200 bg-white p-2 shadow-lg ${agentSession ? 'opacity-50' : ''}`}>
+                  <button
+                    onClick={() => handleAddCell('code')}
+                    disabled={agentSession !== null}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-colors ${agentSession ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
+                    title={agentSession ? 'Locked during agent session' : 'Add Code Cell'}
+                  >
+                    <Plus className="w-4 h-4" /> Code
+                  </button>
+                  <button
+                    onClick={() => handleAddCell('markdown')}
+                    disabled={agentSession !== null}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-colors ${agentSession ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+                    title={agentSession ? 'Locked during agent session' : 'Add Text Cell'}
+                  >
+                    <Plus className="w-4 h-4" /> Text
+                  </button>
+                </div>
+              </div>
+            </div>
             {/* Force remount when file changes to recalculate cell heights */}
             <VirtualCellList
               key={currentFileId || 'empty'}
@@ -4525,6 +5298,7 @@ export const Notebook: React.FC = () => {
                   cell={cell}
                   index={idx}
                   isActive={!isPreviewMode && activeCellId === cell.id}
+                  isSelected={!isPreviewMode && selectedCellIds.has(cell.id)}
                   isHighlighted={highlightedCellIds.has(cell.id)}
                   agentActive={agentActiveCellIds.has(cell.id)}
                   isLocked={agentSession?.exclusive === true || isPreviewMode}
@@ -4541,6 +5315,8 @@ export const Notebook: React.FC = () => {
                   onClick={handleCellClick}
                   onActivate={setActiveCellId}
                   onNavigateCell={(direction) => navigateCellRelative(cell.id, direction)}
+                  onEditorBoundaryNavigate={handleEditorBoundaryNavigate}
+                  onReorder={isPreviewMode ? undefined : reorderCellTo}
                   onAddCell={(afterIndex) => addCell('code', '', afterIndex, true)}
                   onSave={handleManualSave}
                   onSetCellScrolled={setCellScrolled}
@@ -4642,9 +5418,22 @@ export const Notebook: React.FC = () => {
 
             {/* Kernel memory usage */}
             {memoryUsage && (
-              <span className="flex items-center gap-1 tabular-nums flex-shrink-0" title="Kernel memory (RSS)">
+              <span
+                className={`flex items-center gap-1 tabular-nums flex-shrink-0 ${
+                  memoryUsage.total > 0 && memoryUsage.used / memoryUsage.total >= 0.95
+                    ? 'text-red-600 font-semibold'
+                    : memoryUsage.total > 0 && memoryUsage.used / memoryUsage.total >= 0.85
+                      ? 'text-amber-600 font-medium'
+                      : ''
+                }`}
+                title={memoryUsage.total > 0
+                  ? `Kernel memory (RSS) vs allocation limit — SLURM kills the kernel at the limit`
+                  : 'Kernel memory (RSS)'}
+              >
                 <MemoryStick className="w-3 h-3" />
-                {(memoryUsage.used / 1024 / 1024).toFixed(0)} MB
+                {memoryUsage.total > 0
+                  ? `${(memoryUsage.used / 1024 ** 3).toFixed(1)} / ${(memoryUsage.total / 1024 ** 3).toFixed(0)} GB`
+                  : `${(memoryUsage.used / 1024 / 1024).toFixed(0)} MB`}
               </span>
             )}
 
@@ -4657,28 +5446,6 @@ export const Notebook: React.FC = () => {
           </div>
         </div>
 
-        <div className={`pointer-events-none absolute inset-x-0 bottom-14 z-20 ${isTerminalOpen ? 'hidden' : ''}`}>
-          <div className={`${notebookContentClass} flex justify-center`}>
-            <div className={`pointer-events-auto flex gap-4 rounded-full border border-slate-200 bg-white p-2 shadow-lg ${agentSession ? 'opacity-50' : ''}`}>
-              <button
-                onClick={() => handleAddCell('code')}
-                disabled={agentSession !== null}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-colors ${agentSession ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-blue-50 text-blue-600 hover:bg-blue-100'}`}
-                title={agentSession ? 'Locked during agent session' : 'Add Code Cell'}
-              >
-                <Plus className="w-4 h-4" /> Code
-              </button>
-              <button
-                onClick={() => handleAddCell('markdown')}
-                disabled={agentSession !== null}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-colors ${agentSession ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
-                title={agentSession ? 'Locked during agent session' : 'Add Text Cell'}
-              >
-                <Plus className="w-4 h-4" /> Text
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* Settings Modal */}
@@ -4686,6 +5453,7 @@ export const Notebook: React.FC = () => {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         onRefresh={handleSettingsChange}
+        isLoginNode={computeEnabled}
       />
 
       {/* Kernel Manager Modal */}
@@ -4703,6 +5471,52 @@ export const Notebook: React.FC = () => {
           }
         }}
       />
+
+      {/* Compute Allocation Modal */}
+      <ComputeAllocationModal
+        isOpen={showComputeModal}
+        onClose={() => setShowComputeModal(false)}
+        onChanged={refreshClusterInfo}
+        onUseForKernels={(serverId) => {
+          switchServer(serverId);
+          setIsKernelMenuOpen(true); // guide the user straight to picking a kernel
+          toast('Switched to the allocation — choose a kernel to start', 'info', 5000);
+        }}
+      />
+
+      {/* Login-node kernel guard: asked once, then remembered */}
+      {loginNodePrompt && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4" onClick={() => setLoginNodePrompt(null)}>
+          <div className="bg-white rounded-lg shadow-xl border border-slate-200 w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-2">
+              <Server className="w-4 h-4 text-blue-600" />
+              <h3 className="text-sm font-semibold text-slate-900">Run on the login node?</h3>
+            </div>
+            <p className="text-sm text-slate-600 mb-4">
+              This node runs a scheduler, so it's a shared login node. A kernel here competes with
+              other users for CPU and memory. For anything heavier than light editing, allocate a
+              compute job instead — your kernel then runs on a dedicated compute node.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => { saveSettings({ allowLoginNodeKernels: 'deny' }); setLoginNodePrompt(null); setShowComputeModal(true); }}
+                className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <Cpu className="w-3.5 h-3.5" /> Allocate compute instead
+              </button>
+              <button
+                onClick={() => { const p = loginNodePrompt; saveSettings({ allowLoginNodeKernels: 'allow' }); setLoginNodePrompt(null); if (p) switchKernel(p.kernelName, p.serverId, p.keepMenuOpen, p.source, true); }}
+                className="w-full px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium rounded-md transition-colors"
+              >
+                Run here anyway
+              </button>
+            </div>
+            <p className="text-[0.7rem] text-slate-400 mt-3 text-center">
+              Remembered for next time — change it under Settings → General.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Notebook Search */}
       <NotebookSearch
@@ -4722,10 +5536,15 @@ export const Notebook: React.FC = () => {
       {/* Keyboard Shortcuts Help Modal */}
       {isKeyboardHelpOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setIsKeyboardHelpOpen(false)}>
-          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
+          <ModalShell
+            onClose={() => setIsKeyboardHelpOpen(false)}
+            label="Keyboard shortcuts"
+            className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-auto"
+            onClick={e => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between p-4 border-b">
               <h2 className="text-lg font-semibold text-slate-800">Keyboard Shortcuts</h2>
-              <button onClick={() => setIsKeyboardHelpOpen(false)} className="p-1 hover:bg-slate-100 rounded">
+              <button onClick={() => setIsKeyboardHelpOpen(false)} className="p-1 hover:bg-slate-100 rounded" aria-label="Close keyboard shortcuts">
                 <X className="w-5 h-5 text-slate-500" />
               </button>
             </div>
@@ -4752,12 +5571,14 @@ export const Notebook: React.FC = () => {
                 <h3 className="text-sm font-medium text-slate-600 mb-2">Cell Mode (green border)</h3>
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Navigate cells</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">↑ / ↓</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Extend cell selection</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Shift + ↑/↓ (or Shift + Click)</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Enter edit mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Enter</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Insert cell above / below</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">A / B</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Delete cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Delete / Backspace</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Move cell up / down</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + ↑/↓</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Cut / Copy / Paste cell</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">X / C / V</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Enqueue / Dequeue cell (FIFO)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">E / D</kbd></div>
+                  <div className="text-[0.6875rem] text-slate-400 mt-1">Jupyter classic keys (enable in Settings): dd delete · z undo · Shift+Z redo · 00 restart kernel · ii interrupt</div>
                   <div className="flex justify-between"><span className="text-slate-600">Convert to Markdown / Code</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">M / Y</kbd></div>
                 </div>
               </div>
@@ -4765,6 +5586,7 @@ export const Notebook: React.FC = () => {
                 <h3 className="text-sm font-medium text-slate-600 mb-2">Edit Mode (blue border)</h3>
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Exit to cell mode</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Escape</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Move to previous / next cell (at first / last line)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">↑ / ↓</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Undo / Redo (text only)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Z / Y</kbd></div>
                   <div className="text-[0.6875rem] text-slate-400 mt-2">Editing uses CodeMirror keybindings (most standard editor shortcuts apply).</div>
                 </div>
@@ -4774,11 +5596,11 @@ export const Notebook: React.FC = () => {
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Save</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + S</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Search</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + F</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Quick Navigator</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + P</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Command Palette (type '&gt;' for commands, text to search cells)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + P</kbd></div>
                 </div>
               </div>
             </div>
-          </div>
+          </ModalShell>
         </div>
       )}
     </div>

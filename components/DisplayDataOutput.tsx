@@ -3,8 +3,12 @@ import { createPortal } from 'react-dom';
 import { CellOutput as ICellOutput, JsonValue, MimeBundle } from '../types';
 import { loadExternalLibrary } from '../utils/externalLibraryLoader';
 import { wrapHtmlDocument } from '../utils/htmlPreview';
+import { getWidgetManager, WidgetViewHandle } from '../services/widgetManager';
+
+const WIDGET_VIEW_MIME = 'application/vnd.jupyter.widget-view+json';
 
 const PREFERRED_MIME_TYPES = [
+  WIDGET_VIEW_MIME,
   'application/vnd.nebula.web+json',
   'application/vnd.plotly.v1+json',
   'text/html',
@@ -374,6 +378,104 @@ const NebulaWebOutput: React.FC<{ payload: NebulaWebPayload; fallbackText?: stri
   return <div ref={hostRef} className="my-2 w-full overflow-hidden rounded border border-slate-200 bg-white shadow-sm" />;
 };
 
+type WidgetViewPayload = {
+  model_id?: string;
+  version_major?: number;
+  version_minor?: number;
+};
+
+function parseWidgetViewPayload(value: JsonValue | null): WidgetViewPayload | null {
+  if (value === null) return null;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as WidgetViewPayload;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return value as unknown as WidgetViewPayload;
+  }
+  return null;
+}
+
+/**
+ * Live ipywidgets view. Widget MODEL state lives in the per-session widget
+ * manager (services/widgetManager.ts); this component only creates a VIEW on
+ * mount and destroys it on unmount, so virtualized scroll-away/back re-renders
+ * the same live model.
+ */
+const WidgetViewOutput: React.FC<{
+  modelId: string;
+  sessionId: string;
+  fallbackText: string;
+  fallbackTextRenderer: (text: string) => React.ReactNode;
+}> = ({ modelId, sessionId, fallbackText, fallbackTextRenderer }) => {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [state, setState] = useState<'loading' | 'live' | 'stale' | 'error'>('loading');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let viewHandle: WidgetViewHandle | null = null;
+
+    setState('loading');
+    setError(null);
+
+    const mount = async () => {
+      try {
+        const manager = await getWidgetManager(sessionId);
+        if (cancelled || !hostRef.current) return;
+        viewHandle = await manager.renderModel(modelId, hostRef.current);
+        if (cancelled) {
+          viewHandle?.dispose();
+          viewHandle = null;
+          return;
+        }
+        setState(viewHandle ? 'live' : 'stale');
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to render widget');
+          setState('error');
+        }
+      }
+    };
+
+    void mount();
+
+    return () => {
+      cancelled = true;
+      // Destroy the view but NOT the model — the manager keeps model state so
+      // the widget stays live when this cell scrolls back into view.
+      viewHandle?.dispose();
+      viewHandle = null;
+    };
+  }, [modelId, sessionId]);
+
+  if (state === 'stale') {
+    return (
+      <div className="my-2 rounded border border-slate-200 bg-slate-50 px-3 py-2">
+        <div className="text-xs text-slate-500">Widget no longer live — re-run the cell to reconnect it.</div>
+        {fallbackText ? (
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-xs text-slate-400">{fallbackText}</pre>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (state === 'error') {
+    return (
+      <div className="my-2 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+        <div className="font-medium">Widget renderer failed</div>
+        {error ? <div className="mt-1 whitespace-pre-wrap">{error}</div> : null}
+        {fallbackText ? <div className="mt-2 text-xs text-amber-900">{fallbackTextRenderer(fallbackText)}</div> : null}
+      </div>
+    );
+  }
+
+  return <div ref={hostRef} className="my-2 w-full overflow-x-auto" />;
+};
+
 const IsolatedHtmlOutput: React.FC<{ html: string }> = ({ html }) => {
   const srcDoc = useMemo(() => wrapHtmlDocument(html), [html]);
 
@@ -402,9 +504,28 @@ export const DisplayDataOutput: React.FC<{
   fallbackHtmlRenderer: (html: string, isolated: boolean) => React.ReactNode;
   fallbackImageRenderer: (base64: string) => React.ReactNode;
   fallbackTextRenderer: (text: string) => React.ReactNode;
-}> = memo(({ output, fallbackHtmlRenderer, fallbackImageRenderer, fallbackTextRenderer }) => {
+  kernelSessionId?: string; // Live kernel session for interactive widget outputs
+}> = memo(({ output, fallbackHtmlRenderer, fallbackImageRenderer, fallbackTextRenderer, kernelSessionId }) => {
   const preferredMimeType = pickPreferredMimeType(output.mimeBundle, output.preferredMimeType);
   const value = getBundleValue(output.mimeBundle, preferredMimeType);
+
+  if (preferredMimeType === WIDGET_VIEW_MIME) {
+    const payload = parseWidgetViewPayload(value);
+    const plainText = stringifyValue(getBundleValue(output.mimeBundle, 'text/plain')) || output.content || '';
+    if (payload?.model_id && kernelSessionId) {
+      return (
+        <WidgetViewOutput
+          modelId={payload.model_id}
+          sessionId={kernelSessionId}
+          fallbackText={plainText}
+          fallbackTextRenderer={fallbackTextRenderer}
+        />
+      );
+    }
+    // No live kernel session (loaded notebook, kernel off) or malformed
+    // payload: fall back to the text/plain repr from the mime bundle.
+    return <>{fallbackTextRenderer(plainText)}</>;
+  }
 
   if (preferredMimeType === 'application/vnd.plotly.v1+json') {
     const figure = parsePlotlyFigure(value);

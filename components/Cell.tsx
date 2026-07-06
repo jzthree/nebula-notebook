@@ -3,7 +3,7 @@ import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
 import { CodeEditor } from './CodeEditor';
 import { MarkdownPreview } from './MarkdownPreview';
-import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Plus } from 'lucide-react';
+import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Plus, GripVertical } from 'lucide-react';
 import { agentTerminalService, SendResult } from '../services/agentTerminalService';
 import { useNotification } from './NotificationSystem';
 import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
@@ -22,6 +22,7 @@ interface Props {
   cell: ICell;
   index: number;
   isActive: boolean;
+  isSelected?: boolean; // Part of a multi-cell selection
   isHighlighted?: boolean; // Visual feedback for undo/redo
   agentActive?: boolean; // Agent recently touched this cell (collaborative session presence)
   isLocked?: boolean; // When true, cell is read-only (e.g., during agent session)
@@ -38,6 +39,8 @@ interface Props {
   onClick: (id: string, event: React.MouseEvent) => void;
   onActivate: (id: string) => void; // Set as active cell
   onNavigateCell: (direction: 'up' | 'down') => void; // Navigate to adjacent cell (handles virtualization)
+  onEditorBoundaryNavigate?: (id: string, direction: 'up' | 'down') => void; // Arrow past first/last line of the editor → adjacent cell
+  onReorder?: (draggedId: string, targetId: string, position: 'above' | 'below') => void; // Drag-and-drop cell reorder
   onAddCell: (afterIndex: number) => void;
   onSave?: () => void;
   onSetCellScrolled?: (id: string, scrolled: boolean) => void; // Toggle output scroll/wrap mode
@@ -60,6 +63,7 @@ const CellComponent: React.FC<Props> = ({
   cell,
   index,
   isActive,
+  isSelected = false,
   isHighlighted = false,
   agentActive = false,
   isLocked = false,
@@ -76,6 +80,8 @@ const CellComponent: React.FC<Props> = ({
   onClick,
   onActivate,
   onNavigateCell,
+  onEditorBoundaryNavigate,
+  onReorder,
   onAddCell,
   onSave,
   onSetCellScrolled,
@@ -111,6 +117,8 @@ const CellComponent: React.FC<Props> = ({
   const onUpdateRef = useRef(onUpdate);
   const onCursorActivityRef = useRef(onCursorActivity);
   const onSearchEscapeRef = useRef(onSearchEscape);
+  const onEditorBoundaryNavigateRef = useRef(onEditorBoundaryNavigate);
+  const onReorderRef = useRef(onReorder);
   const cellIdRef = useRef(cell.id);
   const cellContentRef = useRef(cell.content);
 
@@ -123,6 +131,8 @@ const CellComponent: React.FC<Props> = ({
     onUpdateRef.current = onUpdate;
     onCursorActivityRef.current = onCursorActivity;
     onSearchEscapeRef.current = onSearchEscape;
+    onEditorBoundaryNavigateRef.current = onEditorBoundaryNavigate;
+    onReorderRef.current = onReorder;
     cellIdRef.current = cell.id;
     cellContentRef.current = cell.content;
   });
@@ -174,6 +184,16 @@ const CellComponent: React.FC<Props> = ({
 
   const handleEditorSave = useCallback(() => {
     onSaveRef.current?.();
+  }, []);
+
+  // Arrow past the editor's first/last line → move focus to the adjacent cell.
+  // Must be stable (empty deps) — CodeEditor rebuilds extensions when they change.
+  const handleEditorNavigateUp = useCallback(() => {
+    onEditorBoundaryNavigateRef.current?.(cellIdRef.current, 'up');
+  }, []);
+
+  const handleEditorNavigateDown = useCallback(() => {
+    onEditorBoundaryNavigateRef.current?.(cellIdRef.current, 'down');
   }, []);
 
   // Stable onChange handler for CodeEditor
@@ -446,6 +466,48 @@ const CellComponent: React.FC<Props> = ({
 
   const showsMarkdownPreview = cell.type === 'markdown' && focusState !== 'editor';
 
+  // ── Drag-and-drop reorder ──
+  const [dropIndicator, setDropIndicator] = useState<'above' | 'below' | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const CELL_DRAG_MIME = 'application/x-nebula-cell';
+
+  const handleGripDragStart = useCallback((e: React.DragEvent) => {
+    e.stopPropagation();
+    e.dataTransfer.setData(CELL_DRAG_MIME, cellIdRef.current);
+    e.dataTransfer.effectAllowed = 'move';
+    if (cellRef.current) {
+      e.dataTransfer.setDragImage(cellRef.current, 24, 24);
+    }
+    setIsDragging(true);
+  }, []);
+
+  const handleGripDragEnd = useCallback(() => setIsDragging(false), []);
+
+  const handleCellDragOver = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes(CELL_DRAG_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = e.currentTarget.getBoundingClientRect();
+    const next: 'above' | 'below' = e.clientY < rect.top + rect.height / 2 ? 'above' : 'below';
+    setDropIndicator(prev => (prev === next ? prev : next));
+  }, []);
+
+  const handleCellDragLeave = useCallback((e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setDropIndicator(null);
+  }, []);
+
+  const handleCellDrop = useCallback((e: React.DragEvent) => {
+    const draggedId = e.dataTransfer.getData(CELL_DRAG_MIME);
+    setDropIndicator(prev => {
+      if (draggedId && draggedId !== cellIdRef.current && prev) {
+        onReorderRef.current?.(draggedId, cellIdRef.current, prev);
+      }
+      return null;
+    });
+    if (draggedId) e.preventDefault();
+  }, []);
+
   return (
     <div
       ref={cellRef}
@@ -454,8 +516,12 @@ const CellComponent: React.FC<Props> = ({
       onKeyDown={handleCellKeyDown}
       onFocus={handleCellFocus}
       onBlur={handleCellBlur}
+      onDragOver={onReorder ? handleCellDragOver : undefined}
+      onDragLeave={onReorder ? handleCellDragLeave : undefined}
+      onDrop={onReorder ? handleCellDrop : undefined}
       tabIndex={isActive ? 0 : -1}
-      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()} ${isHighlighted ? 'cell-highlight-animation' : ''} ${agentActive ? 'ring-2 ring-purple-300 ring-offset-1' : ''} ${focusState === 'cell' ? 'outline-none' : ''}`}
+      className={`group relative mb-2 rounded-lg border bg-white shadow-sm transition-all hover:shadow-md ${getBorderClass()} ${isHighlighted ? 'cell-highlight-animation' : ''} ${agentActive ? 'ring-2 ring-purple-300 ring-offset-1' : ''} ${isSelected ? 'ring-2 ring-blue-300 border-blue-300 bg-blue-50/40' : ''} ${isDragging ? 'opacity-50' : ''} ${focusState === 'cell' ? 'outline-none' : ''}`}
+      style={dropIndicator ? { boxShadow: dropIndicator === 'above' ? 'inset 0 3px 0 0 #3b82f6' : 'inset 0 -3px 0 0 #3b82f6' } : undefined}
     >
       {/* Top Toolbar - click here to enter command mode */}
       <div
@@ -464,6 +530,19 @@ const CellComponent: React.FC<Props> = ({
       >
         {/* Left: Cell info, Run button, and action buttons */}
         <div className="flex items-center gap-0.5">
+          {onReorder && !isLocked && (
+            <span
+              draggable
+              onDragStart={handleGripDragStart}
+              onDragEnd={handleGripDragEnd}
+              onClick={(e) => e.stopPropagation()}
+              className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 -ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
+              title="Drag to reorder cell"
+              aria-label="Drag to reorder cell"
+            >
+              <GripVertical className="w-3.5 h-3.5" />
+            </span>
+          )}
           <span className="text-[0.625rem] font-mono font-bold text-slate-400 min-w-[1.5rem]">
             #{(cellIndexMapRef.current?.get(cell.id) ?? index) + 1}
           </span>
@@ -622,6 +701,8 @@ const CellComponent: React.FC<Props> = ({
             onModEnter={handleModEnter}
             onEscape={handleEditorEscape}
             onSave={handleEditorSave}
+            onNavigateUp={handleEditorNavigateUp}
+            onNavigateDown={handleEditorNavigateDown}
             onFocus={handleEditorFocus}
             onBlur={handleEditorBlur}
             placeholder={cell.type === 'code' ? 'print("Hello World")' : '## Markdown Title'}
@@ -653,6 +734,7 @@ const CellComponent: React.FC<Props> = ({
              onScrolledChange={onSetCellScrolled ? (scrolled) => onSetCellScrolled(cell.id, scrolled) : undefined}
              scrolledHeight={cell.scrolledHeight}
              onScrolledHeightChange={onSetCellScrolledHeight ? (height) => onSetCellScrolledHeight(cell.id, height) : undefined}
+             kernelSessionId={kernelSessionId}
            />
          </div>
       )}
@@ -681,6 +763,9 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     prevProps.requestedFocusMode === nextProps.requestedFocusMode &&
     prevProps.previewDiffStatus === nextProps.previewDiffStatus &&
     prevProps.showLineNumbers === nextProps.showLineNumbers &&
-    prevProps.showCellIds === nextProps.showCellIds
+    prevProps.showCellIds === nextProps.showCellIds &&
+    // kernelSessionId changes rarely (kernel start/restart) but widget outputs
+    // and kernel completions must see the new session, so it must trigger a render.
+    prevProps.kernelSessionId === nextProps.kernelSessionId
   );
 });

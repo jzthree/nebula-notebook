@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Folder, Palette, Bell, Volume2, AlignLeft, Hash, Settings, Cpu, MousePointerClick } from 'lucide-react';
+import { X, Folder, Palette, Bell, Volume2, AlignLeft, Hash, Settings, Cpu, MousePointerClick, Keyboard } from 'lucide-react';
 import {
   getSettings,
   saveSettings,
@@ -8,21 +8,31 @@ import {
 } from '../services/settingsService';
 import { getRootDirectory, setRootDirectory } from '../services/fileService';
 import { useNotification } from './NotificationSystem';
+import { useModalA11y } from '../hooks/useModalA11y';
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   onRefresh: () => void;
+  /** True when the server is a scheduler (login) node — shows the login-node kernel toggle. */
+  isLoginNode?: boolean;
 }
 
 type SettingsTab = 'general' | 'appearance' | 'notifications';
 
-export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) => {
+export const SettingsModal: React.FC<Props> = (props) => {
+  // Mount the panel only while open so useModalA11y attaches/cleans up per open.
+  if (!props.isOpen) return null;
+  return <SettingsModalContent {...props} />;
+};
+
+const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isLoginNode = false }) => {
   const [settings, setSettings] = useState<NebulaSettings>(getSettings());
   const [isSaving, setIsSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [serverRoot, setServerRoot] = useState<string | null>(null);
   const { toast } = useNotification();
+  const modalRef = useModalA11y<HTMLDivElement>(onClose);
 
   const persistSettings = useCallback((next: Partial<NebulaSettings>) => {
     setSettings(prev => ({ ...prev, ...next }));
@@ -141,6 +151,11 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
       {/* Modal */}
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
+          ref={modalRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Settings"
+          tabIndex={-1}
           className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
@@ -149,6 +164,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
             <h2 className="text-lg font-semibold text-slate-900">Settings</h2>
             <button
               onClick={onClose}
+              aria-label="Close settings"
               className="p-1 hover:bg-slate-100 rounded-md transition-colors"
             >
               <X className="w-5 h-5 text-slate-500" />
@@ -273,6 +289,67 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onRefresh }) =
                     </button>
                   </div>
                 </div>
+
+                {/* Jupyter classic keybindings */}
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                    <Keyboard className="w-4 h-4" />
+                    Keyboard
+                  </label>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                    <div className="flex-1">
+                      <p className="text-sm text-slate-700">Jupyter classic shortcuts</p>
+                      <p className="text-xs text-slate-500">
+                        In cell mode: dd deletes, z undoes, Shift+Z redoes, 00 restarts the kernel, ii interrupts.
+                        (Suspends the D dequeue key while on.)
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setSettings({ ...settings, jupyterShortcuts: !settings.jupyterShortcuts })}
+                      aria-label="Toggle Jupyter classic shortcuts"
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        settings.jupyterShortcuts ? 'bg-blue-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          settings.jupyterShortcuts ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Login-node kernels — only relevant on a scheduler (login) node */}
+                {isLoginNode && (
+                  <div>
+                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                      <Cpu className="w-4 h-4" />
+                      Login-node kernels
+                    </label>
+                    <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                      <div className="flex-1 pr-3">
+                        <p className="text-sm text-slate-700">Allow kernels on the login node</p>
+                        <p className="text-xs text-slate-500">
+                          This node runs a scheduler. When off, starting a kernel prompts you to
+                          allocate compute instead of running on the shared login node.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setSettings({ ...settings, allowLoginNodeKernels: settings.allowLoginNodeKernels === 'allow' ? 'deny' : 'allow' })}
+                        className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+                          settings.allowLoginNodeKernels === 'allow' ? 'bg-blue-600' : 'bg-slate-300'
+                        }`}
+                      >
+                        <span
+                          className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                            settings.allowLoginNodeKernels === 'allow' ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Resource Monitor */}
                 <div>

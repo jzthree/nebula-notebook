@@ -4,9 +4,9 @@
  * Used by both FileBrowser and Dashboard for consistent UX.
  */
 
-import { isNotebookExtension } from '../utils/notebookFormats';
+import { isNotebookExtension, isScriptNotebookExtension } from '../utils/notebookFormats';
 import { readFile } from '../services/fileService';
-import React, { useRef, useEffect, memo } from 'react';
+import React, { useRef, useEffect, useState, memo } from 'react';
 import {
   Folder,
   Book,
@@ -46,6 +46,8 @@ interface FileListItemProps {
   onCancelEdit?: () => void;
   /** Called when editing is confirmed (Enter) */
   onConfirmEdit?: () => void;
+  /** Move a file/folder into a destination folder (drag-and-drop). */
+  onMoveItem?: (sourcePath: string, destFolderPath: string) => void;
 }
 
 // Format relative time
@@ -66,6 +68,8 @@ function getFileIcon(item: FileItem) {
   if (item.extension === '.ipynb') return <Book className="w-4 h-4 text-orange-500" />;
   if (item.extension === '.qmd') return <Book className="w-4 h-4 text-violet-500" />;
   if (item.extension === '.py') return <FileCode className="w-4 h-4 text-blue-500" />;
+  if (item.extension?.toLowerCase() === '.r') return <FileCode className="w-4 h-4 text-sky-600" />;
+  if (item.extension?.toLowerCase() === '.jl') return <FileCode className="w-4 h-4 text-purple-500" />;
   if (item.extension === '.csv') return <FileText className="w-4 h-4 text-green-500" />;
   if (item.extension === '.json') return <FileCode className="w-4 h-4 text-yellow-500" />;
   return <File className="w-4 h-4 text-slate-400" />;
@@ -90,14 +94,16 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
   onStartEdit,
   onCancelEdit,
   onConfirmEdit,
+  onMoveItem,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [isDropTarget, setIsDropTarget] = useState(false);
   const isNotebook = isNotebookExtension(item.extension);
   const isHtml = item.extension === '.html' || item.extension === '.htm';
   const isImageFile = item.fileType === 'image'
     || ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(item.extension || '');
-  const isTextFile = ['.py', '.json', '.txt', '.md', '.yaml', '.yml', '.js', '.ts', '.tsx', '.css', '.csv', '.log', '.toml', '.ini']
-    .includes(item.extension || '');
+  const isTextFile = ['.py', '.r', '.jl', '.json', '.txt', '.md', '.yaml', '.yml', '.js', '.ts', '.tsx', '.css', '.csv', '.log', '.toml', '.ini']
+    .includes((item.extension || '').toLowerCase());
   const isOpenableInTab = isNotebook || isHtml || isTextFile;
   const isClickable = (item.isDirectory || isNotebook || (isTextFile && onOpenTextFile) || (isImageFile && onOpenImageFile)) && !isEditing;
 
@@ -158,8 +164,32 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
   return (
     <div
       onClick={isClickable ? handleClick : undefined}
+      draggable={!isEditing && !!onMoveItem}
+      onDragStart={onMoveItem ? (e) => {
+        if (isEditing) { e.preventDefault(); return; }
+        e.dataTransfer.setData('application/x-nebula-move', item.path);
+        e.dataTransfer.setData('text/plain', item.path);
+        e.dataTransfer.effectAllowed = 'move';
+      } : undefined}
+      onDragOver={item.isDirectory && onMoveItem ? (e) => {
+        if (!e.dataTransfer.types.includes('application/x-nebula-move')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'move';
+        if (!isDropTarget) setIsDropTarget(true);
+      } : undefined}
+      onDragLeave={item.isDirectory && onMoveItem ? () => setIsDropTarget(false) : undefined}
+      onDrop={item.isDirectory && onMoveItem ? (e) => {
+        if (!e.dataTransfer.types.includes('application/x-nebula-move')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDropTarget(false);
+        const src = e.dataTransfer.getData('application/x-nebula-move');
+        if (src && src !== item.path) onMoveItem(src, item.path);
+      } : undefined}
       className={`
         group relative flex items-center px-3 py-2 rounded-md transition-all
+        ${isDropTarget ? 'ring-2 ring-blue-400 bg-blue-100/70' : ''}
         ${compact ? 'mb-1' : ''}
         ${isClickable ? 'cursor-pointer' : 'cursor-default'}
         ${isCurrentFile
@@ -212,12 +242,12 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
             {/* File-specific actions */}
             {!item.isDirectory && (
               <>
-                {item.extension === '.py' && onSelect && (
+                {isScriptNotebookExtension(item.extension) && onSelect && (
                   <button
                     onClick={(e) =>
                       handleAction(e, async () => {
                         // Content-based discrimination: marker/header-bearing
-                        // .py files ARE notebooks and open silently; plain
+                        // scripts ARE notebooks and open silently; plain
                         // scripts get an informed-consent confirm first.
                         try {
                           const result = await readFile(item.path);
@@ -225,7 +255,7 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
                           const isPercent = /^#\s*%%/m.test(text) || text.startsWith('# ---\n');
                           if (!isPercent) {
                             const ok = window.confirm(
-                              'This looks like a plain Python script. Opening it as a notebook will add # %% cell markers and cell ids when you save. Continue?'
+                              'This looks like a plain script. Opening it as a notebook will add # %% cell markers and cell ids when you save. Continue?'
                             );
                             if (!ok) return;
                           }

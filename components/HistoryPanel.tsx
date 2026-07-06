@@ -35,6 +35,7 @@ import {
   Power,
 } from 'lucide-react';
 import { TimestampedOperation } from '../hooks/useUndoRedo';
+import { useModalA11y } from '../hooks/useModalA11y';
 
 interface HistoryPanelProps {
   isOpen: boolean;
@@ -463,6 +464,34 @@ function matchesFilter(op: TimestampedOperation, filter: FilterType): boolean {
   return true;
 }
 
+/**
+ * Root element of the open panel. Lives in its own component — mounted only
+ * while the panel is open — so useModalA11y binds on mount and its Escape
+ * handling is only active while the panel is visible (HistoryPanel itself
+ * stays mounted, rendering null, when closed). Non-modal side panel: no focus
+ * trap and no focus grab, so the notebook content stays usable.
+ */
+const HistoryPanelShell: React.FC<{
+  onClose: () => void;
+  height: number;
+  children: React.ReactNode;
+}> = ({ onClose, height, children }) => {
+  const panelRef = useModalA11y<HTMLDivElement>(onClose, { trapFocus: false, skipInitialFocus: true });
+  return (
+    <div
+      ref={panelRef}
+      data-testid="history-panel"
+      role="complementary"
+      aria-label="Edit history"
+      tabIndex={-1}
+      className="flex-none flex flex-col bg-transparent overflow-hidden"
+      style={{ height: `${height}px` }}
+    >
+      {children}
+    </div>
+  );
+};
+
 export const HistoryPanel: React.FC<HistoryPanelProps> = ({
   isOpen,
   onClose,
@@ -481,7 +510,6 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
   const [expandedOps, setExpandedOps] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
-  const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
 
@@ -573,12 +601,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div
-      ref={panelRef}
-      data-testid="history-panel"
-      className="flex-none flex flex-col bg-transparent overflow-hidden"
-      style={{ height: `${height}px` }}
-    >
+    <HistoryPanelShell onClose={onClose} height={height}>
       {/* Resize Handle */}
       <div
         data-testid="history-resize-handle"
@@ -641,6 +664,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
               onClick={onResetHistory}
               className="p-0.5 text-slate-400 hover:text-amber-700 hover:bg-amber-100 rounded transition-colors"
               title="Reset history (clears undo/redo)"
+              aria-label="Reset history (clears undo/redo)"
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
@@ -651,6 +675,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
             onClick={onClose}
             className="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded transition-colors"
             title="Close"
+            aria-label="Close"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -725,7 +750,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
           </span>
         )}
       </div>
-    </div>
+    </HistoryPanelShell>
   );
 };
 
@@ -854,6 +879,7 @@ const GroupSection: React.FC<GroupSectionProps> = ({
                         toggleExpanded(opId);
                       }}
                       title="Show details"
+                      aria-label="Show details"
                     >
                       {isExpanded ? (
                         <ChevronDown className="w-3 h-3" />

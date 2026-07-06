@@ -9,6 +9,11 @@ interface SearchMatch {
   endIndex: number;
 }
 
+/** Escape a literal string for embedding in a RegExp (whole-word mode). */
+function escapeRegExpLiteral(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export interface CurrentMatch {
   cellId: string;
   startIndex: number;
@@ -48,6 +53,7 @@ export const NotebookSearch: React.FC<Props> = ({
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [useRegex, setUseRegex] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
   const [regexError, setRegexError] = useState<string | null>(null);
   const [showReplace, setShowReplace] = useState(false);
   const [showReplaceAllMenu, setShowReplaceAllMenu] = useState(false);
@@ -55,6 +61,20 @@ export const NotebookSearch: React.FC<Props> = ({
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const replaceAllMenuRef = useRef<HTMLDivElement>(null);
   const navAnchorRef = useRef<{ cellId: string; pos: number; ts: number } | null>(null);
+  // Set on Replace: after the cells update and matches recompute, jump to the
+  // first match AFTER the replacement. Without this the same index re-selects
+  // the replaced text when the replacement still contains the query
+  // (preds → preds_train would recursively edit the same instance).
+  const pendingReplaceAnchorRef = useRef<{ cellId: string; pos: number } | null>(null);
+
+  // Whole-word mode is implemented as a query transform at the boundary:
+  // downstream consumers (highlight decorations, replace-all) already speak
+  // (query, caseSensitive, useRegex), so we hand them a \b-wrapped regex
+  // instead of threading a fourth flag everywhere.
+  const effectiveUseRegex = useRegex || wholeWord;
+  const effectiveQuery = wholeWord && query
+    ? `\\b(?:${useRegex ? query : escapeRegExpLiteral(query)})\\b`
+    : query;
 
   // Focus input when opened
   useEffect(() => {
@@ -128,14 +148,17 @@ export const NotebookSearch: React.FC<Props> = ({
       startIndex: matches[currentMatchIndex]?.startIndex,
       endIndex: matches[currentMatchIndex]?.endIndex,
     } : null;
-    onSearchChange?.(query, caseSensitive, useRegex, currentMatch);
+    // Report the EFFECTIVE query (whole-word mode hands downstream a \b-wrapped
+    // regex) so cell highlight decorations match exactly what we matched here.
+    onSearchChange?.(effectiveQuery, caseSensitive, effectiveUseRegex, currentMatch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, query, caseSensitive, useRegex, currentMatchIndex, matches]); // Intentionally exclude onSearchChange to prevent infinite loops
+  }, [isOpen, effectiveQuery, caseSensitive, effectiveUseRegex, currentMatchIndex, matches]); // Intentionally exclude onSearchChange to prevent infinite loops
 
   // Track previous query to detect query changes vs cell content changes
   const prevQueryRef = useRef(query);
   const prevCaseSensitiveRef = useRef(caseSensitive);
   const prevUseRegexRef = useRef(useRegex);
+  const prevWholeWordRef = useRef(wholeWord);
 
   // Search through cells
   useEffect(() => {
@@ -152,11 +175,12 @@ export const NotebookSearch: React.FC<Props> = ({
 
     const newMatches: SearchMatch[] = [];
 
-    // Build regex or use string search
+    // Build regex or use string search (whole-word mode always goes through
+    // the regex path via the \b-wrapped effective query)
     let regex: RegExp | null = null;
-    if (useRegex) {
+    if (effectiveUseRegex) {
       try {
-        regex = new RegExp(query, caseSensitive ? 'g' : 'gi');
+        regex = new RegExp(effectiveQuery, caseSensitive ? 'g' : 'gi');
         setRegexError(null);
       } catch (e) {
         setRegexError((e as Error).message);
@@ -166,7 +190,7 @@ export const NotebookSearch: React.FC<Props> = ({
     }
 
     cells.forEach((cell, cellIndex) => {
-      if (useRegex && regex) {
+      if (effectiveUseRegex && regex) {
         // Regex search
         regex.lastIndex = 0; // Reset regex state
         let match;
@@ -207,7 +231,28 @@ export const NotebookSearch: React.FC<Props> = ({
     // Only navigate to first match when query changes, not when cell content changes
     const queryChanged = query !== prevQueryRef.current ||
                          caseSensitive !== prevCaseSensitiveRef.current ||
-                         useRegex !== prevUseRegexRef.current;
+                         useRegex !== prevUseRegexRef.current ||
+                         wholeWord !== prevWholeWordRef.current;
+
+    // After a Replace, advance to the first match AFTER the replacement —
+    // otherwise a replacement that still contains the query (preds →
+    // preds_train) is re-selected and Replace loops on the same instance.
+    if (!queryChanged && pendingReplaceAnchorRef.current) {
+      const anchor = pendingReplaceAnchorRef.current;
+      pendingReplaceAnchorRef.current = null;
+      if (newMatches.length > 0) {
+        const nextIndex = findNextMatchIndexFromAnchor(newMatches, anchor);
+        setCurrentMatchIndex(nextIndex);
+        onNavigateToCell(newMatches[nextIndex].cellIndex, newMatches[nextIndex].cellId);
+        navAnchorRef.current = { cellId: newMatches[nextIndex].cellId, pos: newMatches[nextIndex].endIndex, ts: Date.now() };
+      } else {
+        setCurrentMatchIndex(0);
+      }
+    } else if (!queryChanged && newMatches.length > 0 && currentMatchIndex >= newMatches.length) {
+      // Content change shrank the match list — clamp the stale index
+      setCurrentMatchIndex(newMatches.length - 1);
+    }
+
     if (queryChanged && newMatches.length > 0) {
       // VS Code behavior: when the query changes, find the first match at or
       // after the CURRENT position. This means:
@@ -245,7 +290,9 @@ export const NotebookSearch: React.FC<Props> = ({
     prevQueryRef.current = query;
     prevCaseSensitiveRef.current = caseSensitive;
     prevUseRegexRef.current = useRegex;
-  }, [isOpen, query, cells, caseSensitive, useRegex, onNavigateToCell, activeCellId]);
+    prevWholeWordRef.current = wholeWord;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, query, cells, caseSensitive, useRegex, wholeWord, onNavigateToCell, activeCellId, findNextMatchIndexFromAnchor]);
 
   const goToMatch = useCallback((index: number) => {
     if (matches.length === 0) return;
@@ -276,11 +323,16 @@ export const NotebookSearch: React.FC<Props> = ({
     goToMatch((currentMatchIndex - 1 + matches.length) % matches.length);
   }, [currentMatchIndex, goToMatch, matches]);
 
-  // Replace current match
+  // Replace current match, then advance to the next match past the
+  // replacement (handled when matches recompute — see the search effect)
   const handleReplace = useCallback(() => {
     if (matches.length === 0 || !onReplace) return;
 
     const match = matches[currentMatchIndex];
+    pendingReplaceAnchorRef.current = {
+      cellId: match.cellId,
+      pos: match.startIndex + replaceText.length,
+    };
     onReplace(match.cellId, match.startIndex, match.endIndex, replaceText);
 
     // Re-focus search input after replace
@@ -295,7 +347,7 @@ export const NotebookSearch: React.FC<Props> = ({
 
     const currentCellId = matches[currentMatchIndex]?.cellId;
     if (currentCellId) {
-      onReplaceAllInCell(currentCellId, query, replaceText, caseSensitive, useRegex);
+      onReplaceAllInCell(currentCellId, effectiveQuery, replaceText, caseSensitive, effectiveUseRegex);
     }
     setShowReplaceAllMenu(false);
 
@@ -303,20 +355,20 @@ export const NotebookSearch: React.FC<Props> = ({
     requestAnimationFrame(() => {
       searchInputRef.current?.focus();
     });
-  }, [matches, currentMatchIndex, query, replaceText, caseSensitive, useRegex, onReplaceAllInCell]);
+  }, [matches, currentMatchIndex, effectiveQuery, replaceText, caseSensitive, effectiveUseRegex, onReplaceAllInCell]);
 
   // Replace all in notebook
   const handleReplaceAllInNotebook = useCallback(() => {
     if (!query || !onReplaceAllInNotebook) return;
 
-    onReplaceAllInNotebook(query, replaceText, caseSensitive, useRegex);
+    onReplaceAllInNotebook(effectiveQuery, replaceText, caseSensitive, effectiveUseRegex);
     setShowReplaceAllMenu(false);
 
     // Re-focus search input
     requestAnimationFrame(() => {
       searchInputRef.current?.focus();
     });
-  }, [query, replaceText, caseSensitive, useRegex, onReplaceAllInNotebook]);
+  }, [query, effectiveQuery, replaceText, caseSensitive, effectiveUseRegex, onReplaceAllInNotebook]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -392,6 +444,17 @@ export const NotebookSearch: React.FC<Props> = ({
           title="Case sensitive"
         >
           Aa
+        </button>
+
+        <button
+          onClick={() => setWholeWord(!wholeWord)}
+          className={`px-1.5 py-0.5 text-xs font-mono rounded ${
+            wholeWord ? 'bg-blue-100 text-blue-700' : 'text-slate-400 hover:bg-slate-100'
+          }`}
+          title="Match whole word"
+          aria-label="Match whole word"
+        >
+          <span className="border-b border-current">ab</span>
         </button>
 
         <button

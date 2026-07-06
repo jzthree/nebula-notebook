@@ -5,6 +5,7 @@ import { lineNumbers } from '@codemirror/view';
 import { python } from '@codemirror/lang-python';
 import { markdown } from '@codemirror/lang-markdown';
 import { readFile, writeFile } from '../services/fileService';
+import { isScriptNotebookExtension, getPathExtension } from '../utils/notebookFormats';
 
 interface TextFileEditorProps {
   filePath: string;
@@ -164,7 +165,7 @@ export const TextFileEditor: React.FC<TextFileEditorProps> = ({ filePath, varian
           )}
         </div>
       </header>
-      {onOpenAsNotebook && filePath.toLowerCase().endsWith('.py') && /^#\s*%%/m.test(content) && (
+      {onOpenAsNotebook && isScriptNotebookExtension(getPathExtension(filePath)) && /^#\s*%%/m.test(content) && (
         <div className="flex items-center justify-between gap-3 px-4 py-2 bg-violet-50 border-b border-violet-100 text-xs text-violet-800">
           <span>This file has <code className="font-mono"># %%</code> notebook cell markers.</span>
           <button
