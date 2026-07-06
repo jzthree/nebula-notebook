@@ -18,6 +18,9 @@
  *   failing silently.
  */
 
+import { getSettings } from './settingsService';
+import { markOnboardingStep } from './onboardingService';
+
 export type AgentStatus = 'none' | 'running';
 export type AgentKind = 'claude' | 'codex' | 'manual';
 
@@ -88,10 +91,13 @@ class AgentTerminalService {
 
   unregisterSender(terminalId: string): void {
     this.senders.delete(terminalId);
-    // The pty connection is gone; any launched agent went with it.
-    if (this.state.terminalId === terminalId && this.state.status === 'running') {
-      this.state = { ...this.state, status: 'none', agentKind: null };
-    }
+    // Only the WebSocket dropped — the pty (and any agent running in it)
+    // survives server-side, and TerminalInstance auto-reconnects. Keep the
+    // running status so the UI doesn't flap to the launch chips mid-outage;
+    // isConnected() goes false, which gates prompt injection and lets the
+    // panel show a "reconnecting" state. Real agent exits arrive as the
+    // pty 'exit' event (markStopped), and a dead server surfaces as the
+    // terminal's "session no longer exists" message.
     this.notify();
   }
 
@@ -139,32 +145,119 @@ class AgentTerminalService {
     return 'npx nebula-notebook-mcp setup-mcp';
   }
 
+  // --- remote-agent mode (run the agent on the user's machine) ---
+
+  /**
+   * Remote-agent settings, when the mode is enabled and complete. The agent
+   * CLI then runs on the USER'S machine — its RAM and its network (for when
+   * the server host is memory-tight or blocks the agent's API) — while its
+   * terminal lives in this panel via an `ssh -R` reverse channel carried by
+   * the user's own tunnel.
+   */
+  getRemoteAgentConfig(): { port: number; user: string; localUrl: string } | null {
+    const s = getSettings();
+    if (!s.remoteAgentEnabled || !s.remoteAgentPort || !s.remoteAgentUser?.trim()) return null;
+    return {
+      port: s.remoteAgentPort,
+      user: s.remoteAgentUser.trim(),
+      localUrl: (s.remoteAgentLocalUrl || 'http://localhost:3000').replace(/\/$/, ''),
+    };
+  }
+
+  /**
+   * The tunnel command the user runs ON THEIR machine: their usual -L forward
+   * plus the -R reverse channel that lets a Nebula terminal ssh back. It must
+   * terminate on the server's host so the pty can reach 127.0.0.1:<port>.
+   */
+  buildTunnelCommand(serverHost: string | null, serverPort: number | null): string {
+    const s = getSettings();
+    let localPort = '3000';
+    try { localPort = new URL(s.remoteAgentLocalUrl || 'http://localhost:3000').port || '80'; } catch { /* keep default */ }
+    const jump = s.remoteAgentJumpHost?.trim() ? ` -J ${s.remoteAgentJumpHost.trim()}` : '';
+    return `ssh${jump} -L ${localPort}:localhost:${serverPort ?? 3000} -R ${s.remoteAgentPort ?? '<port>'}:localhost:22 ${serverHost || '<server-host>'}`;
+  }
+
+  /**
+   * Same tunnel as buildTunnelCommand, but as a Burrow definition — Burrow
+   * (macOS menu-bar SSH tunnel manager) then supervises it: auto-connect,
+   * auto-reconnect, status dot. One-time add; connect from the menu bar.
+   */
+  buildBurrowCommand(serverHost: string | null, serverPort: number | null): string {
+    const s = getSettings();
+    let localPort = '3000';
+    try { localPort = new URL(s.remoteAgentLocalUrl || 'http://localhost:3000').port || '80'; } catch { /* keep default */ }
+    const jump = s.remoteAgentJumpHost?.trim() ? ` --jump ${s.remoteAgentJumpHost.trim()}` : '';
+    return `burrow add --name nebula-agent --host ${serverHost || '<server-host>'}${jump} ` +
+      `--local ${localPort}:localhost:${serverPort ?? 3000} --remote ${s.remoteAgentPort ?? '<port>'}:localhost:22`;
+  }
+
+  /**
+   * The line typed into the Nebula terminal to start the agent on the user's
+   * machine: ssh back over the reverse channel, set NEBULA_URL as seen from
+   * there, run the agent with the bootstrap prompt as its first argument.
+   * accept-new pins the host key on first use without an interactive prompt.
+   */
+  buildRemoteLaunchCommand(kind: 'claude' | 'codex'): string | null {
+    const cfg = this.getRemoteAgentConfig();
+    if (!cfg) return null;
+    const agentCmd = `NEBULA_URL=${cfg.localUrl} ${kind} ${shellSingleQuote(this.buildBootstrapPrompt(true))}`;
+    // Tunnel drops kill the ssh session — so run the agent inside tmux on the
+    // user's machine when available: `tmux new -A` attaches to a surviving
+    // session on relaunch (the command only runs on CREATE), so a network
+    // blip + clicking the launch button again resumes the same agent.
+    const inner = `if command -v tmux >/dev/null 2>&1; then tmux new -A -s nebula-agent ${shellSingleQuote(agentCmd)}; else ${agentCmd}; fi`;
+    // `ssh host cmd` runs a non-login, non-interactive shell on the user's
+    // machine — PATH additions from .zprofile/.zshrc (homebrew, nvm, npm -g)
+    // are absent and the agent CLI isn't found. Re-enter the user's own shell
+    // as login+interactive so their PATH is what their terminals see.
+    const remoteCmd = `exec "$SHELL" -l -i -c ${shellSingleQuote(inner)}`;
+    // ProxyCommand=none: IPA/SSSD-managed clusters wrap ALL ssh in
+    // sss_ssh_knownhostsproxy via the system ssh_config, which breaks a plain
+    // loopback hop — this connection must go straight to 127.0.0.1:<port>.
+    return `ssh -t -p ${cfg.port} -o ProxyCommand=none -o StrictHostKeyChecking=accept-new ${cfg.user}@localhost ${shellSingleQuote(remoteCmd)}`;
+  }
+
   /**
    * Orientation prompt handed to a freshly started agent: which server to
    * connect_server to (the MCP intentionally ignores env config and requires
    * an explicit base_url per session) and which notebook this tab is driving.
+   * `remote` = the agent runs on the user's machine (remote-agent mode), so
+   * URLs must be the ones visible from THERE (the -L forward), and `nebula`
+   * may not be on PATH.
    */
-  buildBootstrapPrompt(): string {
-    const parts: string[] = ['You are driving a Nebula notebook through the nebula-notebook MCP tools.'];
+  buildBootstrapPrompt(remote = false): string {
+    const cfg = remote ? this.getRemoteAgentConfig() : null;
+    const baseUrl = remote ? (cfg?.localUrl || 'http://localhost:3000') : this.serverBaseUrl;
+    const parts: string[] = ['You are driving a Nebula notebook.'];
+    // CLI-first: Nebula terminals have the `nebula` CLI on PATH with
+    // NEBULA_URL pre-set — cheaper and more composable for shell-capable
+    // agents than loading the MCP toolset. MCP remains the fallback.
     parts.push(
-      `If the nebula-notebook MCP tools are not available in this session, register them by running ` +
-      `${this.buildSetupMcpCommand()} and then restart this CLI` +
-      (this.repoRoot ? ` (the server's Nebula repo is at ${this.repoRoot} if you need the source)` : '') +
-      `.`
+      (remote
+        ? `PREFERRED: use the \`nebula\` CLI (NEBULA_URL is already set to ${baseUrl}, your SSH-forwarded Nebula server; notebook paths are paths on the SERVER, not this machine). ` +
+          'If `nebula` is not on PATH, use `npx -p nebula-notebook-mcp nebula …`. '
+        : 'PREFERRED: use the `nebula` CLI available in this terminal (NEBULA_URL is already set). ') +
+      'Start with `nebula --help`; key commands: `nebula nb read <path>` (list cells), ' +
+      '`nebula run <path> <cell-id>` (execute AND get output in one call), ' +
+      '`nebula nb edit <path> <cell-id> --content-file -`, `nebula nb search <path> <query>`, ' +
+      '`nebula kernel status|restart|interrupt <path>`. ' +
+      'Exit code 9 = edit conflict (the current content is printed — retry against it). ' +
+      'For long-running cells: `nebula run` blocks until the cell finishes — launch it as a background shell task ' +
+      '(`--max-wait 0` = no time limit) and the process exit is your completion signal; never poll.'
     );
-    if (this.serverBaseUrl) {
-      parts.push(
-        `First call connect_server with base_url ${this.serverBaseUrl}; ` +
-        'if that URL is not reachable from this machine, ask the user for the correct Nebula server URL.'
-      );
-    } else {
-      parts.push('First call connect_server with this Nebula server’s base_url (ask the user for it).');
-    }
+    parts.push(
+      `FALLBACK (only if the nebula CLI is missing): use the nebula-notebook MCP tools — register with ` +
+      `${this.buildSetupMcpCommand()} and restart this CLI` +
+      (!remote && this.repoRoot ? ` (the server's Nebula repo is at ${this.repoRoot} if you need the source)` : '') +
+      (baseUrl
+        ? `, then call connect_server with base_url ${baseUrl}; if that URL is not reachable from this machine, ask the user for the correct Nebula server URL.`
+        : ', then call connect_server with this Nebula server’s base_url (ask the user for it).')
+    );
     if (this.notebookPath) {
       parts.push(`This session is for the notebook ${this.notebookPath} — operate on that notebook unless told otherwise.`);
-      parts.push('Read it now (read_notebook) to get oriented, then confirm you are connected and ready.');
+      parts.push('Read it now (nebula nb read) to get oriented, then confirm you are ready.');
     } else {
-      parts.push('No notebook is open yet; confirm you are connected and wait for instructions.');
+      parts.push('No notebook is open yet; confirm you are ready and wait for instructions.');
     }
     return sanitizePromptText(parts.join(' '));
   }
@@ -203,7 +296,11 @@ class AgentTerminalService {
   launchAgent(kind: 'claude' | 'codex'): SendResult {
     const send = this.getAgentSender();
     if (!send.ok) return send;
-    send.sender(`${kind} ${shellSingleQuote(this.buildBootstrapPrompt())}\r`);
+    // Remote-agent mode: the launch line hops back to the user's machine over
+    // the reverse SSH channel and runs the agent there instead.
+    const remoteLine = this.buildRemoteLaunchCommand(kind);
+    send.sender(remoteLine ? `${remoteLine}\r` : `${kind} ${shellSingleQuote(this.buildBootstrapPrompt())}\r`);
+    markOnboardingStep('launchedAgent');
     this.state = { ...this.state, status: 'running', agentKind: kind };
     if (this.state.terminalId) writeAgentFlag(this.state.terminalId, kind);
     this.notify();
@@ -216,6 +313,7 @@ class AgentTerminalService {
    * still learns which server and notebook this tab is driving.
    */
   markRunning(): void {
+    markOnboardingStep('launchedAgent');
     this.state = { ...this.state, status: 'running', agentKind: 'manual' };
     if (this.state.terminalId) writeAgentFlag(this.state.terminalId, 'manual');
     this.notify();

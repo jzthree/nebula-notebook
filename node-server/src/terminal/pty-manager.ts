@@ -2,6 +2,7 @@
  * PTY Manager - Manages terminal sessions using node-pty
  */
 
+import * as path from 'path';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -70,6 +71,12 @@ export class PtyManager {
     const cols = options?.cols || 80;
     const rows = options?.rows || 24;
 
+    // Make the `nebula` agent CLI resolvable in every Nebula terminal, and
+    // pre-point it at this server. The CLI is a thin layer over the same
+    // client the MCP uses (packages/mcp) — agents in the built-in terminal
+    // can drive notebooks without any MCP registration.
+    const nebulaCliBinDir = path.resolve(__dirname, '..', '..', '..', 'packages', 'mcp', 'bin');
+
     // Spawn PTY process
     const ptyProcess = pty.spawn(shell, [], {
       name: 'xterm-256color',
@@ -80,6 +87,8 @@ export class PtyManager {
         ...process.env,
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor',
+        NEBULA_URL: process.env.NEBULA_URL ?? `http://localhost:${process.env.PORT || 3000}`,
+        PATH: `${nebulaCliBinDir}:${process.env.PATH ?? ''}`,
       } as { [key: string]: string },
     });
 

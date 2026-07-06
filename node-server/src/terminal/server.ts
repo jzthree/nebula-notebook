@@ -5,6 +5,8 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as HttpServer } from 'http';
+import * as net from 'net';
+import * as os from 'os';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { fsService } from '../fs/fs-service';
@@ -34,9 +36,33 @@ const wsConnections = new Map<string, Set<WebSocket>>();
  */
 export async function setupTerminalRoutes(fastify: FastifyInstance): Promise<void> {
   // Terminal health check (includes terminal count and repo root for the
-  // path-qualified MCP setup hint shown in the agent terminal UI)
+  // path-qualified MCP setup hint shown in the agent terminal UI, plus
+  // hostname/port so the UI can compose an exact SSH tunnel command)
   fastify.get('/api/terminals/health', async (_request: FastifyRequest, reply: FastifyReply) => {
-    return reply.send({ status: 'ok', terminals: ptyManager.list().length, repo_root: NEBULA_REPO_ROOT });
+    return reply.send({
+      status: 'ok',
+      terminals: ptyManager.list().length,
+      repo_root: NEBULA_REPO_ROOT,
+      hostname: os.hostname(),
+      port: Number(process.env.PORT) || 3000,
+    });
+  });
+
+  // Probe a loopback port on THIS host — used by remote-agent mode to detect
+  // whether the user's reverse SSH channel (ssh -R <port>:localhost:22) is up.
+  // Loopback-only by construction; the port is user-chosen and random.
+  fastify.get('/api/terminals/reverse-check', async (request: FastifyRequest, reply: FastifyReply) => {
+    const port = Number((request.query as { port?: string }).port);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      return reply.status(400).send({ error: 'port must be an integer in 1024-65535' });
+    }
+    const up = await new Promise<boolean>((resolve) => {
+      const sock = net.connect({ host: '127.0.0.1', port, timeout: 1200 });
+      sock.once('connect', () => { sock.destroy(); resolve(true); });
+      sock.once('timeout', () => { sock.destroy(); resolve(false); });
+      sock.once('error', () => resolve(false));
+    });
+    return reply.send({ up });
   });
 
   // List all terminals

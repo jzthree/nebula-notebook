@@ -79,9 +79,9 @@ describe('agentTerminalService prompt injection', () => {
     agentTerminalService.registerSender('t1', () => true);
     agentTerminalService.launchAgent('claude');
 
-    // Panel closes: WS drops, in-memory status is lost — but same terminal id.
+    // Panel closes: WS drops — status survives (pty is alive server-side).
     agentTerminalService.unregisterSender('t1');
-    expect(agentTerminalService.getState().status).toBe('none');
+    expect(agentTerminalService.getState().status).toBe('running');
 
     // Panel reopens: sender re-registers for the still-designated terminal.
     agentTerminalService.registerSender('t1', () => true);
@@ -199,15 +199,89 @@ describe('agentTerminalService prompt injection', () => {
     expect(prompt).not.toContain('\n');
   });
 
-  it('drops agent status when the terminal connection goes away', () => {
+  it('keeps agent status through a dropped connection (pty survives; terminal auto-reconnects)', () => {
     agentTerminalService.registerSender('t1', () => true);
     agentTerminalService.launchAgent('codex');
     expect(agentTerminalService.getState().status).toBe('running');
 
     agentTerminalService.unregisterSender('t1');
-    expect(agentTerminalService.getState().status).toBe('none');
-
+    // Status survives the WS drop, but injection is gated until reconnect.
+    expect(agentTerminalService.getState().status).toBe('running');
+    expect(agentTerminalService.isConnected()).toBe(false);
     const result = agentTerminalService.sendPrompt('hi');
     expect(result.ok).toBe(false);
+    expect(result.reason).toBe('not-connected');
+
+    // Reconnect: sender re-registers, everything works again.
+    agentTerminalService.registerSender('t1', () => true);
+    expect(agentTerminalService.isConnected()).toBe(true);
+    expect(agentTerminalService.getState().status).toBe('running');
+
+    // A real exit still clears the state.
+    agentTerminalService.markStopped();
+    expect(agentTerminalService.getState().status).toBe('none');
+  });
+});
+
+describe('remote-agent mode (agent on the user machine)', () => {
+  const SETTINGS_KEY = 'nebula-settings';
+
+  beforeEach(() => {
+    agentTerminalService.setAgentTerminal('t9');
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      remoteAgentEnabled: true,
+      remoteAgentPort: 34567,
+      remoteAgentUser: 'jane',
+      remoteAgentLocalUrl: 'http://localhost:3000',
+      remoteAgentJumpHost: 'bastion',
+    }));
+  });
+
+  afterEach(() => {
+    agentTerminalService.unregisterSender('t9');
+    agentTerminalService.setAgentTerminal(null);
+    agentTerminalService.setNotebookContext(null);
+    window.localStorage.removeItem(SETTINGS_KEY);
+    window.sessionStorage.clear();
+  });
+
+  it('is inert unless enabled AND user is set', () => {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({ remoteAgentEnabled: true, remoteAgentPort: 34567 }));
+    expect(agentTerminalService.getRemoteAgentConfig()).toBeNull();
+    expect(agentTerminalService.buildRemoteLaunchCommand('claude')).toBeNull();
+  });
+
+  it('composes the tunnel command with jump host, forward, and reverse port', () => {
+    const cmd = agentTerminalService.buildTunnelCommand('login-node-01', 3000);
+    expect(cmd).toBe('ssh -J bastion -L 3000:localhost:3000 -R 34567:localhost:22 login-node-01');
+  });
+
+  it('launchAgent types an ssh-back line that survives nested quoting', () => {
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t9', (d) => { sent.push(d); return true; });
+    agentTerminalService.setNotebookContext('/data/proj/nb.ipynb');
+    agentTerminalService.launchAgent('claude');
+
+    const line = sent[0];
+    expect(line).toMatch(/^ssh -t -p 34567 -o ProxyCommand=none -o StrictHostKeyChecking=accept-new jane@localhost '/);
+    expect(line).toContain('NEBULA_URL=http://localhost:3000 claude ');
+    expect(line).toContain('exec "$SHELL" -l -i -c ');
+    // survives tunnel drops: reattach via tmux when available
+    expect(line).toContain('tmux new -A -s nebula-agent ');
+    expect(line).toContain('command -v tmux');
+    // bootstrap rides inside: server paths + local-URL guidance, single line
+    expect(line).toContain('/data/proj/nb.ipynb');
+    expect(line).toContain('paths on the SERVER');
+    expect(line).not.toContain('\n');
+    expect(agentTerminalService.getState().agentKind).toBe('claude');
+  });
+
+  it('local launch is unchanged when the mode is disabled', () => {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({ remoteAgentEnabled: false }));
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t9', (d) => { sent.push(d); return true; });
+    agentTerminalService.launchAgent('codex');
+    expect(sent[0].startsWith('codex ')).toBe(true);
+    expect(sent[0]).not.toContain('ssh');
   });
 });

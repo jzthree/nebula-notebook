@@ -91,85 +91,120 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
     fitAddonRef.current = fitAddon;
     isInitializedRef.current = true;
 
-    // Connect WebSocket
-    const ws = connectTerminal(terminalId);
-    wsRef.current = ws;
     let isUnmounting = false;  // Track if component is unmounting to suppress errors
+    let processExited = false; // PTY gone — reconnecting would be pointless
+    let reconnectAttempt = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let isReconnect = false;   // Next replay follows a live reconnect → reset screen first
 
-    ws.onopen = () => {
-      if (isUnmounting) return;
-      // Send initial size
-      const dimensions = fitAddon.proposeDimensions();
-      if (dimensions) {
-        ws.send(JSON.stringify({
-          type: 'resize',
-          cols: dimensions.cols,
-          rows: dimensions.rows,
-        }));
-      }
-      // Expose a programmatic input path (used to inject agent prompts).
-      // Distinct from terminal.onData, which is gated on user focus.
-      agentTerminalService.registerSender(terminalId, (data: string) => {
-        if (ws.readyState !== WebSocket.OPEN) return false;
-        ws.send(JSON.stringify({ type: 'input', data }));
-        return true;
-      });
-    };
+    const openSocket = () => {
+      const ws = connectTerminal(terminalId);
+      wsRef.current = ws;
 
-    ws.onmessage = (event) => {
-      if (isUnmounting) return;
-      try {
-        const message: TerminalServerMessage = JSON.parse(event.data);
-
-        switch (message.type) {
-          case 'output':
-          case 'replay':
-            terminal.write(message.data);
-            break;
-
-          case 'exit':
-            terminal.write(`\r\n\x1b[90m[Process exited with code ${message.code}]\x1b[0m\r\n`);
-            agentTerminalService.unregisterSender(terminalId);
-            onExit?.(message.code);
-            break;
-
-          case 'error':
-            terminal.write(`\r\n\x1b[31m[Error: ${message.message}]\x1b[0m\r\n`);
-            break;
-
-          case 'inactive':
-            terminal.write('\r\n\x1b[33m[Another tab is now controlling this terminal]\x1b[0m\r\n');
-            onInactive?.();
-            break;
-
-          case 'active':
-            // This tab is now active, nothing special to do
-            break;
+      ws.onopen = () => {
+        if (isUnmounting) return;
+        reconnectAttempt = 0;
+        // Send initial size
+        const dimensions = fitAddon.proposeDimensions();
+        if (dimensions) {
+          ws.send(JSON.stringify({
+            type: 'resize',
+            cols: dimensions.cols,
+            rows: dimensions.rows,
+          }));
         }
-      } catch (error) {
-        console.error('[Terminal] Failed to parse message:', error);
-      }
+        // Expose a programmatic input path (used to inject agent prompts).
+        // Distinct from terminal.onData, which is gated on user focus.
+        agentTerminalService.registerSender(terminalId, (data: string) => {
+          if (ws.readyState !== WebSocket.OPEN) return false;
+          ws.send(JSON.stringify({ type: 'input', data }));
+          return true;
+        });
+      };
+
+      ws.onmessage = (event) => {
+        if (isUnmounting) return;
+        try {
+          const message: TerminalServerMessage = JSON.parse(event.data);
+
+          switch (message.type) {
+            case 'replay':
+              // After a live reconnect the screen already holds the old
+              // content plus the "[Reconnecting…]" line; the replay buffer
+              // re-sends it all, so start from a clean screen like a fresh
+              // page load would.
+              if (isReconnect) {
+                isReconnect = false;
+                terminal.reset();
+              }
+              terminal.write(message.data);
+              break;
+
+            case 'output':
+              terminal.write(message.data);
+              break;
+
+            case 'exit':
+              processExited = true;
+              terminal.write(`\r\n\x1b[90m[Process exited with code ${message.code}]\x1b[0m\r\n`);
+              agentTerminalService.unregisterSender(terminalId);
+              onExit?.(message.code);
+              break;
+
+            case 'error':
+              terminal.write(`\r\n\x1b[31m[Error: ${message.message}]\x1b[0m\r\n`);
+              break;
+
+            case 'inactive':
+              terminal.write('\r\n\x1b[33m[Another tab is now controlling this terminal]\x1b[0m\r\n');
+              onInactive?.();
+              break;
+
+            case 'active':
+              // This tab is now active, nothing special to do
+              break;
+          }
+        } catch (error) {
+          console.error('[Terminal] Failed to parse message:', error);
+        }
+      };
+
+      ws.onerror = (error) => {
+        // Suppress errors during unmount (e.g., "closed before established")
+        if (isUnmounting) return;
+        console.error('[Terminal] WebSocket error:', error);
+      };
+
+      ws.onclose = (event) => {
+        agentTerminalService.unregisterSender(terminalId);
+        if (isUnmounting || processExited) return;
+        // 4004 = server says this terminal id no longer exists (e.g. the
+        // server restarted and PTYs died with it) — retrying can't help.
+        if (event.code === 4004 || event.code === 4000) {
+          terminal.write('\r\n\x1b[90m[Terminal session no longer exists — close and reopen the terminal]\x1b[0m\r\n');
+          return;
+        }
+        // The PTY survives server-side (output is buffered) — reconnect with
+        // backoff until the tab closes or the process exits. Announce only the
+        // first drop to avoid spamming the scrollback on repeated attempts.
+        if (reconnectAttempt === 0) {
+          terminal.write('\r\n\x1b[90m[Disconnected — reconnecting…]\x1b[0m\r\n');
+        }
+        isReconnect = true;
+        const delay = Math.min(1000 * 2 ** reconnectAttempt, 15000);
+        reconnectAttempt += 1;
+        reconnectTimer = setTimeout(openSocket, delay);
+      };
     };
 
-    ws.onerror = (error) => {
-      // Suppress errors during unmount (e.g., "closed before established")
-      if (isUnmounting) return;
-      console.error('[Terminal] WebSocket error:', error);
-      terminal.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n');
-    };
-
-    ws.onclose = () => {
-      agentTerminalService.unregisterSender(terminalId);
-      // Suppress close message during unmount
-      if (isUnmounting) return;
-      terminal.write('\r\n\x1b[90m[Disconnected]\x1b[0m\r\n');
-    };
+    openSocket();
 
     // Handle terminal input - only send if this terminal is active and focused
     terminal.onData((data) => {
       // Check both the active state and that the terminal actually has focus
+      const ws = wsRef.current;
       const hasFocus = containerRef.current?.contains(document.activeElement);
-      if (isActiveRef.current && hasFocus && ws.readyState === WebSocket.OPEN) {
+      if (isActiveRef.current && hasFocus && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'input', data }));
       }
     });
@@ -177,8 +212,10 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
     // Cleanup
     return () => {
       isUnmounting = true;  // Suppress error/close handlers
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       agentTerminalService.unregisterSender(terminalId);
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      const ws = wsRef.current;
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
         ws.close();
       }
       terminal.dispose();

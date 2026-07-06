@@ -17,9 +17,12 @@ import {
   getOrCreateNamedTerminal,
   closeTerminal,
   getTerminalServerInfo,
+  checkReverseTunnel,
   TerminalInfo,
 } from '../services/terminalService';
 import { agentTerminalService } from '../services/agentTerminalService';
+import { getSettings, saveSettings, ensureRemoteAgentPort } from '../services/settingsService';
+import { RemoteAgentSetupModal } from './RemoteAgentSetupModal';
 
 /**
  * Stable per-notebook terminal name, so a page refresh reattaches to the SAME
@@ -73,6 +76,13 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const setTab = onTabChange ?? setInternalTab;
   const [isResizing, setIsResizing] = useState(false);
   const [serverAvailable, setServerAvailable] = useState<boolean | null>(null);
+  const [serverHostInfo, setServerHostInfo] = useState<{ hostname: string | null; port: number | null }>({ hostname: null, port: null });
+  // Remote-agent mode: is the user's reverse SSH channel up? null = not applicable / unknown.
+  const [reverseTunnelUp, setReverseTunnelUp] = useState<boolean | null>(null);
+  // Bumped when this panel changes agent settings, so remoteAgentCfg recomputes.
+  const [, setSettingsNonce] = useState(0);
+  // Remote-agent setup dialog (connection details for the reverse channel).
+  const [showRemoteSetup, setShowRemoteSetup] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [everOpened, setEverOpened] = useState(false);
   useEffect(() => {
@@ -119,18 +129,39 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   }, [notebookPath, shellTerm, agentTerm]);
 
   // Check server availability when panel opens (also learns the server's
-  // Nebula repo path, used for the path-qualified MCP setup command)
+  // Nebula repo path for the path-qualified MCP setup command, and its
+  // hostname/port for the remote-agent tunnel command)
   useEffect(() => {
     if (!isOpen) return;
 
     const checkServer = async () => {
       const info = await getTerminalServerInfo();
       setServerAvailable(info.available);
+      setServerHostInfo({ hostname: info.hostname, port: info.port });
       agentTerminalService.setRepoRoot(info.repoRoot);
     };
 
     checkServer();
   }, [isOpen]);
+
+  // Remote-agent mode: watch whether the user's reverse SSH channel is up so
+  // the launch chips can target their machine (or guide them to connect it).
+  const remoteAgentCfg = agentTerminalService.getRemoteAgentConfig();
+  const remoteAgentPort = remoteAgentCfg?.port ?? null;
+  useEffect(() => {
+    if (!isOpen || tab !== 'agent' || !remoteAgentPort) {
+      setReverseTunnelUp(null);
+      return;
+    }
+    let stopped = false;
+    const check = async () => {
+      const up = await checkReverseTunnel(remoteAgentPort);
+      if (!stopped) setReverseTunnelUp(up);
+    };
+    check();
+    const interval = setInterval(check, 5000);
+    return () => { stopped = true; clearInterval(interval); };
+  }, [isOpen, tab, remoteAgentPort]);
 
   // Lazily create the active tab's terminal when the panel is open
   const activeTerm = tab === 'agent' ? agentTerm : shellTerm;
@@ -305,18 +336,61 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         </button>
       </div>
 
+      {/* Remote-agent tunnel guide — reverse channel not connected yet */}
+      {tab === 'agent' && agentTerm && agentState.status !== 'running' && remoteAgentCfg && reverseTunnelUp === false && (
+        <div className="flex items-center gap-2 px-2 py-1 bg-amber-50 border-b border-amber-200 flex-shrink-0 text-xs">
+          <Bot className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+          <span className="text-amber-800 font-medium flex-shrink-0">
+            Waiting for your machine (reverse port {remoteAgentCfg.port}) — connect the tunnel:
+          </span>
+          <button
+            onClick={async () => {
+              try { await navigator.clipboard.writeText(agentTerminalService.buildBurrowCommand(serverHostInfo.hostname, serverHostInfo.port)); } catch { /* clipboard optional */ }
+            }}
+            className="px-1.5 py-0.5 rounded bg-amber-600 text-white font-medium hover:bg-amber-700 flex-shrink-0"
+            title={`Using Burrow (recommended — supervised, auto-reconnect): run once on your machine, then connect from the menu bar.\n${agentTerminalService.buildBurrowCommand(serverHostInfo.hostname, serverHostInfo.port)}`}
+          >
+            copy Burrow command
+          </button>
+          <button
+            onClick={async () => {
+              try { await navigator.clipboard.writeText(agentTerminalService.buildTunnelCommand(serverHostInfo.hostname, serverHostInfo.port)); } catch { /* clipboard optional */ }
+          }}
+            className="text-amber-700 hover:text-amber-900 underline decoration-dotted flex-shrink-0"
+            title={`Plain ssh alternative (replaces your usual port-forward):\n${agentTerminalService.buildTunnelCommand(serverHostInfo.hostname, serverHostInfo.port)}`}
+          >
+            copy ssh command
+          </button>
+          <button
+            onClick={() => setShowRemoteSetup(true)}
+            className="text-amber-700 hover:text-amber-900 underline decoration-dotted flex-shrink-0"
+            title="Ports, username, jump host, and the full setup guide"
+          >
+            setup…
+          </button>
+          <span className="ml-auto text-amber-500 flex-shrink-0 hidden sm:inline">auto-detects · rechecking every 5s</span>
+          <button
+            onClick={() => { saveSettings({ remoteAgentEnabled: false }); setSettingsNonce(n => n + 1); }}
+            className="text-amber-600 hover:text-amber-800 underline decoration-dotted flex-shrink-0"
+            title="Run the agent on this server instead"
+          >
+            use this server
+          </button>
+        </div>
+      )}
+
       {/* Agent guidance bar — the on-ramp for driving the notebook with an agent */}
-      {tab === 'agent' && agentTerm && agentState.status !== 'running' && (
+      {tab === 'agent' && agentTerm && agentState.status !== 'running' && !(remoteAgentCfg && reverseTunnelUp === false) && (
         <div className="flex items-center gap-2 px-2 py-1 bg-purple-50 border-b border-purple-100 flex-shrink-0 text-xs">
           <Bot className="w-3.5 h-3.5 text-purple-600 flex-shrink-0" />
           <span className="text-purple-800 font-medium truncate">
-            Drive <span className="font-semibold">{notebookName}</span> with an agent:
+            Drive <span className="font-semibold">{notebookName}</span> with
           </span>
           <button
             onClick={() => agentTerminalService.launchAgent('claude')}
             disabled={!agentConnected}
             className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
-            title="Type `claude` into this terminal and start driving the notebook"
+            title={remoteAgentCfg ? 'Start Claude Code on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Type `claude` into this terminal and start driving the notebook'}
           >
             Claude Code
           </button>
@@ -324,10 +398,41 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             onClick={() => agentTerminalService.launchAgent('codex')}
             disabled={!agentConnected}
             className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
-            title="Type `codex` into this terminal and start driving the notebook"
+            title={remoteAgentCfg ? 'Start Codex on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Type `codex` into this terminal and start driving the notebook'}
           >
             Codex
           </button>
+          <span className="text-purple-600 flex-shrink-0">on</span>
+          <select
+            value={remoteAgentCfg ? 'mine' : 'server'}
+            onChange={(e) => {
+              if (e.target.value === 'mine') {
+                const s = getSettings();
+                const port = s.remoteAgentPort ?? ensureRemoteAgentPort();
+                saveSettings({ remoteAgentEnabled: true, remoteAgentPort: port });
+                // Missing username → the mode can't compose the ssh-back line;
+                // open the setup dialog to finish configuration.
+                if (!s.remoteAgentUser?.trim()) setShowRemoteSetup(true);
+              } else {
+                saveSettings({ remoteAgentEnabled: false });
+              }
+              setSettingsNonce(n => n + 1);
+            }}
+            className="px-1 py-0.5 rounded border border-purple-300 bg-white text-purple-800 font-medium cursor-pointer focus:outline-none focus:ring-1 focus:ring-purple-400"
+            title="Where the agent process runs. 'my machine' hops back over your SSH tunnel — the agent uses your computer's memory and network but lives in this panel."
+          >
+            <option value="server">this server</option>
+            <option value="mine">my machine</option>
+          </select>
+          {remoteAgentCfg && reverseTunnelUp && (
+            <button
+              onClick={() => setShowRemoteSetup(true)}
+              className="text-green-600 hover:text-green-800 flex-shrink-0"
+              title={`Reverse tunnel connected (port ${remoteAgentCfg.port}) — click for setup details`}
+            >
+              ✓ tunnel
+            </button>
+          )}
           <button
             onClick={async () => {
               try { await navigator.clipboard.writeText(agentTerminalService.buildSetupMcpCommand()); } catch { /* clipboard optional */ }
@@ -358,19 +463,37 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         </div>
       )}
       {tab === 'agent' && agentTerm && agentState.status === 'running' && (
-        <div className="flex items-center gap-2 px-2 py-1 bg-green-50 border-b border-green-100 flex-shrink-0 text-xs">
-          <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
-          <span className="text-green-800 truncate">
-            Agent active{agentState.agentKind && agentState.agentKind !== 'manual' ? ` (${agentState.agentKind})` : ''} · driving <span className="font-semibold">{notebookName}</span> — type instructions here, or use “Fix with agent” on a failing cell
-          </span>
-          <button
-            onClick={() => agentTerminalService.markStopped()}
-            className="ml-auto text-green-600 hover:text-green-800 underline decoration-dotted flex-shrink-0"
-            title="The agent exited — show launch options again"
-          >
-            agent exited?
-          </button>
-        </div>
+        agentConnected ? (
+          <div className="flex items-center gap-2 px-2 py-1 bg-green-50 border-b border-green-100 flex-shrink-0 text-xs">
+            <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
+            <span className="text-green-800 truncate">
+              Agent active{agentState.agentKind && agentState.agentKind !== 'manual' ? ` (${agentState.agentKind})` : ''} · driving <span className="font-semibold">{notebookName}</span> — type instructions here, or use “Fix with agent” on a failing cell
+            </span>
+            <button
+              onClick={() => agentTerminalService.markStopped()}
+              className="ml-auto text-green-600 hover:text-green-800 underline decoration-dotted flex-shrink-0"
+              title="The agent exited — show launch options again"
+            >
+              agent exited?
+            </button>
+          </div>
+        ) : (
+          // Connection to the pty dropped (network blip / tunnel flap). The
+          // agent keeps running server-side; the terminal auto-reconnects.
+          <div className="flex items-center gap-2 px-2 py-1 bg-amber-50 border-b border-amber-100 flex-shrink-0 text-xs">
+            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse flex-shrink-0"></span>
+            <span className="text-amber-800 truncate">
+              Connection lost — reconnecting to the agent terminal… the agent keeps running; prompts resume when reconnected
+            </span>
+            <button
+              onClick={() => agentTerminalService.markStopped()}
+              className="ml-auto text-amber-600 hover:text-amber-800 underline decoration-dotted flex-shrink-0"
+              title="Give up on this agent session — show launch options again"
+            >
+              reset
+            </button>
+          </div>
+        )
       )}
 
       {/* Terminal Content */}
@@ -416,6 +539,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           </div>
         )}
       </div>
+
+      {showRemoteSetup && (
+        <RemoteAgentSetupModal
+          onClose={() => { setShowRemoteSetup(false); setSettingsNonce(n => n + 1); }}
+        />
+      )}
     </div>
   );
 };

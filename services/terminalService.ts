@@ -43,14 +43,34 @@ export async function checkTerminalServer(): Promise<boolean> {
  * Terminal server health + context: repo_root is the Nebula repo location on
  * the server, used to show a path-qualified MCP setup command.
  */
-export async function getTerminalServerInfo(): Promise<{ available: boolean; repoRoot: string | null }> {
+export async function getTerminalServerInfo(): Promise<{ available: boolean; repoRoot: string | null; hostname: string | null; port: number | null }> {
   try {
     const response = await fetch(`${TERMINAL_API_PREFIX}/terminals/health`);
-    if (!response.ok) return { available: false, repoRoot: null };
+    if (!response.ok) return { available: false, repoRoot: null, hostname: null, port: null };
     const data = await response.json().catch(() => ({}));
-    return { available: true, repoRoot: typeof data.repo_root === 'string' ? data.repo_root : null };
+    return {
+      available: true,
+      repoRoot: typeof data.repo_root === 'string' ? data.repo_root : null,
+      hostname: typeof data.hostname === 'string' ? data.hostname : null,
+      port: typeof data.port === 'number' ? data.port : null,
+    };
   } catch {
-    return { available: false, repoRoot: null };
+    return { available: false, repoRoot: null, hostname: null, port: null };
+  }
+}
+
+/**
+ * Is the user's reverse SSH channel (remote-agent mode) currently connected
+ * on the server host? Probes 127.0.0.1:<port> server-side.
+ */
+export async function checkReverseTunnel(port: number): Promise<boolean> {
+  try {
+    const response = await fetch(`${TERMINAL_API_PREFIX}/terminals/reverse-check?port=${port}`);
+    if (!response.ok) return false;
+    const data = await response.json().catch(() => ({}));
+    return data.up === true;
+  } catch {
+    return false;
   }
 }
 
