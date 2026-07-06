@@ -1,0 +1,163 @@
+/**
+ * Allocation service — owns the lifecycle a compute allocation has *before* and
+ * *around* the cluster registry: submit a job, follow it through the queue, and
+ * correlate the client-server's registration (by one-time token) back to the
+ * allocation. Once correlated, the allocation is a normal registered server and
+ * kernels run on it through the existing cluster path.
+ *
+ * Phase-1 MVP: in-memory allocations, direct transport (no SSH tunnel — not
+ * needed where compute↔login is directly reachable).
+ */
+
+import { randomUUID } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+import type { Scheduler, JobSpec } from './types';
+import { renderJobScript, type LaunchContext } from './job-template';
+import { serverRegistry } from '../cluster/server-registry';
+
+export type AllocationState =
+  | 'pending'   // submitted, waiting in the queue
+  | 'running'   // job is running, client-server not yet registered
+  | 'active'    // client-server registered — usable for kernels
+  | 'ended'     // job finished / walltime hit / cancelled cleanly
+  | 'failed'    // job failed
+  | 'cancelled';
+
+export interface Allocation {
+  id: string;
+  jobId?: string;
+  token: string;
+  spec: JobSpec;
+  state: AllocationState;
+  serverId?: string;
+  nodes?: string[];
+  reason?: string;
+  createdAt: number;
+  walltimeEndsAt?: number;
+}
+
+const POLL_INTERVAL_MS = 5_000;
+const TERMINAL: AllocationState[] = ['ended', 'failed', 'cancelled'];
+
+class AllocationService {
+  private scheduler: Scheduler | null = null;
+  private ctx: LaunchContext | null = null;
+  private allocations = new Map<string, Allocation>();
+  private pollTimer: NodeJS.Timeout | null = null;
+  private enabled = false;
+
+  init(scheduler: Scheduler, ctx: LaunchContext): void {
+    this.scheduler = scheduler;
+    this.ctx = ctx;
+    this.enabled = true;
+    fs.mkdirSync(ctx.stateDir, { recursive: true });
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = setInterval(() => {
+      this.poll().catch((err) => console.error('[Scheduler] poll error:', err));
+    }, POLL_INTERVAL_MS);
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  getScheduler(): Scheduler | null {
+    return this.scheduler;
+  }
+
+  list(): Allocation[] {
+    return [...this.allocations.values()].sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  get(id: string): Allocation | undefined {
+    return this.allocations.get(id);
+  }
+
+  async create(spec: JobSpec): Promise<Allocation> {
+    if (!this.scheduler || !this.ctx) throw new Error('scheduler not initialized');
+
+    const id = randomUUID().slice(0, 8);
+    const token = randomUUID();
+    const alloc: Allocation = { id, token, spec, state: 'pending', createdAt: Date.now() };
+
+    const script = renderJobScript(spec, this.ctx, id, token);
+    const scriptPath = path.join(this.ctx.stateDir, `${id}.sh`);
+    fs.writeFileSync(scriptPath, script, { mode: 0o700 });
+
+    const { jobId } = await this.scheduler.submit(scriptPath);
+    alloc.jobId = jobId;
+    this.allocations.set(id, alloc);
+    console.log(`[Scheduler] Allocation ${id} submitted as job ${jobId} (${spec.partition}${spec.qos ? '/' + spec.qos : ''})`);
+    // Kick an immediate poll so a fast-starting job doesn't sit at "pending".
+    void this.poll().catch(() => {});
+    return alloc;
+  }
+
+  async cancel(id: string): Promise<boolean> {
+    const alloc = this.allocations.get(id);
+    if (!alloc) return false;
+    if (alloc.jobId && this.scheduler) {
+      try {
+        await this.scheduler.cancel(alloc.jobId);
+      } catch (err) {
+        console.error(`[Scheduler] scancel failed for ${alloc.jobId}:`, err);
+      }
+    }
+    if (alloc.serverId) serverRegistry.unregister(alloc.serverId);
+    alloc.state = 'cancelled';
+    return true;
+  }
+
+  private async poll(): Promise<void> {
+    if (!this.scheduler) return;
+    for (const alloc of this.allocations.values()) {
+      if (TERMINAL.includes(alloc.state)) continue;
+
+      // Correlate: has the client-server for this allocation registered yet?
+      if (!alloc.serverId) {
+        const server = serverRegistry.getServerByAllocationToken(alloc.token);
+        if (server) {
+          alloc.serverId = server.id;
+          alloc.state = 'active';
+          alloc.nodes = [server.host];
+          if (!alloc.walltimeEndsAt) {
+            alloc.walltimeEndsAt = Date.now() + alloc.spec.walltimeMinutes * 60_000;
+          }
+          console.log(`[Scheduler] Allocation ${alloc.id} active — registered as ${server.id}`);
+        }
+      }
+
+      // Follow the job through the scheduler.
+      if (!alloc.jobId) continue;
+      let status;
+      try {
+        status = await this.scheduler.query(alloc.jobId);
+      } catch {
+        continue;
+      }
+
+      if (status.state === 'running' && alloc.state === 'pending') {
+        alloc.state = 'running';
+        alloc.nodes = status.nodes.length ? status.nodes : alloc.nodes;
+        if (!alloc.walltimeEndsAt) {
+          alloc.walltimeEndsAt = Date.now() + alloc.spec.walltimeMinutes * 60_000;
+        }
+      } else if (['completed', 'cancelled', 'failed'].includes(status.state)) {
+        alloc.state = status.state === 'failed' ? 'failed' : status.state === 'cancelled' ? 'cancelled' : 'ended';
+        alloc.reason = status.reason;
+        if (alloc.serverId) serverRegistry.unregister(alloc.serverId);
+        console.log(`[Scheduler] Allocation ${alloc.id} ${alloc.state} (job ${alloc.jobId})`);
+      }
+    }
+  }
+
+  shutdown(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+}
+
+export const allocationService = new AllocationService();
