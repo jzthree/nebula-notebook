@@ -8,11 +8,11 @@ Nebula is an agent-native notebook — built for you and your AI to work in the 
        range requests, no attachment disposition). The 12 MB original also stays attached to
        that release as a downloadable asset. Neither is committed to the repo, so clones stay
        lean. Renderers that strip <video> (npm, some mirrors) fall back to the link inside. -->
-  <video src="https://github.com/user-attachments/assets/77d794be-cdcc-4285-ba2d-c3779b9141ed" controls muted width="940" poster="https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/nebula-hero.svg">
-    <a href="https://github.com/jzthree/nebula-notebook/releases/download/demo-assets/nebula-demo-16x9.mp4">Watch the 2½-minute product tour</a>
+  <video src="https://github.com/user-attachments/assets/4a9ec9ce-9ac0-4540-b35a-27c1b97a20b1" controls muted width="940" poster="https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/nebula-hero.svg">
+    <a href="https://github.com/jzthree/nebula-notebook/releases/download/demo-assets/nebula-demo-16x9-v7-hq.mp4">Watch the 2½-minute product tour</a>
   </video>
 </p>
-<p align="center"><sub>▶ <a href="https://github.com/user-attachments/assets/77d794be-cdcc-4285-ba2d-c3779b9141ed">Watch the 2½-minute tour</a> · or skim the autoplay clips below</sub></p>
+<p align="center"><sub>▶ <a href="https://github.com/user-attachments/assets/4a9ec9ce-9ac0-4540-b35a-27c1b97a20b1">Watch the 2½-minute tour</a> · or skim the autoplay clips below</sub></p>
 
 ## Highlights
 
