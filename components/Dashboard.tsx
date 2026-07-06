@@ -14,20 +14,26 @@ import {
   ChevronLeft,
   Plus,
   Book,
+  Bot,
   Cpu,
   Lightbulb,
   History,
   AlertTriangle,
+  Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
+import { writeFile, getFileMtime } from '../services/fileService';
+import { useNotification } from './NotificationSystem';
 import { listTerminals, TerminalInfo } from '../services/terminalService';
 import { getDeadKernelSessions, cleanupDeadKernelSessions, DeadSession } from '../services/kernelService';
 import { getClusterInfo } from '../services/clusterService';
 import { FileBrowser } from './FileBrowser';
 import { ResourcePanel } from './ResourcePanel';
+import ComputeDashboardCard from './ComputeDashboardCard';
 import { KernelManager } from './KernelManager';
 import { TerminalManager } from './TerminalManager';
+import { GetStartedCard } from './GetStartedCard';
 
 // Kernel session from API
 interface KernelSession {
@@ -42,13 +48,14 @@ interface KernelSession {
 
 // Tips for Jupyter users (including hidden settings)
 const TIPS = [
-  { text: <>Use the <strong>Nebula MCP server</strong> to let AI agents run code and analyze data in your notebooks</> },
-  { text: <><code className="bg-slate-200 px-1 rounded">E</code> / <code className="bg-slate-200 px-1 rounded">D</code> keys queue/dequeue cells for batch execution</> },
+  { text: <>Open any notebook → <strong>Agent</strong> tab → one-click launch <strong>Claude Code</strong> or <strong>Codex</strong>, pre-briefed on your notebook</> },
+  { text: <>Agents can also drive notebooks via the <code className="bg-slate-200 px-1 rounded">nebula</code> CLI or MCP — <code className="bg-slate-200 px-1 rounded">npx nebula-notebook-mcp setup-mcp</code></> },
+  { text: <>On a cluster login node, the kernel menu can allocate a compute-node job — no <code className="bg-slate-200 px-1 rounded">sbatch</code> needed</> },
+  { text: <>Run several cells back-to-back — they queue up; the header chip shows the queue and jumps to what's running</> },
   { text: <><code className="bg-slate-200 px-1 rounded">Ctrl+`</code> toggles the integrated terminal</> },
   { text: <><code className="bg-slate-200 px-1 rounded">?terminal=name</code> in URL for persistent named terminals</> },
   { text: <>Click notebook name to rename inline</> },
   { text: <>History panel shows full edit timeline with restore</> },
-  { text: <>AI chat sidebar has full notebook context</> },
   { text: <>Enable <strong>Show Line Numbers</strong> in settings for code cells</> },
   { text: <>Enable <strong>Show Cell IDs</strong> in settings to see cell identifiers</> },
   { text: <>Enable <strong>Notify on Long Run</strong> to get browser notifications when cells finish</> },
@@ -61,6 +68,91 @@ const TIPS = [
 // Recently opened notebooks storage key
 const RECENT_NOTEBOOKS_KEY = 'nebula-recent-notebooks';
 const MAX_RECENT = 5;
+
+// First-run welcome card
+const WELCOME_DISMISSED_KEY = 'nebula-welcome-dismissed';
+const SAMPLE_NOTEBOOK_NAME = 'nebula-welcome.ipynb';
+
+/**
+ * Build the self-contained sample notebook (nbformat 4.5).
+ * Stdlib-only so it runs on a bare ipykernel with nothing to install.
+ */
+function buildWelcomeNotebook(): object {
+  const md = (id: string, source: string) => ({
+    id,
+    cell_type: 'markdown',
+    metadata: {},
+    source,
+  });
+  const code = (id: string, source: string) => ({
+    id,
+    cell_type: 'code',
+    metadata: {},
+    execution_count: null,
+    outputs: [],
+    source,
+  });
+
+  return {
+    nbformat: 4,
+    nbformat_minor: 5,
+    metadata: {
+      kernelspec: { name: 'python3', display_name: 'Python 3', language: 'python' },
+      language_info: { name: 'python' },
+    },
+    cells: [
+      md(
+        'welcome-intro',
+        '# Welcome to Nebula 🌌\n\n' +
+          'This is a tiny tour notebook — **run it top to bottom**. The fastest way: hit **Run All** in the toolbar and watch the cells light up.\n\n' +
+          'Everything here uses only Python’s standard library, so it runs on a bare kernel with nothing to install.'
+      ),
+      code(
+        'welcome-hello',
+        'import sys, platform\n\n' +
+          'print("Hello from Nebula! 👋")\n' +
+          'print(f"You\'re running Python {sys.version.split()[0]} on {platform.system()}.")'
+      ),
+      code(
+        'welcome-plot',
+        '# No matplotlib needed — here\'s a plot in pure Python.\n' +
+          'observations = {"Mon": 3, "Tue": 7, "Wed": 5, "Thu": 9, "Fri": 6, "Sat": 2, "Sun": 4}\n\n' +
+          'print("Meteors spotted this week\\n")\n' +
+          'for day, count in observations.items():\n' +
+          '    print(f"{day}  {\'█\' * count:<10} {count}")'
+      ),
+      code(
+        'welcome-table',
+        '# ...and a table, no pandas required.\n' +
+          'planets = [\n' +
+          '    ("Mercury", 0.39, 88),\n' +
+          '    ("Venus", 0.72, 225),\n' +
+          '    ("Earth", 1.00, 365),\n' +
+          '    ("Mars", 1.52, 687),\n' +
+          ']\n\n' +
+          'print(f"{\'Planet\':<10}{\'AU\':>6}{\'Year (days)\':>14}")\n' +
+          'print("-" * 30)\n' +
+          'for name, au, days in planets:\n' +
+          '    print(f"{name:<10}{au:>6.2f}{days:>14}")'
+      ),
+      md(
+        'welcome-agent',
+        '## Bring in an AI agent 🤖\n\n' +
+          'Open the terminal panel’s **Agent** tab (the **Agent** button in the toolbar) and click **Claude Code**. ' +
+          'It launches pre-briefed on this notebook — it can read these cells, run them, and fix anything that breaks. ' +
+          'Try asking it to *"add a cell that shows the meteor counts as percentages"*.'
+      ),
+      md(
+        'welcome-next',
+        '## Where to go next\n\n' +
+          '- **⌘K** — the command palette: every action, one keystroke away\n' +
+          '- **⌘F** — search across all cells and outputs\n' +
+          '- **History panel** — a full edit timeline of this notebook, with one-click restore\n\n' +
+          'That’s the tour. Make something stellar ✨'
+      ),
+    ],
+  };
+}
 
 interface RecentNotebook {
   path: string;
@@ -131,8 +223,23 @@ function getFilename(path: string): string {
 }
 
 export const Dashboard: React.FC = () => {
+  const { toast } = useNotification();
+
   // Server working directory
   const [serverCwd, setServerCwd] = useState<string>('~');
+  const [browsedPath, setBrowsedPath] = useState<string>('~');
+
+  // First-run welcome card: shown until dismissed, and only while there is
+  // no notebook history yet. Opening/creating things naturally hides it on the
+  // next visit (recents become non-empty) but never sets the dismissed flag.
+  const [showWelcome, setShowWelcome] = useState(() => {
+    try {
+      return !localStorage.getItem(WELCOME_DISMISSED_KEY) && getRecentNotebooks().length === 0;
+    } catch {
+      return false;
+    }
+  });
+  const [isCreatingSample, setIsCreatingSample] = useState(false);
 
   // Sessions state
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
@@ -278,7 +385,7 @@ export const Dashboard: React.FC = () => {
     if (name) {
       // Import and call createNotebook
       import('../services/fileService').then(({ createNotebook }) => {
-        createNotebook(name, [{ id: `cell-${Date.now()}`, type: 'code', content: '', outputs: [] }], serverCwd)
+        createNotebook(name, [{ id: `cell-${Date.now()}`, type: 'code', content: '', outputs: [], isExecuting: false }], browsedPath || serverCwd)
           .then((notebook) => {
             window.open(`/?file=${encodeURIComponent(notebook.id)}`, '_blank');
             setRefreshCounter(c => c + 1);
@@ -287,6 +394,48 @@ export const Dashboard: React.FC = () => {
             alert(err.message || 'Failed to create notebook');
           });
       });
+    }
+  };
+
+  // Dismiss the welcome card permanently (only the X / "don't show again"
+  // set the flag — opening notebooks merely hides it via the recents check).
+  const dismissWelcome = () => {
+    try {
+      localStorage.setItem(WELCOME_DISMISSED_KEY, '1');
+    } catch {
+      // Storage unavailable — hide for this session only
+    }
+    setShowWelcome(false);
+  };
+
+  // Create (if needed) and open the sample notebook. With `withAgent`, also
+  // deep-link the notebook's terminal panel to the Agent tab — Notebook.tsx
+  // restores panel state from these sessionStorage keys on load, and the
+  // same-tab navigation below carries sessionStorage over.
+  const handleOpenSample = async (withAgent: boolean) => {
+    if (isCreatingSample) return;
+    setIsCreatingSample(true);
+    try {
+      const dir = (serverCwd || '~').replace(/\/+$/, '');
+      const samplePath = `${dir}/${SAMPLE_NOTEBOOK_NAME}`;
+      // Don't clobber an existing copy the user may have edited
+      const exists = await getFileMtime(samplePath).then(() => true).catch(() => false);
+      if (!exists) {
+        await writeFile(samplePath, buildWelcomeNotebook(), 'notebook');
+      }
+      if (withAgent) {
+        try {
+          window.sessionStorage.setItem('nebula-terminal-open', '1');
+          window.sessionStorage.setItem('nebula-terminal-tab', 'agent');
+        } catch {
+          // Storage unavailable — the sample's markdown cell covers the Agent tab
+        }
+      }
+      handleOpenNotebook(samplePath);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Failed to create the sample notebook', 'error');
+    } finally {
+      setIsCreatingSample(false);
     }
   };
 
@@ -397,6 +546,78 @@ export const Dashboard: React.FC = () => {
       )}
 
       <div className="max-w-6xl mx-auto px-4 py-6">
+        {/* Event-driven "Get started" checklist (welcome card takes precedence on true first run) */}
+        {!showWelcome && <GetStartedCard />}
+
+        {/* First-run welcome card */}
+        {showWelcome && (
+          <div
+            data-testid="welcome-card"
+            className="relative mb-6 bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm"
+          >
+            <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-violet-500 via-indigo-500 to-blue-500" />
+            <div className="p-5 sm:p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-indigo-500" />
+                    Welcome to Nebula
+                  </h2>
+                  <p className="text-sm text-slate-500 mt-1">
+                    A notebook for you and your AI — here's the 2-minute tour.
+                  </p>
+                </div>
+                <button
+                  onClick={dismissWelcome}
+                  aria-label="Dismiss welcome"
+                  title="Dismiss"
+                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors flex-shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+                <button
+                  onClick={() => handleOpenSample(false)}
+                  disabled={isCreatingSample}
+                  className="group text-left p-4 rounded-lg border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/60 transition-colors disabled:opacity-60 disabled:cursor-wait"
+                >
+                  <Book className="w-5 h-5 text-indigo-500 mb-2" />
+                  <div className="text-sm font-semibold text-slate-800">Open the sample notebook</div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    {isCreatingSample ? 'Setting things up…' : 'A short, runnable tour — just hit Run All.'}
+                  </div>
+                </button>
+                <button
+                  onClick={handleNewNotebook}
+                  className="group text-left p-4 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50/60 transition-colors"
+                >
+                  <Plus className="w-5 h-5 text-blue-500 mb-2" />
+                  <div className="text-sm font-semibold text-slate-800">Start with your own notebook</div>
+                  <div className="text-xs text-slate-500 mt-1">A blank canvas with a Python kernel ready.</div>
+                </button>
+                <button
+                  onClick={() => handleOpenSample(true)}
+                  disabled={isCreatingSample}
+                  className="group text-left p-4 rounded-lg border border-slate-200 hover:border-purple-300 hover:bg-purple-50/60 transition-colors disabled:opacity-60 disabled:cursor-wait"
+                >
+                  <Bot className="w-5 h-5 text-purple-500 mb-2" />
+                  <div className="text-sm font-semibold text-slate-800">See what agents can do</div>
+                  <div className="text-xs text-slate-500 mt-1">Opens the sample with the Agent panel ready.</div>
+                </button>
+              </div>
+
+              <button
+                onClick={dismissWelcome}
+                className="mt-3 text-xs text-slate-400 hover:text-slate-600 underline underline-offset-2 transition-colors"
+              >
+                Don't show this again
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start lg:items-stretch">
           {/* File Browser + Resources - Takes 3 columns */}
           <div className="lg:col-span-3 space-y-4">
@@ -407,6 +628,7 @@ export const Dashboard: React.FC = () => {
               onRefresh={() => setRefreshCounter(c => c + 1)}
               variant="inline"
               initialPath={serverCwd}
+              onPathChange={setBrowsedPath}
               maxHeight="55vh"
             />
             {/* System Resources - aligned with file browser */}
@@ -415,6 +637,9 @@ export const Dashboard: React.FC = () => {
 
           {/* Sidebar - fills vertical space */}
           <div className="flex flex-col gap-4">
+            {/* Compute allocations + queue monitor (only when a scheduler is detected) */}
+            <ComputeDashboardCard />
+
             {/* Quick Stats */}
             <div className="bg-white rounded-xl border border-slate-200 p-4">
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Overview</h3>
