@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Extensionless launcher so `nebula` resolves via PATH (e.g. in Nebula's
+# built-in terminals, where this bin dir is prepended to PATH). npm installs
+# get the name via the package.json bin map instead.
+exec node "$(dirname "$0")/nebula.js" "$@"

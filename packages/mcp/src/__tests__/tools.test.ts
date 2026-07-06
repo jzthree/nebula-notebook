@@ -15,6 +15,7 @@ import {
   kernelTools,
   executionTools,
   fileTools,
+  computeTools,
 
   // Tool utilities
   getToolDefinitions,
@@ -55,14 +56,15 @@ describe('Tool Collections', () => {
         notebookTools.length +
         kernelTools.length +
         executionTools.length +
-        fileTools.length;
+        fileTools.length +
+        computeTools.length;
 
       expect(allTools.length).toBe(expectedCount);
     });
 
-    it('should contain 31 total tools', () => {
-      // 18 notebook + 5 kernel + 1 execution + 7 files = 31
-      expect(allTools.length).toBe(31);
+    it('should contain 37 total tools', () => {
+      // 18 notebook + 5 kernel + 1 execution + 7 files + 6 compute = 37
+      expect(allTools.length).toBe(37);
     });
 
     it('should have unique tool names', () => {
@@ -96,6 +98,7 @@ describe('Tool Collections', () => {
         'kernel',
         'execution',
         'files',
+        'compute',
       ]);
     });
 
@@ -104,6 +107,7 @@ describe('Tool Collections', () => {
       expect(toolCategories.kernel).toBe(kernelTools);
       expect(toolCategories.execution).toBe(executionTools);
       expect(toolCategories.files).toBe(fileTools);
+      expect(toolCategories.compute).toBe(computeTools);
     });
   });
 
@@ -122,6 +126,10 @@ describe('Tool Collections', () => {
 
     it('fileTools should have 7 tools', () => {
       expect(fileTools.length).toBe(7);
+    });
+
+    it('computeTools should have 6 tools', () => {
+      expect(computeTools.length).toBe(6);
     });
   });
 });
@@ -428,6 +436,7 @@ describe('Tool Utility Functions', () => {
       expect(byCategory.kernel.length).toBe(5);
       expect(byCategory.execution.length).toBe(1);
       expect(byCategory.files.length).toBe(7);
+      expect(byCategory.compute.length).toBe(6);
     });
   });
 });
@@ -522,7 +531,7 @@ describe('formatForMCP Functions', () => {
     it('search_cells should handle no results', async () => {
       const result = await searchCellsTool.formatForMCP!({
         success: true,
-        data: { matches: [], matchCount: 0, hasMore: false },
+        data: { query: 'nonexistent', matches: [], matchCount: 0, hasMore: false },
       });
 
       expect(result[0].type).toBe('text');

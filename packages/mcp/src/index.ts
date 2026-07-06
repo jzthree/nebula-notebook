@@ -47,6 +47,14 @@ export {
   type KernelSession,
   type ExecutionResult,
   type WriteCellResult,
+  type ComputeAllocation,
+  type ComputeAllocationState,
+  type ComputeSpec,
+  type ComputeStatus,
+  type ComputePartitions,
+  type ComputePartitionLoad,
+  type ComputeQosLoad,
+  type ComputeStartEstimate,
 } from './notebook/client.js';
 
 // =============================================================================
@@ -66,6 +74,7 @@ export {
   notebookTools,
   kernelTools,
   executionTools,
+  computeTools,
 
   // Tool utilities
   getToolDefinitions,
@@ -97,6 +106,14 @@ export {
 
   // Individual execution tools
   executeCellTool,
+
+  // Individual compute tools
+  computeStatusTool,
+  listComputeQueuesTool,
+  requestAllocationTool,
+  listAllocationsTool,
+  cancelAllocationTool,
+  useAllocationTool,
 } from './tools/index.js';
 
 // =============================================================================

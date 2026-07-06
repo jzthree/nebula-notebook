@@ -1,19 +1,33 @@
 /**
  * Tests for MCP Server JSON-RPC handling
+ *
+ * Spawns the built MCP server (dist/mcp/index.js — run `npm run build` in
+ * packages/mcp first) and talks JSON-RPC to it over stdio. Backend calls go to
+ * an in-process mock Nebula server unless NEBULA_URL points at a live server.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { NebulaMCPServer } from '../mcp/server.js';
 import { spawn, ChildProcess } from 'child_process';
 import * as readline from 'readline';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { startMockNebulaServer, type MockNebulaServer } from './helpers/mock-nebula-server.js';
 
-const NEBULA_URL = process.env.NEBULA_URL || 'http://localhost:3000';
+// Note: pass import.meta.url as a string — under jsdom the global URL class is
+// not accepted by Node's fileURLToPath.
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
+const PACKAGE_ROOT = path.resolve(TEST_DIR, '../..');
+const SERVER_ENTRY = path.join(PACKAGE_ROOT, 'dist', 'mcp', 'index.js');
 
 describe('MCP Server', () => {
   let serverProcess: ChildProcess;
   let rl: readline.Interface;
   let responsePromises: Map<number | string, { resolve: (value: any) => void; reject: (error: any) => void }>;
   let requestId = 0;
+  let mockServer: MockNebulaServer | undefined;
+  let nebulaUrl: string;
 
   function sendRequest(method: string, params: Record<string, unknown> = {}): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -36,10 +50,20 @@ describe('MCP Server', () => {
   beforeAll(async () => {
     responsePromises = new Map();
 
+    nebulaUrl = process.env.NEBULA_URL ?? '';
+    if (!nebulaUrl) {
+      mockServer = await startMockNebulaServer();
+      nebulaUrl = mockServer.url;
+    }
+
+    if (!fs.existsSync(SERVER_ENTRY)) {
+      throw new Error(`MCP server build not found at ${SERVER_ENTRY}. Run "npm run build" in packages/mcp first.`);
+    }
+
     // Start the MCP server process
-    serverProcess = spawn('node', ['dist/mcp/index.js'], {
-      cwd: process.cwd().replace('/src/__tests__', ''),
-      env: { ...process.env, NEBULA_URL: process.env.NEBULA_URL || 'http://localhost:3000' },
+    serverProcess = spawn('node', [SERVER_ENTRY], {
+      cwd: PACKAGE_ROOT,
+      env: { ...process.env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -70,12 +94,15 @@ describe('MCP Server', () => {
     await new Promise(resolve => setTimeout(resolve, 1000));
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     if (serverProcess) {
       serverProcess.kill();
     }
     if (rl) {
       rl.close();
+    }
+    if (mockServer) {
+      await mockServer.close();
     }
   });
 
@@ -94,7 +121,7 @@ describe('MCP Server', () => {
       expect(result).toBeDefined();
       expect(result.tools).toBeDefined();
       expect(Array.isArray(result.tools)).toBe(true);
-      expect(result.tools.length).toBe(31); // 18 notebook + 5 kernel + 1 execution + 7 file
+      expect(result.tools.length).toBe(37); // 18 notebook + 5 kernel + 1 execution + 7 file + 6 compute
     });
 
     it('should have correct tool definitions', async () => {
@@ -127,7 +154,7 @@ describe('MCP Server', () => {
     it('should handle tools/call for list_kernels', async () => {
       await sendRequest('tools/call', {
         name: 'connect_server',
-        arguments: { base_url: NEBULA_URL },
+        arguments: { base_url: nebulaUrl },
       });
       const testPath = `/tmp/mcp-server-kernel-test-${Date.now()}-${Math.random().toString(16).slice(2)}.ipynb`;
       await sendRequest('tools/call', {
@@ -174,7 +201,7 @@ describe('MCP Server', () => {
     it('should return error for unknown tool', async () => {
       await sendRequest('tools/call', {
         name: 'connect_server',
-        arguments: { base_url: NEBULA_URL },
+        arguments: { base_url: nebulaUrl },
       });
       const result = await sendRequest('tools/call', {
         name: 'unknown_tool_xyz',

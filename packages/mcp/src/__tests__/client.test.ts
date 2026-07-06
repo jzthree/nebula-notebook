@@ -1,13 +1,15 @@
 /**
  * Integration tests for NebulaClient operation router.
  *
- * Requires a running Nebula server at http://localhost:8000
+ * Runs against an in-process mock Nebula server by default.
+ * Set NEBULA_URL to run against a live Nebula server instead.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { NebulaClient } from '../notebook/client.js';
 import * as fs from 'fs';
 import * as path from 'path';
+import { startMockNebulaServer, type MockNebulaServer } from './helpers/mock-nebula-server.js';
 
 const TEST_NOTEBOOK_DIR = path.join(process.cwd(), 'tmp');
 const TEST_NOTEBOOK_PATH = path.join(TEST_NOTEBOOK_DIR, 'nebula-client-op-test.ipynb');
@@ -21,15 +23,24 @@ const seedCells = [
 describe('NebulaClient (operation router)', () => {
   let client: NebulaClient;
   let sessionId: string | undefined;
+  let mockServer: MockNebulaServer | undefined;
 
   beforeAll(async () => {
-    client = new NebulaClient({ baseUrl: process.env.NEBULA_URL || 'http://localhost:3000' });
+    let baseUrl = process.env.NEBULA_URL;
+    if (!baseUrl) {
+      mockServer = await startMockNebulaServer();
+      baseUrl = mockServer.url;
+    }
+    client = new NebulaClient({ baseUrl });
     fs.mkdirSync(TEST_NOTEBOOK_DIR, { recursive: true });
   });
 
   afterAll(async () => {
     if (sessionId) {
       await client.shutdownKernel(sessionId);
+    }
+    if (mockServer) {
+      await mockServer.close();
     }
   });
 

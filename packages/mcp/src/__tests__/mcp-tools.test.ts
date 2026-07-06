@@ -1,24 +1,30 @@
 /**
  * Integration Tests for MCP Tool Execution
  *
- * Tests the tool execution pipeline with a live server.
- * Requires Nebula server running at http://localhost:8000
+ * Tests the tool execution pipeline against an in-process mock Nebula server
+ * by default. Set NEBULA_URL to run against a live Nebula server instead.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { NebulaClient } from '../notebook/client.js';
 import { executeToolForMCP, executeToolByName, hasTool } from '../tools/index.js';
+import { startMockNebulaServer, type MockNebulaServer } from './helpers/mock-nebula-server.js';
 
 const TEST_NOTEBOOK_PATH = `/tmp/mcp-test-notebook-${Date.now()}-${Math.random().toString(16).slice(2)}.ipynb`;
 
-const NEBULA_URL = process.env.NEBULA_URL || 'http://localhost:3000';
-
 describe('MCP Tool Execution Integration', () => {
   let client: NebulaClient;
+  let mockServer: MockNebulaServer | undefined;
 
   beforeAll(async () => {
+    let baseUrl = process.env.NEBULA_URL;
+    if (!baseUrl) {
+      mockServer = await startMockNebulaServer();
+      baseUrl = mockServer.url;
+    }
+
     client = new NebulaClient({
-      baseUrl: NEBULA_URL,
+      baseUrl,
       agentId: 'mcp-test-agent',
       autoStartAgentSession: true,
     });
@@ -42,6 +48,12 @@ describe('MCP Tool Execution Integration', () => {
       type: 'code',
       content: 'x = 100\nprint(x)',
     });
+  });
+
+  afterAll(async () => {
+    if (mockServer) {
+      await mockServer.close();
+    }
   });
 
   // ===========================================================================
@@ -320,8 +332,9 @@ describe('MCP Tool Execution Integration', () => {
         cell_id: 'update-target',
       }, client);
       expect(readResult.success).toBe(true);
-      expect(readResult.data!.cell.content).toContain('new');
-      expect(readResult.data!.cell.type).toBe('markdown');
+      const readData = readResult.data as { cell: { content: string; type: string } };
+      expect(readData.cell.content).toContain('new');
+      expect(readData.cell.type).toBe('markdown');
     });
 
     it('should execute start_agent_session and end_agent_session', async () => {

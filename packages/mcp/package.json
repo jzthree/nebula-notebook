@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "nebula-notebook-mcp": "./bin/nebula-mcp.js"
+    "nebula-notebook-mcp": "./bin/nebula-mcp.js",
+    "nebula": "./bin/nebula.js"
   },
   "files": [
     "dist",

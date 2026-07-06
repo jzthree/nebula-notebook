@@ -247,7 +247,7 @@ describe('Circuit Breaker', () => {
 
       expect(operation).not.toHaveBeenCalled();
       expect(result.success).toBe(false);
-      if (!result.success) {
+      if (result.success === false) {
         expect(result.rejectedByCircuit).toBe(true);
         expect(result.error).toContain('Circuit breaker is open');
       }
@@ -280,7 +280,7 @@ describe('Circuit Breaker', () => {
       const result = await breaker.execute(operation);
 
       expect(result.success).toBe(false);
-      if (!result.success) {
+      if (result.success === false) {
         expect(result.rejectedByCircuit).toBe(false);
         expect(result.classifiedError).toBeDefined();
       }
@@ -550,7 +550,7 @@ describe('Circuit Breaker', () => {
       const result = await breaker.execute(operation);
 
       expect(result.success).toBe(false);
-      if (!result.success) {
+      if (result.success === false) {
         expect(result.classifiedError?.category).toBe(ErrorCategory.NETWORK);
       }
     });

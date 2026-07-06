@@ -133,6 +133,101 @@ export interface SearchResult {
   totalCells: number;
 }
 
+// =============================================================================
+// Compute allocation types (mirror node-server /api/compute shapes)
+// =============================================================================
+
+export type ComputeAllocationState =
+  | 'pending'
+  | 'running'
+  | 'active'
+  | 'ended'
+  | 'failed'
+  | 'cancelled';
+
+/**
+ * Resource request for a compute allocation. Field names are camelCase on the
+ * wire — the /api/compute routes parse camelCase keys (memGb, gpuType, …).
+ */
+export interface ComputeSpec {
+  partition: string;
+  qos?: string;
+  account?: string;
+  cpus?: number;
+  memGb?: number;
+  gpus?: number;
+  gpuType?: string;
+  walltimeMinutes?: number;
+  jobName?: string;
+}
+
+export interface ComputeAllocation {
+  id: string;
+  jobId?: string;
+  spec: {
+    partition: string;
+    qos?: string;
+    account?: string;
+    cpus: number;
+    memGb: number;
+    gpus?: number;
+    gpuType?: string;
+    walltimeMinutes: number;
+    jobName: string;
+  };
+  state: ComputeAllocationState;
+  serverId?: string;
+  nodes?: string[];
+  reason?: string;
+  createdAt: number;
+  walltimeEndsAt?: number;
+}
+
+export interface ComputeStatus {
+  enabled: boolean;
+  scheduler: string | null;
+}
+
+export interface ComputePartitionLoad {
+  name: string;
+  up: boolean;
+  timeLimit: string;
+  cpus: { alloc: number; idle: number; other: number; total: number };
+  gpus?: { type: string; total: number; idle: number };
+  nodes: { idle: number; mixed: number; alloc: number; down: number; total: number };
+  jobs: { pending: number; running: number };
+}
+
+export interface ComputeQosLoad {
+  name: string;
+  priority: number;
+  maxWall?: string;
+  preemptible: boolean;
+  preempts: string[];
+  jobs: { running: number; pending: number };
+}
+
+export interface ComputePartitions {
+  enabled: boolean;
+  associations: {
+    account?: string;
+    partitions: string[];
+    qoses: string[];
+    defaultQos?: string;
+  } | null;
+  load: {
+    partitions: ComputePartitionLoad[];
+    qoses: ComputeQosLoad[];
+    fetchedAt: number;
+  } | null;
+}
+
+export interface ComputeStartEstimate {
+  startsAt?: string;
+  nodes?: string[];
+  reason?: string;
+}
+
 /**
  * Client for Nebula Notebook headless API
  */
@@ -443,14 +538,27 @@ export class NebulaClient {
   }
 
   /**
-   * Get or create a kernel session for a notebook file
+   * Get or create a kernel session for a notebook file.
+   *
+   * Pass `serverId` to start (and bind) the notebook's kernel on a specific
+   * registered server — e.g. a compute allocation's serverId. The server also
+   * persists it as the notebook's kernel preference, so later kernels for this
+   * notebook start on the same server.
    */
-  async getOrCreateKernelForFile(filePath: string, kernelName?: string): Promise<ToolResult<KernelSession>> {
+  async getOrCreateKernelForFile(
+    filePath: string,
+    kernelName?: string,
+    serverId?: string
+  ): Promise<ToolResult<KernelSession>> {
     const result = await this.fetch<{ session_id: string; kernel_name: string; file_path: string }>(
       '/api/kernels/for-file',
       {
         method: 'POST',
-        body: JSON.stringify({ file_path: filePath, kernel_name: kernelName }),
+        body: JSON.stringify({
+          file_path: filePath,
+          kernel_name: kernelName,
+          ...(serverId ? { server_id: serverId } : {}),
+        }),
       }
     );
     if (!result.success) return { success: false, error: result.error };
@@ -2165,6 +2273,65 @@ export class NebulaClient {
       const message = error instanceof Error ? error.message : String(error);
       return { success: false, error: message };
     }
+  }
+
+  // ===========================================================================
+  // Compute Allocations (scheduler-backed compute, /api/compute)
+  // ===========================================================================
+  //
+  // Thin wrappers over the server's compute-allocation REST API. All routes
+  // are no-ops (enabled: false / 400) when the server has no scheduler —
+  // check computeStatus() first.
+  // ===========================================================================
+
+  /** Whether scheduler-backed compute is available on this server. */
+  async computeStatus(): Promise<ToolResult<ComputeStatus>> {
+    return this.fetch<ComputeStatus>('/api/compute/status');
+  }
+
+  /** Allowed partitions/QoS for the current user + a live load snapshot. */
+  async listPartitions(): Promise<ToolResult<ComputePartitions>> {
+    return this.fetch<ComputePartitions>('/api/compute/partitions');
+  }
+
+  /** QoS names a partition will accept (null = any). */
+  async partitionQos(partition: string): Promise<ToolResult<{ allowed: string[] | null }>> {
+    return this.fetch<{ allowed: string[] | null }>(
+      `/api/compute/partition-qos?partition=${encodeURIComponent(partition)}`
+    );
+  }
+
+  /** Dry-run estimated start time for a prospective allocation (no submit). */
+  async estimateStart(spec: ComputeSpec): Promise<ToolResult<ComputeStartEstimate>> {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(spec)) {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    }
+    return this.fetch<ComputeStartEstimate>(`/api/compute/estimate?${params.toString()}`);
+  }
+
+  /** List current allocations (pending / running / active / ended / …). */
+  async listAllocations(): Promise<ToolResult<ComputeAllocation[]>> {
+    const result = await this.fetch<{ allocations: ComputeAllocation[] }>('/api/compute/allocations');
+    if (!result.success) return { success: false, error: result.error };
+    return { success: true, data: result.data?.allocations ?? [] };
+  }
+
+  /** Submit a new compute allocation. Returns it in state 'pending'. */
+  async createAllocation(spec: ComputeSpec): Promise<ToolResult<ComputeAllocation>> {
+    return this.fetch<ComputeAllocation>('/api/compute/allocations', {
+      method: 'POST',
+      body: JSON.stringify(spec),
+    });
+  }
+
+  /** Cancel an allocation (scancel + evict its server). */
+  async cancelAllocation(id: string): Promise<ToolResult<{ cancelled: boolean }>> {
+    return this.fetch<{ cancelled: boolean }>(`/api/compute/allocations/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
   }
 
   // ===========================================================================

@@ -1,20 +1,38 @@
 /**
  * Tests for Cell ID stability and metadata updates via operation router.
  *
- * Requires a running Nebula server at http://localhost:8000
+ * Runs against an in-process mock Nebula server by default.
+ * Set NEBULA_URL to run against a live Nebula server instead.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { NebulaClient } from '../notebook/client.js';
 import * as path from 'path';
+import { startMockNebulaServer, type MockNebulaServer } from './helpers/mock-nebula-server.js';
 
 describe('Cell ID Tracking (operation router)', () => {
   let client: NebulaClient;
   let testNotebookPath: string;
+  let mockServer: MockNebulaServer | undefined;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    baseUrl = process.env.NEBULA_URL ?? '';
+    if (!baseUrl) {
+      mockServer = await startMockNebulaServer();
+      baseUrl = mockServer.url;
+    }
+  });
+
+  afterAll(async () => {
+    if (mockServer) {
+      await mockServer.close();
+    }
+  });
 
   beforeEach(async () => {
     client = new NebulaClient({
-      baseUrl: process.env.NEBULA_URL || 'http://localhost:3000',
+      baseUrl,
       agentId: 'cell-id-test-agent',
       autoStartAgentSession: true,
     });

@@ -16,18 +16,21 @@ import { notebookTools } from './notebook.js';
 import { kernelTools } from './kernel.js';
 import { executionTools } from './execution.js';
 import { fileTools } from './files.js';
+import { computeTools } from './compute.js';
 
 // Re-export tool categories for direct access
 export { notebookTools } from './notebook.js';
 export { kernelTools } from './kernel.js';
 export { executionTools } from './execution.js';
 export { fileTools } from './files.js';
+export { computeTools } from './compute.js';
 
 // Re-export individual tools for TypeScript consumers who need type safety
 export * from './notebook.js';
 export * from './kernel.js';
 export * from './execution.js';
 export * from './files.js';
+export * from './compute.js';
 
 /**
  * All tools combined in a single array
@@ -37,6 +40,7 @@ export const allTools: Tool<any, any>[] = [
   ...kernelTools,
   ...executionTools,
   ...fileTools,
+  ...computeTools,
 ];
 
 /**
@@ -241,6 +245,7 @@ export const toolCategories = {
   kernel: kernelTools,
   execution: executionTools,
   files: fileTools,
+  compute: computeTools,
 } as const;
 
 /**
@@ -252,5 +257,6 @@ export function getToolNamesByCategory(): Record<string, string[]> {
     kernel: kernelTools.map(t => t.definition.name),
     execution: executionTools.map(t => t.definition.name),
     files: fileTools.map(t => t.definition.name),
+    compute: computeTools.map(t => t.definition.name),
   };
 }

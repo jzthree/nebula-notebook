@@ -448,6 +448,10 @@ export interface OperationResult {
   requestedId?: string;
   /** Error message if failed */
   error?: string;
+  /** True when the failure is an optimistic-concurrency conflict (cell changed since last read) */
+  conflict?: boolean;
+  /** Current cell content accompanying an OCC conflict, for retrying the edit */
+  currentContent?: string;
   /** Path of created/modified notebook (for createNotebook) */
   path?: string;
   /** File modification time (for createNotebook) */

@@ -5,7 +5,24 @@
  * Claude's multi-image requests require each image to be ≤2000 pixels in any dimension.
  */
 
-import sharp from 'sharp';
+// sharp is a native module and OPTIONAL: it is only needed to downscale
+// oversized image outputs. Loading it lazily keeps the `nebula` CLI (which
+// shares this code) runnable from a bare checkout with no node_modules —
+// images are then passed through at original size instead of failing.
+type SharpModule = typeof import('sharp');
+let sharpPromise: Promise<SharpModule | null> | null = null;
+
+function loadSharp(): Promise<SharpModule | null> {
+  if (!sharpPromise) {
+    sharpPromise = import('sharp')
+      .then((mod) => (mod.default ?? mod) as unknown as SharpModule)
+      .catch(() => {
+        console.error('[ImageResize] sharp not available — images passed through without resizing');
+        return null;
+      });
+  }
+  return sharpPromise;
+}
 
 const DEFAULT_MAX_DIMENSION = 2000;
 
@@ -22,6 +39,8 @@ export async function resizeImageIfNeeded(
   maxDimension: number = DEFAULT_MAX_DIMENSION
 ): Promise<string> {
   try {
+    const sharp = await loadSharp();
+    if (!sharp) return base64Data.trim();
     const buffer = Buffer.from(base64Data, 'base64');
     const image = sharp(buffer);
     const metadata = await image.metadata();
@@ -66,6 +85,8 @@ export async function getImageDimensions(
   base64Data: string
 ): Promise<{ width: number; height: number } | null> {
   try {
+    const sharp = await loadSharp();
+    if (!sharp) return null;
     const buffer = Buffer.from(base64Data, 'base64');
     const metadata = await sharp(buffer).metadata();
     if (metadata.width && metadata.height) {
