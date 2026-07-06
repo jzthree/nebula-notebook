@@ -26,7 +26,8 @@ function describeAllocation(a: ComputeAllocation): string {
   const gpus = a.spec.gpus ? `, ${a.spec.gpus} GPU${a.spec.gpus > 1 ? 's' : ''}${a.spec.gpuType ? ` (${a.spec.gpuType})` : ''}` : '';
   const where = a.serverId ? ` server=${a.serverId}` : '';
   const nodes = a.nodes?.length ? ` node=${a.nodes.join(',')}` : '';
-  return `${a.id} [${a.state}] ${a.spec.partition}${a.spec.qos ? `/${a.spec.qos}` : ''} — ${a.spec.cpus} CPU, ${a.spec.memGb}G${gpus}, ${a.spec.walltimeMinutes}min walltime${where}${nodes}`;
+  const idle = a.spec.idleTimeoutMinutes ? `, auto-ends after ${a.spec.idleTimeoutMinutes}min idle` : '';
+  return `${a.id} [${a.state}] ${a.spec.partition}${a.spec.qos ? `/${a.spec.qos}` : ''} — ${a.spec.cpus} CPU, ${a.spec.memGb}G${gpus}, ${a.spec.walltimeMinutes}min walltime${idle}${where}${nodes}`;
 }
 
 async function findAllocation(
@@ -154,6 +155,7 @@ export interface RequestAllocationParams {
   gpu_type?: string;
   walltime_minutes?: number;
   name?: string;
+  idle_timeout_minutes?: number;
   wait_for_active?: boolean;
   max_wait?: number;
 }
@@ -174,6 +176,7 @@ export const requestAllocationTool: Tool<RequestAllocationParams, ComputeAllocat
         gpu_type: { type: 'string', description: 'Specific GPU model (only with gpus > 0)' },
         walltime_minutes: { type: 'number', description: 'Walltime in minutes (default 120)' },
         name: { type: 'string', description: 'Job name (default nebula-<partition>)' },
+        idle_timeout_minutes: { type: 'number', description: 'Auto-end the allocation after this many minutes with no kernel/terminal activity (recommended: 60) — a safety net against forgotten allocations' },
         wait_for_active: { type: 'boolean', description: 'Block until the allocation is active or fails (default false)' },
         max_wait: { type: 'number', description: 'Max seconds to wait when wait_for_active=true (default 300); returns the current state on expiry' },
       },
@@ -191,6 +194,7 @@ export const requestAllocationTool: Tool<RequestAllocationParams, ComputeAllocat
     if (params.gpu_type !== undefined) spec.gpuType = params.gpu_type;
     if (params.walltime_minutes !== undefined) spec.walltimeMinutes = params.walltime_minutes;
     if (params.name !== undefined) spec.jobName = params.name;
+    if (params.idle_timeout_minutes !== undefined) spec.idleTimeoutMinutes = params.idle_timeout_minutes;
 
     const status = await client.computeStatus();
     if (status.success && !status.data!.enabled) {

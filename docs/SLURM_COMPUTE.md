@@ -245,6 +245,21 @@ bounded by the job's cpus/mem/gpus.
 | Dev-server restart | Reconcile persisted allocations against `squeue` on boot. |
 | Registration never arrives | Timeout (e.g. running + 60 s, no register) → mark unreachable, hint transport/secret. |
 
+### Idle auto-release
+
+Opt-in per allocation: check **"End automatically when idle"** in the allocation
+modal (default 60 minutes, min 10), or pass `--idle-timeout <minutes>` to
+`nebula compute alloc` (`idle_timeout_minutes` on the `request_allocation` MCP
+tool). The setting travels as `idleTimeoutMinutes` in the allocation spec and the
+job script exports `NEBULA_IDLE_EXIT_MINUTES` to the client server on the compute
+node, which then checks once a minute whether it is idle — no kernel busy or
+starting, and no kernel or terminal activity newer than the timeout. Five minutes
+before the cutoff it logs a warning ("run anything to keep it"); at the cutoff it
+shuts its kernels down cleanly and exits its own process, so the batch job
+completes and the allocation ends naturally — no `scancel`, no scheduler-side
+state. Active allocations with the setting show "(auto-ends after Nm idle)" in
+the modal.
+
 ## Reused vs new
 
 **Reused (little/no change):** `server-registry.ts`, `client-registration.ts`,

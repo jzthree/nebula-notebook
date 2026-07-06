@@ -159,6 +159,8 @@ export interface ComputeSpec {
   gpuType?: string;
   walltimeMinutes?: number;
   jobName?: string;
+  /** Opt-in: auto-end the allocation after this many idle minutes (client self-exit). */
+  idleTimeoutMinutes?: number;
 }
 
 export interface ComputeAllocation {
@@ -174,6 +176,7 @@ export interface ComputeAllocation {
     gpuType?: string;
     walltimeMinutes: number;
     jobName: string;
+    idleTimeoutMinutes?: number;
   };
   state: ComputeAllocationState;
   serverId?: string;

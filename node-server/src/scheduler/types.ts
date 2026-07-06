@@ -26,6 +26,12 @@ export interface JobSpec {
   gpuType?: string;
   walltimeMinutes: number;
   jobName: string;
+  /**
+   * Opt-in idle auto-release: the client server on the compute node exits its
+   * own process after this many minutes without kernel/terminal activity, so
+   * the batch job completes and the allocation ends naturally. Omitted = never.
+   */
+  idleTimeoutMinutes?: number;
 }
 
 export interface JobStatus {

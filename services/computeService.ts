@@ -69,6 +69,8 @@ export interface AllocationSpec {
   gpuType?: string;
   walltimeMinutes: number;
   jobName?: string;
+  /** Opt-in: auto-end the allocation after this many idle minutes (client self-exit). */
+  idleTimeoutMinutes?: number;
 }
 
 export type AllocationState =

@@ -70,7 +70,7 @@ export PATH=${shellQuote(path.dirname(ctx.nodeBin))}:"$PATH"
 export NEBULA_MAIN_SERVER=${shellQuote(ctx.mainUrl)}
 ${secretLine}export NEBULA_ALLOCATION_TOKEN=${shellQuote(token)}
 export NEBULA_SERVER_NAME=${shellQuote(spec.jobName)}
-export PORT=0
+${spec.idleTimeoutMinutes ? `export NEBULA_IDLE_EXIT_MINUTES=${Math.floor(spec.idleTimeoutMinutes)}\n` : ''}export PORT=0
 exec ${launch}
 `;
 }

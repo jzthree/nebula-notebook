@@ -149,6 +149,25 @@ describe('nebula compute CLI', () => {
     expect(r.stdout).toContain('nebula compute use');
   });
 
+  it('compute alloc --idle-timeout: sends idleTimeoutMinutes in the POST body', async () => {
+    const r = await runCli(['compute', 'alloc', '--partition', 'cpu', '--idle-timeout', '45', '--json']);
+    expect(r.code).toBe(0);
+    const alloc = JSON.parse(r.stdout);
+    // the mock parses the POST body like the real server and echoes the spec
+    expect(alloc.spec.idleTimeoutMinutes).toBe(45);
+    expect(mockServer.getAllocation(alloc.id)?.spec.idleTimeoutMinutes).toBe(45);
+
+    // omitted → not in the spec
+    const bare = await runCli(['compute', 'alloc', '--partition', 'cpu', '--json']);
+    expect(bare.code).toBe(0);
+    expect(JSON.parse(bare.stdout).spec.idleTimeoutMinutes).toBeUndefined();
+
+    // invalid → usage error
+    const bad = await runCli(['compute', 'alloc', '--partition', 'cpu', '--idle-timeout', '0']);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain('--idle-timeout');
+  });
+
   it('compute alloc --wait: follows the allocation through to active', async () => {
     const r = await runCli([
       'compute', 'alloc',

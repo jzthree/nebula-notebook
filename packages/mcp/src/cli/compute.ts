@@ -35,7 +35,10 @@ scheduler report "no scheduler on this server" — check status first.
   compute queues                     partitions + QoS + idle CPUs/GPUs + backlog
   compute alloc --partition P [...]  request an allocation
       [--qos Q] [--cpus N] [--mem GB] [--gpus N] [--gpu-type T]
-      [--walltime H] [--name NAME] [--wait] [--max-wait S]
+      [--walltime H] [--name NAME] [--idle-timeout MIN] [--wait] [--max-wait S]
+      --idle-timeout MIN auto-ends the allocation after MIN minutes with no
+      kernel or terminal activity (the node's server exits itself) — a safety
+      net against forgotten allocations; recommended for agent-created ones.
       --wait BLOCKS until the allocation is active (internal polling; run it
       as a background shell task for long queue waits). Exit 1 on failure,
       exit 3 if --max-wait (default 3600s) expires while still queued.
@@ -47,11 +50,12 @@ scheduler report "no scheduler on this server" — check status first.
   compute cancel <id>                cancel an allocation (frees the nodes)
 
 Etiquette: allocations consume real cluster resources — request modest sizes,
-cancel what you created when done, never cancel allocations you didn't create.
+cancel what you created when done, never cancel allocations you didn't create,
+and add --idle-timeout 60 as a safety net in case you forget.
 
 examples:
   nebula compute queues
-  nebula compute alloc --partition gpu --gpus 1 --walltime 2 --wait
+  nebula compute alloc --partition gpu --gpus 1 --walltime 2 --idle-timeout 60 --wait
   nebula compute use a1b2c3d4 analysis.ipynb
   nebula compute cancel a1b2c3d4`;
 
@@ -215,6 +219,7 @@ async function computeAlloc(argv: string[]): Promise<number> {
     'gpu-type': { type: 'string' },
     walltime: { type: 'string' },
     name: { type: 'string' },
+    'idle-timeout': { type: 'string' },
     wait: { type: 'boolean' },
     'max-wait': { type: 'string' },
   });
@@ -241,6 +246,13 @@ async function computeAlloc(argv: string[]): Promise<number> {
     spec.walltimeMinutes = Math.round(hours * 60);
   }
   if (typeof values.name === 'string') spec.jobName = values.name;
+  if (values['idle-timeout'] !== undefined) {
+    const minutes = parseIntFlag(values['idle-timeout'], '--idle-timeout', 60);
+    if (minutes <= 0) {
+      throw new CliError(`--idle-timeout must be a positive number of minutes, got "${String(values['idle-timeout'])}"`, EXIT.USAGE);
+    }
+    spec.idleTimeoutMinutes = minutes;
+  }
 
   const maxWait = parseIntFlag(values['max-wait'], '--max-wait', 3600);
   const client = makeClient(resolveUrl(values.url));

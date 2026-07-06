@@ -25,10 +25,13 @@ function parseSpec(x: any): JobSpec {
   const gpus = gpusRaw > 0 ? gpusRaw : undefined;
   const gpuType = gpus && x?.gpuType ? String(x.gpuType).trim() || undefined : undefined;
   const walltimeMinutes = Math.max(1, Math.floor(Number(x?.walltimeMinutes) || 120));
+  // Opt-in idle auto-release (minutes). Absent/invalid/<=0 = disabled.
+  const idleRaw = Math.floor(Number(x?.idleTimeoutMinutes) || 0);
+  const idleTimeoutMinutes = idleRaw > 0 ? idleRaw : undefined;
   const jobName = (x?.jobName ? String(x.jobName) : `nebula-${partition || 'compute'}`)
     .replace(/[^A-Za-z0-9._-]/g, '-')
     .slice(0, 60) || 'nebula';
-  return { partition, qos, account, cpus, memGb, gpus, gpuType, walltimeMinutes, jobName };
+  return { partition, qos, account, cpus, memGb, gpus, gpuType, walltimeMinutes, jobName, idleTimeoutMinutes };
 }
 
 export default async function computeRoutes(fastify: FastifyInstance) {

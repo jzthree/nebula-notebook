@@ -56,6 +56,10 @@ import { setupTerminalRoutes, setupTerminalWebSocket, cleanupTerminals } from '.
 // Import notebook WebSocket
 import { setupNotebookWebSocket } from './notebook/notebook-websocket';
 
+// Idle auto-release (client mode, opt-in via NEBULA_IDLE_EXIT_MINUTES)
+import { startIdleExitMonitor } from './idle-exit';
+import { ptyManager } from './terminal/pty-manager';
+
 const PORT = process.env.PORT || process.env.NODE_SERVER_PORT || 3000;
 const DEV_MODE = process.env.DEV_MODE === 'true' || process.argv.includes('--dev');
 const BODY_LIMIT =
@@ -664,6 +668,42 @@ async function main(): Promise<void> {
     serverRegistry.setLocalServerId(clientServerId);
     kernelService.setServerIdentity(clientServerId, serverInstanceId);
     clientRegistration.initFromEnv(boundPort);
+
+    // Opt-in idle auto-release: exit this process after N idle minutes so the
+    // batch job completes and the allocation ends naturally (no scancel needed).
+    const idleExitMinutes = Math.floor(Number(process.env.NEBULA_IDLE_EXIT_MINUTES) || 0);
+    if (idleExitMinutes > 0) {
+      console.log(`[IdleExit] Enabled — allocation auto-ends after ${idleExitMinutes} idle minutes`);
+      startIdleExitMonitor({
+        timeoutMinutes: idleExitMinutes,
+        getKernelSnapshot: () => kernelService.getIdleSnapshot(),
+        getLastPtyActivityMs: () => {
+          const terminals = ptyManager.list();
+          if (terminals.length === 0) return null;
+          return Math.max(...terminals.map((t) => t.lastActivity));
+        },
+        onWarn: (minutesLeft) => {
+          console.warn(`[IdleExit] Idle — will end allocation in ${minutesLeft}m; run anything to keep it`);
+        },
+        onIdleExit: async () => {
+          console.log(`[IdleExit] Idle for ${idleExitMinutes} minutes — releasing allocation (exiting)`);
+          // Shut kernels down cleanly WITHOUT preservation so nothing tries to
+          // resurrect them, then drop the cluster registration and exit 0 —
+          // the batch job completes and the allocation ends.
+          cleanupTerminals();
+          try {
+            await kernelService.shutdown({ preserveKernels: false });
+          } catch (err) {
+            console.error('[IdleExit] Error during kernel cleanup:', err);
+          }
+          try {
+            await clientRegistration.shutdown();
+          } catch { /* best effort — we are exiting anyway */ }
+          console.log('[IdleExit] Allocation released — exiting');
+          process.exit(0);
+        },
+      });
+    }
   }
 }
 

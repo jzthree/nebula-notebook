@@ -94,7 +94,7 @@ Typical flow:
 \`\`\`bash
 nebula compute status                                  # scheduler present?
 nebula compute queues                                  # partitions, idle CPUs/GPUs, backlog
-nebula compute alloc --partition gpu --gpus 1 --walltime 2 --wait   # background task; blocks until active
+nebula compute alloc --partition gpu --gpus 1 --walltime 2 --idle-timeout 60 --wait   # background task; blocks until active
 nebula compute use <alloc-id> <notebook.ipynb>         # bind the notebook's kernels to it
 nebula run <notebook.ipynb> <cell-id>                  # now executes on the allocation
 nebula compute cancel <alloc-id>                       # when the task is done
@@ -107,7 +107,11 @@ your own poll loop.
 Etiquette — allocations consume real cluster resources:
 
 - Request modest resources: only the CPUs/GPUs/memory/walltime the task needs.
-- Cancel allocations you created as soon as the task completes.
+- Add \`--idle-timeout 60\` to allocations you create: the allocation ends
+  itself after 60 idle minutes (no kernel/terminal activity), so a forgotten
+  allocation never squats on GPUs.
+- Cancel allocations you created as soon as the task completes (the idle
+  timeout is a safety net, not a substitute).
 - NEVER cancel allocations you did not create (\`nebula compute ls\` shows all).
 
 ## Rules

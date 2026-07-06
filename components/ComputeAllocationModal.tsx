@@ -103,6 +103,8 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
   const [gpuType, setGpuType] = useState('');
   const [walltimeHours, setWalltimeHours] = useState(2);
   const [jobName, setJobName] = useState('');
+  const [idleRelease, setIdleRelease] = useState(false);
+  const [idleMinutes, setIdleMinutes] = useState(60);
   const [submitting, setSubmitting] = useState(false);
 
   // QoS the selected partition will actually accept (null = any; [] = still checking).
@@ -118,7 +120,8 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
     gpuType: gpus > 0 && gpuType ? gpuType : undefined,
     walltimeMinutes: Math.max(1, Math.round(walltimeHours * 60)),
     jobName: jobName || undefined,
-  }), [partition, qos, data, cpus, memGb, gpus, gpuType, walltimeHours, jobName]);
+    idleTimeoutMinutes: idleRelease ? Math.max(10, Math.round(idleMinutes) || 60) : undefined,
+  }), [partition, qos, data, cpus, memGb, gpus, gpuType, walltimeHours, jobName, idleRelease, idleMinutes]);
 
   const refreshAll = useCallback(async () => {
     try { setAllocations(await listAllocations()); } catch { /* keep last */ }
@@ -352,6 +355,22 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
                   <input type="text" className={inputClass} value={jobName} placeholder={`nebula-${partition || 'compute'}`}
                     onChange={(e) => setJobName(e.target.value)} />
                 </div>
+                {/* Opt-in idle auto-release: the allocation's server exits itself after
+                    N idle minutes, so the job completes and the nodes free up. */}
+                <div className="col-span-2 flex items-center gap-2 text-xs text-slate-600">
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <input type="checkbox" checked={idleRelease} onChange={(e) => setIdleRelease(e.target.checked)} />
+                    End automatically when idle
+                  </label>
+                  <input
+                    type="number" min={10} step={5}
+                    className="w-20 px-2 py-1 text-xs border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+                    value={idleMinutes} disabled={!idleRelease}
+                    onChange={(e) => setIdleMinutes(Math.max(10, Number(e.target.value) || 10))}
+                    aria-label="Idle minutes before auto-end"
+                  />
+                  <span className={idleRelease ? '' : 'text-slate-400'}>idle minutes (no running cells or terminal use)</span>
+                </div>
               </div>
 
               {/* Availability for the selected partition — capacity-based, not a scheduler guess */}
@@ -447,6 +466,11 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
                         <span className="text-slate-500">
                           {a.spec.partition}{a.spec.qos ? `/${a.spec.qos}` : ''} · {a.spec.cpus}cpu · {a.spec.memGb}GB{a.spec.gpus ? ` · ${a.spec.gpus}gpu${a.spec.gpuType ? ` ${gpuLabel(a.spec.gpuType)}` : ''}` : ''}
                         </span>
+                        {a.spec.idleTimeoutMinutes ? (
+                          <span className="text-slate-400" title="The allocation's server exits itself after this long without kernel or terminal activity">
+                            (auto-ends after {a.spec.idleTimeoutMinutes}m idle)
+                          </span>
+                        ) : null}
                         {a.nodes?.length ? <span className="text-slate-400 truncate">{a.nodes.join(', ')}</span> : null}
                         {a.jobId && <span className="text-slate-400">job {a.jobId}</span>}
                         <div className="flex-1" />

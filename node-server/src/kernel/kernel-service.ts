@@ -2445,6 +2445,22 @@ export class KernelService {
   }
 
   /**
+   * Activity snapshot for the idle auto-release monitor (client mode):
+   * whether any kernel is busy/starting, and the most recent kernel activity
+   * across sessions in ms since epoch (sessions track it in seconds).
+   */
+  getIdleSnapshot(): { anyBusy: boolean; lastActivityMs: number | null } {
+    let anyBusy = false;
+    let lastActivityMs: number | null = null;
+    for (const session of this.sessions.values()) {
+      if (session.status === 'busy' || session.status === 'starting') anyBusy = true;
+      const ms = session.lastActivity * 1000;
+      if (lastActivityMs === null || ms > lastActivityMs) lastActivityMs = ms;
+    }
+    return { anyBusy, lastActivityMs };
+  }
+
+  /**
    * Get all sessions
    */
   async getAllSessions(): Promise<SessionInfo[]> {
