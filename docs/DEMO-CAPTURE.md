@@ -295,6 +295,32 @@ Caption: *"Two commands. Your notebook, and your agent."*
 | 3.5 | D | cut to hero image (navigate to the SVG or an end-card HTML) 📸 |
 | 4.6 | D | stop; export `scene-13-start.gif` |
 
+### Scene 14 — ONE MORE THING: COMPUTE ALLOCATION · ~12 s
+Caption: *"One more thing — it runs where your compute lives."*
+
+> **Capture note (captured — `scene-14-compute.gif`):** the feature is
+> **detection-gated** (hidden unless a scheduler is on PATH), so there's no cluster
+> to shoot against off-site. Instead, run the server with the **mock scheduler**
+> (`NEBULA_SCHEDULER=mock` — see `node-server/src/scheduler/mock-scheduler.ts`):
+> it drives the *real* compute UI with fabricated, generic cluster data (no real
+> site's queues/hosts/accounts/GPU SKUs) **and** launches a real local client on
+> submit, so the allocation genuinely goes *pending → active* on a fabricated node
+> with a working kernel. Captured headlessly via CDP (local Chrome → `localhost:3000`,
+> `NO_AUTH=true`), frames assembled with `ffmpeg` (crossfades). The only beat the
+> mock can't *authentically* show is a real `nvidia-smi` on real silicon — shoot
+> that one beat against a live login node if the film needs it, or omit it.
+> **Do not put a real site's partition/host/GPU names on screen** — keep it generic.
+| t | actor | beat |
+|---|---|---|
+| 0.0 | U | kernel menu open, **Server** section in view; start_recording 📸 |
+| 0.8 | U | click **+ New compute allocation** → modal opens beside the live **cluster-load panel** 📸 |
+| 1.6 | — | panel shows only the account's allowed partitions/QoS, each with idle CPUs / idle GPUs **by type** / queue backlog (your jobs highlighted) + a "soonest queue" recommendation banner 📸📸 |
+| 3.2 | U | set cpus / mem / walltime; pick a **GPU** queue → the GPU-type list **narrows to that queue's models** 📸 |
+| 5.0 | U | click **Submit** → row appears in the Server list as **"Queued · waiting…"** (live elapsed) 📸 |
+| 6.5 | — | job starts → row flips to a **green online server** (trim the queue wait in post) 📸📸 |
+| 9.0 | U | pick the allocation's server; run a cell — `!hostname` → the compute node, `nvidia-smi` → the GPU 📸📸 |
+| 11.5 | D | stop; export `scene-14-compute.gif` |
+
 **B-roll** (resource bar, favicon avatars, output drag-resize, FIFO queue,
 headless agent, keyboard-help modal) follow the same loop template; capture
 on demand if a scene needs padding.
@@ -303,11 +329,33 @@ on demand if a scene needs padding.
 
 ## 5. Assembly
 
-- **Default:** deliver the 14 named GIFs. Drop `scene-09-money-shot.gif` at the
-  top of the README; sprinkle scenes 02/03/07 next to the Highlights bullets.
+- **Default:** deliver the 15 named GIFs. Drop `scene-09-money-shot.gif` at the
+  top of the README; sprinkle scenes 02/03/07 next to the Highlights bullets; place
+  `scene-14-compute.gif` next to the cluster/scheduler section (the "one more thing"
+  capstone). `scene-14` is captured via the mock scheduler (no live cluster needed).
 - **Optional single film:** with `ffmpeg` installed, convert each GIF to a clip
   and concat with 6-frame crossfades + the caption already burned in (it's in the
   pixels). One command per pair; final `nebula-demo.mp4` ~3 min.
+
+### Assets & reproducibility
+
+- **MP4 masters are never committed** (`.gitignore`s `docs/assets/demo/*.mp4`) —
+  too big for the repo. Keep them in a local video workspace outside the repo
+  (current home: `~/demo/video/` — stitched cuts `nebula-demo-16x9*.mp4` plus
+  per-scene mp4 intermediates). If the collection grows, promote it to a
+  dedicated assets repo (e.g. `nebula-demo-assets`, git-lfs) so cuts stay
+  versioned without bloating this repo.
+- **Only small derived artifacts live here**: the README-embedded GIFs and
+  poster PNGs in `docs/assets/demo/`.
+- **Distribution**: the final film uploads to the `demo-assets` GitHub release;
+  the README streams it via the user-attachments URL (see the comment at the
+  top of `README.md`). New cut = replace the release asset and refresh the URL.
+- **Reproducibility**: every scene re-captures headlessly —
+  `python scripts/demo-shoot.py all` against a fresh server (scene 14 needs
+  `NEBULA_SCHEDULER=mock`); caption pills are transparent PNGs rendered from
+  HTML and burned with ffmpeg overlay. **Encode floor for stitched cuts: do not
+  go below the previous master's quality (~630 kbps video)** — crf 18 / preset
+  slow at 1080p30 lands ~670 kbps and is the current reference.
 
 ---
 

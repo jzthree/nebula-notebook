@@ -22,13 +22,14 @@ Nebula is an agent-native notebook — built for you and your AI to work in the 
 - **Jupyter kernels** over ZeroMQ (Python, Julia, R, …) that survive dev-server restarts and reattach
 - **Rich outputs** — Plotly MIME rendering and Nebula-native interactive JS outputs, in a virtualized cell list that stays fast on large notebooks
 - **Runs anywhere** — `npx nebula-notebook`, TOTP 2FA, and multi-server clusters behind a single UI
+- **…and it runs where your compute lives** — on an HPC login node, allocate a scheduler job right from the kernel menu (partition/QoS/GPU, with a live queue-load monitor and soonest-queue hint) and your kernel runs on the compute node — no sbatch script, no SSH tunnel. Detection-gated: invisible off-cluster
 
 ## See it in action
 
-**An agent edits your notebook live** — reindenting a cell while you watch, with a presence ring on the cell it's touching:
+**A failing cell, fixed by the agent live** — the cell errors, the agent rewrites it (presence ring on the cell it's touching) and reruns it clean:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/demo/scene-agent.gif" alt="An agent reindents a code cell from 4-space to 2-space live in the UI, with a purple presence ring around the cell" width="760">
+  <img src="https://raw.githubusercontent.com/jzthree/nebula-notebook/main/docs/assets/demo/scene-agent.gif" alt="A code cell throws a KeyError; an agent session starts, rewrites the cell live with a purple presence ring, reruns it, and the clean output appears" width="760">
 </p>
 
 **Interactive outputs, no widget plumbing** — `application/vnd.nebula.web+json` widgets respond to clicks:
@@ -53,15 +54,32 @@ Nebula is an agent-native notebook — built for you and your AI to work in the 
 
 ## Quick Start
 
+### On your machine
+
 ```bash
 npx nebula-notebook
 ```
 
+On first start a QR code appears in the terminal — scan it with an authenticator app (Google Authenticator, Authy, …), then open http://localhost:3000 and enter the 6-digit code. A startup banner shows the URLs and what was detected.
+
 Nebula itself is pure Node — but running notebooks needs a Python (3.10+) with `ipykernel` on the server machine. If none is found, the kernel menu detects your Python environments (venv, conda, uv, pixi, system) and shows the exact setup command for each; environments that already have `ipykernel` register with one click.
 
-On first start, a QR code will appear in the terminal. Scan it with an authenticator app (Google Authenticator, Authy, etc.) to set up 2FA.
+### On a cluster / remote server
 
-Open http://localhost:3000 and enter your 6-digit code.
+Run the server where your files and compute live; browse it through one SSH tunnel:
+
+```bash
+# on the cluster login node (inside tmux so it outlives your session)
+tmux new -s nebula
+npx nebula-notebook
+
+# from your laptop
+ssh -L 3000:localhost:3000 <login-node>     # then open http://localhost:3000
+```
+
+If a SLURM scheduler is present, the kernel menu gains **New compute allocation** — your kernels run on compute nodes, no sbatch script, no extra tunnels. Full guide (bastions, persistent runs, agent placements, troubleshooting): [docs/CLUSTER_SETUP.md](docs/CLUSTER_SETUP.md).
+
+### Let agents in
 
 To let agents (Claude Code, Codex, Cursor, Gemini CLI, …) operate your notebooks, register the Nebula MCP on the machine where your agent runs:
 
@@ -69,7 +87,7 @@ To let agents (Claude Code, Codex, Cursor, Gemini CLI, …) operate your noteboo
 npx nebula-notebook-mcp setup-mcp
 ```
 
-Then open a notebook, click **Agent**, and launch Claude Code or Codex right in the notebook's terminal.
+Then open a notebook, click **Agent**, and launch Claude Code or Codex right in the notebook's terminal — or use the `nebula` CLI (`npx -p nebula-notebook-mcp nebula --help`) for a lighter, shell-first integration.
 
 ### From source (latest)
 
@@ -140,6 +158,8 @@ See [docs/RICH_OUTPUTS.md](docs/RICH_OUTPUTS.md) for examples, payload format, s
 - Python 3.10+ with `ipykernel`, on the machine running the server (other Jupyter kernels — Julia, R, … — work too)
 
 No ipykernel yet? Open the kernel menu in the UI: it detects your Python environments (venv, conda, uv, pixi, Homebrew, system), registers ready ones with one click, and shows the exact install command for the rest — including the PEP 668 "externally managed" cases (uv/Homebrew/system Python) where `pip install` is blocked and an isolated env is the right move.
+
+Using **R** (or another non-Python kernel)? See [docs/R_KERNEL.md](docs/R_KERNEL.md) — registering IRkernel and the one-line fix for the common headless-server plotting error.
 
 ## Project Structure
 
@@ -272,6 +292,14 @@ Servers without the correct secret will be rejected during registration.
 - All servers must have network access to each other
 - Client servers need access to the same filesystem paths as the main server (for notebook files)
 - Each server runs its own Jupyter kernels locally
+
+### Scheduler-backed compute (HPC)
+
+On an HPC login node you don't launch client servers by hand — the scheduler does it for you. When Nebula detects a scheduler (SLURM first — `sbatch`/`squeue` on `PATH`), the kernel menu's **Server** section grows a **+ New compute allocation** entry:
+
+- **Allocate from the notebook.** Pick a partition + QoS (only the ones your account may actually submit to), CPUs, memory, GPUs, and walltime. A **live cluster-load panel** sits beside the form — idle CPUs, idle GPUs *by type*, and per-queue backlog with your own jobs highlighted — and recommends the queue you'll land on soonest. Choosing a GPU queue narrows the GPU-type list to the models that queue actually has, so you can't request one it doesn't offer.
+- **It just becomes a server.** Nebula submits the job; the allocation shows up in the Server list as *"Queued · waiting…"*, then flips to a normal online server the moment the job starts. Select it and your kernels run on the compute node — proxied over the same WebSocket path as any remote kernel, so ZeroMQ never crosses the network. One allocation hosts **many** kernels: queue once, run several notebooks in it. When the walltime ends (or you cancel), the server drops out of the list and its kernels are marked done.
+- **Nothing changes off-cluster.** The whole feature is detection-gated — no scheduler on the machine, no compute UI. Design and internals in [docs/SLURM_COMPUTE.md](docs/SLURM_COMPUTE.md).
 
 ## Tips
 
