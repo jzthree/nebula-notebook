@@ -10,6 +10,8 @@ export interface NormalizedDisplayOutput {
 
 const PREFERRED_MIME_TYPES = [
   'application/vnd.nebula.web+json',
+  // Widget views must win over plotly/html when both are present
+  'application/vnd.jupyter.widget-view+json',
   'application/vnd.plotly.v1+json',
   'text/html',
   'image/png',

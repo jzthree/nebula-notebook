@@ -1,5 +1,10 @@
 /**
- * jupytext percent-format adapter (.py).
+ * jupytext percent-format adapter for #-comment languages (.py, .R, .jl).
+ *
+ * The format is defined entirely in terms of `#` line comments (markers,
+ * header, commented markdown bodies), so the same parser/serializer works
+ * verbatim for any language that uses `#` comments — Python, R, Julia.
+ * The file extension only decides the default kernel (see registry).
  *
  * Format essentials:
  *   - optional jupytext-style header: `# ---` / `# `-prefixed YAML / `# ---`
@@ -248,7 +253,7 @@ export function isPercentNotebookText(text: string): boolean {
 
 export const percentAdapter: NotebookFormatAdapter = {
   name: 'percent',
-  extensions: ['.py'],
+  extensions: ['.py', '.r', '.jl'],
   capabilities: { storesOutputs: false, storesCellIds: true },
   parse,
   serialize,

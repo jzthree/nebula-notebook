@@ -828,7 +828,7 @@ describe('HeadlessOperationHandler', () => {
 
       const saveSpy = vi
         .spyOn(fsService, 'saveNotebookCells')
-        .mockImplementation(() => ({ success: true, mtime: 0 }));
+        .mockImplementation(async () => ({ success: true, mtime: 0 }));
 
       await handler.applyOperation({
         type: 'updateOutputs',
@@ -1230,7 +1230,9 @@ describe('HeadlessOperationHandler', () => {
   describe('Update tracking', () => {
     it('should return updates since timestamp including MCP edits', async () => {
       const notebookPath = createTestNotebook('updates-since.ipynb', []);
-      const start = Date.now();
+      // -1ms: getUpdatesSince filters strictly-after; under full-suite load an
+      // op can land in the same millisecond as `start` and get dropped (flake).
+      const start = Date.now() - 1;
 
       await handler.applyOperation({
         type: 'insertCell',

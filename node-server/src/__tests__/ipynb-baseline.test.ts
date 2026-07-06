@@ -90,11 +90,11 @@ describe('ipynb serialization baseline (must never change)', () => {
     nbPath = path.join(testDir, 'baseline.ipynb');
     // Generation 1: hand-built cells → disk → parse (canonicalizes outputs)
     await service.saveNotebookCells(nbPath, FIXTURE_CELLS, 'python3', META);
-    const gen1 = service.getNotebookCells(nbPath);
+    const gen1 = await service.getNotebookCells(nbPath);
     // Generation 2: canonical cells → disk → parse (the fixpoint)
     await service.saveNotebookCells(nbPath, gen1.cells as NebulaCell[], 'python3', META);
     gen2Json = fs.readFileSync(nbPath, 'utf-8');
-    gen2Cells = service.getNotebookCells(nbPath).cells as NebulaCell[];
+    gen2Cells = (await service.getNotebookCells(nbPath)).cells as NebulaCell[];
   });
 
   afterAll(() => {
@@ -128,7 +128,7 @@ describe('ipynb serialization baseline (must never change)', () => {
     await service.saveNotebookCells(nbPath, gen2Cells, 'python3', META);
     const gen3Json = fs.readFileSync(nbPath, 'utf-8');
     expect(JSON.parse(gen3Json)).toEqual(JSON.parse(gen2Json));
-    const gen3Cells = service.getNotebookCells(nbPath).cells;
+    const gen3Cells = (await service.getNotebookCells(nbPath)).cells;
     expect(normalizeTimestamps(gen3Cells)).toEqual(normalizeTimestamps(gen2Cells));
   });
 });

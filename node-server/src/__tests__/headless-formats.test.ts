@@ -68,7 +68,7 @@ describe('headless operations on text notebook formats', () => {
         await handler.flush(nbPath);
         handler.invalidate(nbPath);
 
-        const reloaded = fsService.getNotebookCells(nbPath);
+        const reloaded = await fsService.getNotebookCells(nbPath);
         expect(reloaded.cells).toHaveLength(1);
         expect(reloaded.cells[0].id).toBe('mycell1');
         expect(reloaded.cells[0].content).toBe('x = 42\nprint(x)');
@@ -103,7 +103,7 @@ describe('headless operations on text notebook formats', () => {
         expect(mv.success).toBe(true);
         await handler.flush(nbPath);
         handler.invalidate(nbPath);
-        const cells = fsService.getNotebookCells(nbPath).cells;
+        const cells = (await fsService.getNotebookCells(nbPath)).cells;
         expect(cells.map((c) => c.id)).toEqual(['c3', 'c1']);
       });
 
@@ -143,13 +143,13 @@ describe('headless operations on text notebook formats', () => {
 
     it('synthesizes a batch op for an external content edit', async () => {
       const nbPath = await setupNotebook('ext.py');
-      const before = fsService.loadHistory(nbPath);
+      const before = await fsService.loadHistory(nbPath);
 
       // "vim": change one cell's content directly on disk
       const text = fs.readFileSync(nbPath, 'utf-8').replace('b = 2', 'b = 2000  # edited in vim');
       fs.writeFileSync(nbPath, text, 'utf-8');
 
-      const after = fsService.loadHistory(nbPath);
+      const after = await fsService.loadHistory(nbPath);
       expect(after.length).toBe(before.length + 1);
       const entry = after[after.length - 1] as any;
       expect(entry.type).toBe('batch');
@@ -163,7 +163,7 @@ describe('headless operations on text notebook formats', () => {
       });
 
       // Idempotent: loading again does not duplicate the reconciliation
-      const again = fsService.loadHistory(nbPath);
+      const again = await fsService.loadHistory(nbPath);
       expect(again.length).toBe(after.length);
     });
 
@@ -175,7 +175,7 @@ describe('headless operations on text notebook formats', () => {
       text += '\n# %% id="newcell"\nz = 99\n';
       fs.writeFileSync(nbPath, text, 'utf-8');
 
-      const history = fsService.loadHistory(nbPath);
+      const history = await fsService.loadHistory(nbPath);
       const entry = history[history.length - 1] as any;
       expect(entry.type).toBe('batch');
       const types = entry.operations.map((o: any) => o.type).sort();
@@ -193,7 +193,7 @@ describe('headless operations on text notebook formats', () => {
       fs.writeFileSync(nbPath, text, 'utf-8');
 
       // Reconcile (as any history consumer would)
-      fsService.loadHistory(nbPath);
+      await fsService.loadHistory(nbPath);
       handler.invalidate(nbPath);
 
       // Undo via the headless handler: should revert the EXTERNAL edit first
@@ -201,7 +201,7 @@ describe('headless operations on text notebook formats', () => {
       expect(undo.success).toBe(true);
       await handler.flush(nbPath);
       handler.invalidate(nbPath);
-      const cells = fsService.getNotebookCells(nbPath).cells;
+      const cells = (await fsService.getNotebookCells(nbPath)).cells;
       expect(cells.find((c) => c.id === 'edit2')?.content).toBe('b = 2');
 
     });
@@ -210,7 +210,7 @@ describe('headless operations on text notebook formats', () => {
       const nbPath = await setupNotebook('ext4.py');
       const text = fs.readFileSync(nbPath, 'utf-8').replace('b = 2', 'b = 777');
       fs.writeFileSync(nbPath, text, 'utf-8');
-      fsService.loadHistory(nbPath); // reconcile
+      await fsService.loadHistory(nbPath); // reconcile
       handler.invalidate(nbPath);
 
       const undo = await handler.applyOperation({ type: 'undo', notebookPath: nbPath });
@@ -220,7 +220,7 @@ describe('headless operations on text notebook formats', () => {
       expect(redo.success).toBe(true);
       await handler.flush(nbPath);
       handler.invalidate(nbPath);
-      const cells = fsService.getNotebookCells(nbPath).cells;
+      const cells = (await fsService.getNotebookCells(nbPath)).cells;
       expect(cells.find((c) => c.id === 'edit2')?.content).toBe('b = 777');
     });
 
@@ -234,8 +234,8 @@ describe('headless operations on text notebook formats', () => {
         cell: { id: 'i1', type: 'code', content: '1' },
       });
       await handler.flush(nbPath);
-      const before = fsService.loadHistory(nbPath);
-      const again = fsService.loadHistory(nbPath);
+      const before = await fsService.loadHistory(nbPath);
+      const again = await fsService.loadHistory(nbPath);
       expect(again.length).toBe(before.length);
       expect(fs.existsSync(path.join(testDir, '.nebula', 'plain.lastsave.json'))).toBe(false);
     });

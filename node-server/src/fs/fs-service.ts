@@ -5,6 +5,7 @@
  */
 
 import * as fs from 'fs';
+import { promises as fsp } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
@@ -26,7 +27,7 @@ import {
   NebulaConfig,
 } from './types';
 import { getDefaultKernelName } from '../kernel/default-kernel';
-import { getFormatAdapter, isNotebookPath } from './notebook-formats/registry';
+import { getFormatAdapter, isNotebookPath, defaultKernelForPath } from './notebook-formats/registry';
 import { isPercentNotebookText } from './notebook-formats/percent';
 import { NotebookFormatAdapter } from './notebook-formats/types';
 import { buildDisplayOutput, convertMimeBundleToJupyter } from '../output/display-data';
@@ -381,6 +382,43 @@ export class FilesystemService {
   }
 
   /**
+   * Async variant of atomicWriteFileSync (write temp, fsync, rename, fsync dir).
+   * Used on hot notebook-save paths so large writes never block the event loop.
+   */
+  private async atomicWriteFile(targetPath: string, data: string): Promise<void> {
+    const dir = path.dirname(targetPath);
+    await fsp.mkdir(dir, { recursive: true });
+
+    const tmpName = `.${path.basename(targetPath)}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
+    const tmpPath = path.join(dir, tmpName);
+    const handle = await fsp.open(tmpPath, 'w', 0o600);
+    try {
+      await handle.writeFile(data, 'utf-8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+
+    await fsp.rename(tmpPath, targetPath);
+
+    // Best-effort directory fsync
+    try {
+      const dirHandle = await fsp.open(dir, 'r');
+      try {
+        await dirHandle.sync();
+      } finally {
+        await dirHandle.close();
+      }
+    } catch {
+      // Ignore fsync errors on directory handles
+    }
+  }
+
+  private async writeJsonAtomic(targetPath: string, payload: unknown): Promise<void> {
+    await this.atomicWriteFile(targetPath, JSON.stringify(payload, null, 2));
+  }
+
+  /**
    * Format file size for display
    */
   formatSize(size: number): string {
@@ -402,7 +440,7 @@ export class FilesystemService {
     const ext = extension.toLowerCase();
     if (ext === '.ipynb' || ext === '.qmd') {
       return 'notebook';
-    } else if (['.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.yaml', '.yml', '.toml', '.md', '.txt'].includes(ext)) {
+    } else if (['.py', '.r', '.jl', '.js', '.ts', '.tsx', '.jsx', '.json', '.yaml', '.yml', '.toml', '.md', '.txt'].includes(ext)) {
       return 'code';
     } else if (['.csv', '.tsv', '.xlsx', '.xls'].includes(ext)) {
       return 'data';
@@ -473,14 +511,17 @@ export class FilesystemService {
   /**
    * Get file modification time
    */
-  getFileMtime(filePath: string): MtimeResponse {
+  async getFileMtime(filePath: string): Promise<MtimeResponse> {
     const normalizedPath = this.normalizePath(filePath);
 
-    if (!fs.existsSync(normalizedPath)) {
+    let stat: fs.Stats;
+    try {
+      stat = await fsp.stat(normalizedPath);
+    } catch {
+      // Matches the sync existsSync() behavior: any stat failure reads as missing
       throw new Error(`File not found: ${normalizedPath}`);
     }
 
-    const stat = fs.statSync(normalizedPath);
     return {
       path: normalizedPath,
       mtime: stat.mtimeMs / 1000,
@@ -540,14 +581,17 @@ export class FilesystemService {
   /**
    * Read a file's contents
    */
-  readFile(filePath: string): ReadFileResponse {
+  async readFile(filePath: string): Promise<ReadFileResponse> {
     const normalizedPath = this.normalizePath(filePath);
 
-    if (!fs.existsSync(normalizedPath)) {
+    let stat: fs.Stats;
+    try {
+      stat = await fsp.stat(normalizedPath);
+    } catch {
+      // Matches the sync existsSync() behavior: any stat failure reads as missing
       throw new Error(`File not found: ${normalizedPath}`);
     }
 
-    const stat = fs.statSync(normalizedPath);
     if (stat.isDirectory()) {
       throw new Error(`Path is a directory: ${normalizedPath}`);
     }
@@ -555,7 +599,7 @@ export class FilesystemService {
     const extension = path.extname(normalizedPath).toLowerCase();
 
     if (extension === '.ipynb') {
-      const content = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8'));
+      const content = JSON.parse(await fsp.readFile(normalizedPath, 'utf-8'));
       return {
         path: normalizedPath,
         type: 'notebook',
@@ -565,7 +609,7 @@ export class FilesystemService {
 
     // Try to read as text
     try {
-      const content = fs.readFileSync(normalizedPath, 'utf-8');
+      const content = await fsp.readFile(normalizedPath, 'utf-8');
       return {
         path: normalizedPath,
         type: 'text',
@@ -681,12 +725,12 @@ export class FilesystemService {
     return path.join(nebulaDir, `${nameWithoutExt}.lastsave.json`);
   }
 
-  private writeTextNotebookLastSave(notebookPath: string, serializedText: string, adapter: NotebookFormatAdapter): void {
+  private async writeTextNotebookLastSave(notebookPath: string, serializedText: string, adapter: NotebookFormatAdapter): Promise<void> {
     try {
       // Record the POST-round-trip identity (parse of what was written), so
       // positional ids (qmd markdown cells) never read as false divergence.
       const canonical = adapter.parse(serializedText).cells;
-      this.writeJsonAtomicSync(this.getLastSavePath(notebookPath), {
+      await this.writeJsonAtomic(this.getLastSavePath(notebookPath), {
         cells: canonical.map((c) => ({ id: c.id, type: c.type, content: c.content })),
       });
     } catch (e) {
@@ -1118,31 +1162,64 @@ export class FilesystemService {
   }
 
   /**
-   * Read a notebook and convert to internal cell format
+   * Read a notebook and convert to internal cell format (async; hot path for
+   * notebook load — large .ipynb reads must not block the event loop)
    */
-  getNotebookCells(notebookPath: string): NotebookCellsResponse {
+  async getNotebookCells(notebookPath: string): Promise<NotebookCellsResponse> {
+    const normalizedPath = this.normalizePath(notebookPath);
+
+    let raw: string;
+    let stat: fs.Stats;
+    try {
+      [raw, stat] = await Promise.all([
+        fsp.readFile(normalizedPath, 'utf-8'),
+        fsp.stat(normalizedPath),
+      ]);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        throw new Error(`Notebook not found: ${normalizedPath}`);
+      }
+      throw err;
+    }
+
+    return this.buildNotebookCellsResponse(normalizedPath, raw, stat.mtimeMs);
+  }
+
+  /**
+   * Sync variant of getNotebookCells. Kept for cold callers that need a
+   * synchronous read (headless cache warm-up, initial-history bootstrap).
+   */
+  getNotebookCellsSync(notebookPath: string): NotebookCellsResponse {
     const normalizedPath = this.normalizePath(notebookPath);
 
     if (!fs.existsSync(normalizedPath)) {
       throw new Error(`Notebook not found: ${normalizedPath}`);
     }
 
+    const raw = fs.readFileSync(normalizedPath, 'utf-8');
+    const stat = fs.statSync(normalizedPath);
+    return this.buildNotebookCellsResponse(normalizedPath, raw, stat.mtimeMs);
+  }
+
+  /**
+   * Convert raw notebook file content to the internal cell format (CPU only).
+   */
+  private buildNotebookCellsResponse(normalizedPath: string, raw: string, mtimeMs: number): NotebookCellsResponse {
     // Text notebook formats (.py percent / .qmd): adapter path. The .ipynb
     // body below is untouched.
     const formatAdapter = getFormatAdapter(normalizedPath);
     if (formatAdapter) {
-      const parsed = formatAdapter.parse(fs.readFileSync(normalizedPath, 'utf-8'));
-      const textStat = fs.statSync(normalizedPath);
+      const parsed = formatAdapter.parse(raw);
       return {
         cells: parsed.cells,
         metadata: parsed.metadata,
-        kernelspec: parsed.kernelspecName || 'python3',
+        kernelspec: parsed.kernelspecName || defaultKernelForPath(normalizedPath),
         kernelspecSource: parsed.kernelspecName ? 'metadata' : 'default',
-        mtime: textStat.mtimeMs / 1000,
+        mtime: mtimeMs / 1000,
       };
     }
 
-    const notebook: JupyterNotebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8'));
+    const notebook: JupyterNotebook = JSON.parse(raw);
 
     const metadataKernel = notebook.metadata?.kernelspec?.name;
     const kernelspec = metadataKernel || 'python3';
@@ -1185,14 +1262,12 @@ export class FilesystemService {
       return cell;
     });
 
-    const stat = fs.statSync(normalizedPath);
-
     return {
       cells,
       metadata: notebook.metadata || {},
       kernelspec,
       kernelspecSource: metadataKernel ? 'metadata' : 'default',
-      mtime: stat.mtimeMs / 1000,
+      mtime: mtimeMs / 1000,
     };
   }
 
@@ -1200,7 +1275,7 @@ export class FilesystemService {
    * Read a notebook and convert to internal cell format, resolving default kernel if needed
    */
   async getNotebookCellsWithKernel(notebookPath: string): Promise<NotebookCellsResponse> {
-    const result = this.getNotebookCells(notebookPath);
+    const result = await this.getNotebookCells(notebookPath);
     if (result.kernelspecSource === 'metadata') {
       return result;
     }
@@ -1224,17 +1299,17 @@ export class FilesystemService {
   /**
    * Save cells to a notebook file
    */
-  saveNotebookCells(
+  async saveNotebookCells(
     notebookPath: string,
     cells: NebulaCell[],
     kernelName?: string,
     notebookMetadata?: Record<string, unknown>
-  ): SaveNotebookResult {
+  ): Promise<SaveNotebookResult> {
     const normalizedPath = this.normalizePath(notebookPath);
 
     const formatAdapter = getFormatAdapter(normalizedPath);
     if (formatAdapter) {
-      return this.saveTextNotebookCells(formatAdapter, normalizedPath, cells, kernelName, notebookMetadata);
+      return await this.saveTextNotebookCells(formatAdapter, normalizedPath, cells, kernelName, notebookMetadata);
     }
 
     // Load existing notebook metadata if file exists.
@@ -1242,25 +1317,27 @@ export class FilesystemService {
     // parsing the full notebook on every save. Fall back to full JSON
     // parsing only for smaller notebooks when the fast path cannot find it.
     let existingMetadata: JupyterNotebook['metadata'] = {};
-    if (fs.existsSync(normalizedPath)) {
+    try {
+      const stat = await fsp.stat(normalizedPath);
+      const handle = await fsp.open(normalizedPath, 'r');
+      let head: string;
       try {
-        const stat = fs.statSync(normalizedPath);
-        const fd = fs.openSync(normalizedPath, 'r');
         const buf = Buffer.alloc(NOTEBOOK_METADATA_FAST_PATH_BYTES);
-        const bytesRead = fs.readSync(fd, buf, 0, NOTEBOOK_METADATA_FAST_PATH_BYTES, 0);
-        fs.closeSync(fd);
-        const head = buf.toString('utf-8', 0, bytesRead);
-
-        const extractedMetadata = extractTopLevelObjectField(head, 'metadata');
-        if (extractedMetadata) {
-          existingMetadata = extractedMetadata;
-        } else if (stat.size <= NOTEBOOK_METADATA_FALLBACK_PARSE_BYTES) {
-          const notebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8')) as JupyterNotebook;
-          existingMetadata = notebook.metadata || {};
-        }
-      } catch {
-        // Start fresh — metadata extraction failed
+        const { bytesRead } = await handle.read(buf, 0, NOTEBOOK_METADATA_FAST_PATH_BYTES, 0);
+        head = buf.toString('utf-8', 0, bytesRead);
+      } finally {
+        await handle.close();
       }
+
+      const extractedMetadata = extractTopLevelObjectField(head, 'metadata');
+      if (extractedMetadata) {
+        existingMetadata = extractedMetadata;
+      } else if (stat.size <= NOTEBOOK_METADATA_FALLBACK_PARSE_BYTES) {
+        const notebook = JSON.parse(await fsp.readFile(normalizedPath, 'utf-8')) as JupyterNotebook;
+        existingMetadata = notebook.metadata || {};
+      }
+    } catch {
+      // Start fresh — file missing or metadata extraction failed
     }
 
     kernelName = kernelName || 'python3';
@@ -1329,13 +1406,11 @@ export class FilesystemService {
 
     // Create parent directory if needed
     const parentDir = path.dirname(normalizedPath);
-    if (!fs.existsSync(parentDir)) {
-      fs.mkdirSync(parentDir, { recursive: true });
-    }
+    await fsp.mkdir(parentDir, { recursive: true });
 
-    this.writeJsonAtomicSync(normalizedPath, notebook);
+    await this.writeJsonAtomic(normalizedPath, notebook);
 
-    const stat = fs.statSync(normalizedPath);
+    const stat = await fsp.stat(normalizedPath);
     return {
       success: true,
       mtime: stat.mtimeMs / 1000,
@@ -1376,21 +1451,19 @@ export class FilesystemService {
 
       // Ensure .nebula directory exists for journal/history/session
       const { nebulaDir } = this.getNebulaPaths(notebookPath);
-      if (!fs.existsSync(nebulaDir)) {
-        fs.mkdirSync(nebulaDir, { recursive: true });
-      }
+      await fsp.mkdir(nebulaDir, { recursive: true });
 
-      this.writeJsonAtomicSync(journalPath, journal);
+      await this.writeJsonAtomic(journalPath, journal);
 
       if (historyPath) {
-        this.writeJsonAtomicSync(historyPath, history || []);
+        await this.writeJsonAtomic(historyPath, history || []);
       }
 
       if (sessionPath) {
-        this.writeJsonAtomicSync(sessionPath, session || {});
+        await this.writeJsonAtomic(sessionPath, session || {});
       }
 
-      const result = this.saveNotebookCells(notebookPath, cells, kernelName, notebookMetadata);
+      const result = await this.saveNotebookCells(notebookPath, cells, kernelName, notebookMetadata);
 
       const committedJournal: CommitJournal = {
         ...journal,
@@ -1398,10 +1471,10 @@ export class FilesystemService {
         committedAt: Date.now(),
       };
 
-      this.writeJsonAtomicSync(journalPath, committedJournal);
+      await this.writeJsonAtomic(journalPath, committedJournal);
 
       try {
-        fs.unlinkSync(journalPath);
+        await fsp.unlink(journalPath);
       } catch {
         // Ignore cleanup errors; journal can be inspected if needed
       }
@@ -1414,20 +1487,18 @@ export class FilesystemService {
    * Save cells to a text-format notebook (.py percent / .qmd).
    * Outputs and execution counts are never serialized — by format design.
    */
-  private saveTextNotebookCells(
+  private async saveTextNotebookCells(
     adapter: NotebookFormatAdapter,
     normalizedPath: string,
     cells: NebulaCell[],
     kernelName?: string,
     notebookMetadata?: Record<string, unknown>
-  ): SaveNotebookResult {
+  ): Promise<SaveNotebookResult> {
     let existingMetadata: Record<string, unknown> = {};
-    if (fs.existsSync(normalizedPath)) {
-      try {
-        existingMetadata = adapter.parse(fs.readFileSync(normalizedPath, 'utf-8')).metadata;
-      } catch {
-        // Start fresh — metadata extraction failed
-      }
+    try {
+      existingMetadata = adapter.parse(await fsp.readFile(normalizedPath, 'utf-8')).metadata;
+    } catch {
+      // Start fresh — file missing or metadata extraction failed
     }
 
     const finalMetadata: Record<string, unknown> = { ...existingMetadata };
@@ -1442,9 +1513,9 @@ export class FilesystemService {
     }
 
     const text = adapter.serialize(cells, finalMetadata, kernelName);
-    this.atomicWriteFileSync(normalizedPath, text);
-    this.writeTextNotebookLastSave(normalizedPath, text, adapter);
-    const stat = fs.statSync(normalizedPath);
+    await this.atomicWriteFile(normalizedPath, text);
+    await this.writeTextNotebookLastSave(normalizedPath, text, adapter);
+    const stat = await fsp.stat(normalizedPath);
     return { success: true, mtime: stat.mtimeMs / 1000 };
   }
 
@@ -1485,20 +1556,22 @@ export class FilesystemService {
     return await this.withWriteLock(notebookPath, async () => {
       const normalizedPath = this.normalizePath(notebookPath);
 
-      if (!fs.existsSync(normalizedPath)) {
+      try {
+        await fsp.access(normalizedPath);
+      } catch {
         return { success: false, error: `Notebook not found: ${normalizedPath}` };
       }
 
       const formatAdapter = getFormatAdapter(normalizedPath);
       if (formatAdapter) {
         try {
-          const rawText = fs.readFileSync(normalizedPath, 'utf-8');
+          const rawText = await fsp.readFile(normalizedPath, 'utf-8');
           // A plain .py script (no markers, no header) must not be
           // Nebula-fied by metadata side effects — kernel attach and
           // settings writes are skipped until a content save makes the
           // file a notebook on purpose.
           if (formatAdapter.name === 'percent' && !isPercentNotebookText(rawText)) {
-            const stat = fs.statSync(normalizedPath);
+            const stat = await fsp.stat(normalizedPath);
             return { success: true, changed: false, mtime: stat.mtimeMs / 1000 };
           }
           const parsed = formatAdapter.parse(rawText);
@@ -1515,11 +1588,11 @@ export class FilesystemService {
             }
           }
           if (isDeepStrictEqual(existingMetadata, nextMetadata)) {
-            const stat = fs.statSync(normalizedPath);
+            const stat = await fsp.stat(normalizedPath);
             return { success: true, changed: false, mtime: stat.mtimeMs / 1000 };
           }
-          this.atomicWriteFileSync(normalizedPath, formatAdapter.serialize(parsed.cells, nextMetadata));
-          const stat = fs.statSync(normalizedPath);
+          await this.atomicWriteFile(normalizedPath, formatAdapter.serialize(parsed.cells, nextMetadata));
+          const stat = await fsp.stat(normalizedPath);
           return { success: true, changed: true, mtime: stat.mtimeMs / 1000 };
         } catch (e) {
           return { success: false, error: `Failed to update notebook: ${e}` };
@@ -1527,7 +1600,7 @@ export class FilesystemService {
       }
 
       try {
-        const notebook: JupyterNotebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8'));
+        const notebook: JupyterNotebook = JSON.parse(await fsp.readFile(normalizedPath, 'utf-8'));
 
         const existingMetadata = notebook.metadata || {};
         const nextMetadata: Record<string, unknown> = { ...existingMetadata };
@@ -1543,7 +1616,7 @@ export class FilesystemService {
         }
 
         if (isDeepStrictEqual(existingMetadata, nextMetadata)) {
-          const stat = fs.statSync(normalizedPath);
+          const stat = await fsp.stat(normalizedPath);
           return {
             success: true,
             changed: false,
@@ -1552,8 +1625,8 @@ export class FilesystemService {
         }
 
         notebook.metadata = nextMetadata;
-        this.writeJsonAtomicSync(normalizedPath, notebook);
-        const stat = fs.statSync(normalizedPath);
+        await this.writeJsonAtomic(normalizedPath, notebook);
+        const stat = await fsp.stat(normalizedPath);
 
         return {
           success: true,
@@ -1577,7 +1650,7 @@ export class FilesystemService {
   }
 
   private buildInitialHistory(notebookPath: string): unknown[] {
-    const { cells } = this.getNotebookCells(notebookPath);
+    const { cells } = this.getNotebookCellsSync(notebookPath);
     return [{
       type: 'snapshot',
       cells: cells.map(cell => this.stripOutputsForHistorySnapshot(cell)),
@@ -1676,20 +1749,25 @@ export class FilesystemService {
 
     const agentCreated = Boolean(nebula.agent_created);
     const agentPermitted = Boolean(nebula.agent_permitted);
-    const canModify = agentCreated || (agentPermitted && hasHistory);
+    // Tri-state: an explicit user revoke (agent_permitted === false) always wins,
+    // even for agent-created notebooks. Agent-created notebooks are permitted by
+    // default (unless revoked); other notebooks need an explicit user grant.
+    const revoked = nebula.agent_permitted === false;
+    const permitted = agentCreated ? !revoked : agentPermitted;
+    // Agent-created notebooks carry history from creation, so they skip the
+    // separate has-history gate that user-permitted notebooks require.
+    const canModify = permitted && (agentCreated || hasHistory);
 
     return {
       agent_created: agentCreated,
       agent_permitted: agentPermitted,
       has_history: hasHistory,
       can_agent_modify: canModify,
-      reason: agentCreated
-        ? 'Agent created this notebook'
+      reason: !permitted
+        ? (agentCreated ? 'Agent access revoked' : 'Not permitted for agent modifications')
         : canModify
-          ? 'User permitted and history enabled'
-          : agentPermitted
-            ? 'User permitted but history not enabled'
-            : 'Not permitted for agent modifications',
+          ? (agentCreated ? 'Agent created this notebook' : 'User permitted and history enabled')
+          : 'User permitted but history not enabled',
     };
   }
 
@@ -1697,8 +1775,13 @@ export class FilesystemService {
    * Check if a notebook is permitted for agent modifications
    */
   isAgentPermitted(notebookPath: string): boolean {
-    const status = this.getAgentPermissionStatus(notebookPath);
-    return status.agent_created || status.agent_permitted;
+    // Agent-created notebooks are permitted unless explicitly revoked; others
+    // require an explicit grant. A user revoke wins in both cases.
+    const metadata = this.getNotebookMetadata(notebookPath);
+    const nebula = (metadata.nebula || {}) as Record<string, unknown>;
+    const agentCreated = Boolean(nebula.agent_created);
+    const revoked = nebula.agent_permitted === false;
+    return agentCreated ? !revoked : Boolean(nebula.agent_permitted);
   }
 
   /**
@@ -1725,20 +1808,44 @@ export class FilesystemService {
 
     // Create .nebula directory if needed
     const nebulaDir = path.dirname(historyPath);
-    if (!fs.existsSync(nebulaDir)) {
-      fs.mkdirSync(nebulaDir, { recursive: true });
-    }
+    await fsp.mkdir(nebulaDir, { recursive: true });
 
     await this.withWriteLock(notebookPath, async () => {
-      this.writeJsonAtomicSync(historyPath, history);
+      await this.writeJsonAtomic(historyPath, history);
     });
     return true;
   }
 
   /**
-   * Load operation history for a notebook
+   * Load operation history for a notebook (async; history files can be many MB)
    */
-  loadHistory(notebookPath: string): unknown[] {
+  async loadHistory(notebookPath: string): Promise<unknown[]> {
+    const historyPath = this.getHistoryPath(notebookPath);
+
+    if (this.hasPendingCommit(notebookPath)) {
+      console.warn(`[FilesystemService] Pending commit detected for ${notebookPath}; skipping history load.`);
+      return [];
+    }
+
+    let history: unknown[];
+    try {
+      history = JSON.parse(await fsp.readFile(historyPath, 'utf-8'));
+    } catch {
+      // Missing or unreadable/corrupt history file
+      return [];
+    }
+
+    // Text-format notebooks can be edited outside Nebula (that is their
+    // point); reconcile any divergence into history so undo/redo stays
+    // infinite across external edits. No-op for .ipynb.
+    return this.reconcileExternalTextEdits(notebookPath, history);
+  }
+
+  /**
+   * Sync variant of loadHistory. Kept for cold callers that need a
+   * synchronous read (headless undo/redo state bootstrap).
+   */
+  loadHistorySync(notebookPath: string): unknown[] {
     const historyPath = this.getHistoryPath(notebookPath);
 
     if (this.hasPendingCommit(notebookPath)) {
@@ -1757,9 +1864,6 @@ export class FilesystemService {
       return [];
     }
 
-    // Text-format notebooks can be edited outside Nebula (that is their
-    // point); reconcile any divergence into history so undo/redo stays
-    // infinite across external edits. No-op for .ipynb.
     return this.reconcileExternalTextEdits(notebookPath, history);
   }
 
@@ -1898,12 +2002,10 @@ export class FilesystemService {
 
     // Create .nebula directory if needed
     const nebulaDir = path.dirname(sessionPath);
-    if (!fs.existsSync(nebulaDir)) {
-      fs.mkdirSync(nebulaDir, { recursive: true });
-    }
+    await fsp.mkdir(nebulaDir, { recursive: true });
 
     await this.withWriteLock(notebookPath, async () => {
-      this.writeJsonAtomicSync(sessionPath, session);
+      await this.writeJsonAtomic(sessionPath, session);
     });
     return true;
   }

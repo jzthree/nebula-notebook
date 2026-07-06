@@ -19,6 +19,10 @@ export interface UseAutosaveOptions {
   onSave: (fileId: string, cells: Cell[]) => Promise<void>;
   enabled?: boolean;
   hasRedoHistory?: boolean; // Block autosave when redo history exists (user has undone)
+  // Called when a save attempt fails. Retries are scheduled automatically by
+  // the state machine — this exists so the UI can surface the failure loudly
+  // (toast, banner) instead of just a status flag.
+  onSaveError?: (error: Error, info: { isManual: boolean; consecutiveFailures: number }) => void;
 }
 
 interface CellSnapshot {
@@ -30,7 +34,7 @@ interface CellSnapshot {
   outputsRef?: Cell['outputs'];
 }
 
-export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHistory = false }: UseAutosaveOptions) {
+export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHistory = false, onSaveError }: UseAutosaveOptions) {
   // UI status (derived from machine state)
   const [uiStatus, setUiStatus] = useState<AutosaveStatus>({
     status: 'saved',
@@ -59,6 +63,14 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
 
   // Guard against concurrent saves - prevents race conditions with mtime updates
   const saveInProgressRef = useRef(false);
+
+  // Consecutive failed save attempts (reset on success) — lets the UI decide
+  // how loudly to surface repeated failures without spamming on every retry.
+  const consecutiveFailuresRef = useRef(0);
+
+  // Keep the latest onSaveError without re-creating performSave
+  const onSaveErrorRef = useRef(onSaveError);
+  onSaveErrorRef.current = onSaveError;
 
   const buildSnapshot = useCallback((cell: Cell): CellSnapshot => ({
     type: cell.type,
@@ -210,14 +222,21 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
       console.info(`[Autosave] Saving notebook (manual=${isManualSaveRef.current})`);
       await onSave(fileId, cells);
       updateSavedState(cells);
+      consecutiveFailuresRef.current = 0;
       const savedAt = Date.now();
       const hasDirtyChanges = refreshDirtyState(cellsRef.current);
       setUiStatus({ status: hasDirtyChanges ? 'unsaved' : 'saved', lastSaved: savedAt });
       dispatch({ type: 'SAVE_SUCCESS' });
     } catch (error) {
       console.error('Autosave failed:', error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      consecutiveFailuresRef.current += 1;
       setUiStatus(prev => ({ status: 'error', lastSaved: prev.lastSaved }));
-      dispatch({ type: 'SAVE_ERROR', error: error instanceof Error ? error : new Error(String(error)) });
+      onSaveErrorRef.current?.(err, {
+        isManual: isManualSaveRef.current,
+        consecutiveFailures: consecutiveFailuresRef.current,
+      });
+      dispatch({ type: 'SAVE_ERROR', error: err });
     } finally {
       // Reset flags
       saveInProgressRef.current = false;

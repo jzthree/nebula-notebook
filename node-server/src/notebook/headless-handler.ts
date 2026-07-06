@@ -101,7 +101,7 @@ export class HeadlessOperationHandler {
    */
   private getCachedNotebook(notebookPath: string): NotebookCache {
     if (!this.cache.has(notebookPath)) {
-      const result = this.fsService.getNotebookCells(notebookPath);
+      const result = this.fsService.getNotebookCellsSync(notebookPath);
       this.cache.set(notebookPath, {
         cells: result.cells || [],
         metadata: result.metadata || {},
@@ -209,23 +209,24 @@ export class HeadlessOperationHandler {
   private checkAgentPermission(notebookPath: string, _operationType: string): OperationResult | null {
     const status = this.fsService.getAgentPermissionStatus(notebookPath);
 
-    if (status.agent_created) {
+    // can_agent_modify already encodes the tri-state rule (agent-created notebooks
+    // are permitted unless explicitly revoked; user notebooks need permission +
+    // history), so an explicit user revoke wins even for agent-created notebooks.
+    if (status.can_agent_modify) {
       return null;
     }
 
-    if (status.agent_permitted) {
-      if (!status.has_history) {
-        return {
-          success: false,
-          error: `Agent cannot modify "${notebookPath}": notebook is user-permitted but history is not enabled. Open the notebook in the UI first to enable history tracking, or the agent can create a new notebook.`,
-        };
-      }
-      return null;
+    // User-permitted but history not yet enabled (soft, fixable) vs. not permitted.
+    if (status.agent_permitted && !status.has_history && !status.agent_created) {
+      return {
+        success: false,
+        error: `Agent cannot modify "${notebookPath}": notebook is user-permitted but history is not enabled. Open the notebook in the UI first to enable history tracking, or the agent can create a new notebook.`,
+      };
     }
 
     return {
       success: false,
-      error: `Agent cannot modify "${notebookPath}": notebook is not agent-permitted. Either open the notebook in Nebula UI and grant agent permission, or the agent can create a new notebook which will be automatically permitted.`,
+      error: `Agent cannot modify "${notebookPath}": notebook is not agent-permitted (agent access may have been revoked). Either open the notebook in Nebula UI and grant agent permission, or the agent can create a new notebook which will be automatically permitted.`,
     };
   }
 

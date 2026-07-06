@@ -21,6 +21,21 @@ export function getFormatAdapter(filePath: string): NotebookFormatAdapter | null
   return BY_EXTENSION.get(path.extname(filePath).toLowerCase()) ?? null;
 }
 
+/**
+ * Default kernel for a text-notebook file that does not declare one in its
+ * header, keyed by extension. Falls back to python3 for unknown extensions.
+ * (.qmd resolves its kernel from the first code fence's language instead.)
+ */
+const DEFAULT_KERNEL_BY_EXTENSION: Record<string, string> = {
+  '.py': 'python3',
+  '.r': 'ir',
+  '.jl': 'julia',
+};
+
+export function defaultKernelForPath(filePath: string): string {
+  return DEFAULT_KERNEL_BY_EXTENSION[path.extname(filePath).toLowerCase()] ?? 'python3';
+}
+
 export function isTextNotebookPath(filePath: string): boolean {
   return BY_EXTENSION.has(path.extname(filePath).toLowerCase());
 }

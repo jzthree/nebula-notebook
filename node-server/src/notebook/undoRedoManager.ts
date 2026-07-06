@@ -262,7 +262,7 @@ export class HeadlessUndoRedoManager {
       let loadedHistory: TimestampedOperation[] = [];
 
       try {
-        loadedHistory = this.fsService.loadHistory(notebookPath) as TimestampedOperation[];
+        loadedHistory = this.fsService.loadHistorySync(notebookPath) as TimestampedOperation[];
       } catch (err) {
         console.warn(`[UndoRedoManager] Failed to load history for ${notebookPath}:`, err);
       }

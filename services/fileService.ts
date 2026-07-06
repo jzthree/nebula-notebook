@@ -857,3 +857,31 @@ export const updateNotebookSettings = async (
     return null;
   }
 };
+
+/**
+ * Persist live ipywidgets state into notebook metadata.widgets
+ * (application/vnd.jupyter.widget-state+json). Returns the new file mtime so
+ * the caller can adopt it and avoid a false conflict on the next save.
+ */
+export const saveWidgetState = async (
+  notebookPath: string,
+  widgetState: Record<string, unknown>
+): Promise<{ mtime?: number } | null> => {
+  try {
+    const response = await fetch(`${API_BASE}/notebook/widget-state`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: notebookPath, widget_state: widgetState })
+    });
+
+    if (!response.ok) {
+      console.warn('Failed to persist widget state:', await response.text());
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.warn('Failed to persist widget state:', error);
+    return null;
+  }
+};

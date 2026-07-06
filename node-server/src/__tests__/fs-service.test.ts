@@ -183,13 +183,13 @@ describe('FilesystemService', () => {
       fs.unlinkSync(path.join(testDir, 'mtime-test.txt'));
     });
 
-    it('should return mtime for file', () => {
-      const result = service.getFileMtime(path.join(testDir, 'mtime-test.txt'));
+    it('should return mtime for file', async () => {
+      const result = await service.getFileMtime(path.join(testDir, 'mtime-test.txt'));
       expect(typeof result.mtime).toBe('number');
     });
 
-    it('should throw on non-existent file', () => {
-      expect(() => service.getFileMtime('/nonexistent')).toThrow();
+    it('should throw on non-existent file', async () => {
+      await expect(service.getFileMtime('/nonexistent')).rejects.toThrow();
     });
   });
 
@@ -209,24 +209,24 @@ describe('FilesystemService', () => {
       fs.unlinkSync(path.join(testDir, 'read-test.ipynb'));
     });
 
-    it('should read text files', () => {
-      const result = service.readFile(path.join(testDir, 'read-test.txt'));
+    it('should read text files', async () => {
+      const result = await service.readFile(path.join(testDir, 'read-test.txt'));
       expect(result.type).toBe('text');
       expect(result.content).toBe('hello world');
     });
 
-    it('should read notebook files as JSON', () => {
-      const result = service.readFile(path.join(testDir, 'read-test.ipynb'));
+    it('should read notebook files as JSON', async () => {
+      const result = await service.readFile(path.join(testDir, 'read-test.ipynb'));
       expect(result.type).toBe('notebook');
       expect(typeof result.content).toBe('object');
     });
 
-    it('should throw on non-existent file', () => {
-      expect(() => service.readFile('/nonexistent')).toThrow();
+    it('should throw on non-existent file', async () => {
+      await expect(service.readFile('/nonexistent')).rejects.toThrow();
     });
 
-    it('should throw on directory', () => {
-      expect(() => service.readFile(testDir)).toThrow();
+    it('should throw on directory', async () => {
+      await expect(service.readFile(testDir)).rejects.toThrow();
     });
   });
 
@@ -437,8 +437,8 @@ describe('FilesystemService', () => {
       fs.unlinkSync(path.join(testDir, 'cells-test.ipynb'));
     });
 
-    it('should convert notebook to internal cell format', () => {
-      const result = service.getNotebookCells(path.join(testDir, 'cells-test.ipynb'));
+    it('should convert notebook to internal cell format', async () => {
+      const result = await service.getNotebookCells(path.join(testDir, 'cells-test.ipynb'));
       expect(result.cells.length).toBe(2);
       expect(result.kernelspec).toBe('python3');
       expect(result.metadata.kernelspec?.name).toBe('python3');
@@ -460,11 +460,11 @@ describe('FilesystemService', () => {
       expect(mdCell.content).toBe('# Header');
     });
 
-    it('should throw on non-existent notebook', () => {
-      expect(() => service.getNotebookCells('/nonexistent.ipynb')).toThrow();
+    it('should throw on non-existent notebook', async () => {
+      await expect(service.getNotebookCells('/nonexistent.ipynb')).rejects.toThrow();
     });
 
-    it('preserves rich display outputs with MIME bundles', () => {
+    it('preserves rich display outputs with MIME bundles', async () => {
       fs.writeFileSync(
         path.join(testDir, 'cells-test.ipynb'),
         JSON.stringify({
@@ -495,7 +495,7 @@ describe('FilesystemService', () => {
         })
       );
 
-      const result = service.getNotebookCells(path.join(testDir, 'cells-test.ipynb'));
+      const result = await service.getNotebookCells(path.join(testDir, 'cells-test.ipynb'));
       expect(result.cells[0].outputs).toHaveLength(1);
       expect(result.cells[0].outputs[0].type).toBe('display_data');
       expect(result.cells[0].outputs[0].preferredMimeType).toBe('application/vnd.plotly.v1+json');
@@ -533,8 +533,8 @@ describe('FilesystemService', () => {
       } catch {}
     });
 
-    it('should save cells to notebook format', () => {
-      service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells, 'python3');
+    it('should save cells to notebook format', async () => {
+      await service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells, 'python3');
       const saved = JSON.parse(fs.readFileSync(path.join(testDir, 'save-cells.ipynb'), 'utf-8'));
 
       expect(saved.nbformat).toBe(4);
@@ -555,13 +555,13 @@ describe('FilesystemService', () => {
       expect(mdCell.source).toEqual(['# Title']);
     });
 
-    it('should return mtime after save', () => {
-      const result = service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells);
+    it('should return mtime after save', async () => {
+      const result = await service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells);
       expect(result.success).toBe(true);
       expect(typeof result.mtime).toBe('number');
     });
 
-    it('should preserve existing metadata', () => {
+    it('should preserve existing metadata', async () => {
       // Create notebook with existing metadata
       fs.writeFileSync(path.join(testDir, 'save-cells.ipynb'), JSON.stringify({
         cells: [],
@@ -570,14 +570,14 @@ describe('FilesystemService', () => {
         nbformat_minor: 5
       }));
 
-      service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells);
+      await service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells);
       const saved = JSON.parse(fs.readFileSync(path.join(testDir, 'save-cells.ipynb'), 'utf-8'));
 
       expect(saved.metadata.custom).toBe('value');
       expect(saved.metadata.nebula.agent_created).toBe(true);
     });
 
-    it('should preserve top-level metadata when cell metadata appears first in the file', () => {
+    it('should preserve top-level metadata when cell metadata appears first in the file', async () => {
       fs.writeFileSync(path.join(testDir, 'save-cells.ipynb'), JSON.stringify({
         cells: [
           {
@@ -593,14 +593,14 @@ describe('FilesystemService', () => {
         nbformat_minor: 5,
       }));
 
-      service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells);
+      await service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), cells);
       const saved = JSON.parse(fs.readFileSync(path.join(testDir, 'save-cells.ipynb'), 'utf-8'));
 
       expect(saved.metadata.custom).toBe('value');
       expect(saved.metadata.nebula.agent_permitted).toBe(true);
     });
 
-    it('should save output without nebula_seq', () => {
+    it('should save output without nebula_seq', async () => {
       const seqCells = [
         {
           id: 'cell-1',
@@ -612,13 +612,13 @@ describe('FilesystemService', () => {
         },
       ];
 
-      service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), seqCells, 'python3');
+      await service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), seqCells, 'python3');
       const saved = JSON.parse(fs.readFileSync(path.join(testDir, 'save-cells.ipynb'), 'utf-8'));
 
       expect(saved.cells[0].outputs[0].nebula_seq).toBeUndefined();
     });
 
-    it('round-trips MIME bundle outputs back to Jupyter display_data', () => {
+    it('round-trips MIME bundle outputs back to Jupyter display_data', async () => {
       const richCells = [
         {
           id: 'cell-1',
@@ -644,7 +644,7 @@ describe('FilesystemService', () => {
         },
       ];
 
-      service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), richCells, 'python3');
+      await service.saveNotebookCells(path.join(testDir, 'save-cells.ipynb'), richCells, 'python3');
       const saved = JSON.parse(fs.readFileSync(path.join(testDir, 'save-cells.ipynb'), 'utf-8'));
 
       expect(saved.cells[0].outputs[0].output_type).toBe('display_data');
@@ -685,12 +685,12 @@ describe('FilesystemService', () => {
 
     it('should load saved history', async () => {
       await service.saveHistory(getNotebookPath(), historyData);
-      const loaded = service.loadHistory(getNotebookPath());
+      const loaded = await service.loadHistory(getNotebookPath());
       expect(loaded).toEqual(historyData);
     });
 
-    it('should return empty array if no history', () => {
-      const loaded = service.loadHistory(getNotebookPath());
+    it('should return empty array if no history', async () => {
+      const loaded = await service.loadHistory(getNotebookPath());
       expect(loaded).toEqual([]);
     });
 
@@ -804,7 +804,7 @@ describe('FilesystemService', () => {
       expect(result.status?.has_history).toBe(true);
       expect(result.status?.can_agent_modify).toBe(true);
 
-      const history = service.loadHistory(getNotebookPath()) as any[];
+      const history = await service.loadHistory(getNotebookPath()) as any[];
       expect(history).toHaveLength(1);
       expect(history[0].type).toBe('snapshot');
     });
@@ -830,6 +830,21 @@ describe('FilesystemService', () => {
         nbformat_minor: 5
       }));
       expect(service.isAgentPermitted(getNotebookPath())).toBe(true);
+    });
+
+    it('should let an explicit revoke lock out an agent-created notebook', () => {
+      // agent-created but the user explicitly revoked (agent_permitted === false)
+      fs.writeFileSync(getNotebookPath(), JSON.stringify({
+        cells: [],
+        metadata: { nebula: { agent_created: true, agent_permitted: false } },
+        nbformat: 4,
+        nbformat_minor: 5
+      }));
+      const status = service.getAgentPermissionStatus(getNotebookPath());
+      expect(status.agent_created).toBe(true);
+      expect(status.can_agent_modify).toBe(false);
+      expect(status.reason).toBe('Agent access revoked');
+      expect(service.isAgentPermitted(getNotebookPath())).toBe(false);
     });
 
     it('should detect user-permitted notebooks', () => {

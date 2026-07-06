@@ -84,7 +84,7 @@ export default async function fsRoutes(fastify: FastifyInstance) {
       if (!filePath) {
         return reply.code(400).send({ detail: 'path query parameter is required' });
       }
-      const result = fsService.getFileMtime(filePath);
+      const result = await fsService.getFileMtime(filePath);
       return reply.send(result);
     } catch (err) {
       if (err instanceof Error && err.message.includes('not found')) {
@@ -105,7 +105,7 @@ export default async function fsRoutes(fastify: FastifyInstance) {
       if (!filePath) {
         return reply.code(400).send({ detail: 'path query parameter is required' });
       }
-      const result = fsService.readFile(filePath);
+      const result = await fsService.readFile(filePath);
       return reply.send(result);
     } catch (err) {
       if (err instanceof Error) {

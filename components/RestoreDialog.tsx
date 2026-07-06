@@ -9,6 +9,7 @@
 import React, { useState, useMemo } from 'react';
 import { X, RotateCcw, GitBranch, AlertTriangle, Clock, FileText } from 'lucide-react';
 import { Cell } from '../types';
+import { useModalA11y } from '../hooks/useModalA11y';
 
 interface RestoreDialogProps {
   isOpen: boolean;
@@ -97,6 +98,7 @@ export const RestoreDialog: React.FC<RestoreDialogProps> = ({
   suggestedFilename,
 }) => {
   const [isRestoring, setIsRestoring] = useState(false);
+  const modalRef = useModalA11y<HTMLDivElement>(onClose);
 
   const diffSummary = useMemo(
     () => computeDiffSummary(currentCells, previewCells),
@@ -136,7 +138,14 @@ export const RestoreDialog: React.FC<RestoreDialogProps> = ({
       />
 
       {/* Dialog */}
-      <div className="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 overflow-hidden">
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Restore Notebook"
+        tabIndex={-1}
+        className="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 overflow-hidden"
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center gap-2">
@@ -145,6 +154,7 @@ export const RestoreDialog: React.FC<RestoreDialogProps> = ({
           </div>
           <button
             onClick={onClose}
+            aria-label="Close restore dialog"
             className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded transition-colors"
           >
             <X className="w-5 h-5" />

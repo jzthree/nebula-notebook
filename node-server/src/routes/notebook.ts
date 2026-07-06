@@ -115,7 +115,7 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
       if (!notebookPath) {
         return reply.code(400).send({ detail: 'notebook_path query parameter is required' });
       }
-      const history = fsService.loadHistory(notebookPath);
+      const history = await fsService.loadHistory(notebookPath);
       return reply.send({ notebook_path: notebookPath, history });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -363,6 +363,35 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
         full_width: nebula.full_width === true,
         mtime: updateResult.mtime,
       });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({ detail: message });
+    }
+  });
+
+  /**
+   * Persist live ipywidgets state into notebook metadata.widgets
+   * (application/vnd.jupyter.widget-state+json), making saved notebooks
+   * render static widgets in Jupyter/nbviewer.
+   */
+  fastify.post('/notebook/widget-state', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { path: filePath, widget_state } = request.body as { path?: string; widget_state?: unknown };
+      if (!filePath) {
+        return reply.code(400).send({ detail: 'path is required' });
+      }
+      if (!widget_state || typeof widget_state !== 'object') {
+        return reply.code(400).send({ detail: 'widget_state must be an object' });
+      }
+
+      const updateResult = await fsService.updateNotebookMetadata(filePath, {
+        widgets: { 'application/vnd.jupyter.widget-state+json': widget_state },
+      });
+      if (!updateResult.success) {
+        return reply.code(500).send({ detail: updateResult.error || 'Failed to update notebook metadata' });
+      }
+
+      return reply.send({ status: 'ok', notebook_path: filePath, mtime: updateResult.mtime });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       return reply.code(500).send({ detail: message });

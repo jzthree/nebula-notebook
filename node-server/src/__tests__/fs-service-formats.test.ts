@@ -58,7 +58,7 @@ describe('text notebook formats through FilesystemService', () => {
       expect(raw).not.toContain('SHOULD_NOT_PERSIST');
       expect(raw).toContain('bb2'); // id persisted in-file
 
-      const loaded = service.getNotebookCells(p);
+      const loaded = await service.getNotebookCells(p);
       // ids persist for ALL cell types in both formats (qmd markdown cells
       // use <!-- #| id: --> markers)
       expect(loaded.cells.map((c) => ({ id: c.id, type: c.type, content: c.content }))).toEqual([
@@ -75,9 +75,9 @@ describe('text notebook formats through FilesystemService', () => {
     it('ids persist across reloads (history/OCC contract)', async () => {
       const p = path.join(dir, `stable-${filename}`);
       await service.saveNotebookCells(p, cells, 'python3');
-      const first = service.getNotebookCells(p).cells.map((c) => c.id);
-      await service.saveNotebookCells(p, service.getNotebookCells(p).cells as NebulaCell[], 'python3');
-      const second = service.getNotebookCells(p).cells.map((c) => c.id);
+      const first = (await service.getNotebookCells(p)).cells.map((c) => c.id);
+      await service.saveNotebookCells(p, (await service.getNotebookCells(p)).cells as NebulaCell[], 'python3');
+      const second = (await service.getNotebookCells(p)).cells.map((c) => c.id);
       expect(second).toEqual(first);
     });
 
@@ -90,7 +90,7 @@ describe('text notebook formats through FilesystemService', () => {
       const meta = service.getNotebookMetadata(p);
       expect((meta.nebula as any).full_width).toBe(true);
       // cells untouched by the metadata write
-      const loaded = service.getNotebookCells(p);
+      const loaded = await service.getNotebookCells(p);
       expect(loaded.cells).toHaveLength(2);
       // no-op update reports changed: false
       const noop = await service.updateNotebookMetadata(p, { nebula: { full_width: true } });
@@ -120,8 +120,8 @@ describe('text notebook formats through FilesystemService', () => {
         { type: 'snapshot', cells: [], timestamp: 1 },
       ]);
       expect(result.success).toBe(true);
-      expect(service.loadHistory(p)).toHaveLength(1);
-      expect(service.getNotebookCells(p).cells).toHaveLength(2);
+      expect(await service.loadHistory(p)).toHaveLength(1);
+      expect((await service.getNotebookCells(p)).cells).toHaveLength(2);
     });
   });
 
@@ -167,8 +167,8 @@ describe('text notebook formats through FilesystemService', () => {
     await service.saveNotebookCells(ipynb, [cell({ id: 'n1', content: '2' })], 'python3');
     await service.saveHistory(py, [{ marker: 'py-history' }]);
     await service.saveHistory(ipynb, [{ marker: 'ipynb-history' }]);
-    expect((service.loadHistory(py) as any)[0].marker).toBe('py-history');
-    expect((service.loadHistory(ipynb) as any)[0].marker).toBe('ipynb-history');
+    expect((await service.loadHistory(py) as any)[0].marker).toBe('py-history');
+    expect((await service.loadHistory(ipynb) as any)[0].marker).toBe('ipynb-history');
     // ipynb sidecar name is the legacy extension-stripped form
     expect(fs.existsSync(path.join(dir, '.nebula', 'foo.history.json'))).toBe(true);
     expect(fs.existsSync(path.join(dir, '.nebula', 'foo.py.history.json'))).toBe(true);
@@ -179,11 +179,11 @@ describe('text notebook formats through FilesystemService', () => {
     await service.saveNotebookCells(p, [cell({ id: 'a', content: '1' })], 'python3');
     await service.saveHistory(p, [{ marker: 'mv' }]);
     service.renameFile(p, path.join(dir, 'mv2.qmd'));
-    expect((service.loadHistory(path.join(dir, 'mv2.qmd')) as any)[0].marker).toBe('mv');
+    expect((await service.loadHistory(path.join(dir, 'mv2.qmd')) as any)[0].marker).toBe('mv');
     service.duplicateFile(path.join(dir, 'mv2.qmd'));
     const dup = fs.readdirSync(dir).find((f) => f.startsWith('mv2') && f !== 'mv2.qmd');
     expect(dup).toBeTruthy();
-    expect((service.loadHistory(path.join(dir, dup!)) as any)[0].marker).toBe('mv');
+    expect((await service.loadHistory(path.join(dir, dup!)) as any)[0].marker).toBe('mv');
   });
 
   it('deleting a text notebook removes its sidecars', async () => {
@@ -195,12 +195,12 @@ describe('text notebook formats through FilesystemService', () => {
     expect(fs.existsSync(path.join(dir, '.nebula', 'del.py.history.json'))).toBe(false);
   });
 
-  it('createFile makes a .qmd notebook template but an EMPTY .py script', () => {
+  it('createFile makes a .qmd notebook template but an EMPTY .py script', async () => {
     const qmd = service.createFile(path.join(dir, 'fresh.qmd'));
     expect(qmd.is_directory).toBe(false);
     const qmdText = fs.readFileSync(path.join(dir, 'fresh.qmd'), 'utf-8');
     expect(qmdText).toContain('kernelspec');
-    expect(service.getNotebookCells(path.join(dir, 'fresh.qmd')).cells).toEqual([]);
+    expect((await service.getNotebookCells(path.join(dir, 'fresh.qmd'))).cells).toEqual([]);
 
     service.createFile(path.join(dir, 'script.py'));
     expect(fs.readFileSync(path.join(dir, 'script.py'), 'utf-8')).toBe('');

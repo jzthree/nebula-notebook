@@ -29,6 +29,13 @@ export interface UseConflictResolutionResult {
   conflictDialog: ConflictDialogState | null;
 
   /**
+   * True while a resolution (keepLocal/loadRemote) is still writing/loading
+   * in the background. Keep autosave paused while set — resuming it before
+   * the force-save lands would re-detect the same conflict.
+   */
+  resolving: boolean;
+
+  /**
    * Save cells with conflict checking.
    * If conflict detected, shows dialog and returns { needsResolution: true }.
    * If no conflict, saves and returns { success: true, newMtime }.
@@ -73,6 +80,7 @@ export function useConflictResolution(
   onCellsReset: (cells: Cell[]) => void
 ): UseConflictResolutionResult {
   const [conflictDialog, setConflictDialog] = useState<ConflictDialogState | null>(null);
+  const [resolving, setResolving] = useState(false);
 
   const saveWithCheck = useCallback(async (
     fileId: string,
@@ -136,15 +144,25 @@ export function useConflictResolution(
 
     const { fileId, localCells, kernelName, history } = conflictDialog;
 
-    const result = await forceSaveLocal(fileId, localCells, kernelName, history);
-
-    if (result.success && result.newMtime !== null) {
-      onMtimeUpdate(result.newMtime);
-      await updateNotebookMetadata(fileId, {});
-    }
-
+    // Respond instantly: close the dialog first, then run the force-save in
+    // the background. For a large notebook (+ full edit history) over a slow
+    // link the save can take seconds — the user shouldn't stare at a frozen
+    // dialog. `resolving` keeps autosave paused until the save lands, so it
+    // can't re-detect the same conflict mid-flight.
     setConflictDialog(null);
-    return { success: result.success, newMtime: result.newMtime };
+    setResolving(true);
+    try {
+      const result = await forceSaveLocal(fileId, localCells, kernelName, history);
+
+      if (result.success && result.newMtime !== null) {
+        onMtimeUpdate(result.newMtime);
+        await updateNotebookMetadata(fileId, {});
+      }
+
+      return { success: result.success, newMtime: result.newMtime };
+    } finally {
+      setResolving(false);
+    }
   }, [conflictDialog, onMtimeUpdate]);
 
   const loadRemote = useCallback(async (): Promise<{
@@ -158,19 +176,24 @@ export function useConflictResolution(
 
     const { fileId } = conflictDialog;
 
-    const result = await loadRemoteVersion(fileId);
+    setResolving(true);
+    try {
+      const result = await loadRemoteVersion(fileId);
 
-    if (result.success && result.cells && result.mtime !== null) {
-      onCellsReset(result.cells);
-      onMtimeUpdate(result.mtime);
+      if (result.success && result.cells && result.mtime !== null) {
+        onCellsReset(result.cells);
+        onMtimeUpdate(result.mtime);
+      }
+
+      setConflictDialog(null);
+      return {
+        success: result.success,
+        cells: result.cells,
+        mtime: result.mtime
+      };
+    } finally {
+      setResolving(false);
     }
-
-    setConflictDialog(null);
-    return {
-      success: result.success,
-      cells: result.cells,
-      mtime: result.mtime
-    };
   }, [conflictDialog, onCellsReset, onMtimeUpdate]);
 
   const dismissDialog = useCallback(() => {
@@ -179,6 +202,7 @@ export function useConflictResolution(
 
   return {
     conflictDialog,
+    resolving,
     saveWithCheck,
     keepLocal,
     loadRemote,

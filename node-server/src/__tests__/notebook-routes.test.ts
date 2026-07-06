@@ -13,7 +13,7 @@ import * as path from 'path';
 import * as os from 'os';
 
 // Import routes
-import notebookRoutes from '../routes/notebook';
+import notebookRoutes, { headlessHandler } from '../routes/notebook';
 
 describe('Notebook Routes', () => {
   let app: FastifyInstance;
@@ -34,7 +34,10 @@ describe('Notebook Routes', () => {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'notebook-routes-test-'));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Settle any background persist scheduled by headless operations before
+    // removing the test directory (saves are async and can span the teardown)
+    await headlessHandler.flush();
     // Clean up test directory
     if (testDir && fs.existsSync(testDir)) {
       fs.rmSync(testDir, { recursive: true, force: true });
