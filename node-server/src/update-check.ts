@@ -25,10 +25,10 @@ export interface UpdateInfo {
 let info: UpdateInfo = { current: readCurrentVersion(), latest: null, update_available: false, checked_at: null };
 let timer: NodeJS.Timeout | null = null;
 
-/** Running version from the repo/package root (3 levels up from src/ and dist/ alike). */
+/** Running version from the repo/package root (this file is at node-server/{src,dist}/ — 2 levels up). */
 function readCurrentVersion(): string {
   try {
-    const pkgPath = path.resolve(__dirname, '..', '..', '..', 'package.json');
+    const pkgPath = path.resolve(__dirname, '..', '..', 'package.json');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
     if (typeof pkg.version === 'string') return pkg.version;
   } catch { /* fall through */ }
