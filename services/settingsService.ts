@@ -32,8 +32,29 @@ export interface NebulaSettings {
   remoteAgentEnabled?: boolean;
   remoteAgentPort?: number;     // reverse-channel port on the server host; random per user to avoid collisions on shared login nodes
   remoteAgentUser?: string;     // username on the user's machine (for ssh back)
+  remoteAgentLocalSshPort?: number; // sshd port on the user's machine (the -R forward target); default 22. Some setups (e.g. macOS policy blocking 22) run sshd on 2222.
   remoteAgentLocalUrl?: string; // Nebula URL as seen FROM the user's machine (their -L forward), default http://localhost:3000
   remoteAgentJumpHost?: string; // optional ProxyJump host for the displayed tunnel command
+  // AI inline autocomplete (ghost text) in code cells, powered by the
+  // Claude Code / Codex CLI using the user's own subscription.
+  // undefined = undecided → the first-run welcome card asks once.
+  aiAutocomplete?: boolean;
+  aiAutocompleteBackend?: 'claude' | 'codex'; // default 'claude'
+  // Where the agent + autocomplete CLIs run, when the server is remote:
+  // 'server' = on the Nebula host (cluster); 'mine' = on the user's machine
+  // over the reverse tunnel. Ignored when the environment is local (server IS
+  // your machine) — see environmentService. undefined = use the env default.
+  agentRunsOn?: 'server' | 'mine';
+  // Absolute paths to the user's own claude/codex, discovered over the reverse
+  // tunnel (POST /api/autocomplete/probe-remote). Needed to run autocomplete on
+  // the user's machine — a non-interactive ssh has no PATH, so the abs path is
+  // required. Empty string = probed but not found.
+  remoteClaudeBin?: string;
+  remoteCodexBin?: string;
+  // Override for the auto-detected server environment (environmentService),
+  // for cases the heuristic gets wrong (headless local Linux; a cloud VM you
+  // tunnel to). undefined = trust detection.
+  environmentOverride?: 'local' | 'remote';
 }
 
 export const getSettings = (): NebulaSettings => {

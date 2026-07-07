@@ -191,7 +191,8 @@ class AgentTerminalService {
     let localPort = '3000';
     try { localPort = new URL(s.remoteAgentLocalUrl || 'http://localhost:3000').port || '80'; } catch { /* keep default */ }
     const jump = s.remoteAgentJumpHost?.trim() ? ` -J ${s.remoteAgentJumpHost.trim()}` : '';
-    return `ssh${jump} -L ${localPort}:localhost:${serverPort ?? 3000} -R ${s.remoteAgentPort ?? '<port>'}:localhost:22 ${serverHost || '<server-host>'}`;
+    const sshPort = s.remoteAgentLocalSshPort ?? 22;
+    return `ssh${jump} -L ${localPort}:localhost:${serverPort ?? 3000} -R ${s.remoteAgentPort ?? '<port>'}:localhost:${sshPort} ${serverHost || '<server-host>'}`;
   }
 
   /**
@@ -204,8 +205,9 @@ class AgentTerminalService {
     let localPort = '3000';
     try { localPort = new URL(s.remoteAgentLocalUrl || 'http://localhost:3000').port || '80'; } catch { /* keep default */ }
     const jump = s.remoteAgentJumpHost?.trim() ? ` --jump ${s.remoteAgentJumpHost.trim()}` : '';
+    const sshPort = s.remoteAgentLocalSshPort ?? 22;
     return `burrow add --name nebula-agent --host ${serverHost || '<server-host>'}${jump} ` +
-      `--local ${localPort}:localhost:${serverPort ?? 3000} --remote ${s.remoteAgentPort ?? '<port>'}:localhost:22`;
+      `--local ${localPort}:localhost:${serverPort ?? 3000} --remote ${s.remoteAgentPort ?? '<port>'}:localhost:${sshPort}`;
   }
 
   /**

@@ -113,6 +113,18 @@ describe("buildPrompt", () => {
     expect(p).toContain("import pandas as pd");
   });
 
+  it("includes kernel/filename hints and does not hardcode a language", () => {
+    const p = buildPrompt({ prefix: "x", kernelName: "ir", filename: "a.ipynb" }, opts);
+    expect(p).toContain("kernel=ir");
+    expect(p).toContain("file=a.ipynb");
+    expect(p).not.toContain("(python)");
+  });
+
+  it("omits the hint clause entirely when no hints are given", () => {
+    const p = buildPrompt({ prefix: "x" }, opts);
+    expect(p).not.toContain("Hints");
+  });
+
   it("drops cells beyond the budget, keeping nearest", () => {
     const far = { type: "code" as const, content: "far_away = 1".repeat(20) };
     const near = { type: "code" as const, content: "near = 2" };

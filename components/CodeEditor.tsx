@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useEffect } from 'react';
+import React, { useCallback, useMemo, useRef, useEffect, useState } from 'react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { markdown } from '@codemirror/lang-markdown';
@@ -13,6 +13,12 @@ import { highlightSelectionMatches } from '@codemirror/search';
 import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
 import { isEditorPerfTrackingEnabled, recordEditorExtensionBuild } from '../utils/editorPerf';
 import { kernelService, CompletionResult as KernelCompletionResult } from '../services/kernelService';
+import { ghostText } from 'nebula-autocomplete/codemirror';
+import {
+  createAiGhostTextFetcher,
+  isAiAutocompleteEnabled,
+  SETTINGS_CHANGED_EVENT,
+} from '../services/aiAutocompleteService';
 
 interface CurrentMatch {
   cellId: string;
@@ -609,6 +615,15 @@ export const CodeEditor: React.FC<Props> = ({
   const kernelSessionIdRef = useRef<string | undefined>(kernelSessionId);
   kernelSessionIdRef.current = kernelSessionId;
 
+  // AI inline autocomplete — per-user setting; re-read when settings change so
+  // toggling in the settings modal applies without reopening the notebook.
+  const [aiAutocomplete, setAiAutocomplete] = useState<boolean>(() => isAiAutocompleteEnabled());
+  useEffect(() => {
+    const onSettingsChanged = () => setAiAutocomplete(isAiAutocompleteEnabled());
+    window.addEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged);
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged);
+  }, []);
+
   // Focus editor when shouldFocus becomes true
   useEffect(() => {
     if (shouldFocus) {
@@ -779,6 +794,13 @@ export const CodeEditor: React.FC<Props> = ({
       );
     }
 
+    // AI inline ghost-text suggestions (opt-in via settings / first-run card).
+    // Complements the dropdown above: multi-line LLM continuations at the
+    // cursor, Tab to accept. Only for focused python editors.
+    if (language === 'python' && enableInteractiveFeatures && aiAutocomplete && !readOnly) {
+      exts.push(ghostText(createAiGhostTextFetcher(effectiveAllCellsRef, cellId), { debounceMs: 400 }));
+    }
+
     // Add keymap for cell shortcuts - direct callbacks (no synthetic events)
     const keymapEntries: { key: string; run: (view: EditorView) => boolean }[] = [];
 
@@ -907,7 +929,7 @@ export const CodeEditor: React.FC<Props> = ({
 
     return exts;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [language, enableInteractiveFeatures, onShiftEnter, onModEnter, onEscape, onSave, onNavigateUp, onNavigateDown, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, indentConfig, showLineNumbers]);
+  }, [language, enableInteractiveFeatures, onShiftEnter, onModEnter, onEscape, onSave, onNavigateUp, onNavigateDown, onFocus, onBlur, searchQuery, searchCaseSensitive, searchUseRegex, indentConfig, showLineNumbers, aiAutocomplete, readOnly, cellId]);
 
   const handleChange = useCallback(
     (val: string) => {

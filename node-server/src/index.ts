@@ -33,6 +33,7 @@ import authRoutes from './routes/auth';
 import clusterRoutes from './routes/cluster';
 import resourceRoutes from './routes/resources';
 import computeRoutes from './routes/compute';
+import autocompleteRoutes from './routes/autocomplete';
 
 // Import cluster
 import { serverRegistry } from './cluster/server-registry';
@@ -49,6 +50,7 @@ import type { LaunchContext } from './scheduler/job-template';
 import { authService, authMiddleware, authWebSocketMiddleware } from './auth';
 import { fsService } from './fs/fs-service';
 import { getUpdateInfo, startUpdateChecker } from './update-check';
+import { getEnvironment } from './environment';
 
 // Import terminal routes (existing)
 import { setupTerminalRoutes, setupTerminalWebSocket, cleanupTerminals } from './terminal/server';
@@ -293,6 +295,7 @@ async function createApp(): Promise<FastifyInstance> {
       ready: kernelService.isReady,
       cwd: rootDir,
       update,
+      environment: getEnvironment(),
     });
   });
 
@@ -330,6 +333,7 @@ async function createApp(): Promise<FastifyInstance> {
 
   // API routes (protected)
   await fastify.register(kernelRoutes, { prefix: '/api' });
+  await fastify.register(autocompleteRoutes, { prefix: '/api' });
   await fastify.register(fsRoutes, { prefix: '/api' });
   await fastify.register(notebookRoutes, { prefix: '/api' });
   await fastify.register(pythonRoutes, { prefix: '/api' });

@@ -9,6 +9,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
-    exclude: [...configDefaults.exclude, 'node-server/dist/**'],
+    // packages/* are standalone sub-packages with their own test runners
+    // (npm run mcp:test / autocomplete:test) — don't sweep them into the
+    // root jsdom/React run.
+    exclude: [...configDefaults.exclude, 'node-server/dist/**', 'packages/**'],
   },
 });

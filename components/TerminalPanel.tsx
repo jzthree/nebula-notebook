@@ -22,6 +22,8 @@ import {
 } from '../services/terminalService';
 import { agentTerminalService } from '../services/agentTerminalService';
 import { getSettings, saveSettings, ensureRemoteAgentPort } from '../services/settingsService';
+import { fetchEnvironment, serverIsRemote } from '../services/environmentService';
+import { probeRemoteBins } from '../services/aiAutocompleteService';
 import { RemoteAgentSetupModal } from './RemoteAgentSetupModal';
 
 /**
@@ -83,6 +85,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const reverseTunnelUp = reverseTunnel === null ? null : (reverseTunnel.up && reverseTunnel.ssh !== false);
   // Bumped when this panel changes agent settings, so remoteAgentCfg recomputes.
   const [, setSettingsNonce] = useState(0);
+  // Is the Nebula server remote from the user? Only then does "run the agent on
+  // this server vs. my machine" mean anything; on a local install the server IS
+  // your machine, so the whole where-choice collapses away. Defaults to false
+  // (local) until the environment is known.
+  const [serverRemote, setServerRemote] = useState<boolean>(serverIsRemote());
+  useEffect(() => { fetchEnvironment().then((env) => setServerRemote(serverIsRemote(env))); }, []);
   // Remote-agent setup dialog (connection details for the reverse channel).
   const [showRemoteSetup, setShowRemoteSetup] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -148,7 +156,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   // Remote-agent mode: watch whether the user's reverse SSH channel is up so
   // the launch chips can target their machine (or guide them to connect it).
-  const remoteAgentCfg = agentTerminalService.getRemoteAgentConfig();
+  // Gate remote-agent mode on the server actually being remote: a local install
+  // never shows tunnel UI or the "my machine" option (it IS your machine).
+  const remoteAgentCfg = serverRemote ? agentTerminalService.getRemoteAgentConfig() : null;
   const remoteAgentPort = remoteAgentCfg?.port ?? null;
   useEffect(() => {
     if (!isOpen || tab !== 'agent' || !remoteAgentPort) {
@@ -416,28 +426,38 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           >
             Codex
           </button>
-          <span className="text-purple-600 flex-shrink-0">on</span>
-          <select
-            value={remoteAgentCfg ? 'mine' : 'server'}
-            onChange={(e) => {
-              if (e.target.value === 'mine') {
-                const s = getSettings();
-                const port = s.remoteAgentPort ?? ensureRemoteAgentPort();
-                saveSettings({ remoteAgentEnabled: true, remoteAgentPort: port });
-                // Missing username → the mode can't compose the ssh-back line;
-                // open the setup dialog to finish configuration.
-                if (!s.remoteAgentUser?.trim()) setShowRemoteSetup(true);
-              } else {
-                saveSettings({ remoteAgentEnabled: false });
-              }
-              setSettingsNonce(n => n + 1);
-            }}
-            className="px-1 py-0.5 rounded border border-purple-300 bg-white text-purple-800 font-medium cursor-pointer focus:outline-none focus:ring-1 focus:ring-purple-400"
-            title="Where the agent process runs. 'my machine' hops back over your SSH tunnel — the agent uses your computer's memory and network but lives in this panel."
-          >
-            <option value="server">this server</option>
-            <option value="mine">my machine</option>
-          </select>
+          {/* Where the agent runs is only a question when the server is remote.
+              On a local install the server IS your machine — no selector. */}
+          {serverRemote && (
+            <>
+              <span className="text-purple-600 flex-shrink-0">on</span>
+              <select
+                value={remoteAgentCfg ? 'mine' : 'server'}
+                onChange={(e) => {
+                  if (e.target.value === 'mine') {
+                    const s = getSettings();
+                    const port = s.remoteAgentPort ?? ensureRemoteAgentPort();
+                    // One where-choice drives BOTH the agent terminal and
+                    // autocomplete: agentRunsOn is what the autocomplete transport
+                    // reads (see aiAutocompleteService).
+                    saveSettings({ remoteAgentEnabled: true, remoteAgentPort: port, agentRunsOn: 'mine' });
+                    // Missing username → the mode can't compose the ssh-back line;
+                    // open the setup dialog to finish configuration.
+                    if (!s.remoteAgentUser?.trim()) setShowRemoteSetup(true);
+                    else probeRemoteBins(); // discover the user's claude/codex for autocomplete
+                  } else {
+                    saveSettings({ remoteAgentEnabled: false, agentRunsOn: 'server' });
+                  }
+                  setSettingsNonce(n => n + 1);
+                }}
+                className="px-1 py-0.5 rounded border border-purple-300 bg-white text-purple-800 font-medium cursor-pointer focus:outline-none focus:ring-1 focus:ring-purple-400"
+                title="Where the agent process runs. 'my machine' hops back over your SSH tunnel — the agent uses your computer's memory and network but lives in this panel."
+              >
+                <option value="server">This server</option>
+                <option value="mine">Local machine</option>
+              </select>
+            </>
+          )}
           {remoteAgentCfg && reverseTunnelUp && (
             <button
               onClick={() => setShowRemoteSetup(true)}

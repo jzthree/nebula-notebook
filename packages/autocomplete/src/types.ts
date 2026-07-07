@@ -8,8 +8,13 @@ export interface CompletionRequest {
   prefix: string;
   /** Text after the cursor in the active cell. */
   suffix?: string;
-  /** Language of the active cell (e.g. "python"). */
+  /** Explicit language, if known. Usually omitted — prefer the hints below and
+   *  let the model infer the language from the code + kernel/filename. */
   language?: string;
+  /** Active kernel name/spec (e.g. "python3", "ir", "julia-1.9"). A hint. */
+  kernelName?: string;
+  /** Notebook filename (e.g. "analysis.ipynb"). A hint. */
+  filename?: string;
   /** All notebook cells, in order, for cross-cell context. */
   cells?: NotebookCellContext[];
   /** Index of the active cell within `cells`. */

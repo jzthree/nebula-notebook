@@ -34,6 +34,7 @@ import ComputeDashboardCard from './ComputeDashboardCard';
 import { KernelManager } from './KernelManager';
 import { TerminalManager } from './TerminalManager';
 import { GetStartedCard } from './GetStartedCard';
+import { isAiAutocompleteDecided, setAiAutocomplete } from '../services/aiAutocompleteService';
 
 // Kernel session from API
 interface KernelSession {
@@ -247,6 +248,14 @@ export const Dashboard: React.FC = () => {
     }
   });
   const [isCreatingSample, setIsCreatingSample] = useState(false);
+
+  // First-run AI autocomplete choice — asked once (undefined = undecided),
+  // changeable later in Settings → AI.
+  const [aiChoiceDecided, setAiChoiceDecided] = useState(() => isAiAutocompleteDecided());
+  const chooseAiAutocomplete = (enabled: boolean, backend?: 'claude' | 'codex') => {
+    setAiAutocomplete(enabled, backend);
+    setAiChoiceDecided(true);
+  };
 
   // Sessions state
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
@@ -634,6 +643,44 @@ export const Dashboard: React.FC = () => {
                   <div className="text-xs text-slate-500 mt-1">Opens the sample with the Agent panel ready.</div>
                 </button>
               </div>
+
+              {/* One-time AI autocomplete opt-in (also in Settings → AI) */}
+              {!aiChoiceDecided && (
+                <div
+                  data-testid="ai-autocomplete-choice"
+                  className="mt-4 p-4 rounded-lg border border-indigo-200 bg-indigo-50/50"
+                >
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                    <Sparkles className="w-4 h-4 text-indigo-500" />
+                    AI autocomplete in code cells
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Inline ghost-text suggestions while you type, powered by your own Claude Code or
+                    Codex subscription running on this machine. Tab accepts. You can change this
+                    anytime in Settings.
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button
+                      onClick={() => chooseAiAutocomplete(true, 'claude')}
+                      className="px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+                    >
+                      Enable with Claude Code
+                    </button>
+                    <button
+                      onClick={() => chooseAiAutocomplete(true, 'codex')}
+                      className="px-3 py-1.5 text-xs font-medium rounded-md bg-white text-indigo-700 border border-indigo-300 hover:bg-indigo-50 transition-colors"
+                    >
+                      Enable with Codex
+                    </button>
+                    <button
+                      onClick={() => chooseAiAutocomplete(false)}
+                      className="px-3 py-1.5 text-xs rounded-md text-slate-500 hover:text-slate-700 transition-colors"
+                    >
+                      Not now
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <button
                 onClick={dismissWelcome}

@@ -6,6 +6,7 @@ import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment, KernelProvisionError } from '../services/kernelService';
 import { getClusterInfo, ClusterServer, ClusterInfo } from '../services/clusterService';
 import { getComputeStatus } from '../services/computeService';
+import { setAutocompleteContext } from '../services/aiAutocompleteService';
 import ComputeAllocationModal from './ComputeAllocationModal';
 import { getSettings, saveSettings, IndentationPreference } from '../services/settingsService';
 import { markOnboardingStep } from '../services/onboardingService';
@@ -488,6 +489,14 @@ export const Notebook: React.FC = () => {
   const [pythonEnvironments, setPythonEnvironments] = useState<PythonEnvironment[]>([]);
   const [currentKernel, setCurrentKernel] = useState<string>('python3');
   const [kernelSelectionRequired, setKernelSelectionRequired] = useState(false);
+  // Publish kernel + filename as autocomplete hints (the ghost-text fetcher reads
+  // these globally so we don't thread props through every cell editor).
+  useEffect(() => {
+    setAutocompleteContext({
+      kernelName: currentKernel,
+      filename: currentFileId ? getFilenameFromPath(currentFileId) : undefined,
+    });
+  }, [currentKernel, currentFileId]);
   const [kernelSessionId, setKernelSessionId] = useState<string | null>(null);
   const [kernelStatus, setKernelStatus] = useState<'idle' | 'busy' | 'starting' | 'disconnected' | 'dead'>('disconnected');
   const [kernelCreatedAt, setKernelCreatedAt] = useState<number | null>(null);

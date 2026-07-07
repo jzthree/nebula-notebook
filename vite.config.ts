@@ -37,7 +37,11 @@ export default defineConfig(({ mode }) => {
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),
-        }
+        },
+        // nebula-autocomplete is a symlinked file: dep with its own
+        // node_modules — dedupe so CodeMirror resolves to a single instance
+        // (duplicate @codemirror/state instances break extensions).
+        dedupe: ['@codemirror/state', '@codemirror/view'],
       }
     };
 });

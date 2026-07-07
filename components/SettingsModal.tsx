@@ -1,12 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Folder, Palette, Bell, Volume2, AlignLeft, Hash, Settings, Cpu, MousePointerClick, Keyboard } from 'lucide-react';
+import { X, Folder, Palette, Bell, Volume2, AlignLeft, Hash, Settings, Cpu, MousePointerClick, Keyboard, Sparkles, Laptop, Server, Play, Stethoscope, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import {
   getSettings,
   saveSettings,
+  ensureRemoteAgentPort,
   NebulaSettings,
   IndentationPreference,
 } from '../services/settingsService';
 import { getRootDirectory, setRootDirectory } from '../services/fileService';
+import { notifySettingsChanged, fetchServerBackends, probeRemoteBins, runDiagnostics, testCompletion, type Diagnostics } from '../services/aiAutocompleteService';
+import { fetchEnvironment, serverIsRemote, environmentLabel } from '../services/environmentService';
+import { RemoteAgentSetupModal } from './RemoteAgentSetupModal';
+import { checkReverseTunnel } from '../services/terminalService';
 import { useNotification } from './NotificationSystem';
 import { useModalA11y } from '../hooks/useModalA11y';
 
@@ -18,7 +23,7 @@ interface Props {
   isLoginNode?: boolean;
 }
 
-type SettingsTab = 'general' | 'appearance' | 'notifications';
+type SettingsTab = 'general' | 'ai' | 'appearance' | 'notifications';
 
 export const SettingsModal: React.FC<Props> = (props) => {
   // Mount the panel only while open so useModalA11y attaches/cleans up per open.
@@ -31,6 +36,19 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
   const [isSaving, setIsSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [serverRoot, setServerRoot] = useState<string | null>(null);
+  // Environment awareness for the "where do the CLIs run" choice. Only when the
+  // server is remote is that a real question; locally the server IS your machine.
+  const [serverRemote, setServerRemote] = useState<boolean>(serverIsRemote());
+  const [serverBackends, setServerBackends] = useState<{ claude: boolean; codex: boolean } | null>(null);
+  // AI tab: tunnel setup modal + diagnostics + test-completion state.
+  const [showRemoteSetup, setShowRemoteSetup] = useState(false);
+  const [diag, setDiag] = useState<Diagnostics | null>(null);
+  const [diagRunning, setDiagRunning] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string; ranOn: string; ms?: number; fromCache?: boolean; error?: string } | null>(null);
+  const [testRunning, setTestRunning] = useState(false);
+  // Live reverse-tunnel status for the AI tab's "Local machine" section — same
+  // checker the terminal toolbar uses. null = not applicable / not yet checked.
+  const [tunnel, setTunnel] = useState<{ up: boolean; ssh: boolean | null } | null>(null);
   const { toast } = useNotification();
   const modalRef = useModalA11y<HTMLDivElement>(onClose);
 
@@ -57,6 +75,25 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
       console.warn('Failed to apply default notification setting:', error);
     }
   }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    fetchEnvironment().then((env) => setServerRemote(serverIsRemote(env)));
+    fetchServerBackends().then((b) => { if (b) setServerBackends(b); });
+  }, [isOpen]);
+
+  // Poll the reverse tunnel while the AI tab is open in Local-machine mode, so
+  // the status chip turns green the moment the user's tunnel connects.
+  useEffect(() => {
+    const port = settings.remoteAgentPort;
+    const mine = serverRemote && (settings.agentRunsOn ?? 'server') === 'mine';
+    if (!isOpen || activeTab !== 'ai' || !mine || !port) { setTunnel(null); return; }
+    let stopped = false;
+    const check = async () => { const s = await checkReverseTunnel(port); if (!stopped) setTunnel(s); };
+    check();
+    const id = setInterval(check, 4000);
+    return () => { stopped = true; clearInterval(id); };
+  }, [isOpen, activeTab, serverRemote, settings.remoteAgentPort, settings.agentRunsOn]);
 
   useEffect(() => {
     if (isOpen) {
@@ -136,6 +173,7 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
 
   const tabs: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
     { id: 'general', label: 'General', icon: <Settings className="w-4 h-4" /> },
+    { id: 'ai', label: 'AI', icon: <Sparkles className="w-4 h-4" /> },
     { id: 'appearance', label: 'Appearance', icon: <Palette className="w-4 h-4" /> },
     { id: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
   ];
@@ -409,6 +447,231 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
               </>
             )}
 
+            {/* AI Tab */}
+            {activeTab === 'ai' && (() => {
+              const backend = settings.aiAutocompleteBackend ?? 'claude';
+              const runsOn: 'server' | 'mine' = !serverRemote ? 'server' : (settings.agentRunsOn ?? 'server');
+              const tunnelConfigured = !!(settings.remoteAgentUser?.trim() && settings.remoteAgentPort);
+              const setRunsOn = (where: 'server' | 'mine') => {
+                const s = getSettings();
+                if (where === 'mine') {
+                  const port = s.remoteAgentPort ?? ensureRemoteAgentPort();
+                  persistSettings({ agentRunsOn: 'mine', remoteAgentEnabled: true, remoteAgentPort: port });
+                  notifySettingsChanged();
+                  if (!s.remoteAgentUser?.trim()) setShowRemoteSetup(true);
+                  else probeRemoteBins().then((r) => {
+                    if (r && !r.reachable) toast('Could not reach your machine over the tunnel — connect it, then run diagnostics.', 'warning');
+                  });
+                } else {
+                  persistSettings({ agentRunsOn: 'server', remoteAgentEnabled: false });
+                  notifySettingsChanged();
+                }
+                setTestResult(null); setDiag(null);
+              };
+              const doDiagnose = async () => {
+                setDiagRunning(true); setDiag(null);
+                const d = await runDiagnostics();
+                setDiag(d);
+                setDiagRunning(false);
+                if (!d) toast('Diagnostics failed to reach the server.', 'warning');
+              };
+              const doTest = async () => {
+                setTestRunning(true); setTestResult(null);
+                const r = await testCompletion();
+                setTestResult(r);
+                setTestRunning(false);
+              };
+              const Row = ({ ok, label, detail }: { ok: boolean | null; label: string; detail?: string }) => (
+                <div className="flex items-start gap-2 text-xs">
+                  {ok === null
+                    ? <span className="w-3.5 h-3.5 mt-0.5 rounded-full bg-slate-300 flex-shrink-0" />
+                    : ok
+                      ? <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 text-emerald-600 flex-shrink-0" />
+                      : <XCircle className="w-3.5 h-3.5 mt-0.5 text-red-500 flex-shrink-0" />}
+                  <span className="text-slate-700">{label}{detail ? <span className="text-slate-400"> — {detail}</span> : null}</span>
+                </div>
+              );
+              return (
+                <>
+                  {/* AI inline autocomplete */}
+                  <div>
+                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                      <Sparkles className="w-4 h-4" />
+                      AI Autocomplete
+                    </label>
+                    <div className="p-3 bg-slate-50 rounded-lg space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1 pr-3">
+                          <p className="text-sm text-slate-700">Inline code suggestions</p>
+                          <p className="text-xs text-slate-500">
+                            Ghost-text completions in code cells while you pause typing, powered by a
+                            Claude Code or Codex subscription. Tab accepts, Escape dismisses.
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const next = !settings.aiAutocomplete;
+                            setSettings({ ...settings, aiAutocomplete: next });
+                            persistSettings({ aiAutocomplete: next });
+                            notifySettingsChanged();
+                          }}
+                          aria-label="Toggle AI autocomplete"
+                          className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${settings.aiAutocomplete ? 'bg-blue-600' : 'bg-slate-300'}`}
+                        >
+                          <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${settings.aiAutocomplete ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                      </div>
+
+                      {settings.aiAutocomplete && (
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs text-slate-500 flex-1">Suggestion engine</p>
+                          {(['claude', 'codex'] as const).map((b) => (
+                            <button
+                              key={b}
+                              onClick={() => { setSettings({ ...settings, aiAutocompleteBackend: b }); persistSettings({ aiAutocompleteBackend: b }); notifySettingsChanged(); setTestResult(null); }}
+                              className={`px-3 py-1 text-xs rounded-md border transition-colors ${backend === b ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-300 hover:border-blue-400'}`}
+                            >
+                              {b === 'claude' ? 'Claude Code' : 'Codex'}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Runs on — only a real choice when the server is remote. */}
+                      {settings.aiAutocomplete && (
+                        <div className="space-y-1.5">
+                          {serverRemote ? (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <p className="text-xs text-slate-500 flex-1">Runs on</p>
+                                <button
+                                  onClick={() => setRunsOn('server')}
+                                  className={`px-3 py-1 text-xs rounded-md border inline-flex items-center gap-1 transition-colors ${runsOn === 'server' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-300 hover:border-blue-400'}`}
+                                >
+                                  <Server className="w-3 h-3" /> This server
+                                </button>
+                                <button
+                                  onClick={() => setRunsOn('mine')}
+                                  className={`px-3 py-1 text-xs rounded-md border inline-flex items-center gap-1 transition-colors ${runsOn === 'mine' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-300 hover:border-blue-400'}`}
+                                >
+                                  <Laptop className="w-3 h-3" /> Local machine
+                                </button>
+                              </div>
+                              {runsOn === 'mine' && (() => {
+                                // Honest states: green ONLY when a real SSH banner
+                                // came back (a live sshd behind the tunnel). A port
+                                // that accepts TCP but never greets (ssh===null) is a
+                                // stale/dead -R socket — show it as unconfirmed, not
+                                // connected, since that's exactly when autocomplete
+                                // silently can't reach your machine.
+                                const state: 'checking' | 'live' | 'stale' | 'nologin' | 'down' =
+                                  tunnel === null ? 'checking'
+                                    : !tunnel.up ? 'down'
+                                    : tunnel.ssh === true ? 'live'
+                                    : tunnel.ssh === false ? 'nologin'
+                                    : 'stale';
+                                const chip = {
+                                  checking: { cls: 'bg-slate-100 text-slate-500', txt: 'checking tunnel…' },
+                                  live: { cls: 'bg-green-100 text-green-700', txt: '✓ tunnel connected' },
+                                  stale: { cls: 'bg-amber-100 text-amber-700', txt: 'port open, no SSH response — reconnect the tunnel' },
+                                  nologin: { cls: 'bg-amber-100 text-amber-700', txt: 'tunnel up — Remote Login off?' },
+                                  down: { cls: 'bg-amber-100 text-amber-700', txt: 'tunnel not detected' },
+                                }[state];
+                                return (
+                                  <div className="space-y-1.5">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <p className="text-xs text-slate-500">
+                                        Runs on your computer over the reverse SSH tunnel, using your own subscription.
+                                      </p>
+                                      <button
+                                        onClick={() => setShowRemoteSetup(true)}
+                                        className="px-2 py-1 text-xs rounded-md border border-purple-300 text-purple-700 hover:bg-purple-50 flex-shrink-0 whitespace-nowrap"
+                                      >
+                                        {tunnelConfigured ? 'Edit connection…' : 'Set up connection…'}
+                                      </button>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className={`text-xs px-1.5 py-0.5 rounded-full ${chip.cls}`}>{chip.txt}</span>
+                                      {settings.remoteAgentPort && (
+                                        <span className="text-xs text-slate-400">reverse port {settings.remoteAgentPort}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+                            </>
+                          ) : (
+                            <p className="text-xs text-slate-500">Runs on this machine (the Nebula server is local).</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Diagnostics & test */}
+                  {settings.aiAutocomplete && (
+                    <div>
+                      <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                        <Stethoscope className="w-4 h-4" />
+                        Diagnostics &amp; test
+                      </label>
+                      <div className="p-3 bg-slate-50 rounded-lg space-y-3">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={doDiagnose}
+                            disabled={diagRunning}
+                            className="px-3 py-1.5 text-xs rounded-md bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50 inline-flex items-center gap-1.5"
+                          >
+                            {diagRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Stethoscope className="w-3.5 h-3.5" />}
+                            Run diagnostics
+                          </button>
+                          <button
+                            onClick={doTest}
+                            disabled={testRunning}
+                            className="px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 inline-flex items-center gap-1.5"
+                          >
+                            {testRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                            Test completion
+                          </button>
+                        </div>
+
+                        {diag && (
+                          <div className="space-y-1.5 border-t border-slate-200 pt-2">
+                            <Row ok={null} label={`Nebula server: ${environmentLabel({ kind: diag.environment.kind as 'local' | 'cluster' | 'server', hostname: diag.environment.hostname, platform: diag.environment.platform, scheduler: diag.environment.scheduler })}`} />
+                            <Row ok={diag.server.claude.usable} label={`This server · Claude Code`} detail={diag.server.claude.detail} />
+                            <Row ok={diag.server.codex.usable} label={`This server · Codex`} detail={diag.server.codex.detail} />
+                            {diag.tunnel && (
+                              <>
+                                <Row ok={diag.tunnel.reachable} label="Local machine · tunnel" detail={diag.tunnel.reachable ? 'reachable' : 'not reachable — is the tunnel connected?'} />
+                                <Row ok={!!diag.tunnel.claude} label="Local machine · Claude Code" detail={diag.tunnel.claude ?? 'not found'} />
+                                <Row ok={!!diag.tunnel.codex} label="Local machine · Codex" detail={diag.tunnel.codex ?? 'not found'} />
+                              </>
+                            )}
+                            {!diag.tunnel && serverRemote && (
+                              <p className="text-xs text-slate-400">Configure the Local machine connection to diagnose the tunnel.</p>
+                            )}
+                          </div>
+                        )}
+
+                        {testResult && (
+                          <div className="border-t border-slate-200 pt-2 text-xs">
+                            {testResult.ok ? (
+                              <div className="space-y-1">
+                                <p className="text-emerald-700 font-medium">✓ Completion ran on {testResult.ranOn} · {testResult.ms}ms{testResult.fromCache ? ' (cached)' : ''}</p>
+                                <pre className="bg-slate-800 text-slate-100 rounded px-2 py-1.5 overflow-x-auto whitespace-pre-wrap">{testResult.text || '(empty)'}</pre>
+                              </div>
+                            ) : (
+                              <p className="text-red-600">✗ Test failed ({testResult.ranOn}): {testResult.error}</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+
             {/* Appearance Tab */}
             {activeTab === 'appearance' && (
               <>
@@ -529,6 +792,11 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
           </div>
         </div>
       </div>
+
+      {/* Local-machine connection setup (reverse tunnel) — reused from the agent bar. */}
+      {showRemoteSetup && (
+        <RemoteAgentSetupModal onClose={() => { setShowRemoteSetup(false); setSettings(getSettings()); }} />
+      )}
     </>
   );
 };

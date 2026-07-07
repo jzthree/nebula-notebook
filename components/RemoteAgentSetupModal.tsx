@@ -67,8 +67,9 @@ export const RemoteAgentSetupModal: React.FC<Props> = ({ onClose }) => {
   const jumpBurrow = settings.remoteAgentJumpHost?.trim() ? ` --jump ${settings.remoteAgentJumpHost.trim()}` : '';
   const host = serverInfo.hostname ?? '<server-host>';
   const port = serverInfo.port ?? 3000;
-  const burrowCommand = `burrow add --name nebula-agent --host ${host}${jumpBurrow} --local ${localPort}:localhost:${port} --remote ${settings.remoteAgentPort}:localhost:22`;
-  const sshCommand = `ssh${jumpSsh} -L ${localPort}:localhost:${port} -R ${settings.remoteAgentPort}:localhost:22 ${host}`;
+  const sshPort = settings.remoteAgentLocalSshPort ?? 22;
+  const burrowCommand = `burrow add --name nebula-agent --host ${host}${jumpBurrow} --local ${localPort}:localhost:${port} --remote ${settings.remoteAgentPort}:localhost:${sshPort}`;
+  const sshCommand = `ssh${jumpSsh} -L ${localPort}:localhost:${port} -R ${settings.remoteAgentPort}:localhost:${sshPort} ${host}`;
   const sshCopyIdCommand = `ssh-copy-id -o ProxyCommand=none -p ${settings.remoteAgentPort} ${settings.remoteAgentUser?.trim() || '<your-mac-user>'}@localhost`;
   const tokenExportCommand = `echo 'export CLAUDE_CODE_OAUTH_TOKEN=PASTE-TOKEN-HERE' >> ~/.zshenv && chmod 600 ~/.zshenv`;
 
@@ -124,6 +125,20 @@ export const RemoteAgentSetupModal: React.FC<Props> = ({ onClose }) => {
                 placeholder="e.g. jane"
                 className="w-full px-2 py-1.5 text-sm border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-purple-500"
               />
+            </div>
+            <div>
+              <p className="text-xs text-slate-500 mb-1">SSH port on your machine</p>
+              <input
+                type="number"
+                value={settings.remoteAgentLocalSshPort ?? 22}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  persist({ remoteAgentLocalSshPort: Number.isInteger(n) && n > 0 ? n : 22 });
+                }}
+                placeholder="22"
+                className="w-full px-2 py-1.5 text-sm border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-purple-500"
+              />
+              <p className="text-[0.7rem] text-slate-400 mt-0.5">Default 22. Use 2222 if a policy blocks 22.</p>
             </div>
             <div>
               <p className="text-xs text-slate-500 mb-1">Nebula URL from your machine</p>

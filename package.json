@@ -1,7 +1,7 @@
 {
   "name": "nebula-notebook",
   "version": "0.2.0",
-  "description": "AI-native notebook computing environment \u2014 real Jupyter kernels, real filesystem, built to be driven by agents (Claude Code / Codex) via MCP",
+  "description": "AI-native notebook computing environment — real Jupyter kernels, real filesystem, built to be driven by agents (Claude Code / Codex) via MCP",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -27,6 +27,9 @@
     "node-server/package.json",
     "scripts/postinstall.cjs"
   ],
+  "bundledDependencies": [
+    "nebula-autocomplete"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -42,10 +45,12 @@
     "mcp": "npm --prefix packages/mcp run mcp",
     "mcp:build": "npm --prefix packages/mcp run build",
     "mcp:test": "npm --prefix packages/mcp test",
+    "autocomplete:test": "npm --prefix packages/autocomplete test",
     "setup-mcp": "npm --prefix packages/mcp run setup-mcp",
     "setup": "node setup.cjs",
     "postinstall": "node scripts/postinstall.cjs",
-    "prepublishOnly": "npm run build && npm run node-server:build",
+    "autocomplete:build": "npm --prefix packages/autocomplete run build",
+    "prepublishOnly": "npm --prefix packages/autocomplete install && npm run autocomplete:build && npm run build && npm run node-server:build",
     "stop": "lsof -ti:3000,3001,8000 | xargs kill -9 2>/dev/null; echo 'Servers stopped'",
     "test": "vitest",
     "test:run": "vitest run"
@@ -59,6 +64,7 @@
     "better-sqlite3": "^11.0.0",
     "fastify": "^5.8.2",
     "jsonwebtoken": "^9.0.2",
+    "nebula-autocomplete": "file:packages/autocomplete",
     "otplib": "^12.0.1",
     "qrcode-terminal": "^0.12.0",
     "uuid": "^9.0.1",
