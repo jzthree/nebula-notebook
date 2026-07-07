@@ -1,0 +1,58 @@
+{
+  "name": "nebula-autocomplete",
+  "version": "0.1.0",
+  "description": "LLM code autocomplete engine backed by Claude Code / Codex CLI subscriptions, with a Fastify plugin and CodeMirror 6 ghost-text extension.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/fastify.d.ts",
+      "default": "./dist/server/fastify.js"
+    },
+    "./client": {
+      "types": "./dist/client/fetcher.d.ts",
+      "default": "./dist/client/fetcher.js"
+    },
+    "./codemirror": {
+      "types": "./dist/codemirror/ghostText.d.ts",
+      "default": "./dist/codemirror/ghostText.js"
+    }
+  },
+  "files": [
+    "dist",
+    "server.js",
+    "server.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "peerDependencies": {
+    "@codemirror/state": "^6.0.0",
+    "@codemirror/view": "^6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@codemirror/state": {
+      "optional": true
+    },
+    "@codemirror/view": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.36.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}
