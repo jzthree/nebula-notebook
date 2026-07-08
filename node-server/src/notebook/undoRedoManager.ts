@@ -267,27 +267,51 @@ export class HeadlessUndoRedoManager {
         console.warn(`[UndoRedoManager] Failed to load history for ${notebookPath}:`, err);
       }
 
-      // Initialize state
-      const state: NotebookUndoState = {
-        undoStack: [],
-        redoStack: [],
-        fullHistory: loadedHistory.length > 0 ? loadedHistory : [{
-          type: 'snapshot',
-          cells: cells.map(stripCellOutputs),
-          timestamp: Date.now()
-        }],
-        lastContent: new Map(cells.map(c => [c.id, c.content]))
-      };
-
-      // Rebuild undo stack from history
-      if (loadedHistory.length > 0) {
-        state.undoStack = this.rebuildUndoStack(loadedHistory);
-      }
-
-      this.states.set(notebookPath, state);
+      this.initState(notebookPath, cells, loadedHistory);
     }
 
     return this.states.get(notebookPath)!;
+  }
+
+  /**
+   * Preload a notebook's history without blocking the event loop. After this
+   * resolves, getState is a pure in-memory hit — its loadHistorySync fallback
+   * (a large journal read that stalls every in-flight request on a network
+   * filesystem) never fires. No-op if state already exists.
+   */
+  async warm(notebookPath: string, cells: NebulaCell[]): Promise<void> {
+    if (this.states.has(notebookPath)) return;
+
+    let loadedHistory: TimestampedOperation[] = [];
+    try {
+      loadedHistory = (await this.fsService.loadHistory(notebookPath)) as TimestampedOperation[];
+    } catch (err) {
+      console.warn(`[UndoRedoManager] Failed to load history for ${notebookPath}:`, err);
+    }
+
+    // A concurrent sync getState may have initialized while we awaited
+    if (this.states.has(notebookPath)) return;
+    this.initState(notebookPath, cells, loadedHistory);
+  }
+
+  private initState(notebookPath: string, cells: NebulaCell[], loadedHistory: TimestampedOperation[]): void {
+    const state: NotebookUndoState = {
+      undoStack: [],
+      redoStack: [],
+      fullHistory: loadedHistory.length > 0 ? loadedHistory : [{
+        type: 'snapshot',
+        cells: cells.map(stripCellOutputs),
+        timestamp: Date.now()
+      }],
+      lastContent: new Map(cells.map(c => [c.id, c.content]))
+    };
+
+    // Rebuild undo stack from history
+    if (loadedHistory.length > 0) {
+      state.undoStack = this.rebuildUndoStack(loadedHistory);
+    }
+
+    this.states.set(notebookPath, state);
   }
 
   /**

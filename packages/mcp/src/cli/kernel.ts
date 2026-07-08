@@ -19,10 +19,15 @@ import {
   type ParsedArgs,
 } from './shared.js';
 
-const KERNEL_HELP = `usage: nebula kernel <status|restart|interrupt> <path>
+const KERNEL_HELP = `usage: nebula kernel <status|start|stop|restart|interrupt> <path>
+       nebula kernel ls
 
 examples:
+  nebula kernel ls                         # available kernels on the server
   nebula kernel status analysis.ipynb      # session id, kernel, state
+  nebula kernel start analysis.ipynb       # start (kernel from notebook metadata)
+  nebula kernel start analysis.ipynb --name ir
+  nebula kernel stop analysis.ipynb        # shut the session down
   nebula kernel interrupt analysis.ipynb   # stop the running cell
   nebula kernel restart analysis.ipynb     # fresh kernel (variables cleared)
 
@@ -34,11 +39,17 @@ export async function cmdKernel(argv: string[]): Promise<number> {
     console.log(KERNEL_HELP);
     return sub === undefined ? EXIT.USAGE : EXIT.OK;
   }
-  const { values, positionals } = parse(rest);
+  const { values, positionals } = parse(rest, { name: { type: 'string' } });
   if (values.help) {
     console.log(KERNEL_HELP);
     return EXIT.OK;
   }
+
+  // Path-less subcommands
+  if (sub === 'ls') {
+    return kernelLs(makeClient(resolveUrl(values.url)), values);
+  }
+
   const nbPath = requirePositional(positionals, 0, 'path', `nebula kernel ${sub} <path>`);
   const url = resolveUrl(values.url);
   const client = makeClient(url, nbPath);
@@ -46,6 +57,10 @@ export async function cmdKernel(argv: string[]): Promise<number> {
   switch (sub) {
     case 'status':
       return kernelStatus(client, nbPath, values);
+    case 'start':
+      return kernelStart(client, nbPath, values);
+    case 'stop':
+      return kernelStop(client, nbPath, values);
     case 'restart':
       return kernelRestart(client, nbPath, values);
     case 'interrupt':
@@ -53,6 +68,59 @@ export async function cmdKernel(argv: string[]): Promise<number> {
     default:
       throw new CliError(`unknown kernel subcommand: ${sub}`, EXIT.USAGE, "run 'nebula kernel --help' for the list");
   }
+}
+
+async function kernelLs(client: NebulaClient, values: ParsedArgs['values']): Promise<number> {
+  const result = await client.listKernels();
+  if (!result.success) throw toCliError(result.error);
+
+  const kernels = result.data ?? [];
+  if (values.json) {
+    printJson(kernels);
+    return EXIT.OK;
+  }
+  if (kernels.length === 0) {
+    console.log('no kernels discovered on the server');
+    return EXIT.OK;
+  }
+  const nameWidth = Math.max(...kernels.map((k) => k.name.length), 4);
+  console.log(`${'NAME'.padEnd(nameWidth)}  LANGUAGE  DISPLAY NAME`);
+  for (const k of kernels) {
+    console.log(`${k.name.padEnd(nameWidth)}  ${(k.language || '-').padEnd(8)}  ${k.displayName}`);
+  }
+  printHint('start one for a notebook with: nebula kernel start <path> --name <NAME>', values);
+  return EXIT.OK;
+}
+
+async function kernelStart(client: NebulaClient, nbPath: string, values: ParsedArgs['values']): Promise<number> {
+  // No --name → the server resolves the kernel from the notebook's kernelspec.
+  const started = await client.getOrCreateKernelForFile(nbPath, values.name as string | undefined);
+  if (!started.success) throw toCliError(started.error, nbPath);
+
+  if (values.json) {
+    printJson({ sessionId: started.data!.sessionId, kernelName: started.data!.kernelName });
+    return EXIT.OK;
+  }
+  console.log(`kernel session: ${started.data!.sessionId} (${started.data!.kernelName})`);
+  printHint(`execute a cell with: nebula run ${nbPath} <cell-id>`, values);
+  return EXIT.OK;
+}
+
+async function kernelStop(client: NebulaClient, nbPath: string, values: ParsedArgs['values']): Promise<number> {
+  const session = await client.resolveKernelSessionIdForNotebook(nbPath, { createIfMissing: false });
+  if (!session.success) {
+    throw new CliError(`no kernel session for ${nbPath}`, EXIT.KERNEL);
+  }
+  const result = await client.shutdownKernel(session.data!.sessionId);
+  if (!result.success) throw toCliError(result.error, nbPath);
+
+  if (values.json) {
+    printJson({ stopped: true, sessionId: session.data!.sessionId });
+    return EXIT.OK;
+  }
+  console.log('kernel stopped');
+  printHint(`start a fresh one with: nebula kernel start ${nbPath}`, values);
+  return EXIT.OK;
 }
 
 async function kernelStatus(client: NebulaClient, nbPath: string, values: ParsedArgs['values']): Promise<number> {

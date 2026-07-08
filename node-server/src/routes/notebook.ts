@@ -92,6 +92,13 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
         history
       );
 
+      // Outputs-unchanged sentinel couldn't be resolved against the file on
+      // disk (first save, changed ids, external rewrite…) — tell the client
+      // to resend the full payload.
+      if (!result.success && result.needsFull) {
+        return reply.code(409).send({ detail: 'unchanged-outputs sentinel unresolved; resend full payload', code: 'needs_full' });
+      }
+
       // The UI just wrote newer content than whatever the headless handler may
       // have cached. Drop the cache so headless ops (an agent working after the
       // user closes the tab) reload from disk instead of serving — or worse,
@@ -194,7 +201,7 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
         status: 'ok',
         notebook_path,
         mtime: result.mtime,
-        ...(result.status || fsService.getAgentPermissionStatus(notebook_path)),
+        ...(result.status || await fsService.getAgentPermissionStatusAsync(notebook_path)),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -212,7 +219,7 @@ export default async function notebookRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ detail: 'path query parameter is required' });
       }
 
-      const status = fsService.getAgentPermissionStatus(filePath);
+      const status = await fsService.getAgentPermissionStatusAsync(filePath);
 
       return reply.send({
         notebook_path: filePath,

@@ -21,7 +21,9 @@
 import { getSettings } from './settingsService';
 import { markOnboardingStep } from './onboardingService';
 
-export type AgentStatus = 'none' | 'running';
+// Optimistic 'running' on launch; flips to 'failed' if the post-launch output
+// watcher sees a "command not found"-style failure (agent never started).
+export type AgentStatus = 'none' | 'running' | 'failed';
 export type AgentKind = 'claude' | 'codex' | 'manual';
 
 export interface SendResult {
@@ -35,10 +37,31 @@ interface AgentState {
   terminalId: string | null;
   status: AgentStatus;
   agentKind: AgentKind | null;
+  launchError?: string; // set when status === 'failed'
 }
 
 const ENTER_DELAY_MS = 150;
 const MAX_ERROR_EXCERPT_CHARS = 280;
+// Positive launch check: after sending the launch command, wait this long for
+// the agent's TUI to appear. Both Claude and Codex render essentially instantly
+// (<1s); the window is generous to tolerate a slow reverse-ssh hop before we
+// declare the launch dead.
+const LAUNCH_WATCH_MS = 10000;
+// A full-screen TUI (Claude, Codex) sets these private terminal modes when it
+// starts and resets them when it exits back to the shell. Verified by capturing
+// both agents' raw pty output AND the zsh prompt's: focus-events (?1004) is set
+// by both agents and by neither shell, so it's the universal, shell-safe signal;
+// alt-screen (?1049) and mouse (?100x) are extra Claude confirmation. Bracketed
+// paste (?2004) is deliberately excluded — the shell prompt toggles it too.
+// eslint-disable-next-line no-control-regex
+const TUI_INIT_RE = /\x1b\[\?(1049|1004|1000|1002|1003)h/;     // agent came up
+// eslint-disable-next-line no-control-regex
+const TUI_TEARDOWN_RE = /\x1b\[\?(1049|1004|1000|1002|1003)l/; // agent exited to shell
+// Explicit error signatures — a faster, more specific fail than the no-TUI
+// timeout: shell/OS "not found", ssh-level failures (remote launch), and a
+// resume whose transcript is gone.
+const LAUNCH_FAILURE_RE =
+  /command not found|not found|no such file or directory|is not recognized|permission denied|cannot execute|No such file|connection refused|connection timed out|could not resolve hostname|no route to host|ssh: connect to host|no conversation found/i;
 
 // Persisted "agent launched" flag, keyed by terminal id. Terminal ids are
 // stable (named per notebook), so after a page refresh reattaches to the same
@@ -60,21 +83,35 @@ function writeAgentFlag(terminalId: string, kind: AgentKind | null): void {
   } catch { /* storage unavailable — degrade to in-memory only */ }
 }
 
-// The kind of the LAST agent that ran in a terminal (set when it stops).
-// Lets the UI offer "Resume" — `claude --continue` reopens that conversation.
-const AGENT_LAST_PREFIX = 'nebula-agent-last:';
+// Stable Claude session id per (agent terminal, run location). Claude keys each
+// conversation by working directory, so two notebooks that share a cwd would
+// cross-resume with plain `--continue`; a caller-chosen `--session-id` gives
+// each notebook its own thread, resumed with `--resume <id>`. localStorage
+// (not sessionStorage): the on-disk transcript is durable, so the resume
+// pointer should survive a browser restart too. Keyed by location because a
+// server-run and a laptop-run conversation live on different machines (and
+// different ~/.claude), so their ids must not be confused.
+const AGENT_SESSION_PREFIX = 'nebula-agent-session:';
 
-function readLastAgentKind(terminalId: string): 'claude' | null {
-  try {
-    return window.sessionStorage.getItem(AGENT_LAST_PREFIX + terminalId) === 'claude' ? 'claude' : null;
-  } catch { return null; }
+function readAgentSessionId(key: string): string | null {
+  try { return window.localStorage.getItem(AGENT_SESSION_PREFIX + key) || null; }
+  catch { return null; }
 }
 
-function writeLastAgentKind(terminalId: string, kind: 'claude' | null): void {
+function writeAgentSessionId(key: string, id: string | null): void {
   try {
-    if (kind) window.sessionStorage.setItem(AGENT_LAST_PREFIX + terminalId, kind);
-    else window.sessionStorage.removeItem(AGENT_LAST_PREFIX + terminalId);
-  } catch { /* storage unavailable */ }
+    if (id) window.localStorage.setItem(AGENT_SESSION_PREFIX + key, id);
+    else window.localStorage.removeItem(AGENT_SESSION_PREFIX + key);
+  } catch { /* storage unavailable — resume just won't persist */ }
+}
+
+function newSessionUuid(): string {
+  try { if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID(); }
+  catch { /* not a secure context — fall through */ }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
 }
 
 // eslint-disable-next-line no-control-regex
@@ -88,6 +125,14 @@ class AgentTerminalService {
   private notebookPath: string | null = null;
   private serverBaseUrl: string | null = null;
   private repoRoot: string | null = null;
+  // Output watcher over the agent terminal. phase 'launch' = confirming the TUI
+  // came up (positive) or an error/timeout means it didn't; phase 'run' = the
+  // agent is up, watching for it exiting back to the shell (the pty stays alive,
+  // so no exit event fires). `raw` keeps the last bytes UNstripped so the private
+  // mode sequences survive to be matched.
+  private launchWatch:
+    | { terminalId: string; kind: AgentKind; phase: 'launch' | 'run'; raw: string; timer: ReturnType<typeof setTimeout> | null }
+    | null = null;
 
   // --- registration (called by TerminalInstance / TerminalPanel / Notebook) ---
 
@@ -101,6 +146,7 @@ class AgentTerminalService {
       const restored = readAgentFlag(terminalId);
       if (restored) {
         this.state = { ...this.state, status: 'running', agentKind: restored };
+        this.armExitWatch(terminalId, restored); // re-arm exit detection
       }
     }
     this.notify();
@@ -121,12 +167,15 @@ class AgentTerminalService {
   /** Designate which terminal is the agent terminal (the notebook panel's). */
   setAgentTerminal(terminalId: string | null): void {
     if (this.state.terminalId === terminalId) return;
-    // Restore agent status across page refreshes: the named pty survives the
-    // reload, so an agent launched before the refresh is still running in it.
+    // Switching notebooks (or restoring across a refresh): the named pty survives
+    // and an agent launched earlier is still running in it. Detach the old
+    // watch; re-arm exit detection on the newly-current terminal if it's running.
+    this.clearWatch();
     const restored = terminalId ? readAgentFlag(terminalId) : null;
     this.state = restored
       ? { terminalId, status: 'running', agentKind: restored }
       : { terminalId, status: 'none', agentKind: null };
+    if (terminalId && restored) this.armExitWatch(terminalId, restored);
     this.notify();
   }
 
@@ -160,6 +209,16 @@ class AgentTerminalService {
    */
   buildSetupMcpCommand(): string {
     return 'npx nebula-notebook-mcp setup-mcp';
+  }
+
+  /**
+   * Command that installs the `nebula` CLI as a Claude Code skill — the
+   * preferred way to teach an EXTERNAL agent (not launched from a Nebula
+   * terminal) how to drive notebooks. Lighter than the MCP: no server process,
+   * no per-session connect, and every command is scoped to a notebook path.
+   */
+  buildSetupSkillCommand(): string {
+    return 'npx -p nebula-notebook-mcp nebula setup-skill';
   }
 
   // --- remote-agent mode (run the agent on the user's machine) ---
@@ -211,23 +270,28 @@ class AgentTerminalService {
   }
 
   /**
-   * The agent invocation itself. Fresh launches carry the full bootstrap
-   * prompt; resume launches ride the agent CLI's own session persistence
-   * (`claude --continue` reopens the last conversation in that cwd — no
-   * tmux, no daemons, nothing left running when the agent exits) with a
-   * short reorientation prompt. Codex has no equivalent flag; it relaunches
-   * fresh.
+   * The agent invocation itself. Fresh Claude launches pin a caller-chosen
+   * `--session-id` (this notebook's own uuid) so the conversation is
+   * independently resumable even when several notebooks share a working
+   * directory; resume launches reopen exactly that thread with `--resume <id>`
+   * (`--continue` as a fallback if no id is stored) plus a short reorientation
+   * prompt. Codex has no equivalent flag; it relaunches fresh.
    */
-  private buildAgentCommand(kind: 'claude' | 'codex', resume: boolean, envPrefix = ''): string {
+  private buildAgentCommand(kind: 'claude' | 'codex', resume: boolean, envPrefix = '', sessionId?: string): string {
     if (resume && kind === 'claude') {
       const reorient = sanitizePromptText(
         'We were disconnected — this is the same Nebula notebook session as before. ' +
         (this.notebookPath ? `Still driving ${this.notebookPath}. ` : '') +
         'Re-read the notebook if you need to re-orient, then continue where you left off.'
       );
-      return `${envPrefix}claude --continue ${shellSingleQuote(reorient)}`;
+      const flag = sessionId ? `--resume ${sessionId}` : '--continue';
+      return `${envPrefix}claude ${flag} ${shellSingleQuote(reorient)}`;
     }
-    return `${envPrefix}${kind} ${shellSingleQuote(this.buildBootstrapPrompt(envPrefix !== ''))}`;
+    const bootstrap = shellSingleQuote(this.buildBootstrapPrompt(envPrefix !== ''));
+    if (kind === 'claude' && sessionId) {
+      return `${envPrefix}claude --session-id ${sessionId} ${bootstrap}`;
+    }
+    return `${envPrefix}${kind} ${bootstrap}`;
   }
 
   /**
@@ -236,10 +300,18 @@ class AgentTerminalService {
    * there, run the agent with the bootstrap prompt as its first argument.
    * accept-new pins the host key on first use without an interactive prompt.
    */
-  buildRemoteLaunchCommand(kind: 'claude' | 'codex', resume = false): string | null {
+  buildRemoteLaunchCommand(kind: 'claude' | 'codex', resume = false, sessionId?: string): string | null {
     const cfg = this.getRemoteAgentConfig();
     if (!cfg) return null;
-    const agentCmd = this.buildAgentCommand(kind, resume, `NEBULA_URL=${cfg.localUrl} `);
+    // The notebook lives on the SERVER, so its folder doesn't exist on the
+    // user's machine — run the agent from a stable Nebula scratch dir there.
+    // Same dir every launch (what `claude --resume` needs: session lookup is
+    // scoped to the cwd it was created in); the per-notebook session id
+    // separates notebooks within it. The agent drives the notebook via the
+    // `nebula` CLI over the tunnel, not via local files, so the cwd is inert.
+    const cwd = '"$HOME/.nebula/agent"';
+    const agentCmd = `mkdir -p ${cwd} && cd ${cwd} && ` +
+      this.buildAgentCommand(kind, resume, `NEBULA_URL=${cfg.localUrl} `, sessionId);
     // `ssh host cmd` runs a non-login, non-interactive shell on the user's
     // machine — PATH additions from .zprofile/.zshrc (homebrew, nvm, npm -g)
     // are absent and the agent CLI isn't found. Re-enter the user's own shell
@@ -269,11 +341,12 @@ class AgentTerminalService {
     parts.push(
       (remote
         ? `PREFERRED: use the \`nebula\` CLI (NEBULA_URL is already set to ${baseUrl}, your SSH-forwarded Nebula server; notebook paths are paths on the SERVER, not this machine). ` +
+          'Your shell here runs in a scratch dir on your own machine — the notebook and its data files live on the server, reachable only through nebula. ' +
           'If `nebula` is not on PATH, use `npx -p nebula-notebook-mcp nebula …`. '
         : 'PREFERRED: use the `nebula` CLI available in this terminal (NEBULA_URL is already set). ') +
       'Start with `nebula --help`; key commands: `nebula nb read <path>` (list cells), ' +
       '`nebula run <path> <cell-id>` (execute AND get output in one call), ' +
-      '`nebula nb edit <path> <cell-id> --content-file -`, `nebula nb search <path> <query>`, ' +
+      '`nebula nb edit <path> <cell-id> -` (content from stdin; or --content \'…\'), `nebula nb search <path> <query>`, ' +
       '`nebula kernel status|restart|interrupt <path>`. ' +
       'Exit code 9 = edit conflict (the current content is printed — retry against it). ' +
       'For long-running cells: `nebula run` blocks until the cell finishes — launch it as a background shell task ' +
@@ -302,9 +375,19 @@ class AgentTerminalService {
     return this.state;
   }
 
-  /** 'claude' when the last agent in this terminal can be resumed via --continue. */
+  /** Where the agent runs — server-side, or the user's machine over the tunnel. */
+  private where(): 'mine' | 'server' {
+    return this.getRemoteAgentConfig() ? 'mine' : 'server';
+  }
+
+  /** Storage key for this notebook's Claude session id at the current location. */
+  private sessionKey(terminalId: string): string {
+    return `${terminalId}:${this.where()}`;
+  }
+
+  /** 'claude' when this notebook has a stored session to resume at this location. */
   getResumableKind(): 'claude' | null {
-    return this.state.terminalId ? readLastAgentKind(this.state.terminalId) : null;
+    return this.state.terminalId && readAgentSessionId(this.sessionKey(this.state.terminalId)) ? 'claude' : null;
   }
 
   isConnected(): boolean {
@@ -336,16 +419,97 @@ class AgentTerminalService {
     const send = this.getAgentSender();
     if (!send.ok) return send;
     const resume = !!opts.resume;
+    // Per-notebook Claude session id: a fresh launch mints and stores a new one;
+    // resume reuses the stored one. Keyed by run location (server vs. the user's
+    // machine) since those conversations live on different hosts.
+    let sessionId: string | undefined;
+    if (kind === 'claude' && this.state.terminalId) {
+      const key = this.sessionKey(this.state.terminalId);
+      if (resume) {
+        sessionId = readAgentSessionId(key) ?? undefined;
+      } else {
+        sessionId = newSessionUuid();
+        writeAgentSessionId(key, sessionId);
+      }
+    }
     // Remote-agent mode: the launch line hops back to the user's machine over
     // the reverse SSH channel and runs the agent there instead.
-    const remoteLine = this.buildRemoteLaunchCommand(kind, resume);
-    send.sender(remoteLine ? `${remoteLine}\r` : `${this.buildAgentCommand(kind, resume)}\r`);
-    if (this.state.terminalId) writeLastAgentKind(this.state.terminalId, null); // consumed
+    const remoteLine = this.buildRemoteLaunchCommand(kind, resume, sessionId);
+    send.sender(remoteLine ? `${remoteLine}\r` : `${this.buildAgentCommand(kind, resume, '', sessionId)}\r`);
     markOnboardingStep('launchedAgent');
-    this.state = { ...this.state, status: 'running', agentKind: kind };
+    // Report 'running' optimistically, then confirm via the output watcher: it
+    // flips to 'failed' if the TUI never appears (or a known error prints), and
+    // later to stopped when the agent exits back to the shell.
+    this.state = { ...this.state, status: 'running', agentKind: kind, launchError: undefined };
     if (this.state.terminalId) writeAgentFlag(this.state.terminalId, kind);
+    this.startLaunchWatch(kind);
     this.notify();
     return { ok: true };
+  }
+
+  private clearWatch(): void {
+    if (this.launchWatch?.timer) clearTimeout(this.launchWatch.timer);
+    this.launchWatch = null;
+  }
+
+  /** Watch a just-launched agent: confirm its TUI comes up, else fail it. */
+  private startLaunchWatch(kind: AgentKind): void {
+    this.clearWatch();
+    const terminalId = this.state.terminalId;
+    if (!terminalId) return;
+    // Positive check: no TUI within the window ⇒ the agent never came up (a
+    // silent failure the error-regex didn't name). More reliable than only
+    // watching for known error strings.
+    const timer = setTimeout(() => {
+      if (this.launchWatch?.phase === 'launch') {
+        this.markLaunchFailed('the agent did not start (no interface appeared)');
+      }
+    }, LAUNCH_WATCH_MS);
+    this.launchWatch = { terminalId, kind, phase: 'launch', raw: '', timer };
+  }
+
+  /** Watch an already-running agent (restored after refresh/switch) for exit. */
+  private armExitWatch(terminalId: string, kind: AgentKind): void {
+    this.clearWatch();
+    this.launchWatch = { terminalId, kind, phase: 'run', raw: '', timer: null };
+  }
+
+  /**
+   * Fed every PTY output chunk by the terminal view. In 'launch' phase: confirm
+   * the agent's TUI appeared (positive) or catch an explicit error. Once up, in
+   * 'run' phase: detect the TUI tearing down = the agent quit back to the shell
+   * (the pty lives on, so no exit event fires) so the UI stops showing "active"
+   * and offers Resume.
+   */
+  observeOutput(terminalId: string, data: string): void {
+    const w = this.launchWatch;
+    if (!w || this.state.status !== 'running' || w.terminalId !== terminalId) return;
+    // Keep the tail UNstripped — the private-mode escapes are the signal.
+    w.raw = (w.raw + data).slice(-4000);
+    if (w.phase === 'launch') {
+      const stripped = w.raw.replace(ANSI_RE, '');
+      if (LAUNCH_FAILURE_RE.test(stripped)) {
+        const line = (stripped.split('\n').reverse().find((l) => LAUNCH_FAILURE_RE.test(l)) || '').trim();
+        this.markLaunchFailed(line.slice(0, MAX_ERROR_EXCERPT_CHARS) || 'launch failed');
+        return;
+      }
+      if (TUI_INIT_RE.test(w.raw)) {
+        // Confirmed up. Keep watching (no timer) for a later exit-to-shell.
+        if (w.timer) { clearTimeout(w.timer); w.timer = null; }
+        w.phase = 'run';
+        w.raw = '';
+      }
+      return;
+    }
+    // phase 'run'
+    if (TUI_TEARDOWN_RE.test(w.raw)) this.markStopped();
+  }
+
+  private markLaunchFailed(reason: string): void {
+    this.clearWatch();
+    if (this.state.terminalId) writeAgentFlag(this.state.terminalId, null);
+    this.state = { ...this.state, status: 'failed', agentKind: null, launchError: reason };
+    this.notify();
   }
 
   /**
@@ -355,7 +519,9 @@ class AgentTerminalService {
    */
   markRunning(): void {
     markOnboardingStep('launchedAgent');
-    this.state = { ...this.state, status: 'running', agentKind: 'manual' };
+    // Manually started: assume it's up and watch for it exiting to the shell.
+    if (this.state.terminalId) this.armExitWatch(this.state.terminalId, 'manual');
+    this.state = { ...this.state, status: 'running', agentKind: 'manual', launchError: undefined };
     if (this.state.terminalId) writeAgentFlag(this.state.terminalId, 'manual');
     this.notify();
     this.sendPrompt(this.buildBootstrapPrompt());
@@ -363,15 +529,12 @@ class AgentTerminalService {
 
   /** Agent exited (user quit it, or terminal process ended). */
   markStopped(): void {
-    // Always clear the persisted flag — the in-memory status may already have
-    // been dropped by a WS close before the pty's exit event reaches us.
-    if (this.state.terminalId) {
-      const was = readAgentFlag(this.state.terminalId) ?? this.state.agentKind;
-      if (was === 'claude') writeLastAgentKind(this.state.terminalId, 'claude');
-      writeAgentFlag(this.state.terminalId, null);
-    }
+    this.clearWatch();
+    // Clear the "running" flag; the resume pointer (the stored session id)
+    // deliberately persists so the stopped conversation stays resumable.
+    if (this.state.terminalId) writeAgentFlag(this.state.terminalId, null);
     if (this.state.status === 'none') return;
-    this.state = { ...this.state, status: 'none', agentKind: null };
+    this.state = { ...this.state, status: 'none', agentKind: null, launchError: undefined };
     this.notify();
   }
 
@@ -406,8 +569,9 @@ class AgentTerminalService {
     const where = this.notebookPath ? `notebook ${this.notebookPath}` : 'the open notebook';
     return this.sendPrompt(
       `In ${where}, cell ${args.cellNumber} (id ${args.cellId}) failed with: ${excerpt} — ` +
-      `use the nebula-notebook MCP tools to read the cell and its full error output, fix the cell, ` +
-      `and re-run it to verify the fix.`
+      `use the nebula CLI (nebula nb read / nebula run <path> <cell-id>; fall back to the ` +
+      `nebula-notebook MCP tools only if the CLI is unavailable) to read the cell and its full ` +
+      `error output, fix the cell, and re-run it to verify the fix.`
     );
   }
 
@@ -416,7 +580,9 @@ class AgentTerminalService {
     const where = this.notebookPath ? `notebook ${this.notebookPath}` : 'the open notebook';
     return this.sendPrompt(
       `In ${where}, regarding cell ${args.cellNumber} (id ${args.cellId}): ${args.prompt} — ` +
-      `use the nebula-notebook MCP tools to read and edit the notebook; re-run the cell if you change it.`
+      `use the nebula CLI (nebula nb read / nebula nb edit / nebula run; fall back to the ` +
+      `nebula-notebook MCP tools only if the CLI is unavailable) to read and edit the notebook; ` +
+      `re-run the cell if you change it.`
     );
   }
 

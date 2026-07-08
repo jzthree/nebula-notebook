@@ -111,6 +111,39 @@ export class HeadlessOperationHandler {
     return this.cache.get(notebookPath)!;
   }
 
+  /** In-flight cache warm-ups per notebook path (single-flight). */
+  private warming: Map<string, Promise<void>> = new Map();
+
+  /**
+   * Warm the notebook + undo-history caches with non-blocking I/O. The sync
+   * fallback in getCachedNotebook blocks the event loop on a cache miss — on
+   * a network filesystem a large notebook + history read stalls every
+   * in-flight request (kernel completions included) for seconds. Entry points
+   * await this first so the sync accessors below are pure in-memory hits.
+   */
+  private ensureCached(notebookPath: string): Promise<void> {
+    if (!notebookPath || this.cache.has(notebookPath)) return Promise.resolve();
+
+    const inflight = this.warming.get(notebookPath);
+    if (inflight) return inflight;
+
+    const run = (async () => {
+      const result = await this.fsService.getNotebookCells(notebookPath);
+      if (!this.cache.has(notebookPath)) {
+        this.cache.set(notebookPath, {
+          cells: result.cells || [],
+          metadata: result.metadata || {},
+          dirty: false,
+        });
+      }
+      await this.undoRedoManager.warm(notebookPath, this.cache.get(notebookPath)!.cells);
+    })().finally(() => {
+      this.warming.delete(notebookPath);
+    });
+    this.warming.set(notebookPath, run);
+    return run;
+  }
+
   private getCells(notebookPath: string): NebulaCell[] {
     return this.getCachedNotebook(notebookPath).cells;
   }
@@ -206,8 +239,8 @@ export class HeadlessOperationHandler {
   /**
    * Check if agent has permission to modify this notebook.
    */
-  private checkAgentPermission(notebookPath: string, _operationType: string): OperationResult | null {
-    const status = this.fsService.getAgentPermissionStatus(notebookPath);
+  private async checkAgentPermission(notebookPath: string, _operationType: string): Promise<OperationResult | null> {
+    const status = await this.fsService.getAgentPermissionStatusAsync(notebookPath);
 
     // can_agent_modify already encodes the tri-state rule (agent-created notebooks
     // are permitted unless explicitly revoked; user notebooks need permission +
@@ -290,9 +323,20 @@ export class HeadlessOperationHandler {
     const readOnlyOps = new Set(['readCell', 'readCellOutput', 'searchCells', 'getUpdatesSince', 'startAgentSession', 'endAgentSession']);
     const permissionExemptOps = new Set(['createNotebook', 'readCell', 'readCellOutput', 'searchCells', 'getUpdatesSince', 'startAgentSession', 'endAgentSession']);
 
+    // Warm the notebook/history caches without blocking the event loop before
+    // any sync accessor below runs. createNotebook targets a file that may
+    // not exist yet; a failed warm defers to the operation's own error.
+    if (notebookPath && opType !== 'createNotebook') {
+      try {
+        await this.ensureCached(notebookPath);
+      } catch {
+        // Operation handlers report missing/corrupt notebooks themselves
+      }
+    }
+
     // Check permission for write operations
     if (!permissionExemptOps.has(opType) && notebookPath) {
-      const permissionError = this.checkAgentPermission(notebookPath, opType);
+      const permissionError = await this.checkAgentPermission(notebookPath, opType);
       if (permissionError) {
         return permissionError;
       }
@@ -433,6 +477,13 @@ export class HeadlessOperationHandler {
     maxCharsError?: number
   ): Promise<OperationResult> {
     try {
+      // Non-blocking cache warm-up; on failure the sync accessor below
+      // produces the proper error (e.g. notebook not found).
+      try {
+        await this.ensureCached(notebookPath);
+      } catch {
+        // fall through to getCachedNotebook's own error handling
+      }
       const notebook = this.getCachedNotebook(notebookPath);
       let cells = notebook.cells;
 

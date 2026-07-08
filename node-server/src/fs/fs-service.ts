@@ -21,6 +21,7 @@ import {
   CellOutput,
   NotebookCellsResponse,
   SaveNotebookResult,
+  OUTPUTS_UNCHANGED_SENTINEL,
   JupyterNotebook,
   JupyterCell,
   JupyterOutput,
@@ -384,8 +385,16 @@ export class FilesystemService {
   /**
    * Async variant of atomicWriteFileSync (write temp, fsync, rename, fsync dir).
    * Used on hot notebook-save paths so large writes never block the event loop.
+   *
+   * `durable: false` skips both fsyncs while keeping the tmp+rename atomicity.
+   * Use it for auxiliary files (history/session/journal/lastsave): on network
+   * filesystems (GPFS) each fsync can take seconds, and a save doing ~10 of
+   * them was observed at 20-27s. A crash can lose the last few seconds of an
+   * auxiliary file, but never corrupt it — the rename is still atomic. The
+   * notebook file itself stays fully durable.
    */
-  private async atomicWriteFile(targetPath: string, data: string): Promise<void> {
+  private async atomicWriteFile(targetPath: string, data: string, opts: { durable?: boolean } = {}): Promise<void> {
+    const durable = opts.durable !== false;
     const dir = path.dirname(targetPath);
     await fsp.mkdir(dir, { recursive: true });
 
@@ -394,12 +403,14 @@ export class FilesystemService {
     const handle = await fsp.open(tmpPath, 'w', 0o600);
     try {
       await handle.writeFile(data, 'utf-8');
-      await handle.sync();
+      if (durable) await handle.sync();
     } finally {
       await handle.close();
     }
 
     await fsp.rename(tmpPath, targetPath);
+
+    if (!durable) return;
 
     // Best-effort directory fsync
     try {
@@ -414,8 +425,8 @@ export class FilesystemService {
     }
   }
 
-  private async writeJsonAtomic(targetPath: string, payload: unknown): Promise<void> {
-    await this.atomicWriteFile(targetPath, JSON.stringify(payload, null, 2));
+  private async writeJsonAtomic(targetPath: string, payload: unknown, opts: { durable?: boolean } = {}): Promise<void> {
+    await this.atomicWriteFile(targetPath, JSON.stringify(payload, null, 2), opts);
   }
 
   /**
@@ -466,6 +477,23 @@ export class FilesystemService {
       isDirectory: isDir,
       size: isDir ? 0 : stat.size,
       modified: stat.mtimeMs / 1000, // Convert to seconds
+      extension: isDir ? '' : path.extname(name),
+    };
+  }
+
+  /** Async, non-blocking variant of getFileInfo (one `fsp.stat`). Used by
+   *  listDirectory so a folder's entries stat in parallel off the event loop. */
+  private async getFileInfoAsync(filePath: string): Promise<FileInfo> {
+    const stat = await fsp.stat(filePath);
+    const name = path.basename(filePath);
+    const isDir = stat.isDirectory();
+
+    return {
+      name,
+      path: filePath,
+      isDirectory: isDir,
+      size: isDir ? 0 : stat.size,
+      modified: stat.mtimeMs / 1000,
       extension: isDir ? '' : path.extname(name),
     };
   }
@@ -531,36 +559,38 @@ export class FilesystemService {
   /**
    * List contents of a directory
    */
-  listDirectory(dirPath: string): DirectoryListing {
+  async listDirectory(dirPath: string): Promise<DirectoryListing> {
     const normalizedPath = this.normalizePath(dirPath);
 
-    if (!fs.existsSync(normalizedPath)) {
+    let stat: fs.Stats;
+    try {
+      stat = await fsp.stat(normalizedPath);
+    } catch {
       throw new Error(`Path not found: ${normalizedPath}`);
     }
-
-    const stat = fs.statSync(normalizedPath);
     if (!stat.isDirectory()) {
       throw new Error(`Not a directory: ${normalizedPath}`);
     }
 
-    const items: FileInfoResponse[] = [];
-    const entries = fs.readdirSync(normalizedPath);
+    const entries = await fsp.readdir(normalizedPath);
 
-    for (const name of entries) {
-      // Skip hidden files
-      if (name.startsWith('.')) {
-        continue;
-      }
-
-      const fullPath = path.join(normalizedPath, name);
-      try {
-        const info = this.getFileInfo(fullPath);
-        items.push(this.toFileInfoResponse(info));
-      } catch {
-        // Skip files we can't access
-        continue;
-      }
-    }
+    // Stat every visible entry in PARALLEL rather than one blocking statSync at a
+    // time. On a network filesystem a serial loop stalls the single event
+    // loop for N × stat-latency, delaying every other in-flight request (kernel
+    // starts, terminal creation, saves) — the source of the "everything hangs
+    // while a folder lists" latency.
+    const settled = await Promise.all(
+      entries
+        .filter((name) => !name.startsWith('.')) // skip hidden files
+        .map(async (name) => {
+          try {
+            return this.toFileInfoResponse(await this.getFileInfoAsync(path.join(normalizedPath, name)));
+          } catch {
+            return null; // skip entries we can't access
+          }
+        })
+    );
+    const items = settled.filter((x): x is FileInfoResponse => x !== null);
 
     // Sort: directories first, then by name
     items.sort((a, b) => {
@@ -732,7 +762,7 @@ export class FilesystemService {
       const canonical = adapter.parse(serializedText).cells;
       await this.writeJsonAtomic(this.getLastSavePath(notebookPath), {
         cells: canonical.map((c) => ({ id: c.id, type: c.type, content: c.content })),
-      });
+      }, { durable: false });
     } catch (e) {
       console.warn('[FilesystemService] Failed to write lastsave record:', e);
     }
@@ -1343,6 +1373,27 @@ export class FilesystemService {
     kernelName = kernelName || 'python3';
     const displayName = kernelName === 'python3' ? 'Python 3' : kernelName.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
+    // Resolve outputs-unchanged sentinels from the file on disk: the client
+    // elides unchanged outputs (often MBs of base64 images) from autosaves so
+    // slow uplinks aren't saturated. If anything can't be resolved, ask the
+    // client to retry with a full payload rather than guessing.
+    const sentinelCells = cells.filter((c) => (c.outputs as unknown) === OUTPUTS_UNCHANGED_SENTINEL);
+    const priorOutputs = new Map<string, { outputs: JupyterOutput[]; execution_count: number | null }>();
+    if (sentinelCells.length > 0) {
+      try {
+        const existing = JSON.parse(await fsp.readFile(normalizedPath, 'utf-8')) as JupyterNotebook;
+        for (const jc of existing.cells || []) {
+          const nid = jc.metadata?.nebula_id;
+          if (nid) priorOutputs.set(String(nid), { outputs: jc.outputs || [], execution_count: jc.execution_count ?? null });
+        }
+      } catch {
+        return { success: false, mtime: 0, needsFull: true };
+      }
+      for (const c of sentinelCells) {
+        if (!priorOutputs.has(c.id)) return { success: false, mtime: 0, needsFull: true };
+      }
+    }
+
     const nbCells: JupyterCell[] = cells.map((cell) => {
       const preservedMetadata = cell._metadata || {};
       const cellMetadata: JupyterCell['metadata'] = {
@@ -1364,8 +1415,14 @@ export class FilesystemService {
       };
 
       if (cell.type === 'code') {
-        nbCell.outputs = this.convertOutputsToJupyter(cell.outputs);
-        nbCell.execution_count = cell.executionCount;
+        if ((cell.outputs as unknown) === OUTPUTS_UNCHANGED_SENTINEL) {
+          const prior = priorOutputs.get(cell.id)!;
+          nbCell.outputs = prior.outputs;
+          nbCell.execution_count = cell.executionCount ?? prior.execution_count;
+        } else {
+          nbCell.outputs = this.convertOutputsToJupyter(cell.outputs);
+          nbCell.execution_count = cell.executionCount;
+        }
       }
 
       return nbCell;
@@ -1453,14 +1510,16 @@ export class FilesystemService {
       const { nebulaDir } = this.getNebulaPaths(notebookPath);
       await fsp.mkdir(nebulaDir, { recursive: true });
 
-      await this.writeJsonAtomic(journalPath, journal);
+      // Auxiliary files: atomic but non-durable (no fsync) — see atomicWriteFile.
+      // Only the notebook itself (inside saveNotebookCells) pays for fsync.
+      await this.writeJsonAtomic(journalPath, journal, { durable: false });
 
       if (historyPath) {
-        await this.writeJsonAtomic(historyPath, history || []);
+        await this.writeJsonAtomic(historyPath, history || [], { durable: false });
       }
 
       if (sessionPath) {
-        await this.writeJsonAtomic(sessionPath, session || {});
+        await this.writeJsonAtomic(sessionPath, session || {}, { durable: false });
       }
 
       const result = await this.saveNotebookCells(notebookPath, cells, kernelName, notebookMetadata);
@@ -1471,7 +1530,7 @@ export class FilesystemService {
         committedAt: Date.now(),
       };
 
-      await this.writeJsonAtomic(journalPath, committedJournal);
+      await this.writeJsonAtomic(journalPath, committedJournal, { durable: false });
 
       try {
         await fsp.unlink(journalPath);
@@ -1494,6 +1553,11 @@ export class FilesystemService {
     kernelName?: string,
     notebookMetadata?: Record<string, unknown>
   ): Promise<SaveNotebookResult> {
+    // Text formats never serialize outputs; neutralize any outputs-unchanged
+    // sentinels so nothing downstream sees the marker string.
+    cells = cells.map((c) =>
+      (c.outputs as unknown) === OUTPUTS_UNCHANGED_SENTINEL ? { ...c, outputs: [] } : c
+    );
     let existingMetadata: Record<string, unknown> = {};
     try {
       existingMetadata = adapter.parse(await fsp.readFile(normalizedPath, 'utf-8')).metadata;
@@ -1540,6 +1604,42 @@ export class FilesystemService {
 
     try {
       const notebook: JupyterNotebook = JSON.parse(fs.readFileSync(normalizedPath, 'utf-8'));
+      return notebook.metadata || {};
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Async variant of getNotebookMetadata. Nebula-written notebooks put
+   * `metadata` first, so the head-bytes scan avoids reading and parsing the
+   * whole file; externally written notebooks fall back to a full async read.
+   */
+  async getNotebookMetadataAsync(notebookPath: string): Promise<Record<string, unknown>> {
+    const normalizedPath = this.normalizePath(notebookPath);
+
+    const formatAdapter = getFormatAdapter(normalizedPath);
+    try {
+      if (formatAdapter) {
+        return formatAdapter.parse(await fsp.readFile(normalizedPath, 'utf-8')).metadata;
+      }
+
+      const handle = await fsp.open(normalizedPath, 'r');
+      let head: string;
+      try {
+        const buf = Buffer.alloc(NOTEBOOK_METADATA_FAST_PATH_BYTES);
+        const { bytesRead } = await handle.read(buf, 0, NOTEBOOK_METADATA_FAST_PATH_BYTES, 0);
+        head = buf.toString('utf-8', 0, bytesRead);
+      } finally {
+        await handle.close();
+      }
+
+      const extracted = extractTopLevelObjectField(head, 'metadata');
+      if (extracted) {
+        return extracted;
+      }
+
+      const notebook: JupyterNotebook = JSON.parse(await fsp.readFile(normalizedPath, 'utf-8'));
       return notebook.metadata || {};
     } catch {
       return {};
@@ -1744,8 +1844,26 @@ export class FilesystemService {
    */
   getAgentPermissionStatus(notebookPath: string): AgentPermissionSnapshot {
     const metadata = this.getNotebookMetadata(notebookPath);
-    const nebula = (metadata.nebula || {}) as Record<string, unknown>;
     const hasHistory = this.hasHistory(notebookPath);
+    return this.deriveAgentPermission(metadata, hasHistory);
+  }
+
+  /**
+   * Async variant of getAgentPermissionStatus for hot request paths (it runs
+   * on every agent write operation). Reads metadata via the head-bytes fast
+   * path and checks history without parsing it, so the per-operation gate
+   * never blocks the event loop on a slow network filesystem.
+   */
+  async getAgentPermissionStatusAsync(notebookPath: string): Promise<AgentPermissionSnapshot> {
+    const [metadata, hasHistory] = await Promise.all([
+      this.getNotebookMetadataAsync(notebookPath),
+      this.hasHistoryAsync(notebookPath),
+    ]);
+    return this.deriveAgentPermission(metadata, hasHistory);
+  }
+
+  private deriveAgentPermission(metadata: Record<string, unknown>, hasHistory: boolean): AgentPermissionSnapshot {
+    const nebula = (metadata.nebula || {}) as Record<string, unknown>;
 
     const agentCreated = Boolean(nebula.agent_created);
     const agentPermitted = Boolean(nebula.agent_permitted);
@@ -1794,6 +1912,23 @@ export class FilesystemService {
     }
     try {
       const history = JSON.parse(fs.readFileSync(historyPath, 'utf-8'));
+      return Array.isArray(history) && history.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Async variant of hasHistory that only parses small files: history journals
+   * grow to hundreds of KB, and this check runs on every agent operation — a
+   * file that large necessarily has entries, so its size alone answers.
+   */
+  async hasHistoryAsync(notebookPath: string): Promise<boolean> {
+    const historyPath = this.getHistoryPath(notebookPath);
+    try {
+      const stat = await fsp.stat(historyPath);
+      if (stat.size > 4096) return true;
+      const history = JSON.parse(await fsp.readFile(historyPath, 'utf-8'));
       return Array.isArray(history) && history.length > 0;
     } catch {
       return false;

@@ -22,12 +22,14 @@ import {
   saveSessionState,
 } from './shared.js';
 
-const SESSION_HELP = `usage: nebula session start <path> [--name NAME]
+const SESSION_HELP = `usage: nebula session start <path> [--name NAME] [--exclusive]
        nebula session end <path>
 
 Holds/releases the agent lock for a notebook. The session token is stored in
 $NEBULA_STATE_DIR (default ~/.nebula), so every later nebula invocation for
 the same server+notebook automatically carries the lock until 'session end'.
+--exclusive locks out concurrent user edits (required by destructive
+operations like 'nb clear').
 
 examples:
   nebula session start analysis.ipynb --name refactor-bot
@@ -52,12 +54,15 @@ export async function cmdSession(argv: string[]): Promise<number> {
 }
 
 async function sessionStart(argv: string[]): Promise<number> {
-  const { values, positionals } = parse(argv, { name: { type: 'string' } });
+  const { values, positionals } = parse(argv, {
+    name: { type: 'string' },
+    exclusive: { type: 'boolean' },
+  });
   if (values.help) {
     console.log(SESSION_HELP);
     return EXIT.OK;
   }
-  const nbPath = requirePositional(positionals, 0, 'path', 'nebula session start <path> [--name NAME]');
+  const nbPath = requirePositional(positionals, 0, 'path', 'nebula session start <path> [--name NAME] [--exclusive]');
   const url = resolveUrl(values.url);
   const name = values.name as string | undefined;
 
@@ -72,7 +77,7 @@ async function sessionStart(argv: string[]): Promise<number> {
     autoStartAgentSession: false,
   });
 
-  const result = await client.startAgentSession(nbPath, agentId);
+  const result = await client.startAgentSession(nbPath, agentId, undefined, undefined, Boolean(values.exclusive) || undefined);
   if (!result.success) {
     throw new CliError(result.error ?? 'failed to start session', EXIT.ERROR);
   }

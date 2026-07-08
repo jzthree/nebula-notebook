@@ -194,7 +194,9 @@ export type TerminalClientMessage =
 
 export type TerminalServerMessage =
   | { type: 'output'; data: string }
-  | { type: 'replay'; data: string }
+  // cols/rows = the pty's current size; render the replay at that size so
+  // wraps land where they were produced.
+  | { type: 'replay'; data: string; cols?: number; rows?: number }
   | { type: 'exit'; code: number }
   | { type: 'error'; message: string }
   | { type: 'inactive' }  // Another tab took over this terminal

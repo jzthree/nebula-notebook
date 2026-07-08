@@ -127,20 +127,20 @@ describe('FilesystemService', () => {
       fs.unlinkSync(path.join(testDir, '.hidden'));
     });
 
-    it('should list directory contents', () => {
-      const result = service.listDirectory(testDir);
+    it('should list directory contents', async () => {
+      const result = await service.listDirectory(testDir);
       expect(result.path).toBe(testDir);
       expect(result.items.length).toBeGreaterThan(0);
     });
 
-    it('should skip hidden files', () => {
-      const result = service.listDirectory(testDir);
+    it('should skip hidden files', async () => {
+      const result = await service.listDirectory(testDir);
       const hidden = result.items.find(i => i.name === '.hidden');
       expect(hidden).toBeUndefined();
     });
 
-    it('should sort directories first', () => {
-      const result = service.listDirectory(testDir);
+    it('should sort directories first', async () => {
+      const result = await service.listDirectory(testDir);
       const firstDir = result.items.findIndex(i => i.isDirectory);
       const firstFile = result.items.findIndex(i => !i.isDirectory);
       if (firstDir !== -1 && firstFile !== -1) {
@@ -148,17 +148,17 @@ describe('FilesystemService', () => {
       }
     });
 
-    it('should include parent directory', () => {
-      const result = service.listDirectory(testDir);
+    it('should include parent directory', async () => {
+      const result = await service.listDirectory(testDir);
       expect(result.parent).toBe(path.dirname(testDir));
     });
 
-    it('should throw on non-existent directory', () => {
-      expect(() => service.listDirectory('/nonexistent/path')).toThrow();
+    it('should reject on non-existent directory', async () => {
+      await expect(service.listDirectory('/nonexistent/path')).rejects.toThrow();
     });
 
-    it('should throw on file path', () => {
-      expect(() => service.listDirectory(path.join(testDir, 'test.txt'))).toThrow();
+    it('should reject on file path', async () => {
+      await expect(service.listDirectory(path.join(testDir, 'test.txt'))).rejects.toThrow();
     });
   });
 

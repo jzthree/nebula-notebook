@@ -11,6 +11,19 @@ import {
   OUTPUT_BUFFER_TRIM_SIZE
 } from './types';
 
+// Sticky DEC private modes that turn mouse moves / focus changes into garbage
+// *input* when left enabled at a shell prompt (the classic "reconnected terminal
+// spews <b;x;yM sequences"). Tracked from the raw pty stream so a reconnect can
+// restore the AUTHORITATIVE state even when the enabling/disabling sequence has
+// scrolled out of — or been split by — the 100 KB buffer trim. 1000 click /
+// 1002 button-drag / 1003 any-motion mouse · 1004 focus events · 1006 SGR
+// encoding. (Bracketed paste 2004 is intentionally excluded — the shell prompt
+// toggles it itself, so forcing it would fight the shell.)
+const TRACKED_INPUT_MODES = [1000, 1002, 1003, 1004, 1006];
+// DECSET (…h) / DECRST (…l); params may be ;-separated, e.g. \x1b[?1000;1006h
+// eslint-disable-next-line no-control-regex
+const DEC_PRIVATE_MODE_RE = /\x1b\[\?([0-9;]+)([hl])/g;
+
 interface TerminalSession {
   id: string;
   pty: pty.IPty;
@@ -21,6 +34,7 @@ interface TerminalSession {
   created: number;
   lastActivity: number;
   outputBuffer: string;
+  activeModes: Set<number>; // tracked sticky input modes (see TRACKED_INPUT_MODES)
   onData: ((data: string) => void) | null;
   onExit: ((code: number) => void) | null;
 }
@@ -102,6 +116,7 @@ export class PtyManager {
       created: Date.now(),
       lastActivity: Date.now(),
       outputBuffer: '',
+      activeModes: new Set<number>(),
       onData: null,
       onExit: null,
     };
@@ -112,6 +127,21 @@ export class PtyManager {
 
       // Append to output buffer for reconnection
       session.outputBuffer += data;
+
+      // Track sticky input-mode transitions from the RAW stream (before the
+      // trim below can drop or split them) so replay can reassert the true state.
+      DEC_PRIVATE_MODE_RE.lastIndex = 0;
+      let modeMatch: RegExpExecArray | null;
+      while ((modeMatch = DEC_PRIVATE_MODE_RE.exec(data)) !== null) {
+        const enable = modeMatch[2] === 'h';
+        for (const p of modeMatch[1].split(';')) {
+          const n = Number(p);
+          if (TRACKED_INPUT_MODES.includes(n)) {
+            if (enable) session.activeModes.add(n);
+            else session.activeModes.delete(n);
+          }
+        }
+      }
 
       // Trim buffer if too large
       if (session.outputBuffer.length > OUTPUT_BUFFER_MAX_SIZE) {
@@ -194,6 +224,12 @@ export class PtyManager {
     const session = this.sessions.get(id);
     if (!session) return false;
 
+    // Skip no-op resizes: TIOCSWINSZ raises SIGWINCH even when the size is
+    // unchanged, forcing a full-screen repaint from any running TUI. On a
+    // reconnect several resize messages arrive with the SAME dimensions, and
+    // that repaint burst is what stalls input after a refresh.
+    if (session.cols === cols && session.rows === rows) return true;
+
     session.pty.resize(cols, rows);
     session.cols = cols;
     session.rows = rows;
@@ -260,6 +296,21 @@ export class PtyManager {
   getOutputBuffer(id: string): string {
     const session = this.sessions.get(id);
     return session?.outputBuffer || '';
+  }
+
+  /**
+   * Sequences that reassert the sticky input modes (see TRACKED_INPUT_MODES) to
+   * the authoritative state observed on the full pty stream. Appended after the
+   * replay buffer so a reconnect never leaves mouse/focus reporting dangling on
+   * at the shell: the 100 KB buffer trim can drop or split the app's own
+   * mode-reset, and this puts it back deterministically.
+   */
+  getModeReset(id: string): string {
+    const session = this.sessions.get(id);
+    if (!session) return '';
+    return TRACKED_INPUT_MODES
+      .map((n) => `\x1b[?${n}${session.activeModes.has(n) ? 'h' : 'l'}`)
+      .join('');
   }
 
   /**

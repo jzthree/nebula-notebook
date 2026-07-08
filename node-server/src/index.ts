@@ -23,6 +23,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { randomUUID } from 'crypto';
+import * as zlib from 'zlib';
 
 // Import routes
 import kernelRoutes, { setupKernelWebSocket, kernelService } from './routes/kernel';
@@ -245,6 +246,21 @@ async function createApp(): Promise<FastifyInstance> {
     console.log('[Server] HTTP/1.1 mode (no TLS)');
   }
 
+  // Gzipped JSON uploads (Content-Type: application/gzip). The client
+  // compresses large bodies (notebook autosaves) so slow-upload tunnels
+  // aren't saturated for seconds per save; bodyLimit applies to the
+  // COMPRESSED size, which is the wire cost we care about.
+  fastify.addContentTypeParser('application/gzip', { parseAs: 'buffer' }, (_req, body, done) => {
+    zlib.gunzip(body as Buffer, (err, buf) => {
+      if (err) return done(err);
+      try {
+        done(null, JSON.parse(buf.toString('utf-8')));
+      } catch (e) {
+        done(e as Error);
+      }
+    });
+  });
+
   // Request timing hook
   fastify.addHook('onResponse', (request, reply, done) => {
     const duration = reply.elapsedTime;
@@ -253,6 +269,24 @@ async function createApp(): Promise<FastifyInstance> {
     }
     done();
   });
+
+  // Event-loop stall detector: a 100ms heartbeat that logs when it fires late.
+  // Any [perf] line here means the WHOLE server (terminal WS forwarding
+  // included) was frozen that long by synchronous work — the prime suspect
+  // whenever "everything hangs for a moment". Correlate timestamps with
+  // [Slow Request] lines to find the culprit route.
+  {
+    let last = process.hrtime.bigint();
+    const timer = setInterval(() => {
+      const now = process.hrtime.bigint();
+      const stallMs = Number(now - last) / 1e6 - 100;
+      last = now;
+      if (stallMs > 150) {
+        console.warn(`[perf] event-loop stall ~${Math.round(stallMs)}ms at ${new Date().toISOString()}`);
+      }
+    }, 100);
+    timer.unref(); // never keep the process alive for this
+  }
 
   // Register CORS
   await fastify.register(fastifyCors, {

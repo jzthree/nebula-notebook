@@ -103,9 +103,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
       // transient network blip — keep following
     }
   }
-  const elapsedSec = d.executionTime !== undefined ? d.executionTime / 1000 : (Date.now() - started) / 1000;
   const failed = d.executionStatus === 'error' || d.outputs.some((o) => o.type === 'error');
   const status = failed ? 'error' : d.executionStatus === 'busy' ? 'busy' : 'ok';
+  // A cell still "busy" has no meaningful executionTime yet (the initial execute's
+  // value is stale/partial), so report the wall-clock time we actually waited — that
+  // lines up with the "still running after Ns" hint. Only a completed cell reports
+  // its true executionTime.
+  const elapsedSec = status !== 'busy' && d.executionTime !== undefined ? d.executionTime / 1000 : (Date.now() - started) / 1000;
 
   if (values.json) {
     printJson({ ...d, status, elapsed: elapsedSec });
@@ -114,7 +118,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
 
   console.log(`status: ${status}`);
   console.log(`execution_count: ${d.executionCount ?? '-'}`);
-  console.log(`elapsed: ${elapsedSec.toFixed(1)}s`);
+  console.log(status === 'busy' ? `running: ${elapsedSec.toFixed(1)}s (not finished)` : `elapsed: ${elapsedSec.toFixed(1)}s`);
 
   const text = d.outputs
     .map((o) => (o.type === 'image' ? '[image]\n' : o.type === 'error' ? `${o.content}\n` : o.content))

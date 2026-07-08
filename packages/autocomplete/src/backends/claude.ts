@@ -129,7 +129,17 @@ class ClaudeWorker {
         const p = this.pending;
         this.pending = null;
         clearTimeout(p!.timer);
-        p!.resolve(typeof ev.result === "string" ? ev.result : "");
+        // CLI failures (not logged in, out of credits, …) arrive as a result
+        // event with is_error / non-success subtype. Reject those turns —
+        // resolving would cache and render the error text as a suggestion.
+        if (ev.is_error === true || (typeof ev.subtype === "string" && ev.subtype !== "success")) {
+          const msg = typeof ev.result === "string" && ev.result.trim()
+            ? ev.result.trim()
+            : `claude turn failed (${ev.subtype ?? "error"})`;
+          p!.reject(new Error(msg));
+        } else {
+          p!.resolve(typeof ev.result === "string" ? ev.result : "");
+        }
       }
     }
   }

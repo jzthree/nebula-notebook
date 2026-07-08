@@ -16,7 +16,7 @@
  */
 
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { spawnSync, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import { getEnvironment } from '../environment';
 import {
   AutocompleteEngine,
@@ -40,12 +40,32 @@ interface RemoteTransport {
 
 const engines = new Map<string, AutocompleteEngine>();
 
-function binaryAvailable(name: string): boolean {
-  try {
-    return spawnSync('which', [name], { timeout: 3000 }).status === 0;
-  } catch {
-    return false;
-  }
+/**
+ * Async command runner. NEVER use spawnSync here: these probes run ssh calls
+ * that can take 10+ seconds, and spawnSync freezes Node's event loop — which
+ * stalls EVERYTHING the server does (terminal WS input, API responses), felt
+ * as "the whole app is unresponsive for ~10s after a refresh".
+ */
+function runCmd(cmd: string, args: string[], timeoutMs: number): Promise<{ status: number | null; stdout: string }> {
+  return new Promise((resolve) => {
+    let out = '';
+    let done = false;
+    const finish = (status: number | null) => { if (!done) { done = true; resolve({ status, stdout: out }); } };
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      return finish(null);
+    }
+    const timer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* */ } finish(null); }, timeoutMs);
+    proc.stdout?.on('data', (d) => (out += d.toString()));
+    proc.on('error', () => { clearTimeout(timer); finish(null); });
+    proc.on('exit', (code) => { clearTimeout(timer); finish(code); });
+  });
+}
+
+async function binaryAvailable(name: string): Promise<boolean> {
+  return (await runCmd('which', [name], 3000)).status === 0;
 }
 
 /** Parse + validate a client-supplied transport (untrusted input). */
@@ -98,18 +118,18 @@ export function disposeAutocompleteEngines(): void {
  * needs an absolute path). Uses a login shell + a sentinel so rc-file noise
  * doesn't corrupt the result. Best-effort; returns null on any failure.
  */
-function discoverRemoteBin(port: number, user: string, provider: BackendName, host = 'localhost'): string | null {
+async function discoverRemoteBin(port: number, user: string, provider: BackendName, host = 'localhost'): Promise<string | null> {
   if (!Number.isInteger(port) || !/^[A-Za-z0-9._-]+$/.test(user)) return null;
   // `whence -p` FIRST: on the user's machine `claude`/`codex` is typically a zsh
   // FUNCTION, so `command -v` returns the function name (not a path) and would
   // short-circuit. `whence -p` (zsh) resolves the actual binary; `command -v` is
   // the fallback for non-zsh login shells (where `whence` doesn't exist).
   const remote = `$SHELL -lic 'printf "NB_BIN=%s\\n" "$(whence -p ${provider} 2>/dev/null || command -v ${provider} 2>/dev/null)"' 2>/dev/null`;
-  const res = spawnSync(
+  const res = await runCmd(
     'ssh',
     ['-p', String(port), '-o', 'ProxyCommand=none', '-o', 'StrictHostKeyChecking=accept-new',
      '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', `${user}@${host}`, remote],
-    { timeout: 12000, encoding: 'utf-8' },
+    12000,
   );
   if (res.status !== 0 || !res.stdout) return null;
   const line = res.stdout.split('\n').find((l) => l.startsWith('NB_BIN='));
@@ -122,9 +142,9 @@ function discoverRemoteBin(port: number, user: string, provider: BackendName, ho
  * "installed" from "usable" (logged in). Bounded + best-effort. Returns a status
  * the diagnostics UI can render.
  */
-function checkCliUsable(name: BackendName): Promise<{ installed: boolean; usable: boolean; detail: string }> {
+async function checkCliUsable(name: BackendName): Promise<{ installed: boolean; usable: boolean; detail: string }> {
+  if (!(await binaryAvailable(name))) return { installed: false, usable: false, detail: 'not installed on this server' };
   return new Promise((resolve) => {
-    if (!binaryAvailable(name)) return resolve({ installed: false, usable: false, detail: 'not installed on this server' });
     const cfg = `/tmp/nebula-diag-${name}-${process.pid}-${Math.round(process.hrtime()[1])}`;
     const args =
       name === 'claude'
@@ -155,14 +175,34 @@ function checkCliUsable(name: BackendName): Promise<{ installed: boolean; usable
 }
 
 export default async function autocompleteRoutes(fastify: FastifyInstance) {
-  /** Which CLI backends are usable on THIS server (for the settings UI). */
+  /**
+   * Which CLI backends are usable on THIS server (for the settings UI and the
+   * editor's ghost-text gate). "Usable" means an actual trivial turn succeeds
+   * (logged in), not merely that the binary exists — a binary without
+   * credentials previously reported true here, so the UI enabled ghost text
+   * that could only ever produce "Not logged in" errors. The real probe costs
+   * a CLI round trip, so results are cached with a TTL.
+   */
+  let statusCache: { at: number; backends: { claude: boolean; codex: boolean } } | null = null;
+  let statusProbe: Promise<{ claude: boolean; codex: boolean }> | null = null;
+  const STATUS_TTL_MS = 5 * 60_000;
+
   fastify.get('/autocomplete/status', async (_req: FastifyRequest, reply: FastifyReply) => {
+    if (!statusCache || Date.now() - statusCache.at > STATUS_TTL_MS) {
+      if (!statusProbe) {
+        statusProbe = Promise.all([checkCliUsable('claude'), checkCliUsable('codex')])
+          .then(([claude, codex]) => {
+            const backends = { claude: claude.usable, codex: codex.usable };
+            statusCache = { at: Date.now(), backends };
+            return backends;
+          })
+          .finally(() => { statusProbe = null; });
+      }
+      await statusProbe;
+    }
     return reply.send({
       enabled: true,
-      backends: {
-        claude: binaryAvailable('claude'),
-        codex: binaryAvailable('codex'),
-      },
+      backends: statusCache!.backends,
     });
   });
 
@@ -179,8 +219,10 @@ export default async function autocompleteRoutes(fastify: FastifyInstance) {
     if (!Number.isInteger(port) || port <= 0 || !user) {
       return reply.code(400).send({ ok: false, error: 'port and user required' });
     }
-    const claude = discoverRemoteBin(port, user, 'claude', host);
-    const codex = discoverRemoteBin(port, user, 'codex', host);
+    const [claude, codex] = await Promise.all([
+      discoverRemoteBin(port, user, 'claude', host),
+      discoverRemoteBin(port, user, 'codex', host),
+    ]);
     return reply.send({ ok: true, reachable: claude !== null || codex !== null, claude, codex });
   });
 
@@ -200,8 +242,10 @@ export default async function autocompleteRoutes(fastify: FastifyInstance) {
     const [claude, codex] = await Promise.all([checkCliUsable('claude'), checkCliUsable('codex')]);
     let tunnel: null | { configured: boolean; reachable: boolean; claude: string | null; codex: string | null } = null;
     if (hasTunnel) {
-      const rc = discoverRemoteBin(port, user, 'claude', host);
-      const rx = discoverRemoteBin(port, user, 'codex', host);
+      const [rc, rx] = await Promise.all([
+        discoverRemoteBin(port, user, 'claude', host),
+        discoverRemoteBin(port, user, 'codex', host),
+      ]);
       tunnel = { configured: true, reachable: rc !== null || rx !== null, claude: rc, codex: rx };
     }
     return reply.send({ environment: getEnvironment(), server: { claude, codex }, tunnel });

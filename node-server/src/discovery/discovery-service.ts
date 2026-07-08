@@ -6,9 +6,10 @@
  */
 
 import * as fs from 'fs';
+import { promises as fsp } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { spawn, execSync } from 'child_process';
+import { spawn } from 'child_process';
 import {
   PythonEnvironment,
   PythonEnvType,
@@ -226,6 +227,16 @@ export class PythonDiscoveryService {
    */
   pythonExists(pythonPath: string): boolean {
     return fs.existsSync(pythonPath);
+  }
+
+  /**
+   * Async existence check. The discovery scan MUST use this (not existsSync):
+   * env dirs often live on network filesystems (GPFS) where each sync stat can
+   * take 10-500ms, and the scan runs dozens — enough to freeze the entire
+   * event loop for seconds (observed as "terminal dead during autosave").
+   */
+  private async fsExists(p: string): Promise<boolean> {
+    try { await fsp.access(p); return true; } catch { return false; }
   }
 
   /**
@@ -466,14 +477,14 @@ export class PythonDiscoveryService {
 
     // Try to get envs from conda command
     for (const condaPath of condaPaths) {
-      if (!fs.existsSync(condaPath)) continue;
+      if (!(await this.fsExists(condaPath))) continue;
 
       try {
         const { stdout } = await this.runCommand(condaPath, ['env', 'list', '--json'], this.condaListTimeoutMs);
         const data = JSON.parse(stdout);
         for (const envPath of data.envs || []) {
           const pythonPath = path.join(envPath, 'bin', 'python');
-          if (fs.existsSync(pythonPath) && !seenPaths.has(pythonPath)) {
+          if (!seenPaths.has(pythonPath) && (await this.fsExists(pythonPath))) {
             seenPaths.add(pythonPath);
             const envName = path.basename(envPath);
             const isBase = envPath === data.root_prefix || !envPath.includes('envs');
@@ -492,11 +503,11 @@ export class PythonDiscoveryService {
 
     // Also scan common conda base directories
     for (const base of this.getCondaBasePaths()) {
-      if (!fs.existsSync(base)) continue;
+      if (!(await this.fsExists(base))) continue;
 
       // Base environment
       const basePython = path.join(base, 'bin', 'python');
-      if (fs.existsSync(basePython) && !seenPaths.has(basePython)) {
+      if (!seenPaths.has(basePython) && (await this.fsExists(basePython))) {
         seenPaths.add(basePython);
         envs.push({
           path: basePython,
@@ -508,26 +519,24 @@ export class PythonDiscoveryService {
 
       // Sub-environments
       const envsDir = path.join(base, 'envs');
-      if (fs.existsSync(envsDir)) {
-        try {
-          for (const envDir of fs.readdirSync(envsDir)) {
-            const envPath = path.join(envsDir, envDir);
-            if (!fs.statSync(envPath).isDirectory()) continue;
-
-            const pythonPath = path.join(envPath, 'bin', 'python');
-            if (fs.existsSync(pythonPath) && !seenPaths.has(pythonPath)) {
-              seenPaths.add(pythonPath);
-              envs.push({
-                path: pythonPath,
-                envType: 'conda',
-                envName: envDir,
-                base,
-              });
-            }
+      try {
+        // withFileTypes: one readdir instead of a statSync per entry
+        const entries = await fsp.readdir(envsDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+          const pythonPath = path.join(envsDir, entry.name, 'bin', 'python');
+          if (!seenPaths.has(pythonPath) && (await this.fsExists(pythonPath))) {
+            seenPaths.add(pythonPath);
+            envs.push({
+              path: pythonPath,
+              envType: 'conda',
+              envName: entry.name,
+              base,
+            });
           }
-        } catch (e) {
-          console.warn(`Error scanning conda envs: ${e}`);
         }
+      } catch {
+        // envs dir missing/unreadable — nothing to scan
       }
     }
 
@@ -537,30 +546,25 @@ export class PythonDiscoveryService {
   /**
    * Find pyenv Python versions
    */
-  private findPyenvVersions(): DiscoveryCandidate[] {
+  private async findPyenvVersions(): Promise<DiscoveryCandidate[]> {
     const envs: DiscoveryCandidate[] = [];
     const pyenvRoot = this.getPyenvVersionsPath();
 
-    if (!fs.existsSync(pyenvRoot)) {
-      return envs;
-    }
-
     try {
-      for (const versionDir of fs.readdirSync(pyenvRoot)) {
-        const versionPath = path.join(pyenvRoot, versionDir);
-        if (!fs.statSync(versionPath).isDirectory()) continue;
-
-        const pythonPath = path.join(versionPath, 'bin', 'python');
-        if (fs.existsSync(pythonPath)) {
+      const entries = await fsp.readdir(pyenvRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+        const pythonPath = path.join(pyenvRoot, entry.name, 'bin', 'python');
+        if (await this.fsExists(pythonPath)) {
           envs.push({
             path: pythonPath,
             envType: 'pyenv',
-            envName: versionDir,
+            envName: entry.name,
           });
         }
       }
-    } catch (e) {
-      console.warn(`Error scanning pyenv versions: ${e}`);
+    } catch {
+      // pyenv root missing/unreadable — nothing to scan
     }
 
     return envs;
@@ -569,28 +573,25 @@ export class PythonDiscoveryService {
   /**
    * Find virtualenvs in common locations
    */
-  private findVirtualenvs(): DiscoveryCandidate[] {
+  private async findVirtualenvs(): Promise<DiscoveryCandidate[]> {
     const envs: DiscoveryCandidate[] = [];
 
     for (const venvDir of this.getVirtualenvPaths()) {
-      if (!fs.existsSync(venvDir)) continue;
-
       try {
-        for (const envName of fs.readdirSync(venvDir)) {
-          const envPath = path.join(venvDir, envName);
-          if (!fs.statSync(envPath).isDirectory()) continue;
-
-          const pythonPath = path.join(envPath, 'bin', 'python');
-          if (fs.existsSync(pythonPath)) {
+        const entries = await fsp.readdir(venvDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+          const pythonPath = path.join(venvDir, entry.name, 'bin', 'python');
+          if (await this.fsExists(pythonPath)) {
             envs.push({
               path: pythonPath,
               envType: 'venv',
-              envName,
+              envName: entry.name,
             });
           }
         }
-      } catch (e) {
-        console.warn(`Error scanning virtualenvs: ${e}`);
+      } catch {
+        // venv dir missing/unreadable — nothing to scan
       }
     }
 
@@ -600,21 +601,20 @@ export class PythonDiscoveryService {
   /**
    * Find system Python installations
    */
-  private findSystemPythons(): DiscoveryCandidate[] {
+  private async findSystemPythons(): Promise<DiscoveryCandidate[]> {
     const envs: DiscoveryCandidate[] = [];
     const seen = new Set<string>();
 
     for (const pythonPath of this.getSystemPythonPaths()) {
-      if (!fs.existsSync(pythonPath)) continue;
-
-      // Resolve symlinks to avoid duplicates
+      // Resolve symlinks to avoid duplicates (also serves as the existence check)
+      let realPath: string;
       try {
-        const realPath = fs.realpathSync(pythonPath);
-        if (seen.has(realPath)) continue;
-        seen.add(realPath);
+        realPath = await fsp.realpath(pythonPath);
       } catch {
         continue;
       }
+      if (seen.has(realPath)) continue;
+      seen.add(realPath);
 
       const envType: PythonEnvType = pythonPath.toLowerCase().includes('homebrew') ||
         pythonPath.includes('/opt/homebrew') ? 'homebrew' : 'system';
@@ -643,7 +643,7 @@ export class PythonDiscoveryService {
     // Refine the type via stable path markers (uv/pixi) that the coarse scans
     // can't distinguish; resolve symlinks first (e.g. ~/.local/bin/python3 → uv).
     let realPath = candidate.path;
-    try { realPath = fs.realpathSync(candidate.path); } catch { /* keep original */ }
+    try { realPath = await fsp.realpath(candidate.path); } catch { /* keep original */ }
     const envType = this.classifyEnvType(candidate.path, realPath, candidate.envType, isVenv);
 
     const displayName = this.generateDisplayName(version, envType, candidate.envName);
@@ -673,9 +673,9 @@ export class PythonDiscoveryService {
     // Collect all candidates
     const candidates: DiscoveryCandidate[] = [];
     candidates.push(...(await this.findCondaEnvs()));
-    candidates.push(...this.findPyenvVersions());
-    candidates.push(...this.findVirtualenvs());
-    candidates.push(...this.findSystemPythons());
+    candidates.push(...(await this.findPyenvVersions()));
+    candidates.push(...(await this.findVirtualenvs()));
+    candidates.push(...(await this.findSystemPythons()));
 
     // Enrich in parallel
     const enrichPromises = candidates.map(c => this.enrichEnvironment(c));
@@ -776,7 +776,7 @@ export class PythonDiscoveryService {
    *     register-only path.
    */
   async installKernel(pythonPath: string, kernelName?: string): Promise<InstallKernelResult> {
-    if (!fs.existsSync(pythonPath)) {
+    if (!(await this.fsExists(pythonPath))) {
       throw new KernelProvisionError(`Python not found: ${pythonPath}`, 'python_not_found');
     }
 
@@ -794,12 +794,11 @@ export class PythonDiscoveryService {
         );
       }
       // Writable env without ipykernel: install it (safe — not externally managed).
+      // Async spawn (NOT execSync): a pip install can run 30s+, and execSync
+      // would freeze the whole server for that long.
       console.log(`Installing ipykernel for ${pythonPath}...`);
       try {
-        execSync(`"${pythonPath}" -m pip install ipykernel -q`, {
-          timeout: this.kernelInstallTimeoutMs,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
+        await this.runCommand(pythonPath, ['-m', 'pip', 'install', 'ipykernel', '-q'], this.kernelInstallTimeoutMs);
       } catch (e) {
         const detail = this.errorOutput(e);
         // A late-detected PEP 668 (marker absent but pip still refused): treat as managed.
@@ -821,13 +820,10 @@ export class PythonDiscoveryService {
       kernelName = this.generateKernelName(pythonPath, version);
     }
 
-    // Register kernel
+    // Register kernel (async spawn — see pip install above)
     console.log(`Registering kernel as ${kernelName}...`);
     try {
-      execSync(`"${pythonPath}" -m ipykernel install --user --name "${kernelName}"`, {
-        timeout: this.registrationTimeoutMs,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      await this.runCommand(pythonPath, ['-m', 'ipykernel', 'install', '--user', '--name', kernelName], this.registrationTimeoutMs);
     } catch (e) {
       throw new KernelProvisionError(`Failed to register kernel: ${this.errorOutput(e) || e}`, 'register_failed');
     }

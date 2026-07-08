@@ -45,8 +45,12 @@ Find the server URL, in this order:
 Notebook paths in commands are paths on the SERVER's filesystem (ask the user
 or find them via the UI/file browser if unsure — they are usually absolute).
 
-If \`nebula\` is not on PATH: \`npx -p nebula-notebook-mcp nebula …\`, or from a
-Nebula repo checkout: \`<repo>/packages/mcp/bin/nebula\`.
+If \`nebula\` is not on PATH, it ships in the \`nebula-notebook-mcp\` npm package —
+no separate install needed, just prefix every command with npx (it fetches the
+package on first use and caches it): \`npx -p nebula-notebook-mcp nebula …\`. To
+avoid the per-call npx overhead, install it once: \`npm i -g nebula-notebook-mcp\`
+(then \`nebula …\` works directly). From a Nebula repo checkout you can also run
+\`<repo>/packages/mcp/bin/nebula\`.
 
 ## Commands
 
@@ -54,14 +58,22 @@ Nebula repo checkout: \`<repo>/packages/mcp/bin/nebula\`.
 nebula nb read <path>                    # list cells: #idx id type [n] first-line
 nebula nb read <path> --cells 3-8 --outputs --full
 nebula run <path> <cell-id> --tail 40    # execute AND print output tail in one call
-nebula nb edit <path> <cell-id> --content-file -   # stdin; or --content '...'
+nebula nb edit <path> <cell-id> -   # content from stdin (bare '-'); or --content '...' / --content-file <f>
 nebula nb insert <path> --index N --content '...' [--type markdown] [--id my-id]
 nebula nb delete <path> <cell-id>
 nebula nb search <path> <query> --limit 5
-nebula kernel status|restart|interrupt <path>
+nebula nb create <path> [--kernel ir]    # new notebook (agent-permitted by default)
+nebula nb move <path> <cell-id> --to 0   # reorder (or --after <cell-id>)
+nebula nb duplicate <path> <cell-id>
+nebula nb clear-outputs <path> [--cells id,id]
+nebula nb meta <path> <cell-id> --set type=markdown
+nebula kernel ls                         # available kernels on the server
+nebula kernel status|start|stop|restart|interrupt <path>
 nebula session start <path>              # hold the agent edit lock (persists across invocations)
 nebula session end <path>
 nebula compute status|queues|alloc|ls|use|cancel   # cluster compute (see below)
+nebula fs ls|cat|write|rm|mv|download|upload       # SERVER files — remote agents only;
+                                                   # in a Nebula terminal use the shell
 \`\`\`
 
 All commands accept \`--json\` (raw) and \`--quiet\` (no hint line).

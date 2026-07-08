@@ -47,11 +47,11 @@ export class CliError extends Error {
 // =============================================================================
 
 export interface ParsedArgs {
-  values: Record<string, string | boolean | undefined>;
+  values: Record<string, string | boolean | string[] | undefined>;
   positionals: string[];
 }
 
-type FlagSpec = Record<string, { type: 'string' | 'boolean'; short?: string }>;
+type FlagSpec = Record<string, { type: 'string' | 'boolean'; short?: string; multiple?: boolean }>;
 
 /** Flags accepted by every command. */
 const COMMON_FLAGS: FlagSpec = {
@@ -265,7 +265,10 @@ export function parseIntFlag(value: unknown, name: string, fallback: number): nu
 
 /** Map an operation error message to a CliError with the right exit code/hint. */
 export function toCliError(message: string | undefined, notebookPath?: string): CliError {
-  const msg = message || 'operation failed';
+  // Server/client errors sometimes arrive already prefixed with "Error: "; the CLI
+  // printer adds its own "error: ", so strip a redundant leading "Error:" to avoid
+  // the doubled "error: Error: ..." prefix.
+  const msg = (message || 'operation failed').replace(/^Error:\s*/i, '');
   if (/agent session required/i.test(msg)) {
     return new CliError(msg, EXIT.ERROR, `start one with: nebula session start ${notebookPath ?? '<path>'}`);
   }

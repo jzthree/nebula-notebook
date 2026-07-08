@@ -3223,7 +3223,11 @@ export const Notebook: React.FC = () => {
     }
   };
   syncKernelFromBackendRef.current = async (kernelName: string, serverId?: string | null) => {
-    await switchKernel(kernelName, serverId, true, 'mcp');
+    // Sync the UI to a kernel the agent/CLI ALREADY started — bypass the login-node
+    // allocation gate. That gate is for user-initiated kernel starts; re-applying it on
+    // this sync path popped the compute-allocation modal on every agent kernel op (and
+    // never let it close), and its early "gated" return also blocked the kernel-name sync.
+    await switchKernel(kernelName, serverId, true, 'mcp', true);
   };
 
   // Register an environment that already has ipykernel as a Jupyter kernel.

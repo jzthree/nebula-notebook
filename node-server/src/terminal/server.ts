@@ -224,7 +224,16 @@ export function setupTerminalWebSocket(server: HttpServer): WebSocketServer {
     // Send buffered output for reconnection
     const buffer = ptyManager.getOutputBuffer(terminalId);
     if (buffer) {
-      const replayMsg: ServerMessage = { type: 'replay', data: buffer };
+      // Append an authoritative reassert of the sticky input modes so a
+      // reconnect never leaves mouse/focus reporting dangling on at the shell
+      // (the buffer trim can drop or split the app's own mode-reset).
+      const info = ptyManager.getTerminalInfo(terminalId);
+      const replayMsg: ServerMessage = {
+        type: 'replay',
+        data: buffer + ptyManager.getModeReset(terminalId),
+        cols: info?.cols,
+        rows: info?.rows,
+      };
       ws.send(JSON.stringify(replayMsg));
     }
 

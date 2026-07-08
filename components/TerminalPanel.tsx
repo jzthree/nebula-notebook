@@ -15,7 +15,7 @@ import {
 import { TerminalInstance } from './TerminalInstance';
 import {
   getOrCreateNamedTerminal,
-  closeTerminal,
+  listTerminals,
   getTerminalServerInfo,
   checkReverseTunnel,
   TerminalInfo,
@@ -42,6 +42,21 @@ function terminalNameFor(notebookPath: string | null | undefined, role: 'shell' 
   const hex = (hash >>> 0).toString(16).padStart(8, '0').slice(0, 6);
   const slug = (path.split('/').pop() || 'nb').replace(/\.ipynb$/i, '');
   return `nb-${hex}-${role}-${slug}`;
+}
+
+/**
+ * Mirror of the server's terminal-name → id normalization (pty-manager), so we
+ * can recognize this notebook's surviving ptys in the terminal list after a
+ * refresh without a per-name round trip.
+ */
+function normalizeTerminalName(name: string): string {
+  const normalized = name
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 32);
+  return normalized || 'default';
 }
 
 export type TerminalPanelTab = 'shell' | 'agent';
@@ -94,6 +109,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   // Remote-agent setup dialog (connection details for the reverse channel).
   const [showRemoteSetup, setShowRemoteSetup] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  // Delayed visibility for the "opening terminal" overlay: after a refresh the
+  // panel almost always REATTACHES to the surviving pty (not create a new one),
+  // and a fast reattach shouldn't flash a "Creating…" spinner.
+  const [showPendingOverlay, setShowPendingOverlay] = useState(false);
   const [everOpened, setEverOpened] = useState(false);
   useEffect(() => {
     if (isOpen) setEverOpened(true);
@@ -120,23 +139,22 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     agentTerminalService.setAgentTerminal(agentTerm?.id ?? null);
   }, [agentTerm]);
 
-  // Close terminals when notebook changes
+  // On notebook switch, DETACH from the old notebook's terminals but do NOT kill
+  // them: each notebook keeps its own persistent shell + agent session (with any
+  // running agent) alive server-side under a stable per-notebook pty name. So
+  // switching notebooks no longer shares — or destroys — a single agent session;
+  // every notebook has its own. Nulling the slots unmounts the old instances
+  // (closing only their WebSockets, not the ptys) and triggers reattachment to
+  // the new notebook's ptys. Switching back later reconnects with full scrollback
+  // replay, and the agent's status is restored from its per-terminal flag.
   useEffect(() => {
     const prevNotebook = currentNotebookRef.current;
     currentNotebookRef.current = notebookPath ?? null;
-
     if (prevNotebook && prevNotebook !== notebookPath) {
-      if (shellTerm) {
-        closeTerminal(shellTerm.id).catch(console.error);
-        setShellTerm(null);
-      }
-      if (agentTerm) {
-        agentTerminalService.markStopped(); // pty is being killed — clear persisted flag
-        closeTerminal(agentTerm.id).catch(console.error);
-        setAgentTerm(null);
-      }
+      setShellTerm(null);
+      setAgentTerm(null);
     }
-  }, [notebookPath, shellTerm, agentTerm]);
+  }, [notebookPath]);
 
   // Check server availability when panel opens (also learns the server's
   // Nebula repo path for the path-qualified MCP setup command, and its
@@ -177,6 +195,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   // Lazily create the active tab's terminal when the panel is open
   const activeTerm = tab === 'agent' ? agentTerm : shellTerm;
+  const pendingTerm = isOpen && serverAvailable === true && !activeTerm;
+  useEffect(() => {
+    if (!pendingTerm) { setShowPendingOverlay(false); return; }
+    const t = setTimeout(() => setShowPendingOverlay(true), 250);
+    return () => clearTimeout(t);
+  }, [pendingTerm]);
   useEffect(() => {
     if (!isOpen || !serverAvailable || activeTerm || isLoading) return;
 
@@ -206,6 +230,37 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
     createNewTerminal();
   }, [isOpen, serverAvailable, activeTerm, isLoading, notebookPath, tab]);
+
+  // After a refresh (or switching back to a notebook), reattach BOTH of this
+  // notebook's surviving ptys eagerly — not just the visible tab's. Reattachment
+  // used to be lazy (on tab switch), which is invisible on a local server but on
+  // a remote one puts the whole create→WS→replay round trip at the moment you
+  // switch tabs ("Opening terminal…", then a settle delay). Only ptys that
+  // already exist server-side are reattached; nothing is created eagerly, so
+  // never-opened tabs still cost nothing.
+  const eagerReattachKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isOpen || !serverAvailable) return;
+    const key = notebookPath ?? 'scratch';
+    if (eagerReattachKeyRef.current === key) return;
+    eagerReattachKeyRef.current = key;
+    let cancelled = false;
+    (async () => {
+      try {
+        const existing = new Set((await listTerminals()).map((t) => t.id));
+        for (const role of ['shell', 'agent'] as const) {
+          const name = terminalNameFor(notebookPath, role);
+          if (!existing.has(normalizeTerminalName(name))) continue;
+          const info = await getOrCreateNamedTerminal(name, {});
+          if (cancelled) return;
+          // Keep whichever instance the lazy path may have set in the meantime.
+          if (role === 'agent') setAgentTerm((prev) => prev ?? info);
+          else setShellTerm((prev) => prev ?? info);
+        }
+      } catch { /* best-effort: the lazy path still covers the active tab */ }
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen, serverAvailable, notebookPath]);
 
   // Handle terminal exit — clear so a new one can be created on demand
   const handleShellExit = useCallback((_code: number) => setShellTerm(null), []);
@@ -393,6 +448,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         </div>
       )}
 
+      {/* Launch failed — show the shell error, keep the launch buttons for retry */}
+      {tab === 'agent' && agentTerm && agentState.status === 'failed' && (
+        <div className="flex items-start gap-2 px-2 py-1 bg-red-50 border-b border-red-100 flex-shrink-0 text-xs text-red-700">
+          <span className="flex-shrink-0">⚠</span>
+          <span className="min-w-0">
+            Agent didn’t start: <span className="font-mono break-all">{agentState.launchError || 'unknown error'}</span>
+            {' '}— check it’s installed{remoteAgentCfg ? ' on your machine' : ' on this server'} and on PATH, then try again.
+          </span>
+        </div>
+      )}
+
       {/* Agent guidance bar — the on-ramp for driving the notebook with an agent */}
       {tab === 'agent' && agentTerm && agentState.status !== 'running' && !(remoteAgentCfg && reverseTunnelUp === false) && (
         <div className="flex items-center gap-2 px-2 py-1 bg-purple-50 border-b border-purple-100 flex-shrink-0 text-xs">
@@ -405,7 +471,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               onClick={() => agentTerminalService.launchAgent('claude', { resume: true })}
               disabled={!agentConnected}
               className="px-2 py-0.5 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 disabled:opacity-40 transition-colors"
-              title="claude --continue: reopen the previous conversation in this notebook's directory and keep going"
+              title="Resume this notebook's own Claude conversation (claude --resume) and keep going"
             >
               ⟳ Resume Claude
             </button>
@@ -469,12 +535,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           )}
           <button
             onClick={async () => {
-              try { await navigator.clipboard.writeText(agentTerminalService.buildSetupMcpCommand()); } catch { /* clipboard optional */ }
+              try { await navigator.clipboard.writeText(agentTerminalService.buildSetupSkillCommand()); } catch { /* clipboard optional */ }
             }}
             className="text-purple-400 hover:text-purple-600 hidden sm:inline underline decoration-dotted"
-            title={`Requires the Nebula MCP. Click to copy the setup command:\n${agentTerminalService.buildSetupMcpCommand()}`}
+            title={`Drive Nebula from an agent on another machine. Recommended — the nebula CLI as a Claude Code skill (lighter than MCP, per-notebook, no server process). Click to copy:\n${agentTerminalService.buildSetupSkillCommand()}\n\nPrefer MCP? ${agentTerminalService.buildSetupMcpCommand()}`}
           >
-            needs Nebula MCP? copy setup command
+            agent on another machine? copy CLI skill setup
           </button>
           <span className="ml-auto flex items-center gap-2 flex-shrink-0">
             <button
@@ -544,11 +610,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           </div>
         )}
 
-        {serverAvailable && !activeTerm && (
+        {showPendingOverlay && (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-50">
             <div className="text-center text-slate-500">
               <Terminal className="w-8 h-8 mx-auto mb-2" />
-              <p className="text-sm">Creating {tab === 'agent' ? 'agent ' : ''}terminal...</p>
+              <p className="text-sm">Opening {tab === 'agent' ? 'agent ' : ''}terminal…</p>
             </div>
           </div>
         )}

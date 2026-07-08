@@ -16,8 +16,9 @@ Nebula is an agent-native notebook — built for you and your AI to work in the 
 
 ## Highlights
 
-- **Agent-native** — Claude Code, Codex, Cursor & friends operate notebooks through MCP (`npx nebula-notebook-mcp setup-mcp`); an agent terminal is built into every notebook, with one-click launch pre-briefed on your server and notebook
+- **Agent-native, two ways in** — Claude Code, Codex, Cursor & friends drive notebooks through the **MCP** server or the shell-first **`nebula` CLI** (also installable as a Claude Code skill via `nebula setup-skill`); an agent terminal is built into every notebook too, one-click launched and pre-briefed on your server and notebook
 - **Edit while the agent edits** — per-cell optimistic concurrency: if an agent's write conflicts with yours, it's rejected and handed your current content to retry against — nothing is silently overwritten
+- **Infinite undo/redo, persisted** — every edit, yours and the agent's, is journaled to disk, so undo/redo survives reloads and restarts; the History panel time-travels to any past moment with diff highlighting and one-click restore
 - **"Fix with agent"** on any failing cell, plus per-cell prompts — both inject straight into the agent's terminal, context included
 - **Jupyter kernels** over ZeroMQ (Python, Julia, R, …) that survive dev-server restarts and reattach
 - **Rich outputs** — Plotly MIME rendering and Nebula-native interactive JS outputs, in a virtualized cell list that stays fast on large notebooks
@@ -87,7 +88,7 @@ To let agents (Claude Code, Codex, Cursor, Gemini CLI, …) operate your noteboo
 npx nebula-notebook-mcp setup-mcp
 ```
 
-Then open a notebook, click **Agent**, and launch Claude Code or Codex right in the notebook's terminal — or use the `nebula` CLI (`npx -p nebula-notebook-mcp nebula --help`) for a lighter, shell-first integration.
+Then open a notebook, click **Agent**, and launch Claude Code or Codex right in the notebook's terminal. Prefer a command line? The same package ships the shell-first `nebula` CLI (`npx -p nebula-notebook-mcp nebula --help`); run `nebula setup-skill` to install it as a **Claude Code skill** so agents outside a Nebula terminal know how to drive it.
 
 ### From source (latest)
 
@@ -117,7 +118,7 @@ This root is used for the file browser and terminals. You can also change it fro
 - Jupyter kernel execution (Python, Julia, R, etc.)
 - Built-in file browser — open notebooks anywhere on disk
 - Autosave with crash recovery
-- Undo/redo with full edit history
+- Infinite undo/redo, journaled to disk (survives reloads) — time-travel to any past state with diff preview and one-click restore
 
 **Navigation**
 - Table of Contents breadcrumb - auto-generated from markdown headers
@@ -127,7 +128,8 @@ This root is used for the file browser and terminals. You can also change it fro
 **Agents**
 - Agent terminal built into every notebook — one click launches Claude Code or Codex, pre-briefed with the server URL and notebook path
 - "Fix with agent" on any failing cell, and per-cell prompts, injected straight into the agent's terminal
-- Full MCP toolset ([`nebula-notebook-mcp`](https://www.npmjs.com/package/nebula-notebook-mcp)): read/edit/execute cells, manage kernels and files — from any agent on any machine
+- Two ways for agents to plug in, same operations under the hood — **MCP** ([`nebula-notebook-mcp`](https://www.npmjs.com/package/nebula-notebook-mcp)) for tool-calling agents, and the shell-first **`nebula` CLI** (`nb read/edit/run`, `kernel`, `session`, `compute`) for scripting; the CLI also installs as a **Claude Code skill** (`nebula setup-skill`) for agents running outside a Nebula terminal
+- Full toolset on both: read/edit/execute cells, manage kernels and files, and allocate cluster compute — from any agent on any machine
 - Agent sessions lock the notebook during edits and sync live into the UI
 
 **Editor**
@@ -315,7 +317,7 @@ Terminals persist as long as the server runs. Bookmark different terminals for q
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, CodeMirror
 - **Backend**: Node.js, Fastify, ZeroMQ (Jupyter kernel protocol)
 - **Auth**: TOTP (otplib), JWT (jsonwebtoken)
-- **Agents**: MCP (`nebula-notebook-mcp`), used by Claude Code, Codex, and other agent CLIs
+- **Agents**: MCP and the `nebula` CLI (also installable as a Claude Code skill), both in [`nebula-notebook-mcp`](https://www.npmjs.com/package/nebula-notebook-mcp), used by Claude Code, Codex, and other agent CLIs
 
 ## License
 

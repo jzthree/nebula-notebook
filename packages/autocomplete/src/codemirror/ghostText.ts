@@ -114,8 +114,17 @@ export function ghostText(fetcher: GhostTextFetcher, options: GhostTextOptions =
     class {
       private timer: ReturnType<typeof setTimeout> | null = null;
       private controller: AbortController | null = null;
+      // In-flight fetches (supersession can briefly overlap two). While > 0 the
+      // editor root carries .cm-ai-pending so themes can signal "computing"
+      // (e.g. tint the cursor) instead of leaving the wait invisible.
+      private inflight = 0;
 
       constructor(private view: EditorView) {}
+
+      private trackFetch(delta: 1 | -1): void {
+        this.inflight += delta;
+        this.view.dom.classList.toggle("cm-ai-pending", this.inflight > 0);
+      }
 
       update(update: ViewUpdate): void {
         if (!update.docChanged) return;
@@ -149,6 +158,7 @@ export function ghostText(fetcher: GhostTextFetcher, options: GhostTextOptions =
         const stale = () => signal.aborted || this.view.state.doc !== startDoc;
 
         let streamed = "";
+        this.trackFetch(1);
         try {
           const full = await fetcher(
             { prefix, suffix, state },
@@ -165,12 +175,16 @@ export function ghostText(fetcher: GhostTextFetcher, options: GhostTextOptions =
           if (full) this.view.dispatch({ effects: setGhost.of({ pos, text: full }) });
         } catch {
           /* aborted or backend error — ghost text simply doesn't appear */
+        } finally {
+          this.trackFetch(-1);
         }
       }
 
       destroy(): void {
         if (this.timer) clearTimeout(this.timer);
         this.controller?.abort();
+        this.inflight = 0;
+        this.view.dom.classList.remove("cm-ai-pending");
       }
     },
   );

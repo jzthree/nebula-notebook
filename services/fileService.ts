@@ -81,22 +81,53 @@ const shouldRunShadowSerialize = (sample: number) => {
  * Blob holds references — no single joined string. Temporary ~800MB spike
  * for 500MB notebooks, GC'd immediately after send.
  */
+// Sentinel replacing a code cell's outputs when they haven't changed since the
+// last successful save — the server re-uses the outputs already in the file.
+// Autosave payloads are dominated by base64 image outputs that rarely change;
+// over a slow uplink (SSH tunnel through a VPN, measured ~52 KB/s) re-uploading
+// them saturated the tunnel for ~20s per save and starved the terminal.
+const OUTPUTS_UNCHANGED_SENTINEL = '__nebula-outputs-unchanged-v1__';
+
+// Per-notebook: each code cell's outputs hash as of its last successful save.
+// Cleared on notebook load so the first save after a (re)load is always full.
+const savedOutputsHashes = new Map<string, Map<string, string>>();
+
+/** Fast non-cryptographic hash (djb2 + length) for change detection only. */
+function hashString(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36) + ':' + s.length;
+}
+
 const buildSavePayload = (
   path: string,
   cells: Cell[],
   kernelName?: string,
   history?: TimestampedOperation[],
-): Blob => {
+  priorHashes?: Map<string, string> | null,
+): { blob: Blob; hashes: Map<string, string>; elided: number } => {
+  const hashes = new Map<string, string>();
+  let elided = 0;
   const parts: string[] = [`{"path":${JSON.stringify(path)},"cells":[`];
   for (let i = 0; i < cells.length; i++) {
     if (i > 0) parts.push(',');
-    parts.push(JSON.stringify(cells[i]));
+    const cell = cells[i];
+    if (cell.type === 'code' && Array.isArray(cell.outputs) && cell.outputs.length > 0) {
+      const h = hashString(JSON.stringify(cell.outputs));
+      hashes.set(cell.id, h);
+      if (priorHashes && priorHashes.get(cell.id) === h) {
+        elided++;
+        parts.push(JSON.stringify({ ...cell, outputs: OUTPUTS_UNCHANGED_SENTINEL as unknown as Cell['outputs'] }));
+        continue;
+      }
+    }
+    parts.push(JSON.stringify(cell));
   }
   parts.push(']');
   if (kernelName !== undefined) parts.push(`,"kernel_name":${JSON.stringify(kernelName)}`);
   if (history !== undefined) parts.push(`,"history":${JSON.stringify(history)}`);
   parts.push('}');
-  return new Blob(parts, { type: 'application/json' });
+  return { blob: new Blob(parts, { type: 'application/json' }), hashes, elided };
 };
 
 /**
@@ -380,6 +411,11 @@ export const getNotebookData = async (path: string): Promise<NotebookData> => {
     mtime: data.mtime,
   };
 
+  // Fresh load: drop elision hashes so the next save is full — the in-memory
+  // state was just (re)seeded from disk and prior hashes may be stale.
+  savedOutputsHashes.delete(path);
+  savedOutputsHashes.delete(result.path);
+
   // Cache briefly for Strict Mode dedup
   _notebookDataCache = {
     requestPath: path,
@@ -406,18 +442,63 @@ export const getNotebookData = async (path: string): Promise<NotebookData> => {
  * @param kernelName - Optional kernel name to persist in notebook metadata
  * @returns SaveResult with success status and new mtime for conflict detection
  */
+// Stamp logged with every save so it's verifiable in DevTools which client
+// build is running and what each autosave costs over the wire.
+const NEBULA_CLIENT_BUILD = 'delta-save-2026-07-08';
+
+/**
+ * Gzip a payload with the browser's native CompressionStream.
+ * Returns null when unsupported so the caller falls back to plain JSON.
+ */
+async function gzipBlob(blob: Blob): Promise<ArrayBuffer | null> {
+  try {
+    const CS = (globalThis as { CompressionStream?: new (f: string) => ReadableWritablePair<Uint8Array, Uint8Array> }).CompressionStream;
+    if (!CS) return null;
+    const stream = blob.stream().pipeThrough(new CS('gzip'));
+    return await new Response(stream).arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
+/** POST one save payload, gzipped when large (slow-uplink tunnels). */
+const postSavePayload = async (blob: Blob, elided: number): Promise<Response> => {
+  const gz = blob.size > 16_384 ? await gzipBlob(blob) : null;
+  console.log(
+    `[nebula ${NEBULA_CLIENT_BUILD}] autosave ${(blob.size / 1024).toFixed(0)}KB` +
+    (elided > 0 ? ` (${elided} cells' unchanged outputs elided)` : '') +
+    (gz ? ` → gzip ${(gz.byteLength / 1024).toFixed(0)}KB on the wire` : '')
+  );
+  return fetch(`${API_BASE}/notebook/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': gz ? 'application/gzip' : 'application/json' },
+    body: gz ?? blob,
+  });
+};
+
 export const saveNotebookCells = async (
   path: string,
   cells: Cell[],
   kernelName?: string,
   history?: any[],
 ): Promise<SaveResult> => {
-  const body = buildSavePayload(path, cells, kernelName, history);
-  const response = await fetch(`${API_BASE}/notebook/save`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
-  });
+  // Payload diet: elide outputs unchanged since the last successful save
+  // (sentinel resolved server-side from the file), then gzip what remains.
+  const prior = savedOutputsHashes.get(path) ?? null;
+  let { blob, hashes, elided } = buildSavePayload(path, cells, kernelName, history, prior);
+  let response = await postSavePayload(blob, elided);
+
+  // Server couldn't resolve a sentinel (ids changed, external rewrite…):
+  // retry once with the full payload.
+  if (response.status === 409) {
+    const err = await response.json().catch(() => ({} as { code?: string }));
+    if (err?.code !== 'needs_full') {
+      throw new Error(err?.detail || 'Failed to save notebook');
+    }
+    savedOutputsHashes.delete(path);
+    ({ blob, hashes, elided } = buildSavePayload(path, cells, kernelName, history, null));
+    response = await postSavePayload(blob, 0);
+  }
 
   if (!response.ok) {
     const error = await response.json();
@@ -425,6 +506,8 @@ export const saveNotebookCells = async (
   }
 
   const data = await response.json();
+  // This save is now what's on disk — future saves elide against it.
+  savedOutputsHashes.set(path, hashes);
   return { success: true, mtime: data.mtime };
 };
 

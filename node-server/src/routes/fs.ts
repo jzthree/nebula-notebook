@@ -15,7 +15,7 @@ export default async function fsRoutes(fastify: FastifyInstance) {
   fastify.get('/fs/list', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const dirPath = ((request.query as any).path as string) || '~';
-      const result = fsService.listDirectory(dirPath);
+      const result = await fsService.listDirectory(dirPath);
       return reply.send(result);
     } catch (err) {
       if (err instanceof Error) {

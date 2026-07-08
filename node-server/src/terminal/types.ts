@@ -32,7 +32,9 @@ export type ClientMessage =
 
 export type ServerMessage =
   | { type: 'output'; data: string }
-  | { type: 'replay'; data: string }
+  // cols/rows = the pty's CURRENT size, so the client can render the replayed
+  // bytes at the width they were produced for (else wraps land wrong).
+  | { type: 'replay'; data: string; cols?: number; rows?: number }
   | { type: 'exit'; code: number }
   | { type: 'error'; message: string }
   | { type: 'inactive' }  // Another tab took over this terminal

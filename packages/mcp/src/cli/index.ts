@@ -15,25 +15,29 @@ import { cmdRun } from './run.js';
 import { cmdKernel } from './kernel.js';
 import { cmdSession } from './session.js';
 import { cmdCompute } from './compute.js';
+import { cmdFs } from './fs.js';
 import { cmdSetupSkill } from './skill.js';
 
 const ROOT_HELP = `nebula — work with notebooks on a running Nebula server
 
 Server URL required: --url <url> on any command, or export NEBULA_URL.
+Not installed? npx -p nebula-notebook-mcp nebula …  (or: npm i -g nebula-notebook-mcp)
 
 usage: nebula <command> …
 
-  nb read <path>                 list cells (--cells, --outputs, --full)
-  nb edit <path> <cell-id> …     update a cell (OCC-checked; conflict → exit 9)
-  nb insert <path> --index N …   insert a cell
-  nb delete <path> <cell-id>     delete a cell
-  nb search <path> <query>       search cell sources (--limit)
+  nb read|edit|insert|delete|search <path> …
+                                 cells: read/OCC-checked edit (conflict → exit 9)/
+                                 insert/delete/search — see 'nebula nb --help'
+  nb create|move|duplicate|clear-outputs|clear|meta <path> …
+                                 create notebooks, reorder/copy cells, outputs, metadata
   run <path> <cell-id>           execute a cell + print output tail (--tail)
-  kernel status|restart|interrupt <path>
+  kernel ls                      available kernels on the server
+  kernel status|start|stop|restart|interrupt <path>
   session start|end <path>       hold/release the agent lock across invocations
   compute status|queues|alloc|ls|use|cancel
-                                 cluster compute allocations (HPC; optional —
-                                 absent unless the server has a scheduler)
+                                 cluster compute allocations (HPC; optional)
+  fs ls|cat|write|rm|mv|download|upload
+                                 SERVER files (remote agents; in a Nebula terminal use the shell)
   setup-skill                    install the Claude Code skill (for agents outside Nebula terminals)
 
 Every command accepts --json (raw output) and --quiet (no hint line).
@@ -58,6 +62,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdSession(rest);
     case 'compute':
       return cmdCompute(rest);
+    case 'fs':
+      return cmdFs(rest);
     case 'setup-skill':
       return cmdSetupSkill(rest);
     default:

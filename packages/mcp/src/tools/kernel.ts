@@ -85,7 +85,7 @@ export const kernelStartTool: Tool<KernelStartParams, KernelStartResult> = {
     inputSchema: {
       type: 'object',
       properties: {
-        kernel_name: { type: 'string', description: 'Kernel name (e.g., python3). Default: python3.' },
+        kernel_name: { type: 'string', description: 'Kernel name (e.g., python3, ir). Default: resolved from the notebook\'s kernelspec metadata.' },
       },
       required: [],
     },
@@ -97,14 +97,15 @@ export const kernelStartTool: Tool<KernelStartParams, KernelStartResult> = {
     if (!notebookPath) {
       return { success: false, error: 'No active agent session. Call start_agent_session first.' };
     }
-    const kernelName = params.kernel_name || 'python3';
-    const result = await client.getOrCreateKernelForFile(notebookPath, kernelName);
+    // No explicit kernel → let the server resolve it from the notebook's
+    // kernelspec metadata (hardcoding python3 here breaks R/Julia notebooks).
+    const result = await client.getOrCreateKernelForFile(notebookPath, params.kernel_name);
     if (!result.success) return { success: false, error: result.error };
     return {
       success: true,
       data: {
         sessionId: result.data!.sessionId,
-        kernelName: result.data!.kernelName || kernelName,
+        kernelName: result.data!.kernelName || params.kernel_name || 'default',
       },
     };
   },
@@ -192,7 +193,9 @@ export const kernelRestartTool: Tool<KernelRestartParams, void> = {
       }
     }
 
-    const started = await client.getOrCreateKernelForFile(notebookPath, 'python3');
+    // Kernel name resolved server-side from the notebook's kernelspec —
+    // hardcoding python3 here restarted R notebooks into the wrong kernel.
+    const started = await client.getOrCreateKernelForFile(notebookPath);
     return started.success ? { success: true } : { success: false, error: started.error };
   },
 

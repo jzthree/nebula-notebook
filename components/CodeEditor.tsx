@@ -119,6 +119,17 @@ const lightTheme = EditorView.theme({
   '.cm-cursor': {
     borderLeftColor: '#1e293b',
   },
+  // While an AI ghost-text fetch is in flight (.cm-ai-pending, set by the
+  // ghostText extension) tint the cursor blue so the wait reads as
+  // "computing", not "hung". Kernel dropdown completions are fast enough
+  // (~40ms) that they deliberately do NOT tint.
+  '&.cm-ai-pending .cm-cursor': {
+    borderLeftColor: '#2563eb', // blue-600
+    borderLeftWidth: '2px',
+  },
+  '&.cm-ai-pending .cm-content': {
+    caretColor: '#2563eb',
+  },
   // Search match highlighting
   '.cm-searchMatch': {
     // Orange background, keep text color unchanged for readability.
@@ -789,6 +800,10 @@ export const CodeEditor: React.FC<Props> = ({
         autocompletion({
           override: [createCombinedCompletionSource(effectiveAllCellsRef, kernelSessionIdRef)],
           activateOnTyping: true,
+          // Default is 100ms; the kernel answers in ~35ms warm, so a shorter
+          // debounce makes the popup feel immediate without extra kernel
+          // chatter (validFor filters continued typing client-side).
+          activateOnTypingDelay: 50,
           defaultKeymap: true,
         })
       );

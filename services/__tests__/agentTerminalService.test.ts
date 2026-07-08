@@ -153,7 +153,8 @@ describe('agentTerminalService prompt injection', () => {
 
     agentTerminalService.launchAgent('claude');
     const cmd = sent[0];
-    expect(cmd.startsWith("claude '")).toBe(true);
+    // Fresh Claude launch pins this notebook's own session id, then the prompt.
+    expect(cmd).toMatch(/^claude --session-id [0-9a-f-]{36} '/);
     expect(cmd.endsWith('\r')).toBe(true);
     expect(cmd).toContain('connect_server');
     expect(cmd).toContain('http://localhost:8000');
@@ -164,6 +165,38 @@ describe('agentTerminalService prompt injection', () => {
     // single quote in path is shell-escaped, so the arg can't break out
     expect(cmd).toContain("my analysis'\\''s.ipynb");
     expect(cmd).not.toContain('\n');
+  });
+
+  it('confirms launch when the TUI appears, then detects exit back to the shell', () => {
+    agentTerminalService.registerSender('t1', () => true);
+    agentTerminalService.launchAgent('claude');
+    expect(agentTerminalService.getState().status).toBe('running');
+    // Focus-events set (?1004h) = the agent UI came up — survives the no-UI timeout.
+    agentTerminalService.observeOutput('t1', 'welcome \x1b[?1004h');
+    vi.advanceTimersByTime(20000);
+    expect(agentTerminalService.getState().status).toBe('running');
+    // Later the agent quits: focus-events reset (?1004l) = exited to the shell.
+    agentTerminalService.observeOutput('t1', 'goodbye \x1b[?1004l');
+    expect(agentTerminalService.getState().status).toBe('none');
+    // …and the conversation stays resumable (session id persists).
+    expect(agentTerminalService.getResumableKind()).toBe('claude');
+  });
+
+  it('fails the launch if no interface ever appears (positive check)', () => {
+    agentTerminalService.registerSender('t1', () => true);
+    agentTerminalService.launchAgent('claude');
+    vi.advanceTimersByTime(11000);
+    const s = agentTerminalService.getState();
+    expect(s.status).toBe('failed');
+    expect(s.launchError).toMatch(/did not start|no interface/i);
+  });
+
+  it('fails fast on an explicit error, before the no-UI timeout', () => {
+    agentTerminalService.registerSender('t1', () => true);
+    agentTerminalService.launchAgent('claude');
+    agentTerminalService.observeOutput('t1', 'zsh: command not found: claude\n');
+    expect(agentTerminalService.getState().status).toBe('failed');
+    expect(agentTerminalService.getState().launchError).toMatch(/command not found/i);
   });
 
   it('markRunning injects the bootstrap context into a manually started agent', () => {
@@ -275,13 +308,20 @@ describe('remote-agent mode (agent on the user machine)', () => {
     expect(agentTerminalService.getState().agentKind).toBe('claude');
   });
 
-  it('resume launches use claude --continue with a short reorientation prompt', () => {
+  it('resume reopens this notebook\'s own session id with a short reorientation prompt', () => {
     const sent: string[] = [];
     agentTerminalService.registerSender('t9', (d) => { sent.push(d); return true; });
     agentTerminalService.setNotebookContext('/data/proj/nb.ipynb');
+    // Fresh launch mints + stores this notebook's session id...
+    agentTerminalService.launchAgent('claude');
+    const sessionId = sent[0].match(/--session-id ([0-9a-f-]{36})/)?.[1];
+    expect(sessionId).toBeTruthy();
+    agentTerminalService.markStopped();
+    sent.length = 0;
+    // ...and resume reopens exactly that id (not a cwd-shared --continue).
     agentTerminalService.launchAgent('claude', { resume: true });
     const line = sent[0];
-    expect(line).toContain('claude --continue ');
+    expect(line).toContain(`claude --resume ${sessionId} `);
     expect(line).toContain('/data/proj/nb.ipynb');
     expect(line).not.toContain('PREFERRED: use the `nebula` CLI'); // short prompt, not the full bootstrap
   });

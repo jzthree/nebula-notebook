@@ -541,13 +541,13 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
    */
   fastify.post('/kernels/for-file', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { file_path, kernel_name = 'python3', server_id, client_origin } = request.body as any;
+      const { file_path, kernel_name, server_id, client_origin } = request.body as any;
       if (!file_path) {
         return reply.code(400).send({ detail: 'file_path is required' });
       }
 
       const normalizedFilePath = kernelService.normalizeNotebookPath(file_path);
-      let effectiveKernelName = kernel_name;
+      let effectiveKernelName = kernel_name as string | undefined;
       let effectiveServerId = server_id as string | undefined;
       const localServerId = serverRegistry.getLocalServerId();
 
@@ -564,6 +564,25 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
             effectiveServerId = preferredServerId;
           }
         }
+      }
+
+      // No explicit kernel and no saved preference: resolve from the
+      // notebook's own kernelspec metadata (headless callers — CLI/MCP —
+      // don't resolve it client-side the way the UI does). Only then fall
+      // back to python3.
+      if (!effectiveKernelName) {
+        try {
+          const metadata = await fsService.getNotebookMetadataAsync(normalizedFilePath);
+          const specName = (metadata.kernelspec as { name?: string } | undefined)?.name;
+          if (specName) {
+            effectiveKernelName = specName;
+          }
+        } catch {
+          // fall through to the default
+        }
+      }
+      if (!effectiveKernelName) {
+        effectiveKernelName = 'python3';
       }
 
       // Check if we should start on a remote server

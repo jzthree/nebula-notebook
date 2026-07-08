@@ -106,7 +106,17 @@ export interface NotebookCellsResponse {
 export interface SaveNotebookResult {
   success: boolean;
   mtime: number;
+  /** Client sent outputs-unchanged sentinels the server couldn't resolve — it must retry with a full payload. */
+  needsFull?: boolean;
 }
+
+/**
+ * Sentinel the client puts in place of a code cell's outputs when they are
+ * unchanged since its last successful save. The server re-uses the outputs
+ * already in the file (matched by nebula_id), so autosaves don't re-upload
+ * megabytes of unchanged base64 images over slow uplinks.
+ */
+export const OUTPUTS_UNCHANGED_SENTINEL = '__nebula-outputs-unchanged-v1__';
 
 // Jupyter .ipynb format types
 export interface JupyterCellMetadata {

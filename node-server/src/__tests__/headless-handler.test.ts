@@ -785,8 +785,6 @@ describe('HeadlessOperationHandler', () => {
 
   describe('readCellOutput', () => {
     it('should return promptly when the cell is already idle', async () => {
-      vi.useFakeTimers();
-
       const notebookPath = createTestNotebook('idle-output.ipynb', [
         {
           id: 'cell-1',
@@ -795,6 +793,11 @@ describe('HeadlessOperationHandler', () => {
           execution_count: 1,
         },
       ]);
+
+      // Warm the notebook cache with real timers: applyOperation's async
+      // warm-up does real fs I/O, which never resolves under fake timers.
+      await handler.readNotebook(notebookPath, false);
+      vi.useFakeTimers();
 
       let settled = false;
       const resultPromise = handler.applyOperation({
