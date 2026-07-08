@@ -18,6 +18,13 @@ export interface UseAutosaveOptions {
   cells: Cell[];
   onSave: (fileId: string, cells: Cell[]) => Promise<void>;
   enabled?: boolean;
+  /**
+   * True while the notebook is being (re)loaded from disk. The saved-state
+   * baseline seeds when loading FINISHES — seeding on fileId change alone
+   * races the async load (fileId flips before cells arrive), which made every
+   * loaded cell look dirty and fired a pointless full autosave on page load.
+   */
+  loading?: boolean;
   hasRedoHistory?: boolean; // Block autosave when redo history exists (user has undone)
   // Called when a save attempt fails. Retries are scheduled automatically by
   // the state machine — this exists so the UI can surface the failure loudly
@@ -34,7 +41,7 @@ interface CellSnapshot {
   outputsRef?: Cell['outputs'];
 }
 
-export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHistory = false, onSaveError }: UseAutosaveOptions) {
+export function useAutosave({ fileId, cells, onSave, enabled = true, loading = false, hasRedoHistory = false, onSaveError }: UseAutosaveOptions) {
   // UI status (derived from machine state)
   const [uiStatus, setUiStatus] = useState<AutosaveStatus>({
     status: 'saved',
@@ -304,7 +311,9 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
 
   // React to cells changes
   useEffect(() => {
-    if (!fileId || !enabled) return;
+    // `loading` also guards same-file reloads (external-change refresh):
+    // disk state arriving must never read as user edits.
+    if (!fileId || !enabled || loading) return;
 
     // Skip when fileId just changed — the fileId-init effect below will
     // set the snapshot.  We detect this by comparing against the last
@@ -328,7 +337,7 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
 
     // Dispatch cells changed event
     dispatch({ type: 'CELLS_CHANGED' });
-  }, [cells, fileId, enabled, hasRedoHistory, dispatch, refreshDirtyState]);
+  }, [cells, fileId, enabled, loading, hasRedoHistory, dispatch, refreshDirtyState]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -354,16 +363,20 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, hasRedoHist
     dispatch({ type: 'MANUAL_SAVE' });
   }, [cancelPendingOperations, cells, dispatch, refreshDirtyState]);
 
-  // Initialize last saved content when file changes
+  // Initialize the saved-state baseline when a load COMPLETES (fileId set and
+  // no longer loading). Keying on fileId alone raced the async load: fileId
+  // flips before the fetched cells land, so the baseline was seeded from the
+  // previous file's cells and the loaded cells all read as dirty → a full,
+  // pointless autosave on every page load / notebook switch.
   useEffect(() => {
-    if (fileId) {
+    if (fileId && !loading) {
       updateSavedState(cells);
       initializedFileIdRef.current = fileId;
       cellsRef.current = cells;
       setUiStatus({ status: 'saved', lastSaved: Date.now() });
       setMachineState(getInitialState());
     }
-  }, [fileId]); // Only on fileId change, not cells
+  }, [fileId, loading]); // Not cells: re-seed only on load transitions
 
   // Warn before unload if there are unsaved changes
   useEffect(() => {

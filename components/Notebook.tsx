@@ -1543,6 +1543,7 @@ export const Notebook: React.FC = () => {
     fileId: currentFileId,
     cells,
     onSave: performSaveToFile,
+    loading: isLoadingFile, // baseline seeds when the load FINISHES (not when fileId flips)
     // Avoid repeated conflict checks / log spam while the conflict modal is
     // open OR while a resolution's force-save is still in flight (resuming
     // early would re-detect the same conflict against the stale mtime).

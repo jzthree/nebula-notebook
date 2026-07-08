@@ -308,6 +308,18 @@ export class PtyManager {
   getModeReset(id: string): string {
     const session = this.sessions.get(id);
     if (!session) return '';
+    // If the pty's FOREGROUND process is a plain shell, no TUI can be holding
+    // the sticky input modes — any tracked "on" state is stale (a TUI died
+    // without its teardown bytes reaching the pty, e.g. an agent riding a
+    // collapsed reverse tunnel, or a SIGKILL). Reasserting it would turn the
+    // user's mouse movements into SGR garbage typed at the prompt, so reset
+    // everything OFF instead.
+    try {
+      const fg = (session.pty.process || '').split('/').pop() || '';
+      if (/^-?(bash|zsh|sh|dash|fish|tcsh|ksh)$/.test(fg)) {
+        session.activeModes.clear();
+      }
+    } catch { /* can't inspect foreground — keep tracked state */ }
     return TRACKED_INPUT_MODES
       .map((n) => `\x1b[?${n}${session.activeModes.has(n) ? 'h' : 'l'}`)
       .join('');
