@@ -24,6 +24,14 @@ export interface CompletionRequest {
    * aborts the previous in-flight request. Use the cell id.
    */
   sessionKey?: string;
+  /** Model override (e.g. "haiku" | "sonnet"). Engines are pooled per model. */
+  model?: string;
+  /** Per-request cross-cell context budget in chars (clamped server-side).
+   *  More context grounds suggestions in the notebook (fewer hallucinated
+   *  names) at the cost of a bigger prompt. */
+  contextBudget?: number;
+  /** Per-request cap on suggested lines (clamped server-side). */
+  maxLines?: number;
   /** Backend selector, for servers hosting more than one engine. */
   backend?: string;
 }
@@ -67,6 +75,9 @@ export interface CompletionDiag {
   poolSize?: number;
   /** Characters in the assembled prompt. */
   promptChars?: number;
+  /** Characters in the RAW model reply, before tag/fence/overlap trimming —
+   *  rawChars>0 with empty final text means post-processing removed it. */
+  rawChars?: number;
 }
 
 export interface CompleteOptions {

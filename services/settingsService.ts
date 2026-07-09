@@ -55,6 +55,12 @@ export interface NebulaSettings {
   // for cases the heuristic gets wrong (headless local Linux; a cloud VM you
   // tunnel to). undefined = trust detection.
   environmentOverride?: 'local' | 'remote';
+  // --- AI autocomplete: Advanced tuning (quality <-> speed) ---
+  aiAutocompleteModel?: string;          // model id (haiku | sonnet | opus | any alias your CLI accepts)
+  aiAutocompleteContextChars?: number;   // cross-cell context budget in characters (0 = none)
+  aiAutocompleteMaxLines?: number;       // suggestion length cap in lines
+  aiAutocompleteDebounceMs?: number;     // idle time before a fetch, ms
+  aiAutocompleteThinkingTokens?: number; // thinking-token budget (0 = off)
 }
 
 export const getSettings = (): NebulaSettings => {

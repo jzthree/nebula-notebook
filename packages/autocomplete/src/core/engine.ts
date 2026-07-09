@@ -1,6 +1,7 @@
 import { LruCache } from "./lru.js";
 import { buildPrompt, cacheKey } from "./prompt.js";
 import {
+  createPrefixTrimStreamFilter,
   createTagStreamFilter,
   extractCompletionTag,
   stripFences,
@@ -79,15 +80,21 @@ export class AutocompleteEngine {
       if (ttfb === null) ttfb = performance.now() - t0;
       onChunk?.(t);
     };
-    // The model wraps its completion in <completion> tags (leading whitespace
-    // survives generation only inside them) — keep the tags out of streamed
-    // ghost text while the inner text streams through.
-    const chunkGuard = createTagStreamFilter(rawChunkGuard);
+    // Streamed ghost text goes through the same shaping as the final text so
+    // the done event never visibly "snaps" it: strip <completion> tags, then
+    // hold back a possible prefix-echo until it either confirms (stripped) or
+    // is ruled out (streamed through).
+    const chunkGuard = createTagStreamFilter(
+      createPrefixTrimStreamFilter(req.prefix, rawChunkGuard),
+    );
 
     try {
+      // Per-request tuning (Advanced settings), clamped to sane bounds.
+      const clamp = (v: number | undefined, lo: number, hi: number, dflt: number) =>
+        typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : dflt;
       const prompt = buildPrompt(req, {
-        contextBudget: this.contextBudget,
-        maxLines: this.maxLines,
+        contextBudget: clamp(req.contextBudget, 0, 20_000, this.contextBudget),
+        maxLines: clamp(req.maxLines, 1, 20, this.maxLines),
       });
       const diag: import("../types.js").CompletionDiag = { promptChars: prompt.length };
 
@@ -116,6 +123,7 @@ export class AutocompleteEngine {
         });
       }
       const raw = await run;
+      diag.rawChars = raw.length;
       // Tag-wrapped replies carry whitespace verbatim; untagged replies fall
       // back to the fence-stripping pipeline.
       const tagged = extractCompletionTag(raw);
@@ -123,7 +131,10 @@ export class AutocompleteEngine {
         req.suffix ?? "",
         trimPrefixOverlap(req.prefix, tagged !== null ? tagged : stripFences(raw)),
       );
-      this.cache.set(key, text);
+      // Cache only non-empty results: an empty completion is a transient
+      // model shrug, and caching it pins "no suggestion" onto that exact
+      // prefix for the cache's lifetime (observed as instant empty repeats).
+      if (text) this.cache.set(key, text);
       return {
         text,
         backend: this.opts.backend.name,

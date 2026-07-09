@@ -501,50 +501,17 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
               );
               return (
                 <>
-                  {/* AI inline autocomplete */}
+                  {/* Shared: where the agent AND autocomplete run. Never gated on
+                      the autocomplete toggle — this is agent infrastructure too. */}
                   <div>
                     <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
-                      <Sparkles className="w-4 h-4" />
-                      AI Autocomplete
+                      <Server className="w-4 h-4" />
+                      Where AI runs
                     </label>
                     <div className="p-3 bg-slate-50 rounded-lg space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1 pr-3">
-                          <p className="text-sm text-slate-700">Inline code suggestions</p>
-                          <p className="text-xs text-slate-500">
-                            Ghost-text completions in code cells while you pause typing, powered by a
-                            Claude Code or Codex subscription. Tab accepts, Escape dismisses.
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => {
-                            const next = !settings.aiAutocomplete;
-                            setSettings({ ...settings, aiAutocomplete: next });
-                            persistSettings({ aiAutocomplete: next });
-                            notifySettingsChanged();
-                          }}
-                          aria-label="Toggle AI autocomplete"
-                          className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${settings.aiAutocomplete ? 'bg-blue-600' : 'bg-slate-300'}`}
-                        >
-                          <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${settings.aiAutocomplete ? 'translate-x-5' : 'translate-x-0'}`} />
-                        </button>
-                      </div>
-
-                      {settings.aiAutocomplete && (
-                        <div className="flex items-center gap-2">
-                          <p className="text-xs text-slate-500 flex-1">Suggestion engine</p>
-                          {(['claude', 'codex'] as const).map((b) => (
-                            <button
-                              key={b}
-                              onClick={() => { setSettings({ ...settings, aiAutocompleteBackend: b }); persistSettings({ aiAutocompleteBackend: b }); notifySettingsChanged(); setTestResult(null); }}
-                              className={`px-3 py-1 text-xs rounded-md border transition-colors ${backend === b ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-300 hover:border-blue-400'}`}
-                            >
-                              {b === 'claude' ? 'Claude Code' : 'Codex'}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-
+                      <p className="text-xs text-slate-500">
+                        Applies to <span className="font-medium text-slate-600">both</span> the agent terminal and AI autocomplete.
+                      </p>
                       {/* Where does this server run? Detection is silent when
                           confident; asks ONCE when genuinely ambiguous; always
                           correctable via the override select. */}
@@ -573,34 +540,43 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
                             </div>
                           </div>
                         ) : (
+                          // One plain sentence; detection detail lives in the
+                          // tooltip. (Was: "Server environment: this machine —
+                          // macOS — a personal machine" + a second line saying
+                          // the same thing — em-dash soup for a first-time user.)
                           <div className="flex items-center gap-2 text-xs text-slate-500">
-                            <span className="flex-1">
-                              Server environment: <span className="text-slate-700">{settings.environmentOverride === 'remote' ? 'remote machine' : settings.environmentOverride === 'local' ? 'this computer' : environmentLabel(envInfo) || 'detecting…'}</span>
-                              {settings.environmentOverride
-                                ? ' (your setting)'
-                                : envInfo?.reason ? ` — ${envInfo.reason}` : ''}
+                            <span
+                              className="flex-1"
+                              title={envInfo?.reason ? `How Nebula decided: ${envInfo.reason}${settings.environmentOverride ? ' (currently overridden by you)' : ''}` : undefined}
+                            >
+                              {serverRemote ? (
+                                <>Nebula is running on <span className="text-slate-700 font-medium">{envInfo?.hostname || 'a remote machine'}</span>, which you connect to remotely.</>
+                              ) : (
+                                <>Nebula is running on <span className="text-slate-700 font-medium">this {envInfo?.platform === 'darwin' ? 'Mac' : 'computer'}</span>, so everything runs locally.</>
+                              )}
+                              <span className="text-slate-400"> {settings.environmentOverride ? '· set by you' : '· detected'}</span>
                             </span>
                             <select
                               value={settings.environmentOverride ?? ''}
                               onChange={(e) => chooseEnvironment(e.target.value === '' ? undefined : (e.target.value as 'local' | 'remote'))}
                               className="text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
-                              title="Override where Nebula thinks this server runs (decides whether run-on-my-machine options appear)"
+                              title="Wrong? Tell Nebula where this server really runs — it decides whether the run-on-your-own-computer options appear."
                             >
-                              <option value="">Auto-detect</option>
-                              <option value="local">This computer</option>
-                              <option value="remote">Remote machine</option>
+                              <optgroup label="Where does this Nebula server run?">
+                                <option value="">Detect automatically</option>
+                                <option value="local">On this computer</option>
+                                <option value="remote">On a remote machine I connect to</option>
+                              </optgroup>
                             </select>
                           </div>
                         )}
                       </div>
-
                       {/* Runs on — only a real choice when the server is remote. */}
-                      {settings.aiAutocomplete && (
-                        <div className="space-y-1.5">
+                      <div className="space-y-1.5">
                           {serverRemote ? (
                             <>
                               <div className="flex items-center gap-2">
-                                <p className="text-xs text-slate-500 flex-1">Runs on</p>
+                                <p className="text-xs text-slate-500 flex-1">Agent &amp; autocomplete run on</p>
                                 <button
                                   onClick={() => setRunsOn('server')}
                                   className={`px-3 py-1 text-xs rounded-md border inline-flex items-center gap-1 transition-colors ${runsOn === 'server' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-300 hover:border-blue-400'}`}
@@ -657,16 +633,130 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
                                 );
                               })()}
                             </>
-                          ) : (
-                            <p className="text-xs text-slate-500">Runs on this machine (the Nebula server is local).</p>
-                          )}
+                          ) : null /* local server: the sentence above already says everything runs here */}
                         </div>
-                      )}
                     </div>
                   </div>
 
-                  {/* Diagnostics & test */}
-                  {settings.aiAutocomplete && (
+                  {/* AI inline autocomplete */}
+                  <div>
+                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                      <Sparkles className="w-4 h-4" />
+                      AI Autocomplete
+                    </label>
+                    <div className="p-3 bg-slate-50 rounded-lg space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1 pr-3">
+                          <p className="text-sm text-slate-700">Inline code suggestions</p>
+                          <p className="text-xs text-slate-500">
+                            Ghost-text completions in code cells while you pause typing, powered by a
+                            Claude Code or Codex subscription. Tab accepts, Escape dismisses.
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const next = !settings.aiAutocomplete;
+                            setSettings({ ...settings, aiAutocomplete: next });
+                            persistSettings({ aiAutocomplete: next });
+                            notifySettingsChanged();
+                          }}
+                          aria-label="Toggle AI autocomplete"
+                          className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${settings.aiAutocomplete ? 'bg-blue-600' : 'bg-slate-300'}`}
+                        >
+                          <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${settings.aiAutocomplete ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                      </div>
+
+                      {settings.aiAutocomplete && (
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs text-slate-500 flex-1">Suggestion engine</p>
+                          {(['claude', 'codex'] as const).map((b) => (
+                            <button
+                              key={b}
+                              onClick={() => { setSettings({ ...settings, aiAutocompleteBackend: b }); persistSettings({ aiAutocompleteBackend: b }); notifySettingsChanged(); setTestResult(null); }}
+                              className={`px-3 py-1 text-xs rounded-md border transition-colors ${backend === b ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-300 hover:border-blue-400'}`}
+                            >
+                              {b === 'claude' ? 'Claude Code' : 'Codex'}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {settings.aiAutocomplete && (
+                        <details className="group">
+                          <summary className="text-xs text-slate-500 cursor-pointer select-none hover:text-slate-700">
+                            Advanced — quality ↔ speed <span className="text-slate-400">(experimental: help us tune the defaults)</span>
+                          </summary>
+                          <div className="mt-2 space-y-2">
+                            {backend === 'claude' && (
+                              <div className="flex items-center gap-2">
+                                <p className="text-xs text-slate-500 flex-1" title="Any model alias your claude CLI accepts. haiku = fastest; sonnet/opus = smarter, slower and pricier per suggestion.">Model</p>
+                                <input
+                                  type="text" list="nebula-ac-models" placeholder="haiku"
+                                  value={settings.aiAutocompleteModel ?? ''}
+                                  onChange={(e) => { persistSettings({ aiAutocompleteModel: e.target.value.trim() || undefined }); notifySettingsChanged(); setTestResult(null); }}
+                                  className="w-28 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
+                                />
+                                <datalist id="nebula-ac-models">
+                                  <option value="haiku" />
+                                  <option value="sonnet" />
+                                  <option value="opus" />
+                                </datalist>
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2">
+                              <p className="text-xs text-slate-500 flex-1" title="Characters of OTHER cells included in the prompt, nearest cells first (oversized neighbors are truncated to fit). More grounds suggestions in your variables and data — fewer made-up names — but enlarges the prompt. 0 disables cross-cell context.">Notebook context (chars of other cells)</p>
+                              <input
+                                type="number" min={0} max={20000} step={500}
+                                value={settings.aiAutocompleteContextChars ?? 2500}
+                                onChange={(e) => { persistSettings({ aiAutocompleteContextChars: Math.max(0, Math.min(20000, Number(e.target.value) || 0)) }); notifySettingsChanged(); }}
+                                className="w-20 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <p className="text-xs text-slate-500 flex-1" title="Cap on how many lines a suggestion may span (1-20).">Suggestion length (lines)</p>
+                              <input
+                                type="number" min={1} max={20} step={1}
+                                value={settings.aiAutocompleteMaxLines ?? 5}
+                                onChange={(e) => { persistSettings({ aiAutocompleteMaxLines: Math.max(1, Math.min(20, Number(e.target.value) || 5)) }); notifySettingsChanged(); }}
+                                className="w-20 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <p className="text-xs text-slate-500 flex-1" title="How long after you stop typing before a suggestion is requested (100-2000ms). Longer = fewer wasted requests; shorter = snappier.">Trigger delay (ms)</p>
+                              <input
+                                type="number" min={100} max={2000} step={50}
+                                value={settings.aiAutocompleteDebounceMs ?? 300}
+                                onChange={(e) => { persistSettings({ aiAutocompleteDebounceMs: Math.max(100, Math.min(2000, Number(e.target.value) || 300)) }); notifySettingsChanged(); }}
+                                className="w-20 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
+                              />
+                            </div>
+                            {backend === 'claude' && (
+                              <div className="flex items-center gap-2">
+                                <p className="text-xs text-slate-500 flex-1" title="Thinking-token budget. Nothing streams while the model thinks, so the first character arrives later — but tricky completions can come out better. 0 = off.">Thinking tokens (0 = off)</p>
+                                <input
+                                  type="number" min={0} max={16000} step={512}
+                                  value={settings.aiAutocompleteThinkingTokens ?? 0}
+                                  onChange={(e) => { persistSettings({ aiAutocompleteThinkingTokens: Math.max(0, Math.min(16000, Number(e.target.value) || 0)) }); notifySettingsChanged(); }}
+                                  className="w-20 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
+                                />
+                              </div>
+                            )}
+                            <p className="text-[11px] text-slate-400">
+                              Changes apply to new suggestions (trigger delay: to newly focused cells). The browser
+                              console logs each completion's timing breakdown — filter for [ai-autocomplete] when tuning.
+                            </p>
+                          </div>
+                        </details>
+                      )}
+
+
+                    </div>
+                  </div>
+
+                  {/* Diagnostics & test — infrastructure checks; useful for the
+                      agent path even with autocomplete off. */}
+                  {(
                     <div>
                       <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
                         <Stethoscope className="w-4 h-4" />

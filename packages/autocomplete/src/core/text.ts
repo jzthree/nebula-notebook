@@ -95,6 +95,41 @@ export function stripFences(text: string): string {
 }
 
 /**
+ * Streaming variant of trimPrefixOverlap: emits the completion as it streams,
+ * holding back ONLY while the text so far could still be the beginning of a
+ * longer prefix-echo. Without this the ghost text visibly "snaps" when the
+ * done event applies the trim that streaming skipped (echo shown, then
+ * removed). For non-echo completions the hold is typically zero characters.
+ */
+export function createPrefixTrimStreamFilter(
+  prefix: string,
+  emit: (t: string) => void,
+): (t: string) => void {
+  const tail = prefix.slice(-200);
+  let buf = "";
+  let settled = false;
+  return (chunk: string) => {
+    if (settled) return emit(chunk);
+    buf += chunk;
+    // Could buf still grow into a LONGER echo of the prefix tail?
+    let couldExtend = false;
+    for (let n = buf.length + 1; n <= tail.length; n++) {
+      if (tail.slice(-n).startsWith(buf)) { couldExtend = true; break; }
+    }
+    if (couldExtend) return; // hold — echo still possible
+    // Settle: strip the longest confirmed echo, stream the rest.
+    let confirmed = 0;
+    for (let n = Math.min(tail.length, buf.length); n > 0; n--) {
+      if (buf.startsWith(tail.slice(-n))) { confirmed = n; break; }
+    }
+    settled = true;
+    const out = buf.slice(confirmed);
+    buf = "";
+    if (out) emit(out);
+  };
+}
+
+/**
  * Models sometimes echo the tail of the prefix (e.g. the current line) before
  * continuing. Trim the longest suffix-of-prefix that the completion starts
  * with, so accepting the suggestion never duplicates typed text.

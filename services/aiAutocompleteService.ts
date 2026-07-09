@@ -15,6 +15,15 @@ import { serverIsRemote, fetchEnvironment } from './environmentService';
 
 export const SETTINGS_CHANGED_EVENT = 'nebula-settings-changed';
 
+// Ghost-text completions currently in flight (queue wait included). Autosave
+// consults this to yield: both fire on the same "stopped typing" moment, and
+// the save's serialize+gzip+upload otherwise lands inside the completion's
+// window. Completions win; saves defer briefly (with a starvation cap).
+let completionsInFlight = 0;
+export function isAiCompletionInFlight(): boolean {
+  return completionsInFlight > 0;
+}
+
 /**
  * Notebook-level hints for autocomplete (kernel, filename). Set by the Notebook
  * when the kernel/file changes; read by the ghost-text fetcher. Global (like
@@ -57,6 +66,17 @@ const fetchCompletion = createCompletionFetcher('/api/autocomplete', {
  * agent terminal's "my machine" mode) as implying it — so autocomplete follows
  * the agent onto the tunnel even if the where-selector was never touched.
  */
+/** Advanced quality<->speed tuning, read fresh per request. */
+function buildTuning(): Record<string, unknown> {
+  const s = getSettings();
+  return {
+    ...(s.aiAutocompleteModel ? { model: s.aiAutocompleteModel } : {}),
+    ...(s.aiAutocompleteContextChars ? { contextBudget: s.aiAutocompleteContextChars } : {}),
+    ...(s.aiAutocompleteMaxLines ? { maxLines: s.aiAutocompleteMaxLines } : {}),
+    ...(s.aiAutocompleteThinkingTokens ? { thinkingTokens: s.aiAutocompleteThinkingTokens } : {}),
+  };
+}
+
 function wantsRemoteMachine(): boolean {
   // On a LOCAL server there is no "my machine" vs "server" — the server IS your
   // machine. Never treat it as remote, even if a stale remoteAgent flag lingers.
@@ -162,7 +182,7 @@ export async function testCompletion(): Promise<{
   const t0 = performance.now();
   try {
     const result = await fetchCompletion(
-      { prefix: `# selftest ${marker}\ndef add(a, b):\n    `, suffix: '', language: 'python', sessionKey: `diag-${marker}`, backend, ...(transport ? { transport } : {}) } as Parameters<typeof fetchCompletion>[0],
+      { prefix: `# selftest ${marker}\ndef add(a, b):\n    `, suffix: '', language: 'python', sessionKey: `diag-${marker}`, backend, ...(transport ? { transport } : {}), ...buildTuning() } as Parameters<typeof fetchCompletion>[0],
       {},
     );
     return { ok: true, text: result.text, ranOn, ms: Math.round(performance.now() - t0), fromCache: !!result.fromCache };
@@ -229,6 +249,7 @@ export function createAiGhostTextFetcher(
     }
     const t0 = performance.now();
     const where = transport ? `ssh:${transport.port}` : 'server';
+    completionsInFlight += 1;
     try {
       const result = await fetchCompletion(
         {
@@ -243,6 +264,7 @@ export function createAiGhostTextFetcher(
           sessionKey: cellId ?? 'default-cell',
           backend,
           ...(transport ? { transport } : {}),
+          ...buildTuning(),
         } as Parameters<typeof fetchCompletion>[0],
         { signal, onChunk },
       );
@@ -260,7 +282,7 @@ export function createAiGhostTextFetcher(
           (d.poolSize !== undefined ? ` · pool ${d.poolBusy}/${d.poolSize} busy` : '') +
           (d.promptChars !== undefined ? ` · prompt ${d.promptChars} chars` : '')) +
         ` · ${backend}@${where}` +
-        ` · ${result.text ? `${result.text.length} chars` : 'empty'}`
+        ` · ${result.text ? `${result.text.length} chars` : `empty${d.rawChars ? ` (raw ${d.rawChars}ch — post-processing removed it)` : ' (model returned nothing)'}`}`
       );
       return result.text;
     } catch (e) {
@@ -271,6 +293,8 @@ export function createAiGhostTextFetcher(
         console.log(`[ai-autocomplete] error after ${wire}ms · ${backend}@${where} · ${e instanceof Error ? e.message : String(e)}`);
       }
       throw e;
+    } finally {
+      completionsInFlight -= 1;
     }
   };
 }

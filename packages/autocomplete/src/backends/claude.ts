@@ -27,6 +27,10 @@ export interface ClaudeBackendOptions {
   /** Where the claude process runs: locally (default) or over ssh on the user's
    *  machine (remote Nebula + local agent). Default { kind: "local" }. */
   transport?: Transport;
+  /** Thinking-token budget. Default 0: thinking never streams as ghost text
+   *  (observed burning a whole turn invisibly), but a budget can improve
+   *  tricky completions — surfaced as an Advanced setting. */
+  maxThinkingTokens?: number;
 }
 
 function isWorkerDeath(err: unknown): boolean {
@@ -38,6 +42,8 @@ interface PendingTurn {
   resolve: (full: string) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** Accumulated streamed deltas — salvages output-token-limit "errors". */
+  streamed?: string;
 }
 
 class ClaudeWorker {
@@ -81,7 +87,16 @@ class ClaudeWorker {
       "--verbose",
     ];
     const env: Record<string, string> = {
-      CLAUDE_CODE_MAX_OUTPUT_TOKENS: "512",
+      // Generous cap: hitting it surfaces as an ERROR that discards the turn,
+      // so a tight cap converts long completions into nothing (observed).
+      // Runaways are bounded by the turn timeout and by supersession
+      // interrupts instead; long ghost text streams visibly and the user can
+      // ignore or Escape it.
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: "4096",
+      // Default 0: thinking tokens never stream as ghost text — observed as
+      // a 17s turn burning the whole budget with NOTHING shown. Users can
+      // opt into a budget (Advanced) for higher-quality completions.
+      MAX_THINKING_TOKENS: String(opts.maxThinkingTokens ?? 0),
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     };
     if (opts.transport.kind === "ssh") {
@@ -140,6 +155,7 @@ class ClaudeWorker {
       if (ev.type === "stream_event") {
         const event = ev.event;
         if (event?.type === "content_block_delta" && event.delta?.type === "text_delta") {
+          this.pending.streamed = (this.pending.streamed ?? "") + event.delta.text;
           this.pending.onChunk?.(event.delta.text);
         }
       } else if (ev.type === "result") {
@@ -153,7 +169,18 @@ class ClaudeWorker {
           const msg = typeof ev.result === "string" && ev.result.trim()
             ? ev.result.trim()
             : `claude turn failed (${ev.subtype ?? "error"})`;
-          p!.reject(new Error(msg));
+          // Hitting the output-token cap arrives as an ERROR, discarding a
+          // completion we already streamed in full (observed: 35s turn, 512
+          // tokens, then thrown away). The streamed text IS the completion —
+          // truncated, but the tag/trim pipeline handles a missing close tag.
+          if (/output token maximum/i.test(msg) && p!.streamed) {
+            p!.resolve(p!.streamed);
+          } else {
+            const note = /output token maximum/i.test(msg)
+              ? ` (streamed ${p!.streamed?.length ?? 0}ch before the cap)`
+              : "";
+            p!.reject(new Error(msg + note));
+          }
         } else {
           p!.resolve(typeof ev.result === "string" ? ev.result : "");
         }
@@ -161,7 +188,7 @@ class ClaudeWorker {
     }
   }
 
-  runTurn(text: string, onChunk?: (t: string) => void): Promise<string> {
+  runTurn(text: string, onChunk?: (t: string) => void, signal?: AbortSignal): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       if (this.dead) return reject(new Error("claude worker is dead"));
       const timer = setTimeout(() => {
@@ -169,7 +196,31 @@ class ClaudeWorker {
         this.kill();
         reject(new Error("claude turn timed out"));
       }, this.opts.turnTimeoutMs);
-      this.pending = { onChunk, resolve, reject, timer };
+      const pending: PendingTurn = { onChunk, resolve, reject, timer };
+      // Supersession: a dispatched turn CAN be cancelled — the stream-json
+      // protocol accepts {type:"control_request",request:{subtype:"interrupt"}}
+      // and ends the running turn in ~10ms (measured), leaving the worker
+      // reusable. Without this, a superseded completion held its worker for
+      // the full turn and the successor's "queued" time was a whole turn.
+      // Guard on `this.pending === pending` so a late abort can never kill a
+      // successor's turn that reused this worker.
+      const onAbort = () => {
+        if (this.pending === pending && !this.dead) {
+          try {
+            this.proc.stdin.write(JSON.stringify({
+              type: "control_request",
+              request_id: `int-${Date.now()}`,
+              request: { subtype: "interrupt" },
+            }) + "\n");
+          } catch { /* worker dying anyway */ }
+        }
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const cleanup = () => signal?.removeEventListener("abort", onAbort);
+      pending.resolve = (v) => { cleanup(); resolve(v); };
+      pending.reject = (e) => { cleanup(); reject(e); };
+      this.pending = pending;
+      if (signal?.aborted) onAbort();
       const msg = {
         type: "user",
         message: { role: "user", content: [{ type: "text", text }] },
@@ -251,6 +302,7 @@ export class ClaudeBackend implements CompletionBackend {
         options.workspaceDir ?? join(tmpdir(), `nebula-autocomplete-ws-${this.wsToken}`),
       binary: options.binary ?? "claude",
       transport,
+      maxThinkingTokens: options.maxThinkingTokens ?? 0,
     };
     // Local transport keeps its worker workspaces under workspaceDir; ssh workers
     // use remote dirs, so no local dir is needed.
@@ -371,7 +423,7 @@ export class ClaudeBackend implements CompletionBackend {
     await worker.warmed;
     if (diag) diag.workerWaitMs = Math.round(performance.now() - tAcquire);
     try {
-      const full = await worker.runTurn(prompt, guard);
+      const full = await worker.runTurn(prompt, guard, signal);
       signal?.throwIfAborted();
       return full;
     } finally {

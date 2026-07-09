@@ -47,6 +47,13 @@ export interface GhostTextOptions {
    * context, not here. Set >0 only for context-free single-document use.
    */
   minPrefixLength?: number;
+  /**
+   * When this returns true at fetch time, the fetch is skipped — e.g. while a
+   * completion DROPDOWN is open, so the two UIs don't stack and ghost turns
+   * aren't burned while the user browses the list. Injected as a predicate so
+   * this package needs no dependency on @codemirror/autocomplete.
+   */
+  holdWhen?: (state: unknown) => boolean; // untyped: avoids dual @codemirror/state identities across workspace boundaries
 }
 
 const setGhost = StateEffect.define<{ pos: number; text: string } | null>();
@@ -158,6 +165,7 @@ export function ghostText(fetcher: GhostTextFetcher, options: GhostTextOptions =
       private async fetch(): Promise<void> {
         const { state } = this.view;
         if (!this.view.hasFocus) return;
+        if (options.holdWhen?.(state)) return; // e.g. kernel dropdown open
         const pos = state.selection.main.head;
         if (!state.selection.main.empty) return;
         const prefix = state.sliceDoc(0, pos);

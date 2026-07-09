@@ -14,6 +14,7 @@ import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDete
 import { isEditorPerfTrackingEnabled, recordEditorExtensionBuild } from '../utils/editorPerf';
 import { kernelService, CompletionResult as KernelCompletionResult } from '../services/kernelService';
 import { ghostText } from 'nebula-autocomplete/codemirror';
+import { getSettings } from '../services/settingsService';
 import {
   createAiGhostTextFetcher,
   isAiAutocompleteEnabled,
@@ -818,7 +819,13 @@ export const CodeEditor: React.FC<Props> = ({
     // the rest of the notebook as context even an empty cell is completable;
     // the fetcher skips only when the whole notebook is empty.
     if (enableInteractiveFeatures && aiAutocomplete && !readOnly) {
-      exts.push(ghostText(createAiGhostTextFetcher(effectiveAllCellsRef, cellId), { debounceMs: 300, minPrefixLength: 0 }));
+      exts.push(ghostText(createAiGhostTextFetcher(effectiveAllCellsRef, cellId), {
+        debounceMs: getSettings().aiAutocompleteDebounceMs ?? 300,
+        minPrefixLength: 0,
+        // Don't fetch ghost text while the kernel completion dropdown is open —
+        // the two UIs stack visually and turns burn while the user browses.
+        holdWhen: (state) => completionStatus(state as Parameters<typeof completionStatus>[0]) === 'active',
+      }));
     }
 
     // Add keymap for cell shortcuts - direct callbacks (no synthetic events)

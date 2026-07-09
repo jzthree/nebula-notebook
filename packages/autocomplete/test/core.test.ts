@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { LruCache } from "../src/core/lru.js";
 import { buildPrompt, cacheKey } from "../src/core/prompt.js";
 import {
+  createPrefixTrimStreamFilter,
   createTagStreamFilter,
   extractCompletionTag,
   stripFences,
@@ -198,5 +199,27 @@ describe("createTagStreamFilter", () => {
     const f = createTagStreamFilter(emit);
     f("def long_function_name_without_tags():\n    return 1  # some more text to exceed the buffer");
     expect(out.join("")).toContain("def long_function_name_without_tags");
+  });
+});
+
+describe("createPrefixTrimStreamFilter", () => {
+  const collect = () => { const out: string[] = []; return { out, emit: (t: string) => out.push(t) }; };
+  it("strips a streamed echo of the current line across chunk splits", () => {
+    const { out, emit } = collect();
+    const f = createPrefixTrimStreamFilter("def add(a, b):\n    return ", emit);
+    for (const c of ["retu", "rn ", "a + b"]) f(c);
+    expect(out.join("")).toBe("a + b");
+  });
+  it("passes non-echo completions through with no visible hold", () => {
+    const { out, emit } = collect();
+    const f = createPrefixTrimStreamFilter("x = ", emit);
+    f("np.array([1])");
+    expect(out.join("")).toBe("np.array([1])");
+  });
+  it("streams a leading-newline completion untouched", () => {
+    const { out, emit } = collect();
+    const f = createPrefixTrimStreamFilter("# fibonacci", emit);
+    f("\ndef fib(n):");
+    expect(out.join("")).toBe("\ndef fib(n):");
   });
 });
