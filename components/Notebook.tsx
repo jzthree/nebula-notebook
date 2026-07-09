@@ -33,6 +33,7 @@ import {
   saveWidgetState,
   OutputLoggingMode,
   seedOutputsBaseline,
+  setActiveNotebookPath,
 } from '../services/fileService';
 import { peekWidgetStateSnapshot } from '../services/widgetManager';
 import { listAllocations } from '../services/computeService';
@@ -2730,6 +2731,8 @@ export const Notebook: React.FC = () => {
 
     const meta = files.find(f => f.id === id);
     if (meta) setCurrentFileMetadata(meta);
+    // Base directory for file-path completion (kernel cwd = notebook dir).
+    setActiveNotebookPath(id); // file ids are server paths
     // Note: No need to scroll to top - Virtuoso resets when key={currentFileId} changes
 
     // Resolve kernel/server preference (server is the source of truth)

@@ -148,6 +148,17 @@ const buildSavePayload = (
   return { blob: new Blob(parts, { type: 'application/json' }), hashes, elided };
 };
 
+// Directory of the notebook currently open in the editor. Kernels start with
+// cwd = the notebook's directory, so relative paths typed in cells resolve
+// against it — the file-path completion source uses this as its base.
+let activeNotebookDir: string | null = null;
+export const setActiveNotebookPath = (path: string | null): void => {
+  if (!path) { activeNotebookDir = null; return; }
+  const i = path.lastIndexOf('/');
+  activeNotebookDir = i > 0 ? path.slice(0, i) : i === 0 ? '/' : null;
+};
+export const getActiveNotebookDir = (): string | null => activeNotebookDir;
+
 /**
  * List contents of a directory
  */

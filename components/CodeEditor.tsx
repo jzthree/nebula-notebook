@@ -7,7 +7,7 @@ import { Prec, EditorState, StateEffect, StateField } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
 import { indentUnit, syntaxHighlighting, defaultHighlightStyle, bracketMatching, indentOnInput } from '@codemirror/language';
-import { autocompletion, closeBrackets, closeBracketsKeymap, completionStatus, CompletionContext, CompletionResult, Completion } from '@codemirror/autocomplete';
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionStatus, startCompletion, CompletionContext, CompletionResult, Completion } from '@codemirror/autocomplete';
 import { history, defaultKeymap, historyKeymap } from '@codemirror/commands';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { IndentationConfig, DEFAULT_INDENTATION } from '../utils/indentationDetector';
@@ -20,6 +20,7 @@ import {
   isAiAutocompleteEnabled,
   SETTINGS_CHANGED_EVENT,
 } from '../services/aiAutocompleteService';
+import { listDirectory, getActiveNotebookDir } from '../services/fileService';
 
 interface CurrentMatch {
   cellId: string;
@@ -420,6 +421,12 @@ function createPythonCompletionSource(allCellsRef: React.RefObject<Array<{ type:
     // Don't show completions if we're not typing a word and not explicitly requested
     if (!word && !context.explicit) return null;
 
+    // Identifiers are noise inside string literals and on shell/magic lines —
+    // those are path territory (see createPathCompletionSource).
+    const line = context.state.doc.lineAt(context.pos);
+    const textBefore = line.text.slice(0, context.pos - line.from);
+    if (isInsideString(textBefore) || /^\s*[!%]/.test(line.text)) return null;
+
     // Compute content lazily from ref - only runs when autocomplete triggers, not on every keystroke
     const allCells = allCellsRef.current || [];
     const allCellsContent = allCells
@@ -548,46 +555,88 @@ function createKernelCompletionSource(kernelSessionIdRef: React.RefObject<string
   };
 }
 
-// Create combined completion source with context-based routing
-function createCombinedCompletionSource(
-  allCellsRef: React.RefObject<Array<{ type: string; content: string }> | null>,
-  kernelSessionIdRef: React.RefObject<string | undefined>
-) {
-  const staticSource = createPythonCompletionSource(allCellsRef);
-  const kernelSource = createKernelCompletionSource(kernelSessionIdRef);
-
+// File-path completion served from the node server's FS — no kernel involved,
+// so it works for any language, a busy kernel, or no kernel at all. Kernels
+// start with cwd = the notebook's directory, so relative paths resolve there.
+// Fires inside string literals and on shell/magic lines (!ls ./data, %cd …).
+function createPathCompletionSource() {
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
     const line = context.state.doc.lineAt(context.pos);
     const textBefore = line.text.slice(0, context.pos - line.from);
-    const sessionId = kernelSessionIdRef.current;
+    const shellish = /^\s*[!%]/.test(line.text);
+    if (!isInsideString(textBefore) && !shellish) return null;
+    // On a shell line, don't complete the command word itself (!ls, %cd).
+    if (shellish && /^\s*[!%]\S*$/.test(textBefore)) return null;
 
-    // Inside string → kernel (file paths)
-    if (isInsideString(textBefore)) {
-      console.log('[Completion] Inside string, using kernel. SessionId:', sessionId);
-      const result = await kernelSource(context);
-      console.log('[Completion] Kernel result:', result);
-      if (result && result.options.length > 0) return result;
-      // Fall through to static if kernel returns nothing
+    const token = (textBefore.match(/[\w.~/-]*$/) || [''])[0];
+    if (!token && !context.explicit) return null;
+    const slash = token.lastIndexOf('/');
+    const dirPart = slash >= 0 ? token.slice(0, slash + 1) : '';
+    const stem = token.slice(slash + 1);
+
+    let target: string;
+    if (dirPart.startsWith('/') || dirPart.startsWith('~')) {
+      target = dirPart;
+    } else {
+      const baseDir = getActiveNotebookDir();
+      if (!baseDir) return null;
+      target = dirPart ? `${baseDir}/${dirPart}` : baseDir;
     }
 
-    // After dot → kernel (object attributes)
-    if (textBefore.match(/\.\w*$/)) {
-      console.log('[Completion] After dot, using kernel. SessionId:', sessionId, 'textBefore:', textBefore);
-      const result = await kernelSource(context);
-      console.log('[Completion] Kernel result:', result);
-      if (result && result.options.length > 0) return result;
+    let listing;
+    try {
+      listing = await listDirectory(target);
+    } catch {
+      return null; // not a directory / gone — just no path completions
     }
+    if (context.aborted) return null;
 
-    // After import/from → kernel (module names)
-    if (textBefore.match(/^\s*(from|import)\s+[\w.]*$/)) {
-      console.log('[Completion] After import, using kernel. SessionId:', sessionId);
-      const result = await kernelSource(context);
-      console.log('[Completion] Kernel result:', result);
-      if (result && result.options.length > 0) return result;
-    }
+    const options: Completion[] = listing.items
+      // Hide dotfiles unless the user is explicitly typing one.
+      .filter((it) => stem.startsWith('.') || !it.name.startsWith('.'))
+      .map((it) => ({
+        label: it.isDirectory ? `${it.name}/` : it.name,
+        type: it.isDirectory ? 'folder' : 'file',
+        boost: it.isDirectory ? 1 : 0,
+        apply: it.isDirectory
+          ? (view: EditorView, _c: Completion, from: number, to: number) => {
+              view.dispatch({
+                changes: { from, to, insert: `${it.name}/` },
+                selection: { anchor: from + it.name.length + 1 },
+                userEvent: 'input.complete',
+              });
+              startCompletion(view); // descend straight into the subdirectory
+            }
+          : undefined,
+      }));
 
-    // Default → static completions (instant, no latency)
-    return staticSource(context);
+    return {
+      from: context.pos - stem.length,
+      options,
+      // Valid only within the current segment: a '/' (or quote) means a new
+      // directory level and must re-query — reusing the old list client-side
+      // is exactly the staleness bug this source replaces.
+      validFor: /^[^/'"]*$/,
+    };
+  };
+}
+
+// Kernel completions, narrowed to what only the live kernel can know: object
+// attributes after '.' and importable module names. File paths are served by
+// createPathCompletionSource. Hard 800ms timeout so a slow kernel (R with a
+// huge environment) can't hold the whole dropdown hostage.
+function createKernelDotImportSource(kernelSessionIdRef: React.RefObject<string | undefined>) {
+  const kernelSource = createKernelCompletionSource(kernelSessionIdRef);
+  return async (context: CompletionContext): Promise<CompletionResult | null> => {
+    const line = context.state.doc.lineAt(context.pos);
+    const textBefore = line.text.slice(0, context.pos - line.from);
+    if (isInsideString(textBefore) || /^\s*[!%]/.test(line.text)) return null;
+    const wantsKernel = /\.\w*$/.test(textBefore) || /^\s*(from|import)\s+[\w.]*$/.test(textBefore);
+    if (!wantsKernel) return null;
+    return Promise.race([
+      kernelSource(context),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 800)),
+    ]);
   };
 }
 
@@ -794,12 +843,19 @@ export const CodeEditor: React.FC<Props> = ({
       exts.push(lineNumbers());
     }
 
-    // Add autocompletion for Python - uses refs so no rebuild on content changes
-    // Combined source: static for variables, kernel for paths/attributes/imports
-    if (language === 'python' && enableInteractiveFeatures) {
+    // Dropdown autocompletion — parallel sources (each returns fast or null;
+    // nothing blocks the others): FS-backed file paths for every language;
+    // static identifiers + kernel dot/import completion for Python. Uses refs
+    // so no rebuild on content changes.
+    if (enableInteractiveFeatures) {
+      const sources: ((context: CompletionContext) => CompletionResult | null | Promise<CompletionResult | null>)[] = [createPathCompletionSource()];
+      if (language === 'python') {
+        sources.push(createPythonCompletionSource(effectiveAllCellsRef));
+        sources.push(createKernelDotImportSource(kernelSessionIdRef));
+      }
       exts.push(
         autocompletion({
-          override: [createCombinedCompletionSource(effectiveAllCellsRef, kernelSessionIdRef)],
+          override: sources,
           activateOnTyping: true,
           // Default is 100ms; the kernel answers in ~35ms warm, so a shorter
           // debounce makes the popup feel immediate without extra kernel
