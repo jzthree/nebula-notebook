@@ -25,6 +25,14 @@ export interface UseAutosaveOptions {
    * loaded cell look dirty and fired a pointless full autosave on page load.
    */
   loading?: boolean;
+  /**
+   * When this returns true at save time, the (auto)save politely steps aside
+   * and retries shortly. Used to give in-flight AI completions priority:
+   * both fire on the same typing pause, and the save's serialize+gzip+upload
+   * otherwise lands inside the completion's latency window. Bounded — after
+   * ~8s of deferrals the save proceeds regardless. Manual saves never defer.
+   */
+  deferWhile?: () => boolean;
   hasRedoHistory?: boolean; // Block autosave when redo history exists (user has undone)
   // Called when a save attempt fails. Retries are scheduled automatically by
   // the state machine — this exists so the UI can surface the failure loudly
@@ -41,7 +49,7 @@ interface CellSnapshot {
   outputsRef?: Cell['outputs'];
 }
 
-export function useAutosave({ fileId, cells, onSave, enabled = true, loading = false, hasRedoHistory = false, onSaveError }: UseAutosaveOptions) {
+export function useAutosave({ fileId, cells, onSave, enabled = true, loading = false, hasRedoHistory = false, deferWhile, onSaveError }: UseAutosaveOptions) {
   // UI status (derived from machine state)
   const [uiStatus, setUiStatus] = useState<AutosaveStatus>({
     status: 'saved',
@@ -64,6 +72,8 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, loading = f
 
   // Ref for executeEffect to avoid stale closure in dispatch
   const executeEffectRef = useRef<(effect: AutosaveEffect) => void>(() => {});
+  // Ref so deferred-save timers always call the latest performSave
+  const performSaveRef = useRef<(() => Promise<void>) | null>(null);
 
   // Track if current save is manual (show "Saving..." only for manual saves)
   const isManualSaveRef = useRef(false);
@@ -177,6 +187,10 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, loading = f
       clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
     }
+    if (deferTimerRef.current) {
+      clearTimeout(deferTimerRef.current);
+      deferTimerRef.current = null;
+    }
   }, []);
 
   // Dispatch an event to the state machine and execute effects
@@ -196,12 +210,29 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, loading = f
     });
   }, []);
 
+  // Deferral bookkeeping for completion-priority (see deferWhile).
+  const deferCountRef = useRef(0);
+  const deferTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const DEFER_RETRY_MS = 1200;
+  const DEFER_MAX = 7; // ~8.4s worst case, then save anyway
+
   // Perform the actual save operation
   const performSave = useCallback(async () => {
     if (!fileId || !enabled) {
       dispatch({ type: 'SAVE_SUCCESS' }); // No-op success
       return;
     }
+
+    // AI completion in flight? Step aside briefly — autocomplete latency is
+    // user-facing; the save can wait a beat. Never defer manual saves, and
+    // never starve (bounded retries).
+    if (!isManualSaveRef.current && deferWhile?.() && deferCountRef.current < DEFER_MAX) {
+      deferCountRef.current += 1;
+      if (deferTimerRef.current) clearTimeout(deferTimerRef.current);
+      deferTimerRef.current = setTimeout(() => { performSaveRef.current?.(); }, DEFER_RETRY_MS);
+      return;
+    }
+    deferCountRef.current = 0;
 
     // Guard against concurrent saves - wait for current save to complete
     // This prevents race conditions where multiple saves could cause false conflicts
@@ -249,7 +280,8 @@ export function useAutosave({ fileId, cells, onSave, enabled = true, loading = f
       saveInProgressRef.current = false;
       isManualSaveRef.current = false;
     }
-  }, [fileId, cells, enabled, onSave, dispatch, updateSavedState, refreshDirtyState]);
+  }, [fileId, cells, enabled, onSave, deferWhile, dispatch, updateSavedState, refreshDirtyState]);
+  performSaveRef.current = performSave;
 
   // Check for changes and report to state machine
   const checkForChanges = useCallback(() => {

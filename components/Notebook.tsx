@@ -6,7 +6,7 @@ import { Cell, CellType, NotebookMetadata } from '../types';
 import { kernelService, KernelSpec, PythonEnvironment, KernelProvisionError } from '../services/kernelService';
 import { getClusterInfo, ClusterServer, ClusterInfo } from '../services/clusterService';
 import { getComputeStatus } from '../services/computeService';
-import { setAutocompleteContext } from '../services/aiAutocompleteService';
+import { setAutocompleteContext, isAiCompletionInFlight } from '../services/aiAutocompleteService';
 import ComputeAllocationModal from './ComputeAllocationModal';
 import { getSettings, saveSettings, IndentationPreference } from '../services/settingsService';
 import { markOnboardingStep } from '../services/onboardingService';
@@ -31,7 +31,8 @@ import {
   getNotebookSettings,
   updateNotebookSettings,
   saveWidgetState,
-  OutputLoggingMode
+  OutputLoggingMode,
+  seedOutputsBaseline,
 } from '../services/fileService';
 import { peekWidgetStateSnapshot } from '../services/widgetManager';
 import { listAllocations } from '../services/computeService';
@@ -121,8 +122,9 @@ function copyCellOutput(output: Cell['outputs'][number]) {
 // ─── Command Palette (self-contained to avoid Notebook re-renders on typing) ──
 // One modal, two modes (VS Code convention): a '>' prefix filters commands,
 // plain text searches cells (the original Cell Navigator behavior).
-// Cmd/Ctrl+Shift+P opens it with '>' prefilled so commands are the default;
-// delete the '>' to drop back into cell search.
+// Cmd/Ctrl+Shift+P opens it in command mode ('>' prefilled); Cmd/Ctrl+P (no
+// Shift) opens it in cell-search/spotlight mode (empty query). Either way you
+// can toggle modes by typing or deleting a leading '>'.
 interface NavigatorItem { cellId: string; index: number; type: string; preview: string; content: string }
 export interface PaletteCommand {
   id: string;
@@ -466,15 +468,19 @@ export const Notebook: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'KeyP') return;
       const isMac = navigator.platform.toLowerCase().includes('mac');
-      const isShortcut = event.shiftKey && event.code === 'KeyP' && (isMac ? (event.metaKey || event.ctrlKey) : event.ctrlKey);
-      if (!isShortcut) return;
+      const hasModifier = isMac ? (event.metaKey || event.ctrlKey) : event.ctrlKey;
+      if (!hasModifier) return;
+      // Cmd/Ctrl+Shift+P → command mode ('>' prefilled); Cmd/Ctrl+P (no Shift)
+      // → cell search/spotlight mode (empty query), VS Code convention.
+      const commandMode = event.shiftKey;
 
       event.preventDefault();
       if (isNavigatorOpen) {
         closeNavigator();
       } else {
-        openNavigator();
+        openNavigator(commandMode ? '>' : '');
       }
     };
 
@@ -1211,6 +1217,15 @@ export const Notebook: React.FC = () => {
   useEffect(() => {
     agentTerminalService.setNotebookContext(currentFileId ?? null);
   }, [currentFileId]);
+
+  // When a load finishes, seed the outputs-elision baseline from the loaded
+  // cells (identical to the file right now) so even the FIRST autosave elides
+  // unchanged outputs instead of shipping the full payload (1.2MB+ on
+  // plot-heavy notebooks — many seconds on slow tunnels).
+  useEffect(() => {
+    if (!isLoadingFile && currentFileId) seedOutputsBaseline(currentFileId, cells);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- baseline seeds on load transitions only, not on every cells change
+  }, [isLoadingFile, currentFileId]);
   useEffect(() => {
     // The canonical MCP base_url is the URL Nebula is reached at (dev: vite on
     // :3000 proxying /api; prod: the single :3000 server). This also stays
@@ -1544,6 +1559,7 @@ export const Notebook: React.FC = () => {
     cells,
     onSave: performSaveToFile,
     loading: isLoadingFile, // baseline seeds when the load FINISHES (not when fileId flips)
+    deferWhile: isAiCompletionInFlight, // completions take precedence; saves wait for a true idle
     // Avoid repeated conflict checks / log spam while the conflict modal is
     // open OR while a resolution's force-save is still in flight (resuming
     // early would re-detect the same conflict against the stale mtime).
@@ -4348,7 +4364,7 @@ export const Notebook: React.FC = () => {
     { id: 'undo', title: 'Undo', section: 'Edit', keywords: 'revert', shortcut: `${modKeyLabel}Z`, disabled: !canUndo, run: undo },
     { id: 'redo', title: 'Redo', section: 'Edit', keywords: 'repeat', shortcut: `${modKeyLabel}Y`, disabled: !canRedo, run: redo },
     { id: 'find', title: 'Find & replace…', section: 'Edit', keywords: 'search regex', shortcut: `${modKeyLabel}F`, run: () => setIsSearchOpen(true) },
-    { id: 'go-to-cell', title: 'Go to cell…', section: 'Edit', keywords: 'jump navigate search cells', shortcut: `${isMacPlatform ? '⇧⌘' : 'Ctrl+Shift+'}P`, run: () => openNavigator('') },
+    { id: 'go-to-cell', title: 'Go to cell…', section: 'Edit', keywords: 'jump navigate search cells spotlight', shortcut: `${isMacPlatform ? '⌘' : 'Ctrl+'}P`, run: () => openNavigator('') },
     // View
     { id: 'toggle-full-width', title: isFullWidth ? 'Exit full width mode' : 'Enter full width mode', section: 'View', keywords: 'wide layout width', run: () => { handleToggleFullWidth(); } },
     { id: 'toggle-history', title: isHistoryOpen ? 'Hide history panel' : 'Show history panel', section: 'View', keywords: 'time travel edits undo timeline', run: () => setIsHistoryOpen(open => !open) },
@@ -5269,7 +5285,8 @@ export const Notebook: React.FC = () => {
                   </div>
                   <div className="text-[0.6875rem] text-slate-400">
                     Type in the cell above · <kbd className="px-1 py-0.5 bg-slate-100 rounded">Shift+Enter</kbd> runs it ·{' '}
-                    <kbd className="px-1 py-0.5 bg-slate-100 rounded">Cmd/Ctrl+Shift+P</kbd> opens the command palette
+                    <kbd className="px-1 py-0.5 bg-slate-100 rounded">Cmd/Ctrl+P</kbd> search cells ·{' '}
+                    <kbd className="px-1 py-0.5 bg-slate-100 rounded">Cmd/Ctrl+Shift+P</kbd> commands
                   </div>
                 </div>
               </div>
@@ -5610,7 +5627,8 @@ export const Notebook: React.FC = () => {
                 <div className="space-y-1 text-sm">
                   <div className="flex justify-between"><span className="text-slate-600">Save</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + S</kbd></div>
                   <div className="flex justify-between"><span className="text-slate-600">Search</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + F</kbd></div>
-                  <div className="flex justify-between"><span className="text-slate-600">Command Palette (type '&gt;' for commands, text to search cells)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + P</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Go to cell / spotlight search</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + P</kbd></div>
+                  <div className="flex justify-between"><span className="text-slate-600">Command Palette (run commands)</span><kbd className="px-2 py-0.5 bg-slate-100 rounded text-xs">Cmd/Ctrl + Shift + P</kbd></div>
                 </div>
               </div>
             </div>

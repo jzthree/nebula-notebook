@@ -99,6 +99,24 @@ function hashString(s: string): string {
   return (h >>> 0).toString(36) + ':' + s.length;
 }
 
+/**
+ * Seed the outputs-elision baseline from freshly LOADED cells: the in-memory
+ * outputs are byte-identical to the file at this instant, so the FIRST save
+ * after opening can already elide unchanged outputs. Without this, that first
+ * save shipped the full payload — observed 1.2MB+ on plot-heavy notebooks,
+ * which used to saturate slow tunnels for many seconds. Hashes are computed
+ * exactly like buildSavePayload's, on the same in-memory objects.
+ */
+export const seedOutputsBaseline = (path: string, cells: Cell[]): void => {
+  const hashes = new Map<string, string>();
+  for (const cell of cells) {
+    if (cell.type === 'code' && Array.isArray(cell.outputs) && cell.outputs.length > 0) {
+      hashes.set(cell.id, hashString(JSON.stringify(cell.outputs)));
+    }
+  }
+  savedOutputsHashes.set(path, hashes);
+};
+
 const buildSavePayload = (
   path: string,
   cells: Cell[],
