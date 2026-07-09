@@ -690,9 +690,9 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
                           <div className="mt-2 space-y-2">
                             {backend === 'claude' && (
                               <div className="flex items-center gap-2">
-                                <p className="text-xs text-slate-500 flex-1" title="Any model alias your claude CLI accepts. haiku = fastest; sonnet/opus = smarter, slower and pricier per suggestion.">Model</p>
+                                <p className="text-xs text-slate-500 flex-1" title="Any model alias your claude CLI accepts. Benchmarked: sonnet (default) is only ~100ms slower to first character than haiku but eliminates its hallucination failures; haiku = cheapest quota; thinking budgets measured as not worth it.">Model</p>
                                 <input
-                                  type="text" list="nebula-ac-models" placeholder="haiku"
+                                  type="text" list="nebula-ac-models" placeholder="sonnet (default)"
                                   value={settings.aiAutocompleteModel ?? ''}
                                   onChange={(e) => { persistSettings({ aiAutocompleteModel: e.target.value.trim() || undefined }); notifySettingsChanged(); setTestResult(null); }}
                                   className="w-28 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
