@@ -37,7 +37,7 @@ export class AutocompleteEngine {
   constructor(private opts: EngineOptions) {
     this.cache = new LruCache<string>(opts.cacheSize ?? 128);
     this.contextBudget = opts.contextBudget ?? 6000;
-    this.maxLines = opts.maxLines ?? 5;
+    this.maxLines = opts.maxLines ?? 8; // a small function is 6-8 lines; 5 truncated the most-wanted completions
   }
 
   async complete(

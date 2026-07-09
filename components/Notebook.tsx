@@ -2147,6 +2147,9 @@ export const Notebook: React.FC = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+      // Chrome fires synthetic keydown events with key === undefined when an
+      // option is picked from a <datalist> (e.g. the model field in Settings).
+      if (typeof e.key !== 'string') return;
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 
       // Ctrl+S: Save (works everywhere) - uses handleManualSave for redo confirmation

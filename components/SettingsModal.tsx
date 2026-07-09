@@ -717,8 +717,8 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
                               <p className="text-xs text-slate-500 flex-1" title="Cap on how many lines a suggestion may span (1-20).">Suggestion length (lines)</p>
                               <input
                                 type="number" min={1} max={20} step={1}
-                                value={settings.aiAutocompleteMaxLines ?? 5}
-                                onChange={(e) => { persistSettings({ aiAutocompleteMaxLines: Math.max(1, Math.min(20, Number(e.target.value) || 5)) }); notifySettingsChanged(); }}
+                                value={settings.aiAutocompleteMaxLines ?? 8}
+                                onChange={(e) => { persistSettings({ aiAutocompleteMaxLines: Math.max(1, Math.min(20, Number(e.target.value) || 8)) }); notifySettingsChanged(); }}
                                 className="w-20 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
                               />
                             </div>
