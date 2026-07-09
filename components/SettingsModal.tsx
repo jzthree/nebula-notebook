@@ -46,6 +46,9 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
   const [diag, setDiag] = useState<Diagnostics | null>(null);
   const [diagRunning, setDiagRunning] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string; ranOn: string; ms?: number; fromCache?: boolean; error?: string } | null>(null);
+  // Model picker: true while "Custom…" is selected so the free-text field stays
+  // visible even before the user has typed anything into it.
+  const [modelCustom, setModelCustom] = useState(false);
   const [testRunning, setTestRunning] = useState(false);
   // Live reverse-tunnel status for the AI tab's "Local machine" section — same
   // checker the terminal toolbar uses. null = not applicable / not yet checked.
@@ -691,17 +694,30 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
                             {backend === 'claude' && (
                               <div className="flex items-center gap-2">
                                 <p className="text-xs text-slate-500 flex-1" title="Any model alias your claude CLI accepts. Benchmarked: sonnet (default) is only ~100ms slower to first character than haiku but eliminates its hallucination failures; haiku = cheapest quota; thinking budgets measured as not worth it.">Model</p>
-                                <input
-                                  type="text" list="nebula-ac-models" placeholder="sonnet (default)"
-                                  value={settings.aiAutocompleteModel ?? ''}
-                                  onChange={(e) => { persistSettings({ aiAutocompleteModel: e.target.value.trim() || undefined }); notifySettingsChanged(); setTestResult(null); }}
-                                  className="w-28 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
-                                />
-                                <datalist id="nebula-ac-models">
-                                  <option value="haiku" />
-                                  <option value="sonnet" />
-                                  <option value="opus" />
-                                </datalist>
+                                <select
+                                  value={modelCustom || (settings.aiAutocompleteModel && !['haiku', 'sonnet', 'opus'].includes(settings.aiAutocompleteModel)) ? 'custom' : (settings.aiAutocompleteModel ?? '')}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    if (v === 'custom') { setModelCustom(true); return; }
+                                    setModelCustom(false);
+                                    persistSettings({ aiAutocompleteModel: v || undefined }); notifySettingsChanged(); setTestResult(null);
+                                  }}
+                                  className="w-32 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
+                                >
+                                  <option value="">sonnet (default)</option>
+                                  <option value="haiku">haiku — cheapest</option>
+                                  <option value="sonnet">sonnet</option>
+                                  <option value="opus">opus</option>
+                                  <option value="custom">custom…</option>
+                                </select>
+                                {(modelCustom || (settings.aiAutocompleteModel && !['haiku', 'sonnet', 'opus'].includes(settings.aiAutocompleteModel))) && (
+                                  <input
+                                    type="text" placeholder="model alias" autoFocus={modelCustom}
+                                    value={settings.aiAutocompleteModel ?? ''}
+                                    onChange={(e) => { persistSettings({ aiAutocompleteModel: e.target.value.trim() || undefined }); notifySettingsChanged(); setTestResult(null); }}
+                                    className="w-28 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
+                                  />
+                                )}
                               </div>
                             )}
                             <div className="flex items-center gap-2">
