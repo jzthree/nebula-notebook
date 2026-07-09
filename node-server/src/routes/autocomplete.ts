@@ -101,8 +101,10 @@ function sanitizeTuning(name: BackendName, raw: Record<string, unknown>): Engine
     // Default sonnet (was haiku): BENCHMARKED (eval/bench.mjs, 54 samples/config,
     // interleaved) — sonnet ttfb p50 1086ms vs haiku 987ms (+10%, fixed API
     // overhead dominates short completions) while fixing haiku's context
-    // failures (100% vs 94% ctx-accuracy). Thinking budgets add nothing on
-    // sonnet and 3-8s of dead air on haiku.
+    // failures (100% vs 94% ctx-accuracy). Thinking: on haiku it engages
+    // every turn (probed: ~1-1.5k chars) = 3-8s of non-streaming dead air; on
+    // sonnet MAX_THINKING_TOKENS never engages at all for completion-sized
+    // prompts (probed: 0 thinking chars, 4/4), so it can't help there either.
     model = /^[a-z0-9][a-z0-9._:-]{0,63}$/.test(model) ? model : 'sonnet';
   } else model = ''; // codex: fixed model
   const rawTokens = Number((raw as { thinkingTokens?: unknown }).thinkingTokens);
