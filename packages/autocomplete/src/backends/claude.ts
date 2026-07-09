@@ -55,6 +55,10 @@ class ClaudeWorker {
    *  count (measured: 6.4KB prompts drag +~0.2s/turn; 1.5KB prompts don't). */
   sentChars = 0;
   readonly bornAt = Date.now();
+  /** True once the warmup turn has settled — pool selection prefers warmed
+   *  workers so a request never waits ~5s on a still-booting one while a
+   *  warm sibling sits idle (observed: workerWait 4506ms, pool 0/2 busy). */
+  warmedDone = false;
   /** Invoked once when the process exits/errors — lets the pool respawn in the background. */
   onDeath?: () => void;
   readonly warmed: Promise<void>;
@@ -134,8 +138,8 @@ class ClaudeWorker {
       cb?.();
     });
     this.warmed = this.runTurn("Reply with exactly: ok").then(
-      () => undefined,
-      () => undefined,
+      () => { this.warmedDone = true; },
+      () => { this.warmedDone = true; }, // failed warmup: dead flag governs usability
     );
   }
 
@@ -406,7 +410,13 @@ export class ClaudeBackend implements CompletionBackend {
       diag.poolSize = this.pool.length;
       diag.poolBusy = this.pool.filter((w) => w.busy && !w.dead).length;
     }
-    let worker = forceFresh ? undefined : this.pool.find((w) => !w.busy && !w.dead);
+    // Prefer a WARMED idle worker; only fall back to a still-warming one
+    // (and only then to a cold spawn). Landing on a booting worker costs the
+    // whole warmup (~5s over ssh) even when a warm sibling is idle.
+    let worker = forceFresh
+      ? undefined
+      : this.pool.find((w) => !w.busy && !w.dead && w.warmedDone) ??
+        this.pool.find((w) => !w.busy && !w.dead);
     if (!worker) {
       worker = this.spawnWorker();
       this.pool.push(worker);
