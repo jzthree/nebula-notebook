@@ -705,20 +705,20 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
                               </div>
                             )}
                             <div className="flex items-center gap-2">
-                              <p className="text-xs text-slate-500 flex-1" title="Characters of OTHER cells included in the prompt, nearest cells first (oversized neighbors are truncated to fit). More grounds suggestions in your variables and data — fewer made-up names — but enlarges the prompt. 0 disables cross-cell context.">Notebook context (chars of other cells)</p>
+                              <p className="text-xs text-slate-500 flex-1" title="Characters of OTHER cells included in the prompt, nearest cells first (oversized neighbors are truncated to fit). The default covers the whole notebook in most cases; latency is nearly unaffected by size at these scales. 0 disables cross-cell context.">Notebook context (chars of other cells)</p>
                               <input
-                                type="number" min={0} max={20000} step={500}
-                                value={settings.aiAutocompleteContextChars ?? 2500}
-                                onChange={(e) => { persistSettings({ aiAutocompleteContextChars: Math.max(0, Math.min(20000, Number(e.target.value) || 0)) }); notifySettingsChanged(); }}
+                                type="number" min={0} max={100000} step={1000}
+                                value={settings.aiAutocompleteContextChars ?? 20000}
+                                onChange={(e) => { persistSettings({ aiAutocompleteContextChars: Math.max(0, Math.min(100000, Number(e.target.value) || 0)) }); notifySettingsChanged(); }}
                                 className="w-20 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
                               />
                             </div>
                             <div className="flex items-center gap-2">
                               <p className="text-xs text-slate-500 flex-1" title="Cap on how many lines a suggestion may span (1-20).">Suggestion length (lines)</p>
                               <input
-                                type="number" min={1} max={20} step={1}
-                                value={settings.aiAutocompleteMaxLines ?? 8}
-                                onChange={(e) => { persistSettings({ aiAutocompleteMaxLines: Math.max(1, Math.min(20, Number(e.target.value) || 8)) }); notifySettingsChanged(); }}
+                                type="number" min={1} max={40} step={1}
+                                value={settings.aiAutocompleteMaxLines ?? 10}
+                                onChange={(e) => { persistSettings({ aiAutocompleteMaxLines: Math.max(1, Math.min(40, Number(e.target.value) || 10)) }); notifySettingsChanged(); }}
                                 className="w-20 text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
                               />
                             </div>

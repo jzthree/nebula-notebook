@@ -37,7 +37,7 @@ export class AutocompleteEngine {
   constructor(private opts: EngineOptions) {
     this.cache = new LruCache<string>(opts.cacheSize ?? 128);
     this.contextBudget = opts.contextBudget ?? 6000;
-    this.maxLines = opts.maxLines ?? 8; // a small function is 6-8 lines; 5 truncated the most-wanted completions
+    this.maxLines = opts.maxLines ?? 10; // field-tested: longer caps don't hurt latency; short ones truncate wanted completions
   }
 
   async complete(
@@ -93,8 +93,8 @@ export class AutocompleteEngine {
       const clamp = (v: number | undefined, lo: number, hi: number, dflt: number) =>
         typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : dflt;
       const prompt = buildPrompt(req, {
-        contextBudget: clamp(req.contextBudget, 0, 20_000, this.contextBudget),
-        maxLines: clamp(req.maxLines, 1, 20, this.maxLines),
+        contextBudget: clamp(req.contextBudget, 0, 200_000, this.contextBudget),
+        maxLines: clamp(req.maxLines, 1, 40, this.maxLines),
       });
       const diag: import("../types.js").CompletionDiag = { promptChars: prompt.length };
 

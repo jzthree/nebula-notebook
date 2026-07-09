@@ -127,12 +127,12 @@ function getEngine(name: BackendName, t: RemoteTransport | null, tune: EngineTun
             ...(tune.model ? { model: tune.model } : {}),
             maxThinkingTokens: tune.thinkingTokens,
           });
-    // contextBudget 2500 (default 6000): MEASURED interleaved A/B on real-size
-    // notebooks — median ttfb 2.6s vs 4.9s, faster in every pair. Nearest-first
-    // cell selection keeps the most relevant context within the tighter budget.
-    // Per-request contextBudget/maxLines overrides (Advanced settings) are
-    // clamped inside the engine.
-    engine = new AutocompleteEngine({ backend, contextBudget: 2500 });
+    // contextBudget 20000: field testing showed 20k chars of context leaves
+    // latency essentially unchanged (worker history is prefix-cached; only the
+    // new message is uncached) — an earlier small A/B suggesting otherwise was
+    // cache/variance artifact. 20k covers the whole notebook in most cases;
+    // per-request overrides (Advanced settings) are clamped inside the engine.
+    engine = new AutocompleteEngine({ backend, contextBudget: 20_000 });
     engines.set(key, engine);
   }
   return engine;
