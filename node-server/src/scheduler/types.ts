@@ -60,8 +60,9 @@ export interface PartitionLoad {
   up: boolean;
   timeLimit: string;
   cpus: { alloc: number; idle: number; other: number; total: number };
-  /** GPU capacity for the partition: total configured vs currently idle (available). */
-  gpus?: { type: string; total: number; idle: number };
+  /** GPU capacity for the partition, one entry per GPU model (heterogeneous
+   *  queues carry several): total configured vs currently idle (available). */
+  gpus?: { type: string; total: number; idle: number }[];
   nodes: { idle: number; mixed: number; alloc: number; down: number; total: number };
   jobs: { pending: number; running: number };
 }

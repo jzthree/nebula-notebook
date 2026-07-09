@@ -208,7 +208,8 @@ export class SlurmScheduler implements Scheduler {
     // allocated (AllocTRES) `gres/gpu`, so we can report *idle* (available) GPUs
     // rather than a per-node count. Generic — no site-specific node/gres names.
     if (nodeRes.status === 'fulfilled') {
-      const agg = new Map<string, { type: string; total: number; used: number }>();
+      // Aggregate per (partition, GPU model) — heterogeneous queues mix cards.
+      const agg = new Map<string, Map<string, { total: number; used: number }>>();
       for (const line of nodeRes.value.stdout.split('\n')) {
         if (!line.trim()) continue;
         const cfg = scontrolField(line, 'CfgTRES') || '';
@@ -219,15 +220,21 @@ export class SlurmScheduler implements Scheduler {
         const allocGpu = toInt((scontrolField(line, 'AllocTRES')?.match(/gres\/gpu=(\d+)/) || [])[1]);
         const type = (scontrolField(line, 'Gres')?.match(/gpu:([^:(]+)/) || [])[1] || 'gpu';
         for (const part of parts.split(',')) {
-          const e = agg.get(part) || { type, total: 0, used: 0 };
+          const byType = agg.get(part) ?? new Map<string, { total: number; used: number }>();
+          const e = byType.get(type) || { total: 0, used: 0 };
           e.total += cfgGpu; e.used += allocGpu;
-          if (!e.type || e.type === 'gpu') e.type = type;
-          agg.set(part, e);
+          byType.set(type, e);
+          agg.set(part, byType);
         }
       }
-      for (const [part, g] of agg) {
+      for (const [part, byType] of agg) {
         const p = partitions.get(part);
-        if (p && g.total > 0) p.gpus = { type: g.type, total: g.total, idle: Math.max(0, g.total - g.used) };
+        if (!p) continue;
+        const list = [...byType.entries()]
+          .filter(([, g]) => g.total > 0)
+          .map(([type, g]) => ({ type, total: g.total, idle: Math.max(0, g.total - g.used) }))
+          .sort((a, b) => b.total - a.total || a.type.localeCompare(b.type));
+        if (list.length) p.gpus = list;
       }
     }
 

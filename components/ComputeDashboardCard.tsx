@@ -171,9 +171,14 @@ export default function ComputeDashboardCard() {
             </div>
           ) : (
             <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
-              {queue.map((p) => {
-                const gpu = p.gpus;
-                // GPU queues headline their idle GPUs; everything else, idle CPUs.
+              {queue.flatMap((p) => {
+                // GPU queues headline their idle GPUs — one row per GPU model
+                // (heterogeneous queues mix cards); everything else, idle CPUs.
+                const rows: { key: string; gpu: { type: string; total: number; idle: number } | null; showName: boolean }[] =
+                  p.gpus?.length
+                    ? p.gpus.map((g, i) => ({ key: `${p.name}:${g.type}`, gpu: g, showName: i === 0 }))
+                    : [{ key: p.name, gpu: null, showName: true }];
+                return rows.map(({ key, gpu, showName }) => {
                 const idle = gpu ? gpu.idle : p.cpus.idle;
                 const total = gpu ? gpu.total : p.cpus.total;
                 const pct = Math.round((idle / (total || 1)) * 100);
@@ -186,8 +191,8 @@ export default function ComputeDashboardCard() {
                   `Queue: ${p.jobs.pending} pending, ${p.jobs.running} running`,
                 ].filter(Boolean).join('\n');
                 return (
-                  <div key={p.name} title={title} className="flex items-center gap-2 text-xs py-0.5">
-                    <span className="font-medium text-slate-600 truncate w-14 flex-shrink-0">{p.name}</span>
+                  <div key={key} title={title} className="flex items-center gap-2 text-xs py-0.5">
+                    <span className={`font-medium truncate w-14 flex-shrink-0 ${showName ? 'text-slate-600' : 'text-transparent select-none'}`}>{p.name}</span>
                     <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden min-w-[1.5rem]">
                       <div
                         className={`h-full ${pct > 25 ? 'bg-green-400' : pct > 5 ? 'bg-amber-400' : 'bg-red-400'}`}
@@ -205,6 +210,7 @@ export default function ComputeDashboardCard() {
                     </span>
                   </div>
                 );
+                });
               })}
             </div>
           )}

@@ -37,7 +37,7 @@ function partitions(): PartitionLoad[] {
   const p = (
     name: string, total: number, idle: number, timeLimit: string,
     jobs: { pending: number; running: number },
-    gpus?: { type: string; total: number; idle: number },
+    gpus?: { type: string; total: number; idle: number }[],
     nodes?: { idle: number; mixed: number; alloc: number; down: number; total: number },
   ): PartitionLoad => ({
     name, up: true, timeLimit,
@@ -49,10 +49,14 @@ function partitions(): PartitionLoad[] {
   return [
     p('cpu',      512, 236, '1-00:00:00', { pending: 5,  running: 44 }),
     p('cpu-long', 256, 14,  '7-00:00:00', { pending: 71, running: 58 }),
-    p('gpu',      128, 46,  '1-00:00:00', { pending: 3,  running: 12 }, { type: 'nvidia_l40s',      total: 16, idle: 7 }),
-    p('gpu-a100', 96,  22,  '1-00:00:00', { pending: 6,  running: 9  }, { type: 'nvidia_a100_80gb', total: 8,  idle: 3 }),
+    // Heterogeneous GPU queue — two card models, shown as separate rows.
+    p('gpu',      128, 46,  '1-00:00:00', { pending: 3,  running: 12 }, [
+      { type: 'nvidia_l40s',     total: 16, idle: 7 },
+      { type: 'nvidia_rtx_6000', total: 8,  idle: 2 },
+    ]),
+    p('gpu-a100', 96,  22,  '1-00:00:00', { pending: 6,  running: 9  }, [{ type: 'nvidia_a100_80gb', total: 8,  idle: 3 }]),
     p('bigmem',   192, 104, '2-00:00:00', { pending: 1,  running: 6  }),
-    p('lab',      64,  28,  '30-00:00:00',{ pending: 0,  running: 3  }, { type: 'nvidia_h100_80gb', total: 8,  idle: 5 }),
+    p('lab',      64,  28,  '30-00:00:00',{ pending: 0,  running: 3  }, [{ type: 'nvidia_h100_80gb', total: 8,  idle: 5 }]),
   ];
 }
 

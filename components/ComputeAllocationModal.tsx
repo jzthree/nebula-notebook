@@ -85,10 +85,17 @@ function partitionFit(p: PartitionLoad, req: Req): { ok: boolean; reason: string
     return { ok: false, reason: `walltime exceeds ${p.timeLimit} limit`, score: -1e8 };
   }
   if (req.gpus > 0) {
-    if (!p.gpus) return { ok: false, reason: 'no GPUs', score: -1e9 };
-    if (req.gpuType && p.gpus.type !== req.gpuType) return { ok: false, reason: 'different GPU type', score: -1e9 };
-    if (p.gpus.idle < req.gpus) return { ok: false, reason: `only ${p.gpus.idle} of ${req.gpus} GPUs free`, score: -1e6 + p.gpus.idle };
-    return { ok: true, reason: `${p.gpus.idle} GPUs free now`, score: 1e6 + p.gpus.idle };
+    if (!p.gpus?.length) return { ok: false, reason: 'no GPUs', score: -1e9 };
+    if (req.gpuType) {
+      const g = p.gpus.find((x) => x.type === req.gpuType);
+      if (!g) return { ok: false, reason: 'different GPU type', score: -1e9 };
+      if (g.idle < req.gpus) return { ok: false, reason: `only ${g.idle} of ${req.gpus} ${gpuLabel(g.type)} free`, score: -1e6 + g.idle };
+      return { ok: true, reason: `${g.idle} ${gpuLabel(g.type)} free now`, score: 1e6 + g.idle };
+    }
+    // Any type acceptable — the scheduler places on whichever card is free.
+    const idle = p.gpus.reduce((s, g) => s + g.idle, 0);
+    if (idle < req.gpus) return { ok: false, reason: `only ${idle} of ${req.gpus} GPUs free`, score: -1e6 + idle };
+    return { ok: true, reason: `${idle} GPUs free now`, score: 1e6 + idle };
   }
   if (p.cpus.idle < req.cpus) return { ok: false, reason: `only ${p.cpus.idle} of ${req.cpus} CPUs free`, score: -1e6 + p.cpus.idle };
   return { ok: true, reason: `${p.cpus.idle} CPUs free now`, score: 1e6 + p.cpus.idle };
@@ -195,7 +202,7 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
   // Drop a GPU type that the newly-selected queue doesn't offer.
   useEffect(() => {
     const gpus = data?.load?.partitions.find((p) => p.name === partition)?.gpus;
-    const types = gpus ? [gpus.type] : [];
+    const types = gpus?.map((g) => g.type) ?? [];
     setGpuType((cur) => (cur && !types.includes(cur) ? '' : cur));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partition]);
@@ -252,7 +259,7 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
 
   const selectedLoad = loadByName.get(partition);
   // Only the GPU model(s) that actually exist in the selected queue.
-  const partitionGpuTypes = selectedLoad?.gpus ? [selectedLoad.gpus.type] : [];
+  const partitionGpuTypes = selectedLoad?.gpus?.map((g) => g.type) ?? [];
   const selectedFit = selectedLoad ? partitionFit(selectedLoad, req) : null;
   const betterExists = recommended && recommended.name !== partition &&
     (!selectedFit || recommended.fit.score > selectedFit.score + 1);
@@ -260,7 +267,7 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
   const applyRecommended = () => {
     if (!recommended) return;
     setPartition(recommended.name);
-    if (gpus > 0 && !gpuType && recommended.p.gpus) setGpuType(recommended.p.gpus.type);
+    if (gpus > 0 && !gpuType && recommended.p.gpus?.length === 1) setGpuType(recommended.p.gpus[0].type);
   };
 
   return (
@@ -320,7 +327,7 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
                     {partitions.length === 0 && <option value="">(none available)</option>}
                     {partitions.map((p) => {
                       const lp = loadByName.get(p);
-                      const free = lp?.gpus ? `${lp.gpus.idle} gpu free` : lp ? `${lp.cpus.idle} cpu free` : '';
+                      const free = lp?.gpus?.length ? `${lp.gpus.reduce((s2, g) => s2 + g.idle, 0)} gpu free` : lp ? `${lp.cpus.idle} cpu free` : '';
                       return <option key={p} value={p}>{p}{free ? ` — ${free}` : ''}</option>;
                     })}
                   </select>
@@ -394,7 +401,7 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
                     {' '}
                     <span className="text-slate-500">
                       ({selectedLoad.cpus.idle}/{selectedLoad.cpus.total} CPUs
-                      {selectedLoad.gpus ? `, ${selectedLoad.gpus.idle}/${selectedLoad.gpus.total} ${gpuLabel(selectedLoad.gpus.type)} GPUs` : ''} idle
+                      {selectedLoad.gpus?.length ? selectedLoad.gpus.map((g) => `, ${g.idle}/${g.total} ${gpuLabel(g.type)} GPUs`).join('') : ''} idle
                       {selectedLoad.timeLimit ? `, limit ${selectedLoad.timeLimit}` : ''})
                     </span>
                   </span>
