@@ -16,14 +16,13 @@ Nebula is an agent-native notebook — built for you and your AI to work in the 
 
 ## Highlights
 
-- **Agent-native, two ways in** — Claude Code, Codex, Cursor & friends drive notebooks through the **MCP** server or the shell-first **`nebula` CLI** (also installable as a Claude Code skill via `nebula setup-skill`); an agent terminal is built into every notebook too, one-click launched and pre-briefed on your server and notebook
-- **Edit while the agent edits** — per-cell optimistic concurrency: if an agent's write conflicts with yours, it's rejected and handed your current content to retry against — nothing is silently overwritten
-- **Infinite undo/redo, persisted** — every edit, yours and the agent's, is journaled to disk, so undo/redo survives reloads and restarts; the History panel time-travels to any past moment with diff highlighting and one-click restore
-- **"Fix with agent"** on any failing cell, plus per-cell prompts — both inject straight into the agent's terminal, context included
-- **Jupyter kernels** over ZeroMQ (Python, Julia, R, …) that survive dev-server restarts and reattach
-- **Rich outputs** — Plotly MIME rendering and Nebula-native interactive JS outputs, in a virtualized cell list that stays fast on large notebooks
-- **Runs anywhere** — `npx nebula-notebook`, TOTP 2FA, and multi-server clusters behind a single UI
-- **…and it runs where your compute lives** — on an HPC login node, allocate a scheduler job right from the kernel menu (partition/QoS/GPU, with a live queue-load monitor and soonest-queue hint) and your kernel runs on the compute node — no sbatch script, no SSH tunnel. Detection-gated: invisible off-cluster
+- **Your notebook and your agent, at the same time** — Claude Code, Codex, Cursor & friends drive notebooks through the **MCP** server or the **`nebula` CLI** (also installable as a Claude Code skill), and every notebook has a built-in agent terminal, one-click launched and pre-briefed. You keep editing *while* the agent edits: per-cell optimistic concurrency hands a conflicting agent your current content to retry against — nothing is silently overwritten. **"Fix with agent"** sits on every failing cell, and any cell takes a plain-English prompt
+- **Never lose work** — **infinite undo/redo**, journaled to disk and surviving reloads — every edit, yours and the agent's; the History panel time-travels to any past moment with diff highlighting and one-click restore; autosave that notices when the file changed underneath you
+- **Everything smoother** — big notebooks open instantly (virtualized cells), Run All shows live queue positions and per-cell timings, `tqdm` renders as one clean bar, and there's real whole-notebook search & replace (regex included) plus a keyboard-first cell navigator
+- **Rich outputs, no widget plumbing** — Plotly MIME rendering and Nebula-native interactive JS outputs that respond to clicks
+- **Notebooks your git history will thank you for** — first-class **`.qmd` and `.py` (percent)** notebooks: clean text diffs, outputs never serialized
+- **Meets your environment where it is** — detects conda / venv / uv / pixi / system Pythons with one-click kernel registration (and exact guidance when `ipykernel` is missing); Jupyter kernels over ZeroMQ (Python, Julia, R, …) survive server restarts and reattach
+- **Runs anywhere — including where your compute lives** — `npx nebula-notebook`, TOTP 2FA, multi-server clusters behind one UI; on an HPC login node, allocate a scheduler job right from the kernel menu (partition/QoS/GPU, live queue-load monitor) and your kernel runs on the compute node — no sbatch script, no SSH tunnel, invisible off-cluster
 
 ## See it in action
 
