@@ -513,6 +513,10 @@ export const Notebook: React.FC = () => {
   const [clusterInfo, setClusterInfo] = useState<ClusterInfo | null>(null);
   const [computeEnabled, setComputeEnabled] = useState(false);
   const [showComputeModal, setShowComputeModal] = useState(false);
+  // Allocation id armed via "Use when ready": watched until it turns active,
+  // then kernels switch to it automatically (selecting a still-starting
+  // allocation shouldn't require the user to sit in the modal and wait).
+  const [pendingAllocSwitch, setPendingAllocSwitch] = useState<string | null>(null);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null); // null = local
   // On a login node, the pending kernel start we're asking the user to confirm
   // (run here vs allocate compute). null = no prompt showing.
@@ -1850,6 +1854,44 @@ export const Notebook: React.FC = () => {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kernelSessionId, selectedServerId]);
+
+  // "Use when ready": watch the armed allocation until it registers, then
+  // switch kernels to it. Cleared on success, failure, or user re-selection.
+  useEffect(() => {
+    if (!pendingAllocSwitch) return;
+    let cancelled = false;
+    const check = async () => {
+      let alloc;
+      try {
+        const allocs = await listAllocations();
+        alloc = allocs.find(a => a.id === pendingAllocSwitch);
+      } catch {
+        return; // transient — keep watching
+      }
+      if (cancelled) return;
+      if (!alloc || ['ended', 'failed', 'cancelled'].includes(alloc.state)) {
+        setPendingAllocSwitch(null);
+        toast(
+          alloc
+            ? `Allocation ${alloc.spec.jobName || alloc.id} ${alloc.state} before it became ready`
+            : 'The selected allocation is gone',
+          'warning',
+          6000
+        );
+        return;
+      }
+      if (alloc.state === 'active' && alloc.serverId) {
+        setPendingAllocSwitch(null);
+        switchServer(alloc.serverId);
+        setIsKernelMenuOpen(true);
+        toast('Allocation is ready — kernels switched. Choose a kernel to start.', 'info', 6000);
+      }
+    };
+    check();
+    const id = setInterval(check, 3000);
+    return () => { cancelled = true; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAllocSwitch]);
 
   // Fetch available kernels and initialize
   // Load Python environments (separate from kernel init for faster startup)
@@ -5512,9 +5554,14 @@ export const Notebook: React.FC = () => {
         onClose={() => setShowComputeModal(false)}
         onChanged={refreshClusterInfo}
         onUseForKernels={(serverId) => {
+          setPendingAllocSwitch(null);
           switchServer(serverId);
           setIsKernelMenuOpen(true); // guide the user straight to picking a kernel
           toast('Switched to the allocation — choose a kernel to start', 'info', 5000);
+        }}
+        onUseWhenReady={(allocationId) => {
+          setPendingAllocSwitch(allocationId);
+          toast('Kernels will switch to the allocation as soon as it is ready', 'info', 5000);
         }}
       />
 

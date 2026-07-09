@@ -37,6 +37,12 @@ interface ComputeAllocationModalProps {
    * allocations render a "Use for kernels" action when this is provided.
    */
   onUseForKernels?: (serverId: string) => void;
+  /**
+   * Like onUseForKernels, but for allocations still starting (pending/running):
+   * called with the allocation id; the caller watches it and switches kernels
+   * the moment it becomes active, so selecting doesn't require waiting here.
+   */
+  onUseWhenReady?: (allocationId: string) => void;
 }
 
 const inputClass =
@@ -88,7 +94,7 @@ function partitionFit(p: PartitionLoad, req: Req): { ok: boolean; reason: string
   return { ok: true, reason: `${p.cpus.idle} CPUs free now`, score: 1e6 + p.cpus.idle };
 }
 
-export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onUseForKernels }: ComputeAllocationModalProps) {
+export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onUseForKernels, onUseWhenReady }: ComputeAllocationModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<ComputePartitions | null>(null);
@@ -482,6 +488,16 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
                           >
                             <Play className="w-3 h-3" />
                             Use for kernels
+                          </button>
+                        )}
+                        {onUseWhenReady && ['pending', 'running'].includes(a.state) && (
+                          <button
+                            onClick={() => { onUseWhenReady(a.id); onClose(); }}
+                            className="px-2 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 font-medium flex items-center gap-1"
+                            title="Switch this notebook's kernels to this allocation as soon as it finishes starting"
+                          >
+                            <Clock className="w-3 h-3" />
+                            Use when ready
                           </button>
                         )}
                         {!['ended', 'failed', 'cancelled'].includes(a.state) && (
