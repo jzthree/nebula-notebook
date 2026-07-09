@@ -158,6 +158,39 @@ class BoundedAsyncQueue<T> {
   }
 }
 
+/**
+ * Polyfill IPython-style `!command` lines for kernels whose language lacks
+ * them, by rewriting each such line into the language's own shell-call idiom
+ * before the code reaches the kernel. Because the rewritten code still runs
+ * in the kernel process, cwd, environment (conda env, loaded modules), and
+ * machine (allocation node) are all the kernel's — the same guarantees
+ * IPython's native `!` gives Python users.
+ *
+ * Python kernels are deliberately untouched: IPython's `!` is richer than a
+ * plain shell call (output capture `x = !ls`, `{var}` interpolation,
+ * streaming output) and a rewrite would break it.
+ *
+ * Only whole lines that start with `!` are rewritten. Known limits (v1):
+ * a line inside a multi-line string that happens to start with `!` would be
+ * rewritten too, and R's intern=TRUE buffers output until the command exits.
+ */
+export function rewriteShellLines(code: string, language: string | undefined): string {
+  const lang = (language || '').toLowerCase();
+  if (lang !== 'r') return code; // python: native support; others: no safe idiom mapped yet
+  if (!/^[ \t]*!/m.test(code)) return code;
+  return code
+    .split('\n')
+    .map((line) => {
+      const m = line.match(/^([ \t]*)!(.+)$/);
+      if (!m) return line;
+      // Merge stderr at the shell level — intern=TRUE captures only stdout.
+      const cmd = `${m[2].trim()} 2>&1`;
+      const rString = cmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      return `${m[1]}cat(system("${rString}", intern = TRUE), sep = "\\n")`;
+    })
+    .join('\n');
+}
+
 export class KernelService {
   private sessions: Map<string, KernelSession> = new Map();
   private fileToSession: Map<string, string> = new Map();
@@ -1510,6 +1543,14 @@ export class KernelService {
     onQueueInfo?: (info: ExecutionQueueInfo) => void,
     cellId?: string | null
   ): Promise<ExecutionResult> {
+    // Polyfill `!command` lines for kernels whose language lacks them (see
+    // rewriteShellLines) — rewritten code still runs IN the kernel process,
+    // so cwd/env/node are the kernel's, exactly like IPython's native `!`.
+    {
+      const kernelName = this.sessions.get(sessionId)?.kernelName;
+      const spec = kernelName ? getKernelSpec(kernelName) : null;
+      code = rewriteShellLines(code, spec?.language);
+    }
     const queueInfo = this.reserveExecutionSlot(sessionId);
     if (onQueueInfo) {
       onQueueInfo(queueInfo);
