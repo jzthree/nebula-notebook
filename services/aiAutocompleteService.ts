@@ -195,6 +195,10 @@ export function createAiGhostTextFetcher(
 ): GhostTextFetcher {
   return async ({ prefix, suffix }, { signal, onChunk }) => {
     const raw = cellsRef.current ?? [];
+    // The editor has no minimum-length gate (any edit in any cell triggers) —
+    // the only true "nothing to go on" case is a blank cell in an otherwise
+    // empty notebook. Everything else completes from notebook context.
+    if (!prefix.trim() && !suffix.trim() && !raw.some((c) => c.content?.trim())) return '';
     const cells = raw.map((c) => ({
       type: c.type === 'markdown' ? ('markdown' as const) : ('code' as const),
       content: c.content,
@@ -219,23 +223,54 @@ export function createAiGhostTextFetcher(
     // User wants their own machine but we can't reach its CLI — skip rather than
     // fall back to the server (whose CLI may not be logged in and would surface a
     // misleading error).
-    if (!transport && wantsRemoteMachine()) return '';
-    const result = await fetchCompletion(
-      {
-        prefix,
-        suffix,
-        // Hints only — no hardcoded language. The model infers it from the code
-        // plus the current kernel/filename.
-        ...(autocompleteContext.kernelName ? { kernelName: autocompleteContext.kernelName } : {}),
-        ...(autocompleteContext.filename ? { filename: autocompleteContext.filename } : {}),
-        cells,
-        ...(activeCellIndex >= 0 ? { activeCellIndex } : {}),
-        sessionKey: cellId ?? 'default-cell',
-        backend,
-        ...(transport ? { transport } : {}),
-      } as Parameters<typeof fetchCompletion>[0],
-      { signal, onChunk },
-    );
-    return result.text;
+    if (!transport && wantsRemoteMachine()) {
+      console.log('[ai-autocomplete] skipped: run-on-my-machine configured but tunnel/CLI unreachable');
+      return '';
+    }
+    const t0 = performance.now();
+    const where = transport ? `ssh:${transport.port}` : 'server';
+    try {
+      const result = await fetchCompletion(
+        {
+          prefix,
+          suffix,
+          // Hints only — no hardcoded language. The model infers it from the code
+          // plus the current kernel/filename.
+          ...(autocompleteContext.kernelName ? { kernelName: autocompleteContext.kernelName } : {}),
+          ...(autocompleteContext.filename ? { filename: autocompleteContext.filename } : {}),
+          cells,
+          ...(activeCellIndex >= 0 ? { activeCellIndex } : {}),
+          sessionKey: cellId ?? 'default-cell',
+          backend,
+          ...(transport ? { transport } : {}),
+        } as Parameters<typeof fetchCompletion>[0],
+        { signal, onChunk },
+      );
+      // One line per completion with the full latency breakdown, so slow ghost
+      // text is diagnosable from the browser console (filter: [ai-autocomplete]).
+      const d = result.diag ?? {};
+      const wire = Math.round(performance.now() - t0);
+      console.log(
+        `[ai-autocomplete] ${result.fromCache ? 'cache hit' : 'done'} in ${wire}ms` +
+        (result.fromCache ? '' :
+          ` · engine ttfb ${result.ttfbMs}ms / total ${result.totalMs}ms` +
+          (d.queueWaitMs !== undefined ? ` · queued ${d.queueWaitMs}ms` : '') +
+          (d.workerWaitMs !== undefined ? ` · worker wait ${d.workerWaitMs}ms${d.coldSpawn ? ' (COLD SPAWN)' : ''}${d.retried ? ' (retried)' : ''}` : '') +
+          (d.workerTurn !== undefined ? ` · worker turn #${d.workerTurn}${d.workerHistoryChars !== undefined ? ` (${Math.round((d.workerHistoryChars as number) / 1000)}k hist)` : ''}` : '') +
+          (d.poolSize !== undefined ? ` · pool ${d.poolBusy}/${d.poolSize} busy` : '') +
+          (d.promptChars !== undefined ? ` · prompt ${d.promptChars} chars` : '')) +
+        ` · ${backend}@${where}` +
+        ` · ${result.text ? `${result.text.length} chars` : 'empty'}`
+      );
+      return result.text;
+    } catch (e) {
+      const wire = Math.round(performance.now() - t0);
+      if (signal?.aborted) {
+        console.log(`[ai-autocomplete] superseded after ${wire}ms (kept typing) · ${backend}@${where}`);
+      } else {
+        console.log(`[ai-autocomplete] error after ${wire}ms · ${backend}@${where} · ${e instanceof Error ? e.message : String(e)}`);
+      }
+      throw e;
+    }
   };
 }

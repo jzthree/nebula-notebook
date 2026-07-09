@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { LruCache } from "../src/core/lru.js";
 import { buildPrompt, cacheKey } from "../src/core/prompt.js";
 import {
+  createTagStreamFilter,
+  extractCompletionTag,
   stripFences,
   transcriptDirMatchesToken,
   trimPrefixOverlap,
@@ -20,6 +22,15 @@ describe("stripFences", () => {
   });
   it("keeps inner backticks", () => {
     expect(stripFences("f'`{x}`'")).toBe("f'`{x}`'");
+  });
+  it("preserves a leading newline on unfenced completions (code after a comment)", () => {
+    expect(stripFences("\ndef fib(n):")).toBe("\ndef fib(n):");
+  });
+  it("preserves leading indentation on unfenced completions", () => {
+    expect(stripFences("    return a + b")).toBe("    return a + b");
+  });
+  it("drops trailing whitespace on unfenced completions", () => {
+    expect(stripFences("x = 1\n\n  ")).toBe("x = 1");
   });
 });
 
@@ -148,5 +159,44 @@ describe("cacheKey", () => {
   it("is stable for identical requests", () => {
     const req = { prefix: "a", suffix: "b", language: "python" };
     expect(cacheKey(req)).toBe(cacheKey({ ...req }));
+  });
+});
+
+describe("extractCompletionTag", () => {
+  it("extracts verbatim, leading newline preserved", () => {
+    expect(extractCompletionTag("<completion>\ndef f():\n    pass</completion>")).toBe("\ndef f():\n    pass");
+  });
+  it("tolerates a missing close tag (stream cut off)", () => {
+    expect(extractCompletionTag("<completion>\nx = 1")).toBe("\nx = 1");
+  });
+  it("returns null for untagged replies", () => {
+    expect(extractCompletionTag("x = 1")).toBeNull();
+  });
+  it("ignores chatter before the open tag", () => {
+    expect(extractCompletionTag("Sure!<completion>x</completion>")).toBe("x");
+  });
+});
+
+describe("createTagStreamFilter", () => {
+  const collect = () => { const out: string[] = []; return { out, emit: (t: string) => out.push(t) }; };
+  it("streams inner text, never the tags, across chunk splits", () => {
+    const { out, emit } = collect();
+    const f = createTagStreamFilter(emit);
+    for (const c of ["<compl", "etion>\ndef f(", "):\n    pass</compl", "etion>"]) f(c);
+    expect(out.join("")).toBe("\ndef f():\n    pass");
+    expect(out.join("")).not.toContain("<completion>");
+  });
+  it("holds back a partial close tag until resolved as text", () => {
+    const { out, emit } = collect();
+    const f = createTagStreamFilter(emit);
+    f("<completion>a < b</");     // "</" could start the close tag
+    f("x>c</completion>");         // …but it was real text
+    expect(out.join("")).toBe("a < b</x>c");
+  });
+  it("passes through untagged streams once clearly not tagged", () => {
+    const { out, emit } = collect();
+    const f = createTagStreamFilter(emit);
+    f("def long_function_name_without_tags():\n    return 1  # some more text to exceed the buffer");
+    expect(out.join("")).toContain("def long_function_name_without_tags");
   });
 });

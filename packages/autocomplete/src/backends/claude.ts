@@ -14,6 +14,10 @@ export interface ClaudeBackendOptions {
   poolSize?: number;
   /** Turns before a worker is recycled (stream-json turns share history). Default 8. */
   maxTurnsPerWorker?: number;
+  /** Accumulated prompt chars before a worker is recycled. History size — not
+   *  turn count — is what drags TTFB, so this is the primary recycle driver.
+   *  Default 18_000 (~3 big-notebook prompts). */
+  maxHistoryCharsPerWorker?: number;
   /** Per-turn timeout. Default 45_000 ms. */
   turnTimeoutMs?: number;
   /** Working directory for workers — keep it empty so no CLAUDE.md loads. */
@@ -40,6 +44,13 @@ class ClaudeWorker {
   busy = false;
   dead = false;
   turns = 0;
+  /** Total prompt chars sent — the real recycle driver: stream-json history
+   *  grows with every prompt, and TTFB grows with HISTORY SIZE, not turn
+   *  count (measured: 6.4KB prompts drag +~0.2s/turn; 1.5KB prompts don't). */
+  sentChars = 0;
+  readonly bornAt = Date.now();
+  /** Invoked once when the process exits/errors — lets the pool respawn in the background. */
+  onDeath?: () => void;
   readonly warmed: Promise<void>;
   // Each worker runs in its OWN cwd subdir so Claude's per-cwd transcript
   // directory is unique per worker. Pruning a recycled worker's transcripts
@@ -95,11 +106,17 @@ class ClaudeWorker {
       this.dead = true;
       this.pending?.reject(new Error("claude worker exited"));
       this.pending = null;
+      const cb = this.onDeath;
+      this.onDeath = undefined; // fire once
+      cb?.();
     });
     this.proc.on("error", (err) => {
       this.dead = true;
       this.pending?.reject(err instanceof Error ? err : new Error(String(err)));
       this.pending = null;
+      const cb = this.onDeath;
+      this.onDeath = undefined;
+      cb?.();
     });
     this.warmed = this.runTurn("Reply with exactly: ok").then(
       () => undefined,
@@ -213,7 +230,18 @@ export class ClaudeBackend implements CompletionBackend {
     this.opts = {
       model: options.model ?? "haiku",
       poolSize: options.poolSize ?? 2,
+      // MEASURED (10 sequential real turns, one worker): per-turn latency does
+      // NOT grow with turn count — turns 7-9 averaged FASTER than 0-2, so the
+      // CLI/API handles its own history efficiently (prompt caching). Keep 8:
+      // recycling more often would just burn a warmup API call per recycle
+      // for zero latency benefit.
       maxTurnsPerWorker: options.maxTurnsPerWorker ?? 8,
+      // MEASURED: TTFB grows with accumulated HISTORY, not turns — 6.4KB
+      // real-notebook prompts dragged ttfb 3.2s@turn5 -> 4.0s@turn7, while a
+      // 10-turn run of 1.5KB prompts showed no drag at all. Cap history size;
+      // the turn cap above is just a backstop. Recycling is background-warmed
+      // (spawnWorker/ensurePool), so tighter recycling costs the user nothing.
+      maxHistoryCharsPerWorker: options.maxHistoryCharsPerWorker ?? 18_000,
       turnTimeoutMs: options.turnTimeoutMs ?? 45_000,
       // Default to a per-instance dir so the transcript-dir name is unique to
       // this backend. A caller-supplied dir is used verbatim (its transcripts
@@ -261,13 +289,35 @@ export class ClaudeBackend implements CompletionBackend {
     if (this.disposed) return;
     this.pool = this.pool.filter((w) => !w.dead);
     while (this.pool.length < this.opts.poolSize) {
-      this.pool.push(new ClaudeWorker(this.opts));
+      this.pool.push(this.spawnWorker());
     }
+  }
+
+  /**
+   * Spawn a worker wired for background self-healing: the claude CLI exits on
+   * its own after long idle, and replacing it lazily (at the next request)
+   * put the whole cold start — process boot + ssh reconnect + warmup turn —
+   * on the user's first post-idle completion (multi-second "autocomplete is
+   * dead after I come back" lag). Respawning the moment a worker dies keeps
+   * the pool warm through idle, so the first keystroke after a break pays the
+   * same ~1.5s as any other. Crash-loop guard: only self-respawn for workers
+   * that were healthy (survived 60s or completed a turn) — a broken binary
+   * dies instantly and would otherwise spawn-loop forever.
+   */
+  private spawnWorker(): ClaudeWorker {
+    const w = new ClaudeWorker(this.opts);
+    w.onDeath = () => {
+      if (this.disposed) return;
+      const wasHealthy = w.turns > 0 || Date.now() - w.bornAt > 60_000;
+      if (!wasHealthy) return;
+      setTimeout(() => this.ensurePool(), 250);
+    };
+    return w;
   }
 
   async complete(
     prompt: string,
-    { signal, onChunk }: { signal?: AbortSignal; onChunk?: (t: string) => void } = {},
+    { signal, onChunk, diag }: { signal?: AbortSignal; onChunk?: (t: string) => void; diag?: import("../types.js").CompletionDiag } = {},
   ): Promise<string> {
     if (this.disposed) throw new Error("backend disposed");
     signal?.throwIfAborted();
@@ -282,10 +332,11 @@ export class ClaudeBackend implements CompletionBackend {
       }
     };
     try {
-      return await this.attempt(prompt, signal, guard, false);
+      return await this.attempt(prompt, signal, guard, false, diag);
     } catch (err) {
       if (this.disposed || signal?.aborted || emitted || !isWorkerDeath(err)) throw err;
-      return await this.attempt(prompt, signal, guard, true);
+      if (diag) diag.retried = true;
+      return await this.attempt(prompt, signal, guard, true, diag);
     }
   }
 
@@ -294,25 +345,44 @@ export class ClaudeBackend implements CompletionBackend {
     signal: AbortSignal | undefined,
     guard: (t: string) => void,
     forceFresh: boolean,
+    diag?: import("../types.js").CompletionDiag,
   ): Promise<string> {
+    const tAcquire = performance.now();
     this.ensurePool();
+    if (diag) {
+      diag.transport = this.opts.transport.kind;
+      diag.poolSize = this.pool.length;
+      diag.poolBusy = this.pool.filter((w) => w.busy && !w.dead).length;
+    }
     let worker = forceFresh ? undefined : this.pool.find((w) => !w.busy && !w.dead);
     if (!worker) {
-      worker = new ClaudeWorker(this.opts);
+      worker = this.spawnWorker();
       this.pool.push(worker);
+      if (diag) diag.coldSpawn = true;
+      console.log(`[autocomplete] cold worker spawn (${this.opts.transport.kind}): pool ${this.pool.length - 1} all busy/dead`);
     }
     worker.busy = true;
+    if (diag) {
+      diag.workerTurn = worker.turns;
+      diag.workerHistoryChars = worker.sentChars;
+    }
     // Always wait for the warmup turn: dispatching while it is in flight
     // would steal its pending handler and resolve with the warmup's output.
     await worker.warmed;
+    if (diag) diag.workerWaitMs = Math.round(performance.now() - tAcquire);
     try {
       const full = await worker.runTurn(prompt, guard);
       signal?.throwIfAborted();
       return full;
     } finally {
       worker.turns += 1;
+      worker.sentChars += prompt.length;
       worker.busy = false;
-      if (worker.turns >= this.opts.maxTurnsPerWorker || worker.dead) {
+      if (
+        worker.turns >= this.opts.maxTurnsPerWorker ||
+        worker.sentChars >= this.opts.maxHistoryCharsPerWorker ||
+        worker.dead
+      ) {
         const recycled = worker;
         recycled.kill();
         // Prune only THIS worker's transcript dir (matched by its own cwd

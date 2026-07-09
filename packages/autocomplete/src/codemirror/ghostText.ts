@@ -40,7 +40,12 @@ export type GhostTextFetcher = (
 export interface GhostTextOptions {
   /** Idle time after the last edit before a fetch fires. Default 400 ms. */
   debounceMs?: number;
-  /** Skip fetching when the prefix (trimmed) is shorter than this. Default 3. */
+  /**
+   * Skip fetching when the prefix (trimmed) is shorter than this. Default 0:
+   * with notebook-level context (other cells) available to the fetcher, even
+   * an empty cell is completable — gate in the fetcher, which can see that
+   * context, not here. Set >0 only for context-free single-document use.
+   */
   minPrefixLength?: number;
 }
 
@@ -108,7 +113,7 @@ export function dismissGhostText(view: EditorView): boolean {
 
 export function ghostText(fetcher: GhostTextFetcher, options: GhostTextOptions = {}): Extension {
   const debounceMs = options.debounceMs ?? 400;
-  const minPrefixLength = options.minPrefixLength ?? 3;
+  const minPrefixLength = options.minPrefixLength ?? 0;
 
   const plugin = ViewPlugin.fromClass(
     class {
@@ -128,12 +133,19 @@ export function ghostText(fetcher: GhostTextFetcher, options: GhostTextOptions =
 
       update(update: ViewUpdate): void {
         if (!update.docChanged) return;
-        // Only user-driven edits trigger fetches (not accepting a suggestion).
-        const isUserInput = update.transactions.some(
-          (tr) => tr.isUserEvent("input") && !tr.isUserEvent("input.complete"),
+        // Any user-driven edit triggers a fetch — typing, paste, delete,
+        // undo/redo — EXCEPT accepting a suggestion (that would immediately
+        // re-fetch on its own output). The kind of edit doesn't matter: the
+        // model can complete from whatever state the edit produced.
+        const isUserEdit = update.transactions.some(
+          (tr) =>
+            (tr.isUserEvent("input") && !tr.isUserEvent("input.complete")) ||
+            tr.isUserEvent("delete") ||
+            tr.isUserEvent("undo") ||
+            tr.isUserEvent("redo") ||
+            tr.isUserEvent("move"),
         );
-        const isDelete = update.transactions.some((tr) => tr.isUserEvent("delete"));
-        if (!isUserInput && !isDelete) return;
+        if (!isUserEdit) return;
         this.schedule();
       }
 

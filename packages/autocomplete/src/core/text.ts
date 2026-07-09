@@ -10,15 +10,88 @@ export function transcriptDirMatchesToken(dirName: string, token: string): boole
   return needle.length > 0 && norm(dirName).includes(needle);
 }
 
-/** Strip a wrapping markdown code fence, if present. */
+const OPEN_TAG = "<completion>";
+const CLOSE_TAG = "</completion>";
+
+/**
+ * Extract the tag-wrapped completion, whitespace preserved VERBATIM.
+ *
+ * Why tags: models structurally avoid beginning a message with whitespace, so
+ * a completion that must START with "\n" (cursor at the end of a finished
+ * comment like `# fibonacci`) loses its newline when asked for raw output —
+ * verified empirically; no prompt wording fixed it. Inside a tag pair the
+ * leading newline survives generation. Returns null when the reply isn't
+ * tag-wrapped (fall back to the fence-stripping pipeline).
+ */
+export function extractCompletionTag(text: string): string | null {
+  const start = text.indexOf(OPEN_TAG);
+  if (start === -1) return null;
+  const inner = text.slice(start + OPEN_TAG.length);
+  const end = inner.indexOf(CLOSE_TAG);
+  return end === -1 ? inner : inner.slice(0, end);
+}
+
+/**
+ * Streaming variant: wraps an onChunk callback so tag delimiters never leak
+ * into streamed ghost text, while the inner text (leading whitespace included)
+ * streams through as it arrives. If no opening tag shows up within the first
+ * 64 chars, assumes an untagged reply and passes everything through.
+ */
+export function createTagStreamFilter(emit: (t: string) => void): (t: string) => void {
+  let state: "seeking" | "inside" | "done" | "passthrough" = "seeking";
+  let buf = "";
+  return (chunk: string) => {
+    if (state === "done") return;
+    if (state === "passthrough") return emit(chunk);
+    buf += chunk;
+    if (state === "seeking") {
+      const at = buf.indexOf(OPEN_TAG);
+      if (at !== -1) {
+        state = "inside";
+        buf = buf.slice(at + OPEN_TAG.length);
+      } else if (buf.length > 64 && !OPEN_TAG.startsWith(buf.slice(-OPEN_TAG.length))) {
+        state = "passthrough";
+        emit(buf);
+        buf = "";
+        return;
+      } else {
+        return; // keep buffering — the tag may still be arriving
+      }
+    }
+    // inside: emit everything except a possible partial close tag at the tail
+    const close = buf.indexOf(CLOSE_TAG);
+    if (close !== -1) {
+      if (close > 0) emit(buf.slice(0, close));
+      state = "done";
+      buf = "";
+      return;
+    }
+    // Hold back the longest suffix that could be the start of the close tag.
+    let hold = 0;
+    for (let n = Math.min(CLOSE_TAG.length - 1, buf.length); n > 0; n--) {
+      if (CLOSE_TAG.startsWith(buf.slice(-n))) { hold = n; break; }
+    }
+    const emittable = buf.slice(0, buf.length - hold);
+    if (emittable) emit(emittable);
+    buf = buf.slice(buf.length - hold);
+  };
+}
+
+/**
+ * Strip a wrapping markdown code fence, if present. Leading whitespace of an
+ * UNFENCED completion is preserved verbatim — it is often meaningful: with
+ * the cursor at the end of `# fibonacci` the completion must START with "\n"
+ * to put code on the next line, and indentation after `if x:` matters too.
+ * (A blanket .trim() here silently glued completions onto comments.)
+ */
 export function stripFences(text: string): string {
-  let t = text.trim();
+  const t = text.trim();
   const open = t.match(/^```[a-zA-Z0-9_-]*\n?/);
   if (open) {
-    t = t.slice(open[0].length);
-    t = t.replace(/\n?```\s*$/, "");
+    return t.slice(open[0].length).replace(/\n?```\s*$/, "");
   }
-  return t;
+  // No fence: keep leading whitespace, drop only trailing whitespace.
+  return text.replace(/\s+$/, "");
 }
 
 /**

@@ -70,7 +70,12 @@ export function planSpawn(
   }
   const sshOpts = [...SSH_BASE_OPTS, '-p', String(transport.port)];
   if (transport.controlPath) {
-    sshOpts.push('-o', 'ControlMaster=auto', '-o', `ControlPath=${transport.controlPath}`, '-o', 'ControlPersist=120');
+    // ControlPersist 1h (was 120s): the master handshake is the expensive part
+    // over the reverse tunnel, and a 2-minute persist meant any idle gap made
+    // the next worker spawn pay it again — part of the "autocomplete lags
+    // after I come back" cold start. An idle master on a localhost tunnel
+    // costs one file descriptor; keep it warm for the whole work session.
+    sshOpts.push('-o', 'ControlMaster=auto', '-o', `ControlPath=${transport.controlPath}`, '-o', 'ControlPersist=3600');
   }
   const remoteCwd = transport.remoteCwd ?? cwd;
   const envPrefix = Object.entries(env).map(([k, v]) => `${k}=${shellQuote(v)}`).join(' ');

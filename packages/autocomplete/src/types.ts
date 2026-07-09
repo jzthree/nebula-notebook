@@ -34,6 +34,39 @@ export interface CompletionResult {
   fromCache: boolean;
   ttfbMs: number;
   totalMs: number;
+  /** Per-request engine/worker diagnostics (see CompletionDiag). */
+  diag?: CompletionDiag;
+}
+
+/**
+ * Where a completion's latency went — filled by the backend, forwarded in the
+ * SSE done event so the browser console can show the breakdown.
+ */
+export interface CompletionDiag {
+  /** Transport the worker ran on. */
+  transport?: string;
+  /** ms spent queued behind an earlier in-flight turn for the same session
+   *  (single-flight per cell — typing bursts wait for the previous turn
+   *  instead of fanning out across workers; see engine.complete). */
+  queueWaitMs?: number;
+  /** ms from request start until the turn was dispatched to a warm worker
+   *  (pool scan + possible spawn + warmup wait). The silent part of TTFB. */
+  workerWaitMs?: number;
+  /** A fresh worker process had to be spawned for this request. */
+  coldSpawn?: boolean;
+  /** The turn was retried on a fresh worker after the first one died. */
+  retried?: boolean;
+  /** How many turns this worker had already served (conversation history
+   *  grows with each turn, inflating time-to-first-byte). */
+  workerTurn?: number;
+  /** Accumulated prompt chars in this worker's history before this turn —
+   *  the actual TTFB-drag driver (recycled past maxHistoryCharsPerWorker). */
+  workerHistoryChars?: number;
+  /** Busy workers / pool size at request time (busy=size → cold spawn). */
+  poolBusy?: number;
+  poolSize?: number;
+  /** Characters in the assembled prompt. */
+  promptChars?: number;
 }
 
 export interface CompleteOptions {
@@ -47,7 +80,7 @@ export interface CompletionBackend {
   readonly name: string;
   complete(
     prompt: string,
-    opts: { signal?: AbortSignal; onChunk?: (text: string) => void },
+    opts: { signal?: AbortSignal; onChunk?: (text: string) => void; diag?: CompletionDiag },
   ): Promise<string>;
   /** Release child processes. */
   dispose(): void;

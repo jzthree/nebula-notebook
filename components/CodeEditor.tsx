@@ -811,9 +811,14 @@ export const CodeEditor: React.FC<Props> = ({
 
     // AI inline ghost-text suggestions (opt-in via settings / first-run card).
     // Complements the dropdown above: multi-line LLM continuations at the
-    // cursor, Tab to accept. Only for focused python editors.
-    if (language === 'python' && enableInteractiveFeatures && aiAutocomplete && !readOnly) {
-      exts.push(ghostText(createAiGhostTextFetcher(effectiveAllCellsRef, cellId), { debounceMs: 400 }));
+    // cursor, Tab to accept. Language-agnostic: the prompt carries kernel +
+    // filename hints and the model infers the language (R kernels verified),
+    // so no python-only gate. debounce 300ms is part of the ~2s latency
+    // budget (300ms idle + ~1.5s warm claude turn). No min-length gate — with
+    // the rest of the notebook as context even an empty cell is completable;
+    // the fetcher skips only when the whole notebook is empty.
+    if (enableInteractiveFeatures && aiAutocomplete && !readOnly) {
+      exts.push(ghostText(createAiGhostTextFetcher(effectiveAllCellsRef, cellId), { debounceMs: 300, minPrefixLength: 0 }));
     }
 
     // Add keymap for cell shortcuts - direct callbacks (no synthetic events)

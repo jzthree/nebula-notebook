@@ -258,6 +258,15 @@ export default async function autocompleteRoutes(fastify: FastifyInstance) {
     return getEngine(req.backend === 'codex' ? 'codex' : 'claude', t);
   });
 
+  // Pre-warm the default local engine at server start: the first completion
+  // after a server (re)start otherwise pays engine creation + pool spawn +
+  // warmup turns on the user's keystroke (measured ~19s cold). Booting it
+  // here moves that entirely off the request path. Best-effort; claude only
+  // (the default backend — codex spawns per-request by design).
+  void binaryAvailable('claude').then((ok) => {
+    if (ok) getEngine('claude', null);
+  }).catch(() => { /* pre-warm is opportunistic */ });
+
   fastify.addHook('onClose', async () => {
     disposeAutocompleteEngines();
   });
