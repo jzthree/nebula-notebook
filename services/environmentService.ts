@@ -17,17 +17,28 @@ export type EnvironmentKind = 'local' | 'cluster' | 'server';
 
 export interface EnvironmentInfo {
   kind: EnvironmentKind;
+  /** 'high' = trust the detection; 'ambiguous' = ask the user once. */
+  confidence: 'high' | 'ambiguous';
+  /** Human-readable detection reason ("SLURM scheduler detected", ...). */
+  reason: string;
   hostname: string;
   platform: string;
   scheduler: string | null;
 }
 
 let cached: EnvironmentInfo | null = null;
+let cachedAt = 0;
 let inflight: Promise<EnvironmentInfo | null> | null = null;
 
-/** Fetch (once) the server's self-reported environment. Null if unreachable. */
+// TTL, not cache-forever: right after a server (re)start the server can answer
+// health before its scheduler detection finishes, briefly self-reporting
+// 'local' on a cluster login node. A short TTL lets the client converge on the
+// settled answer instead of freezing the boot-race result for the tab's life.
+const ENV_CACHE_TTL_MS = 30_000;
+
+/** Fetch the server's self-reported environment (30s cache). Null if unreachable. */
 export async function fetchEnvironment(): Promise<EnvironmentInfo | null> {
-  if (cached) return cached;
+  if (cached && Date.now() - cachedAt < ENV_CACHE_TTL_MS) return cached;
   if (inflight) return inflight;
   inflight = (async () => {
     try {
@@ -38,10 +49,13 @@ export async function fetchEnvironment(): Promise<EnvironmentInfo | null> {
       if (env && typeof env.kind === 'string') {
         cached = {
           kind: env.kind,
+          confidence: env.confidence === 'ambiguous' ? 'ambiguous' : 'high',
+          reason: typeof env.reason === 'string' ? env.reason : '',
           hostname: typeof env.hostname === 'string' ? env.hostname : '',
           platform: typeof env.platform === 'string' ? env.platform : '',
           scheduler: typeof env.scheduler === 'string' ? env.scheduler : null,
         };
+        cachedAt = Date.now();
         return cached;
       }
       return null;
@@ -78,4 +92,16 @@ export function environmentLabel(env: EnvironmentInfo | null = cached): string {
   if (env.kind === 'cluster') return env.hostname ? `${env.hostname} (cluster)` : 'cluster';
   if (env.kind === 'server') return env.hostname || 'remote server';
   return 'this machine';
+}
+
+/**
+ * Should the UI ask the user where this server runs? True only when the
+ * server itself says its detection is ambiguous (headless Linux, no
+ * scheduler, not launched over ssh) AND the user hasn't answered yet
+ * (environmentOverride unset). Everything else resolves silently.
+ */
+export function environmentNeedsUserChoice(env: EnvironmentInfo | null = cached): boolean {
+  if (!env || env.confidence !== 'ambiguous') return false;
+  const override = getSettings().environmentOverride;
+  return override !== 'local' && override !== 'remote';
 }

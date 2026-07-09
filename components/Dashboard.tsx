@@ -19,6 +19,7 @@ import {
   Lightbulb,
   History,
   AlertTriangle,
+  Server,
   Sparkles,
   Trash2,
   X,
@@ -34,7 +35,9 @@ import ComputeDashboardCard from './ComputeDashboardCard';
 import { KernelManager } from './KernelManager';
 import { TerminalManager } from './TerminalManager';
 import { GetStartedCard } from './GetStartedCard';
-import { isAiAutocompleteDecided, setAiAutocomplete } from '../services/aiAutocompleteService';
+import { isAiAutocompleteDecided, setAiAutocomplete, notifySettingsChanged } from '../services/aiAutocompleteService';
+import { fetchEnvironment, type EnvironmentInfo } from '../services/environmentService';
+import { getSettings, saveSettings } from '../services/settingsService';
 
 // Kernel session from API
 interface KernelSession {
@@ -256,6 +259,26 @@ export const Dashboard: React.FC = () => {
     setAiAutocomplete(enabled, backend);
     setAiChoiceDecided(true);
   };
+
+  // First-run environment confirmation — detection only SUGGESTS (a scheduler
+  // can exist on a laptop; a Mac can be a remote server); the user confirms
+  // once and the answer is stored as an explicit override. Changeable anytime
+  // in Settings → AI.
+  const [envDecided, setEnvDecided] = useState(() => {
+    const o = getSettings().environmentOverride;
+    return o === 'local' || o === 'remote';
+  });
+  const [detectedEnv, setDetectedEnv] = useState<EnvironmentInfo | null>(null);
+  useEffect(() => {
+    if (!envDecided) fetchEnvironment().then(setDetectedEnv);
+  }, [envDecided]);
+  const chooseEnvironment = (choice: 'local' | 'remote') => {
+    saveSettings({ environmentOverride: choice });
+    notifySettingsChanged();
+    setEnvDecided(true);
+  };
+  const suggestedEnv: 'local' | 'remote' | null =
+    detectedEnv ? (detectedEnv.kind === 'local' ? 'local' : 'remote') : null;
 
   // Sessions state
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
@@ -645,6 +668,39 @@ export const Dashboard: React.FC = () => {
               </div>
 
               {/* One-time AI autocomplete opt-in (also in Settings → AI) */}
+              {!envDecided && (
+                <div
+                  data-testid="environment-choice"
+                  className="mt-4 p-4 rounded-lg border border-slate-200 bg-slate-50/70"
+                >
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                    <Server className="w-4 h-4 text-slate-500" />
+                    Where does this Nebula server run?
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {detectedEnv
+                      ? <>Looks like <span className="font-medium text-slate-700">{detectedEnv.kind === 'local' ? 'this computer' : 'a remote machine'}</span> ({detectedEnv.reason}) — confirm or correct.</>
+                      : 'Checking…'}{' '}
+                    This decides whether you get options to run the agent and autocomplete on your own
+                    computer over an SSH tunnel. Changeable anytime in Settings → AI.
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button
+                      onClick={() => chooseEnvironment('local')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${suggestedEnv === 'local' ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-white text-slate-700 border border-slate-300 hover:border-indigo-400'}`}
+                    >
+                      This computer{suggestedEnv === 'local' ? ' (detected)' : ''}
+                    </button>
+                    <button
+                      onClick={() => chooseEnvironment('remote')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${suggestedEnv === 'remote' ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-white text-slate-700 border border-slate-300 hover:border-indigo-400'}`}
+                    >
+                      A remote machine I connect to{suggestedEnv === 'remote' ? ' (detected)' : ''}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {!aiChoiceDecided && (
                 <div
                   data-testid="ai-autocomplete-choice"

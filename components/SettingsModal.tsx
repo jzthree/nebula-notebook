@@ -9,7 +9,7 @@ import {
 } from '../services/settingsService';
 import { getRootDirectory, setRootDirectory } from '../services/fileService';
 import { notifySettingsChanged, fetchServerBackends, probeRemoteBins, runDiagnostics, testCompletion, type Diagnostics } from '../services/aiAutocompleteService';
-import { fetchEnvironment, serverIsRemote, environmentLabel } from '../services/environmentService';
+import { fetchEnvironment, serverIsRemote, environmentLabel, environmentNeedsUserChoice, type EnvironmentInfo } from '../services/environmentService';
 import { RemoteAgentSetupModal } from './RemoteAgentSetupModal';
 import { checkReverseTunnel } from '../services/terminalService';
 import { useNotification } from './NotificationSystem';
@@ -39,6 +39,7 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
   // Environment awareness for the "where do the CLIs run" choice. Only when the
   // server is remote is that a real question; locally the server IS your machine.
   const [serverRemote, setServerRemote] = useState<boolean>(serverIsRemote());
+  const [envInfo, setEnvInfo] = useState<EnvironmentInfo | null>(null);
   const [serverBackends, setServerBackends] = useState<{ claude: boolean; codex: boolean } | null>(null);
   // AI tab: tunnel setup modal + diagnostics + test-completion state.
   const [showRemoteSetup, setShowRemoteSetup] = useState(false);
@@ -56,6 +57,13 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
     setSettings(prev => ({ ...prev, ...next }));
     saveSettings(next);
   }, []);
+
+  /** Set (or clear) the user's environment override and re-derive the UI mode. */
+  const chooseEnvironment = useCallback((choice: 'local' | 'remote' | undefined) => {
+    persistSettings({ environmentOverride: choice });
+    notifySettingsChanged();
+    fetchEnvironment().then((env) => setServerRemote(serverIsRemote(env)));
+  }, [persistSettings]);
 
   useEffect(() => {
     try {
@@ -78,7 +86,7 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
 
   useEffect(() => {
     if (!isOpen) return;
-    fetchEnvironment().then((env) => setServerRemote(serverIsRemote(env)));
+    fetchEnvironment().then((env) => { setEnvInfo(env); setServerRemote(serverIsRemote(env)); });
     fetchServerBackends().then((b) => { if (b) setServerBackends(b); });
   }, [isOpen]);
 
@@ -537,6 +545,55 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
                         </div>
                       )}
 
+                      {/* Where does this server run? Detection is silent when
+                          confident; asks ONCE when genuinely ambiguous; always
+                          correctable via the override select. */}
+                      <div className="space-y-1.5">
+                        {environmentNeedsUserChoice(envInfo) ? (
+                          <div className="rounded-md border border-amber-300 bg-amber-50 p-2.5 space-y-1.5">
+                            <p className="text-xs font-medium text-amber-800">Where does this Nebula server run?</p>
+                            <p className="text-xs text-amber-700">
+                              Nebula couldn't tell ({envInfo?.reason || 'no clear signal'}). This decides whether you
+                              see options to run the agent and autocomplete on your own computer over an SSH tunnel —
+                              pointless if this <em>is</em> your computer, essential if it's a box you connect to.
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => chooseEnvironment('local')}
+                                className="px-3 py-1 text-xs rounded-md border bg-white text-slate-700 border-slate-300 hover:border-blue-400 inline-flex items-center gap-1"
+                              >
+                                <Laptop className="w-3 h-3" /> This computer
+                              </button>
+                              <button
+                                onClick={() => chooseEnvironment('remote')}
+                                className="px-3 py-1 text-xs rounded-md border bg-white text-slate-700 border-slate-300 hover:border-blue-400 inline-flex items-center gap-1"
+                              >
+                                <Server className="w-3 h-3" /> A remote machine I connect to
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 text-xs text-slate-500">
+                            <span className="flex-1">
+                              Server environment: <span className="text-slate-700">{settings.environmentOverride === 'remote' ? 'remote machine' : settings.environmentOverride === 'local' ? 'this computer' : environmentLabel(envInfo) || 'detecting…'}</span>
+                              {settings.environmentOverride
+                                ? ' (your setting)'
+                                : envInfo?.reason ? ` — ${envInfo.reason}` : ''}
+                            </span>
+                            <select
+                              value={settings.environmentOverride ?? ''}
+                              onChange={(e) => chooseEnvironment(e.target.value === '' ? undefined : (e.target.value as 'local' | 'remote'))}
+                              className="text-xs border border-slate-300 rounded-md px-1.5 py-0.5 bg-white text-slate-600"
+                              title="Override where Nebula thinks this server runs (decides whether run-on-my-machine options appear)"
+                            >
+                              <option value="">Auto-detect</option>
+                              <option value="local">This computer</option>
+                              <option value="remote">Remote machine</option>
+                            </select>
+                          </div>
+                        )}
+                      </div>
+
                       {/* Runs on — only a real choice when the server is remote. */}
                       {settings.aiAutocomplete && (
                         <div className="space-y-1.5">
@@ -637,7 +694,7 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
 
                         {diag && (
                           <div className="space-y-1.5 border-t border-slate-200 pt-2">
-                            <Row ok={null} label={`Nebula server: ${environmentLabel({ kind: diag.environment.kind as 'local' | 'cluster' | 'server', hostname: diag.environment.hostname, platform: diag.environment.platform, scheduler: diag.environment.scheduler })}`} />
+                            <Row ok={null} label={`Nebula server: ${environmentLabel({ kind: diag.environment.kind as 'local' | 'cluster' | 'server', confidence: 'high', reason: '', hostname: diag.environment.hostname, platform: diag.environment.platform, scheduler: diag.environment.scheduler })}`} />
                             <Row ok={diag.server.claude.usable} label={`This server · Claude Code`} detail={diag.server.claude.detail} />
                             <Row ok={diag.server.codex.usable} label={`This server · Codex`} detail={diag.server.codex.detail} />
                             {diag.tunnel && (
