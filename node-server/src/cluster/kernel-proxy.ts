@@ -184,9 +184,16 @@ export async function getRemoteKernelStatus(sessionId: string): Promise<{
     throw new Error(`Server not found: ${serverId}`);
   }
 
-  const response = await fetch(`${server.url}/api/kernels/${remoteSessionId}/status`, {
-    headers: { ...getClusterHeaders() },
-  });
+  let response;
+  try {
+    response = await fetch(`${server.url}/api/kernels/${remoteSessionId}/status`, {
+      headers: { ...getClusterHeaders() },
+    });
+  } catch (err) {
+    // Connection-level failure (refused/reset) — the node may be gone.
+    serverRegistry.reportUnreachable(serverId);
+    throw err;
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string };
@@ -384,6 +391,10 @@ export function createWebSocketProxy(
   // Handle remote close
   remoteWs.on('close', () => {
     console.log(`[KernelProxy] Remote WebSocket closed for ${sessionId}`);
+    // The kernel channel dropping is the earliest signal a compute node
+    // died (walltime, scancel, crash) — let the allocation layer verify.
+    const { serverId: sid } = parseSessionId(sessionId);
+    if (sid) serverRegistry.reportUnreachable(sid);
     if (clientWs.readyState === WebSocket.OPEN) {
       clientWs.close();
     }
@@ -400,6 +411,8 @@ export function createWebSocketProxy(
   // Handle errors
   remoteWs.on('error', (err) => {
     console.error(`[KernelProxy] Remote WebSocket error for ${sessionId}:`, err);
+    const { serverId: sid } = parseSessionId(sessionId);
+    if (sid) serverRegistry.reportUnreachable(sid);
   });
 
   // Track the proxy

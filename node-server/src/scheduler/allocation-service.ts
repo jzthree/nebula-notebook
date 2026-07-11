@@ -52,6 +52,8 @@ class AllocationService {
   private allocations = new Map<string, Allocation>();
   private pollTimer: NodeJS.Timeout | null = null;
   private enabled = false;
+  private lastPollAt = 0;
+  private lostListenerRegistered = false;
 
   init(scheduler: Scheduler, ctx: LaunchContext): void {
     this.scheduler = scheduler;
@@ -59,6 +61,30 @@ class AllocationService {
     this.enabled = true;
     fs.mkdirSync(ctx.stateDir, { recursive: true });
     this.scheduleNextPoll(POLL_FAST_MS);
+    // React instantly when the cluster layer loses contact with a server
+    // that belongs to one of our allocations (kernel WS dropped, proxy
+    // request refused, heartbeat timeout) — verify against the scheduler
+    // NOW instead of waiting out the steady 30s cadence.
+    if (!this.lostListenerRegistered) {
+      this.lostListenerRegistered = true;
+      serverRegistry.onServerLost((server) => {
+        const tracked = [...this.allocations.values()].some(
+          (a) => !TERMINAL.includes(a.state) &&
+            (a.serverId === server.id || (server.allocationToken && a.token === server.allocationToken))
+        );
+        if (tracked) {
+          console.log(`[Scheduler] Lost contact with ${server.id} — checking its allocation now`);
+          this.pollNow();
+        }
+      });
+    }
+  }
+
+  /** Poll immediately (debounced to 2s so error bursts don't hammer squeue). */
+  pollNow(): void {
+    if (!this.enabled) return;
+    if (Date.now() - this.lastPollAt < 2_000) return;
+    this.scheduleNextPoll(0);
   }
 
   /** Pick the poll cadence from what we're actually waiting for. */
@@ -134,6 +160,7 @@ class AllocationService {
 
   private async poll(): Promise<void> {
     if (!this.scheduler) return;
+    this.lastPollAt = Date.now();
     for (const alloc of this.allocations.values()) {
       if (TERMINAL.includes(alloc.state)) continue;
 

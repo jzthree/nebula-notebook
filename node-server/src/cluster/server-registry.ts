@@ -212,6 +212,29 @@ class ServerRegistry {
     return this.getAllServers().filter(s => s.status === 'online');
   }
 
+  // Listeners fired when a peer looks dead (heartbeat timeout, or a proxy
+  // request to it failed at the connection level). Lets the allocation
+  // service react instantly instead of waiting for its next squeue poll.
+  private lostListeners: ((server: PeerServer) => void)[] = [];
+  onServerLost(cb: (server: PeerServer) => void): void {
+    this.lostListeners.push(cb);
+  }
+  private notifyLost(server: PeerServer): void {
+    for (const cb of this.lostListeners) {
+      try { cb(server); } catch { /* listener errors must not break the sweep */ }
+    }
+  }
+
+  /**
+   * A request proxied to this server just failed at the connection level
+   * (refused/reset/timeout). Don't mark it offline on one failure — that's
+   * the heartbeat's job — but do tell listeners so they can verify fast.
+   */
+  reportUnreachable(serverId: string): void {
+    const server = this.servers.get(serverId);
+    if (server) this.notifyLost(server);
+  }
+
   /**
    * Check server health and update status
    */
@@ -229,6 +252,7 @@ class ServerRegistry {
       if (stale > HEARTBEAT_TIMEOUT_MS && server.status === 'online') {
         console.log(`[ServerRegistry] Server ${server.id} marked offline (heartbeat timeout)`);
         server.status = 'offline';
+        this.notifyLost(server);
       }
     }
   }
