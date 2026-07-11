@@ -37,6 +37,9 @@ vi.mock('../../services/kernelService', () => ({
 
 vi.mock('../../services/fileService', () => ({
   getFiles: vi.fn().mockResolvedValue([]),
+  setActiveNotebookPath: vi.fn(),
+  getActiveNotebookDir: vi.fn().mockReturnValue(null),
+  seedOutputsBaseline: vi.fn(),
   getNotebookData: vi.fn().mockResolvedValue({
     path: '/test/notebook.ipynb',
     cells: [
