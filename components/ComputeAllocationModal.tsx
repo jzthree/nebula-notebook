@@ -169,19 +169,28 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  // Allocation state is cheap (in-memory) — poll often so transitions show fast.
+  // Allocation state is cheap (in-memory) — poll often so transitions show
+  // fast. Paused while the tab is hidden.
   useEffect(() => {
     if (!isOpen) return;
-    const id = setInterval(refreshAll, 4000);
+    const id = setInterval(() => { if (!document.hidden) refreshAll(); }, 4000);
     return () => clearInterval(id);
   }, [isOpen, refreshAll]);
 
-  // Queue load + QoS usage hit the scheduler — poll slowly.
+  // Queue load + QoS usage hit the scheduler — poll slowly, never hidden.
   useEffect(() => {
     if (!isOpen) return;
-    const id = setInterval(refreshLoad, 15000);
+    const id = setInterval(() => { if (!document.hidden) refreshLoad(); }, 15000);
     return () => clearInterval(id);
   }, [isOpen, refreshLoad]);
+
+  // Refresh the moment the tab becomes visible again.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onVisible = () => { if (!document.hidden) { refreshAll(); refreshLoad(); } };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [isOpen, refreshAll, refreshLoad]);
 
   // When the partition changes, discover which QoS it accepts and keep the
   // selected QoS valid (some partitions require an explicit QoS).

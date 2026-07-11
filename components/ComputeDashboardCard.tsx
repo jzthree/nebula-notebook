@@ -77,19 +77,30 @@ export default function ComputeDashboardCard() {
   }, [refreshAllocations, refreshLoad]);
 
   // Allocation state is cheap (in-memory list) — poll it often so pending →
-  // running → active transitions show up quickly.
+  // running → active transitions show up quickly. Paused while the tab is
+  // hidden: a background dashboard must generate zero traffic.
   useEffect(() => {
     if (!enabled) return;
-    const id = setInterval(refreshAllocations, 4000);
+    const id = setInterval(() => { if (!document.hidden) refreshAllocations(); }, 4000);
     return () => clearInterval(id);
   }, [enabled, refreshAllocations]);
 
-  // The queue-load snapshot hits the scheduler (sinfo/scontrol/squeue) — poll slowly.
+  // The queue-load snapshot hits the scheduler (sinfo/scontrol/squeue) — poll
+  // slowly, never from a hidden tab.
   useEffect(() => {
     if (!enabled) return;
-    const id = setInterval(refreshLoad, 15000);
+    const id = setInterval(() => { if (!document.hidden) refreshLoad(); }, 15000);
     return () => clearInterval(id);
   }, [enabled, refreshLoad]);
+
+  // Coming back to the tab: refresh immediately instead of waiting for the
+  // next interval tick, so the data is never stale right when it's looked at.
+  useEffect(() => {
+    if (!enabled) return;
+    const onVisible = () => { if (!document.hidden) { refreshAllocations(); refreshLoad(); } };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [enabled, refreshAllocations, refreshLoad]);
 
   if (!enabled) return null; // hidden unless a scheduler is detected
 

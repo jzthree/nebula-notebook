@@ -59,6 +59,9 @@ function mapState(raw: string): JobState {
 async function expandNodes(nodelist: string): Promise<string[]> {
   const nl = (nodelist || '').trim();
   if (!nl || nl === '(null)' || nl === 'None' || nl === 'n/a') return [];
+  // Plain single hostname (no ranges/lists) — the common case for 1-node
+  // allocations. Don't shell out to scontrol just to echo it back.
+  if (!/[\[\],]/.test(nl)) return [nl];
   try {
     const { stdout } = await run('scontrol', ['show', 'hostnames', nl], 5_000);
     return stdout.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -76,7 +79,9 @@ export class SlurmScheduler implements Scheduler {
   // Short-TTL caches + in-flight de-duplication so the dashboard's 15s poll, the
   // allocation modal, and manual refresh don't each re-run the (potentially slow)
   // sinfo/scontrol/squeue/sacctmgr queries against the scheduler.
-  private static readonly LOAD_TTL_MS = 10_000;
+  // 20s: deliberately ABOVE the clients' 15s poll so steady-state polling
+  // alternates cache hit/miss instead of missing every time (10s never hit).
+  private static readonly LOAD_TTL_MS = 20_000;
   private static readonly ASSOC_TTL_MS = 60_000;
   private loadCache: { data: QueueLoad; at: number } | null = null;
   private loadInflight: Promise<QueueLoad> | null = null;

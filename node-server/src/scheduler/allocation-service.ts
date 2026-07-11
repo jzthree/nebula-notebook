@@ -37,7 +37,13 @@ export interface Allocation {
   walltimeEndsAt?: number;
 }
 
-const POLL_INTERVAL_MS = 5_000;
+// Adaptive polling: fast only while a transition is imminent (job climbing
+// the queue / server booting), slow once allocations are correlated and
+// steady (we're only watching for job end), slowest when idle. Each squeue
+// poll is a real scheduler hit on a shared login node — don't burn them.
+const POLL_FAST_MS = 5_000;    // pending/running/uncorrelated allocations
+const POLL_STEADY_MS = 30_000; // all tracked allocations active + correlated
+const POLL_IDLE_MS = 60_000;   // nothing non-terminal to watch
 const TERMINAL: AllocationState[] = ['ended', 'failed', 'cancelled'];
 
 class AllocationService {
@@ -52,10 +58,26 @@ class AllocationService {
     this.ctx = ctx;
     this.enabled = true;
     fs.mkdirSync(ctx.stateDir, { recursive: true });
-    if (this.pollTimer) clearInterval(this.pollTimer);
-    this.pollTimer = setInterval(() => {
-      this.poll().catch((err) => console.error('[Scheduler] poll error:', err));
-    }, POLL_INTERVAL_MS);
+    this.scheduleNextPoll(POLL_FAST_MS);
+  }
+
+  /** Pick the poll cadence from what we're actually waiting for. */
+  private nextPollDelay(): number {
+    const live = [...this.allocations.values()].filter((a) => !TERMINAL.includes(a.state));
+    if (live.length === 0) return POLL_IDLE_MS;
+    return live.some((a) => a.state !== 'active' || !a.serverId) ? POLL_FAST_MS : POLL_STEADY_MS;
+  }
+
+  private scheduleNextPoll(delay: number): void {
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = setTimeout(async () => {
+      try {
+        await this.poll();
+      } catch (err) {
+        console.error('[Scheduler] poll error:', err);
+      }
+      if (this.enabled) this.scheduleNextPoll(this.nextPollDelay());
+    }, delay);
   }
 
   isEnabled(): boolean {
@@ -89,8 +111,9 @@ class AllocationService {
     alloc.jobId = jobId;
     this.allocations.set(id, alloc);
     console.log(`[Scheduler] Allocation ${id} submitted as job ${jobId} (${spec.partition}${spec.qos ? '/' + spec.qos : ''})`);
-    // Kick an immediate poll so a fast-starting job doesn't sit at "pending".
-    void this.poll().catch(() => {});
+    // Poll now and drop back to the fast cadence — a create can land while
+    // the poller is in a slow idle/steady wait.
+    this.scheduleNextPoll(0);
     return alloc;
   }
 
@@ -154,7 +177,7 @@ class AllocationService {
 
   shutdown(): void {
     if (this.pollTimer) {
-      clearInterval(this.pollTimer);
+      clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
   }
