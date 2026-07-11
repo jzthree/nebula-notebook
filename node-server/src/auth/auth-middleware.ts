@@ -10,6 +10,7 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { IncomingMessage } from 'http';
 import { parse as parseUrl } from 'url';
+import { timingSafeEqual } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -106,13 +107,28 @@ function extractClusterSecret(req: FastifyRequest | IncomingMessage): string | u
   return value;
 }
 
+function secretsEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+/** Loopback = same machine (or arrived through an ssh tunnel, which
+ *  terminates on this machine) — the trust boundary for the on-disk
+ *  session-token fallback used by MCP/CLI tools. */
+function isLoopback(addr: string | undefined): boolean {
+  if (!addr) return false;
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1' || addr.startsWith('127.');
+}
+
 function hasValidClusterSecret(req: FastifyRequest | IncomingMessage): boolean {
   const clusterSecret = getClusterSecret();
   if (!clusterSecret) {
     return false;
   }
   const provided = extractClusterSecret(req);
-  return Boolean(provided && provided === clusterSecret);
+  return Boolean(provided && secretsEqual(provided, clusterSecret));
 }
 
 function isClusterRoute(pathname: string): boolean {
@@ -191,8 +207,10 @@ export async function authMiddleware(request: FastifyRequest, reply: FastifyRepl
 
   // Fallback: if no token in request, check the persisted session token file.
   // This allows MCP servers and CLI tools to piggyback on the browser's auth
-  // without needing their own TOTP flow.
-  if (!token) {
+  // without needing their own TOTP flow. Loopback-only: those tools run on
+  // this machine (or reach it through an ssh tunnel, which lands on
+  // loopback); a token-less request from the network gets no free ride.
+  if (!token && isLoopback(request.ip)) {
     token = readSessionToken();
   }
 
@@ -236,7 +254,7 @@ export function authWebSocketMiddleware(request: IncomingMessage): boolean {
       return false;
     }
     const provided = extractClusterSecret(request as any);
-    if (provided !== clusterSecret) {
+    if (!provided || !secretsEqual(provided, clusterSecret)) {
       console.log('[Auth] WebSocket rejected - invalid cluster secret');
       return false;
     }

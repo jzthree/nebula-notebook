@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # Root install triggers postinstall, which installs node-server and
+      # packages/* when running from a git checkout (not under node_modules).
+      - run: npm install
+      - name: Typecheck (client + server)
+        run: |
+          npx tsc --noEmit -p tsconfig.json
+          cd node-server && npx tsc -p tsconfig.json --noEmit
+      - name: Client tests
+        run: npx vitest run
+      - name: Server tests
+        run: cd node-server && npx vitest run
+      - name: Autocomplete tests
+        run: cd packages/autocomplete && npm test --if-present
+
+  # Catches packaging regressions the dev flow never sees: missing root deps
+  # (node-server runtime deps must live in the ROOT package.json for npm
+  # installs), files-whitelist mistakes, and native-module install failures.
+  pack-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - name: Pack tarball (runs prepublishOnly build)
+        run: npm pack
+      - name: Install tarball in a clean dir and boot the server
+        run: |
+          mkdir /tmp/smoke && cd /tmp/smoke
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/nebula-notebook-*.tgz
+          # Boot with auth disabled on a scratch dir; wait for /api/health.
+          NEBULA_NO_AUTH=true PORT=8123 npx nebula-notebook &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8123/api/health >/dev/null && ok=1 && break
+            sleep 1
+          done
+          [ -n "$ok" ] || { echo "server never became healthy"; exit 1; }
+          curl -sf http://localhost:8123/api/health

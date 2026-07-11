@@ -288,9 +288,26 @@ async function createApp(): Promise<FastifyInstance> {
     timer.unref(); // never keep the process alive for this
   }
 
-  // Register CORS
+  // Register CORS. Allowlist instead of '*': cross-origin BROWSER pages lose
+  // API access (drive-by protection), while nothing we ship is affected —
+  // the terminal/agent/MCP are non-browser clients (no Origin header, CORS
+  // doesn't apply), the served UI is same-origin, ssh port-forwards land on
+  // localhost, and vite dev is a localhost origin. Extra origins for exotic
+  // serving setups: NEBULA_ALLOWED_ORIGINS=https://a.com,https://b.com
+  const extraOrigins = (process.env.NEBULA_ALLOWED_ORIGINS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
   await fastify.register(fastifyCors, {
-    origin: '*',
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true); // non-browser client or same-origin
+      if (extraOrigins.includes(origin)) return cb(null, true);
+      try {
+        const { hostname } = new URL(origin);
+        if (hostname === 'localhost' || hostname === '::1' || hostname === '127.0.0.1' || hostname.startsWith('127.')) {
+          return cb(null, true);
+        }
+      } catch { /* malformed Origin — treat as disallowed */ }
+      cb(null, false); // no CORS headers -> browser blocks the cross-origin page
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-API-Provider'],
@@ -746,6 +763,16 @@ async function main(): Promise<void> {
 }
 
 // Run
+// A single stray rejection must not take down every kernel, terminal, and
+// SLURM allocation this process is holding. Log loudly and keep serving —
+// for a state-holding server, dying is strictly worse than degrading.
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal-ish] Unhandled promise rejection (continuing):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[fatal-ish] Uncaught exception (continuing):', err);
+});
+
 main().catch((err) => {
   console.error('[Server] Fatal error:', err);
   process.exit(1);

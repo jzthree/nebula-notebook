@@ -50,8 +50,10 @@ export interface VerifyResult {
 // Rate limiting: max 5 attempts per 30 seconds
 const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 30000;
-// Temporary debugging setting: accept up to five TOTP steps before and after
-// current time while investigating clock skew and login flow issues.
+// DELIBERATELY wide (±5 steps = ±2.5min): cluster login nodes have shipped
+// with minutes of clock skew and a tight window locks the user out entirely.
+// Availability beats the marginal brute-force surface here — do not "fix"
+// this back to 1 without confirming server NTP is trustworthy everywhere.
 const TOTP_WINDOW_STEPS = 5;
 authenticator.options = {
   ...authenticator.options,

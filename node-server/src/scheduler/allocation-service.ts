@@ -60,6 +60,7 @@ class AllocationService {
     this.ctx = ctx;
     this.enabled = true;
     fs.mkdirSync(ctx.stateDir, { recursive: true });
+    this.loadPersisted();
     this.scheduleNextPoll(POLL_FAST_MS);
     // React instantly when the cluster layer loses contact with a server
     // that belongs to one of our allocations (kernel WS dropped, proxy
@@ -85,6 +86,59 @@ class AllocationService {
     if (!this.enabled) return;
     if (Date.now() - this.lastPollAt < 2_000) return;
     this.scheduleNextPoll(0);
+  }
+
+  private stateFile(): string | null {
+    return this.ctx ? path.join(this.ctx.stateDir, 'allocations.json') : null;
+  }
+
+  /**
+   * Allocations survive head-server restarts: persisted on every change,
+   * reloaded on init. A reloaded 'active' allocation is demoted to 'running'
+   * with its serverId cleared — the registry is empty after a restart, and
+   * the compute node's client-server re-registers itself (heartbeat -> 404
+   * -> re-register with its allocation token) within ~30s, at which point
+   * poll() re-correlates and promotes it back to 'active'. The SLURM job
+   * itself is re-checked by jobId on the next poll, so jobs that died while
+   * we were down are marked ended/failed instead of lingering.
+   */
+  private persist(): void {
+    const file = this.stateFile();
+    if (!file) return;
+    try {
+      const all = [...this.allocations.values()];
+      // Cap history so the file can't grow unboundedly: all live ones,
+      // plus the 20 most recent terminal ones for the UI's history list.
+      const live = all.filter((a) => !TERMINAL.includes(a.state));
+      const done = all.filter((a) => TERMINAL.includes(a.state))
+        .sort((a, b) => b.createdAt - a.createdAt).slice(0, 20);
+      const tmp = `${file}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify([...live, ...done]));
+      fs.renameSync(tmp, file);
+    } catch (err) {
+      console.error('[Scheduler] failed to persist allocations:', err);
+    }
+  }
+
+  private loadPersisted(): void {
+    const file = this.stateFile();
+    if (!file || !fs.existsSync(file)) return;
+    try {
+      const list = JSON.parse(fs.readFileSync(file, 'utf-8')) as Allocation[];
+      let revived = 0;
+      for (const alloc of list) {
+        if (!alloc?.id || this.allocations.has(alloc.id)) continue;
+        if (!TERMINAL.includes(alloc.state)) {
+          if (alloc.state === 'active') alloc.state = 'running';
+          alloc.serverId = undefined; // fresh registry — re-correlate via token
+          revived++;
+        }
+        this.allocations.set(alloc.id, alloc);
+      }
+      if (revived) console.log(`[Scheduler] Recovered ${revived} live allocation(s) from disk`);
+    } catch (err) {
+      console.error('[Scheduler] failed to load persisted allocations:', err);
+    }
   }
 
   /** Pick the poll cadence from what we're actually waiting for. */
@@ -136,6 +190,7 @@ class AllocationService {
     const { jobId } = await this.scheduler.submit(scriptPath);
     alloc.jobId = jobId;
     this.allocations.set(id, alloc);
+    this.persist();
     console.log(`[Scheduler] Allocation ${id} submitted as job ${jobId} (${spec.partition}${spec.qos ? '/' + spec.qos : ''})`);
     // Poll now and drop back to the fast cadence — a create can land while
     // the poller is in a slow idle/steady wait.
@@ -155,12 +210,14 @@ class AllocationService {
     }
     if (alloc.serverId) serverRegistry.unregister(alloc.serverId);
     alloc.state = 'cancelled';
+    this.persist();
     return true;
   }
 
   private async poll(): Promise<void> {
     if (!this.scheduler) return;
     this.lastPollAt = Date.now();
+    let dirty = false;
     for (const alloc of this.allocations.values()) {
       if (TERMINAL.includes(alloc.state)) continue;
 
@@ -171,6 +228,7 @@ class AllocationService {
           alloc.serverId = server.id;
           alloc.state = 'active';
           alloc.nodes = [server.host];
+          dirty = true;
           if (!alloc.walltimeEndsAt) {
             alloc.walltimeEndsAt = Date.now() + alloc.spec.walltimeMinutes * 60_000;
           }
@@ -189,6 +247,7 @@ class AllocationService {
 
       if (status.state === 'running' && alloc.state === 'pending') {
         alloc.state = 'running';
+        dirty = true;
         alloc.nodes = status.nodes.length ? status.nodes : alloc.nodes;
         if (!alloc.walltimeEndsAt) {
           alloc.walltimeEndsAt = Date.now() + alloc.spec.walltimeMinutes * 60_000;
@@ -196,10 +255,12 @@ class AllocationService {
       } else if (['completed', 'cancelled', 'failed'].includes(status.state)) {
         alloc.state = status.state === 'failed' ? 'failed' : status.state === 'cancelled' ? 'cancelled' : 'ended';
         alloc.reason = status.reason;
+        dirty = true;
         if (alloc.serverId) serverRegistry.unregister(alloc.serverId);
         console.log(`[Scheduler] Allocation ${alloc.id} ${alloc.state} (job ${alloc.jobId})`);
       }
     }
+    if (dirty) this.persist();
   }
 
   shutdown(): void {

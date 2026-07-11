@@ -317,7 +317,7 @@ export default async function fsRoutes(fastify: FastifyInstance) {
       }
 
       // Save the uploaded file to a temp location first
-      const tmpPath = path.join(os.tmpdir(), `upload-${Date.now()}-${data.filename}`);
+      const tmpPath = path.join(os.tmpdir(), `upload-${Date.now()}-${path.basename(data.filename || 'file')}`);
       const writeStream = nodeFs.createWriteStream(tmpPath);
       await new Promise<void>((resolve, reject) => {
         data.file.pipe(writeStream);
