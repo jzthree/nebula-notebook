@@ -233,7 +233,7 @@ function getFilename(path: string): string {
 }
 
 export const Dashboard: React.FC = () => {
-  const { toast } = useNotification();
+  const { toast, promptText } = useNotification();
 
   // Server working directory
   const [serverCwd, setServerCwd] = useState<string>('~');
@@ -417,21 +417,24 @@ export const Dashboard: React.FC = () => {
   };
 
   // Create new notebook - handled by FileBrowser
-  const handleNewNotebook = () => {
-    // FileBrowser handles this, but we provide a header button too
-    // We can trigger it by incrementing refresh which causes FileBrowser to re-render
-    // Actually, clicking this should use the same prompt flow as FileBrowser
-    const name = prompt('Enter notebook name:');
+  const handleNewNotebook = async () => {
+    const name = await promptText({ title: 'New notebook', placeholder: 'notebook name' });
     if (name) {
-      // Import and call createNotebook
+      // Open a placeholder tab SYNCHRONOUSLY inside the user gesture — a
+      // window.open after the await is popup-blocked and the action looks
+      // broken (notebook created, nothing happens). Blocked anyway (null)
+      // -> navigate this tab instead of failing silently.
+      const tab = window.open('', '_blank');
       import('../services/fileService').then(({ createNotebook }) => {
         createNotebook(name, [{ id: `cell-${Date.now()}`, type: 'code', content: '', outputs: [], isExecuting: false }], browsedPath || serverCwd)
           .then((notebook) => {
-            window.open(`/?file=${encodeURIComponent(notebook.id)}`, '_blank');
+            const url = `/?file=${encodeURIComponent(notebook.id)}`;
+            if (tab) tab.location.href = url; else window.location.href = url;
             setRefreshCounter(c => c + 1);
           })
           .catch((err) => {
-            alert(err.message || 'Failed to create notebook');
+            tab?.close();
+            toast(err.message || 'Failed to create notebook', 'error');
           });
       });
     }

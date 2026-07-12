@@ -10,6 +10,19 @@ interface Toast {
   type: ToastType;
   message: string;
   duration?: number;
+  /** Optional action button — e.g. "Restart kernel" on a kernel-death toast. */
+  action?: { label: string; onClick: () => void };
+}
+
+// Text-input prompt state (modal replacement for window.prompt)
+interface PromptState {
+  isOpen: boolean;
+  title: string;
+  message?: string;
+  placeholder?: string;
+  defaultValue?: string;
+  confirmLabel?: string;
+  resolve?: (result: string | null) => void;
 }
 
 // Confirm dialog state
@@ -25,7 +38,7 @@ interface ConfirmState {
 
 // Context type
 interface NotificationContextType {
-  toast: (message: string, type?: ToastType, duration?: number) => void;
+  toast: (message: string, type?: ToastType, duration?: number, action?: Toast['action']) => void;
   confirm: (options: {
     title: string;
     message: string;
@@ -33,6 +46,14 @@ interface NotificationContextType {
     cancelLabel?: string;
     variant?: 'danger' | 'warning' | 'default';
   }) => Promise<boolean>;
+  /** Modal text input; resolves to the string or null if cancelled. */
+  promptText: (options: {
+    title: string;
+    message?: string;
+    placeholder?: string;
+    defaultValue?: string;
+    confirmLabel?: string;
+  }) => Promise<string | null>;
 }
 
 const NotificationContext = createContext<NotificationContextType | null>(null);
@@ -61,7 +82,17 @@ const ToastItem: React.FC<{ toast: Toast; onDismiss: (id: string) => void }> = (
       role="alert"
     >
       <div className="flex-shrink-0">{toastIcons[toast.type]}</div>
-      <p className="flex-1 text-sm font-medium break-words min-w-0">{toast.message}</p>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium break-words">{toast.message}</p>
+        {toast.action && (
+          <button
+            onClick={() => { toast.action!.onClick(); onDismiss(toast.id); }}
+            className="mt-1.5 px-2.5 py-1 text-xs font-semibold rounded-md border border-current/30 hover:bg-black/5 transition-colors"
+          >
+            {toast.action.label}
+          </button>
+        )}
+      </div>
       <button
         onClick={() => onDismiss(toast.id)}
         aria-label="Dismiss notification"
@@ -133,6 +164,66 @@ const ConfirmDialog: React.FC<{
   );
 };
 
+// Prompt dialog — modal replacement for window.prompt (which is blocked in
+// some embedded contexts and jarring everywhere else).
+const PromptDialog: React.FC<{
+  state: PromptState;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+}> = ({ state, onSubmit, onCancel }) => {
+  const dialogRef = useModalA11y<HTMLDivElement>(onCancel);
+  const [value, setValue] = useState(state.defaultValue ?? '');
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/50 animate-in fade-in" onClick={onCancel} />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="prompt-dialog-title"
+        tabIndex={-1}
+        className="relative bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 animate-in zoom-in-95 fade-in"
+      >
+        <form
+          onSubmit={(e) => { e.preventDefault(); if (value.trim()) onSubmit(value.trim()); }}
+        >
+          <div className="p-6">
+            <h3 id="prompt-dialog-title" className="text-lg font-semibold text-slate-900 mb-2">
+              {state.title}
+            </h3>
+            {state.message && <p className="text-sm text-slate-600 mb-3 break-words">{state.message}</p>}
+            <input
+              autoFocus
+              type="text"
+              value={value}
+              placeholder={state.placeholder}
+              onChange={(e) => setValue(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div className="flex justify-end gap-3 px-6 py-4 bg-slate-50 rounded-b-xl border-t border-slate-100">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!value.trim()}
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+            >
+              {state.confirmLabel || 'Create'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
 // Provider component
 export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -141,6 +232,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     title: '',
     message: '',
   });
+
+  const [promptState, setPromptState] = useState<PromptState>({ isOpen: false, title: '' });
 
   const toastTimeouts = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
@@ -155,9 +248,9 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   }, []);
 
   // Add toast
-  const toast = useCallback((message: string, type: ToastType = 'info', duration: number = 4000) => {
+  const toast = useCallback((message: string, type: ToastType = 'info', duration: number = 4000, action?: Toast['action']) => {
     const id = crypto.randomUUID();
-    const newToast: Toast = { id, type, message, duration };
+    const newToast: Toast = { id, type, message, duration, action };
 
     setToasts(prev => [...prev, newToast]);
 
@@ -187,6 +280,28 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     });
   }, []);
 
+  const promptText = useCallback((options: {
+    title: string;
+    message?: string;
+    placeholder?: string;
+    defaultValue?: string;
+    confirmLabel?: string;
+  }): Promise<string | null> => {
+    return new Promise((resolve) => {
+      setPromptState({ isOpen: true, ...options, resolve });
+    });
+  }, []);
+
+  const handlePromptSubmit = useCallback((value: string) => {
+    promptState.resolve?.(value);
+    setPromptState(prev => ({ ...prev, isOpen: false }));
+  }, [promptState.resolve]);
+
+  const handlePromptCancel = useCallback(() => {
+    promptState.resolve?.(null);
+    setPromptState(prev => ({ ...prev, isOpen: false }));
+  }, [promptState.resolve]);
+
   // Handle confirm
   const handleConfirm = useCallback(() => {
     confirmState.resolve?.(true);
@@ -200,7 +315,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   }, [confirmState.resolve]);
 
   return (
-    <NotificationContext.Provider value={{ toast, confirm }}>
+    <NotificationContext.Provider value={{ toast, confirm, promptText }}>
       {children}
 
       {/* Toast container */}
@@ -216,6 +331,16 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           state={confirmState}
           onConfirm={handleConfirm}
           onCancel={handleCancel}
+        />
+      )}
+
+      {/* Prompt dialog — keyed remount per open so the input state resets */}
+      {promptState.isOpen && (
+        <PromptDialog
+          key={promptState.title + (promptState.defaultValue ?? '')}
+          state={promptState}
+          onSubmit={handlePromptSubmit}
+          onCancel={handlePromptCancel}
         />
       )}
     </NotificationContext.Provider>

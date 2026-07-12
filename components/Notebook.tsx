@@ -10,7 +10,7 @@ import { setAutocompleteContext, isAiCompletionInFlight } from '../services/aiAu
 import ComputeAllocationModal from './ComputeAllocationModal';
 import { getSettings, saveSettings, IndentationPreference } from '../services/settingsService';
 import { markOnboardingStep } from '../services/onboardingService';
-import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server, Clock, Maximize2, Minimize2, FileText, FolderOpen } from 'lucide-react';
+import { Plus, Play, Save, Menu, ChevronDown, RotateCw, Power, Sparkles, Undo2, Redo2, Settings, Square, Cloud, CloudOff, Loader2, Check, AlertCircle, RefreshCw, Download, Cpu, Keyboard, X, CheckCircle, XCircle, Layers, Bot, Shield, ShieldCheck, ShieldOff, Terminal, History, MemoryStick, Server, Clock, Maximize2, Minimize2, FileText, FolderOpen, ScrollText } from 'lucide-react';
 import { CellListHandle } from './VirtualCellList';
 import { EditorView } from '@codemirror/view';
 import {
@@ -315,6 +315,20 @@ function getInitialFileId(): string | null {
 }
 
 // Format elapsed time in a compact form (e.g., "1.2s", "1m 23s")
+// Leaf component so the 100ms execution tick re-renders ONLY this span —
+// as top-level Notebook state it re-rendered the entire 5.7k-line tree
+// (and re-ran the full cell map) ten times a second while any cell ran.
+const ElapsedTimer: React.FC<{ startRef: React.RefObject<number | null> }> = ({ startRef }) => {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setElapsed(startRef.current ? Date.now() - startRef.current : 0);
+    }, 100);
+    return () => clearInterval(id);
+  }, [startRef]);
+  return <span className="text-gray-400 tabular-nums">{formatElapsedTime(elapsed)}</span>;
+};
+
 function formatElapsedTime(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   const tenths = Math.floor((ms % 1000) / 100);
@@ -1483,6 +1497,12 @@ export const Notebook: React.FC = () => {
 
   // Ref for saveNow to avoid stale closures in keyboard handler
   const saveNowRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  // Best-effort flush hook for the ErrorBoundary: before its reload nukes
+  // in-memory state, it tries to save whatever autosave hasn't shipped yet.
+  useEffect(() => {
+    (window as any).__nebulaFlushSave = () => saveNowRef.current?.();
+    return () => { delete (window as any).__nebulaFlushSave; };
+  }, []);
   // Ref for handleManualSave to avoid stale closures in keyboard handler
   const handleManualSaveRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
@@ -1661,10 +1681,13 @@ export const Notebook: React.FC = () => {
             toast(
               `Kernel died at ~${Math.round(lastMemPctRef.current * 100)}% of the allocation memory limit — almost certainly OOM-killed by SLURM. Re-allocate with more memory for this workload.`,
               'error',
-              15000
+              15000, { label: 'Restart kernel', onClick: () => restartKernelFnRef.current?.() }
             );
           } else {
-            toast('Kernel died — use the kernel menu to restart it', 'error', 6000);
+            toast('Kernel died', 'error', 10000, {
+              label: 'Restart kernel',
+              onClick: () => restartKernelFnRef.current?.(),
+            });
           }
         }
         // If kernel is busy with a specific cell (reconnect scenario),
@@ -1699,7 +1722,7 @@ export const Notebook: React.FC = () => {
   const executionStartTimeRef = useRef<number | null>(null); // Track when queue execution started
 
   // Execution indicator state - persists after completion until dismissed
-  const [executionElapsedMs, setExecutionElapsedMs] = useState(0);
+  // (elapsed time lives in the ElapsedTimer leaf, driven by cellExecutionStartRef)
   const [lastExecutionResult, setLastExecutionResult] = useState<{
     cellId: string;
     cellIndex: number;
@@ -1743,21 +1766,6 @@ export const Notebook: React.FC = () => {
       }
     }
   }, [executionQueue]);
-
-  // Timer to update elapsed time while execution is in progress
-  useEffect(() => {
-    if (!isProcessingQueue || !cellExecutionStartRef.current) {
-      return;
-    }
-
-    const interval = setInterval(() => {
-      if (cellExecutionStartRef.current) {
-        setExecutionElapsedMs(Date.now() - cellExecutionStartRef.current);
-      }
-    }, 100); // Update every 100ms for smooth display
-
-    return () => clearInterval(interval);
-  }, [isProcessingQueue]);
 
   // Clear last result when new execution starts
   useEffect(() => {
@@ -3140,11 +3148,18 @@ export const Notebook: React.FC = () => {
       // The flag was written into the notebook file on the server — adopt
       // the new mtime or the next autosave shows a false conflict dialog.
       adoptServerMtime(result.mtime);
-      toast(
-        newPermitted ? 'Agent can now modify this notebook' : 'Agent access revoked',
-        'info',
-        2000
-      );
+      if (newPermitted && !result.has_history) {
+        // Without history there's no undo trail, so agent edits stay blocked
+        // until the first human edit initializes it. Say so out loud — this
+        // gate used to hide in a tooltip and read as "agent silently broken".
+        toast('Agent enabled — it can start editing after your first edit to this notebook (that starts the undo history that makes agent changes reversible)', 'info', 8000);
+      } else {
+        toast(
+          newPermitted ? 'Agent can now modify this notebook' : 'Agent access revoked',
+          'info',
+          2000
+        );
+      }
     } else {
       toast('Failed to update agent permission', 'error');
     }
@@ -3997,7 +4012,6 @@ export const Notebook: React.FC = () => {
       // Start timing for this cell
       const cellStartTime = Date.now();
       cellExecutionStartRef.current = cellStartTime;
-      setExecutionElapsedMs(0);
 
       if (cell && cell.type === 'code') {
         let hasError = false;
@@ -4995,7 +5009,7 @@ export const Notebook: React.FC = () => {
                               >
                                 #{executionIndicator.cellIndex + 1}
                               </span>
-                              <span className="text-gray-400 tabular-nums">{formatElapsedTime(executionElapsedMs)}</span>
+                              <ElapsedTimer startRef={cellExecutionStartRef} />
                               {executionIndicator.queueLength > 1 && (
                                 <span className="text-gray-400">+{executionIndicator.queueLength - 1}</span>
                               )}
@@ -5159,13 +5173,24 @@ export const Notebook: React.FC = () => {
                   >
                     <Keyboard className="w-4 h-4" />
                   </button>
-                  {/* Output Logging Mode Toggle - Hidden for now to prevent history bloat.
-                      The feature is fully implemented and can be enabled via:
-                      - API: POST /api/notebook/settings { path, output_logging: 'full' | 'minimal' }
-                      - Stored in notebook metadata.nebula.output_logging
-                      - 'minimal' (default): no output in history
-                      - 'full': complete output saved to history
-                  */}
+                  {/* Output Logging Mode Toggle — 'full' persists outputs into
+                      history (bigger history files; default 'minimal' keeps it lean) */}
+                  <button
+                    onClick={handleToggleOutputLogging}
+                    className={`p-1.5 rounded-md transition-colors ${
+                      outputLoggingMode === 'full'
+                        ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
+                        : 'hover:bg-slate-200 text-slate-600'
+                    }`}
+                    title={
+                      outputLoggingMode === 'full'
+                        ? 'Outputs are saved into notebook history (larger history files) - click for minimal'
+                        : 'Outputs are not saved into history - click to log full outputs into history'
+                    }
+                    aria-label="Toggle output logging in history"
+                  >
+                    <ScrollText className="w-4 h-4" />
+                  </button>
                   {/* Agent Permission Toggle */}
                   <button
                     onClick={handleToggleAgentPermission}

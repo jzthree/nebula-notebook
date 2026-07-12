@@ -109,7 +109,7 @@ const FileBrowserComponent: React.FC<Props> = ({
   maxHeight = '60vh',
   className = '',
 }) => {
-  const { toast, confirm } = useNotification();
+  const { toast, confirm, promptText } = useNotification();
   const defaultSidebarWidth = 320;
   const [currentPath, setCurrentPath] = useState<string>(() => initialPath || '~');
   const [rootPath, setRootPath] = useState<string>('~');
@@ -393,19 +393,24 @@ const FileBrowserComponent: React.FC<Props> = ({
   const handleCreate = async (extension: '.ipynb' | '.qmd' | '.py' = '.ipynb') => {
     setShowCreateMenu(false);
     const label = extension === '.qmd' ? 'Quarto notebook' : extension === '.py' ? 'Python notebook' : 'notebook';
-    const name = prompt(`Enter ${label} name:`);
+    const name = await promptText({ title: `New ${label}`, placeholder: `${label} name` });
     if (name) {
+      // Placeholder tab opened synchronously in the user gesture; a
+      // window.open after the await gets popup-blocked (silent no-op).
+      const tab = window.open('', '_blank');
       try {
         const result = await createNotebook(name, [], currentPath, extension);
         loadDirectory(currentPath);
         onRefresh();
-        // Open the newly created notebook in a new browser tab
         if (result?.id) {
           const url = new URL(window.location.href);
           url.searchParams.set('file', result.id);
-          window.open(url.toString(), '_blank');
+          if (tab) tab.location.href = url.toString(); else window.location.href = url.toString();
+        } else {
+          tab?.close();
         }
       } catch (err: any) {
+        tab?.close();
         toast(err.message || 'Failed to create notebook', 'error');
       }
     }

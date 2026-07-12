@@ -42,26 +42,47 @@ describe('ErrorBoundary', () => {
     );
 
     expect(screen.getByText('Something went wrong')).toBeInTheDocument();
-    expect(screen.getByText(/Test error message/)).toBeInTheDocument();
+    // Message shows in the summary line and again inside technical details
+    expect(screen.getAllByText(/Test error message/).length).toBeGreaterThan(0);
   });
 
-  it('shows reload button when error occurs', () => {
+  it('shows recovery buttons when error occurs', () => {
     render(
       <ErrorBoundary>
         <ThrowingComponent shouldThrow={true} />
       </ErrorBoundary>
     );
 
-    expect(screen.getByText('Reload Page')).toBeInTheDocument();
+    expect(screen.getByText('Try again')).toBeInTheDocument();
+    expect(screen.getByText('Save & reload')).toBeInTheDocument();
   });
 
-  it('calls window.location.reload when reload button is clicked', () => {
-    // Mock window.location.reload
+  it('"Try again" resets the boundary and re-renders children', () => {
+    let shouldThrow = true;
+    const Flaky = () => {
+      if (shouldThrow) throw new Error('Test error message');
+      return <div>Recovered content</div>;
+    };
+    render(
+      <ErrorBoundary>
+        <Flaky />
+      </ErrorBoundary>
+    );
+    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+
+    shouldThrow = false;
+    fireEvent.click(screen.getByText('Try again'));
+    expect(screen.getByText('Recovered content')).toBeInTheDocument();
+  });
+
+  it('flushes unsaved work then reloads on "Save & reload"', async () => {
     const mockReload = vi.fn();
     Object.defineProperty(window, 'location', {
       value: { reload: mockReload },
       writable: true
     });
+    const flush = vi.fn().mockResolvedValue(undefined);
+    (window as any).__nebulaFlushSave = flush;
 
     render(
       <ErrorBoundary>
@@ -69,7 +90,9 @@ describe('ErrorBoundary', () => {
       </ErrorBoundary>
     );
 
-    fireEvent.click(screen.getByText('Reload Page'));
-    expect(mockReload).toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Save & reload'));
+    await vi.waitFor(() => expect(mockReload).toHaveBeenCalled());
+    expect(flush).toHaveBeenCalled();
+    delete (window as any).__nebulaFlushSave;
   });
 });
