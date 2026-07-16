@@ -270,6 +270,42 @@ describe('PythonDiscoveryService', () => {
     });
   });
 
+  describe('Conda discovery via filesystem locator', () => {
+    it('finds a path-based conda env recorded in environments.txt (no conda on PATH needed)', async () => {
+      const fixtureHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nebula-conda-home-')));
+      try {
+        // A conda env in a random location, created e.g. with `mamba create -p …`
+        const stray = path.join(fixtureHome, 'Code', '.conda-envs', 'hypir');
+        fs.mkdirSync(path.join(stray, 'conda-meta'), { recursive: true });
+        fs.mkdirSync(path.join(stray, 'bin'), { recursive: true });
+        // Stub python: answers --version, and prints probe JSON for -c
+        fs.writeFileSync(
+          path.join(stray, 'bin', 'python'),
+          '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "Python 3.10.4"; exit 0; fi\n' +
+          'echo \'{"ipykernel": false, "externally_managed": false, "venv": false}\'\n',
+          { mode: 0o755 }
+        );
+        fs.mkdirSync(path.join(fixtureHome, '.conda'), { recursive: true });
+        fs.writeFileSync(path.join(fixtureHome, '.conda', 'environments.txt'), `${stray}\n`);
+
+        const svc = new PythonDiscoveryService({
+          cacheFile: path.join(fixtureHome, 'cache.json'),
+          condaLocator: { home: fixtureHome, env: {} },
+        });
+        const candidates = await (svc as unknown as {
+          findCondaEnvs(): Promise<Array<{ path: string; envType: string; envName: string | null }>>;
+        }).findCondaEnvs();
+
+        const found = candidates.find(c => c.path === path.join(stray, 'bin', 'python'));
+        expect(found).toBeTruthy();
+        expect(found!.envType).toBe('conda');
+        expect(found!.envName).toBe('hypir');
+      } finally {
+        fs.rmSync(fixtureHome, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe('Integration - Discovery', () => {
     it('should discover at least one Python environment on this system', async () => {
       // This test actually runs discovery on the current system

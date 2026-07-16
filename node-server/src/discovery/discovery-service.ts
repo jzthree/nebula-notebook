@@ -21,19 +21,25 @@ import {
   DEFAULT_CACHE_TTL_HOURS,
   DEFAULT_VERSION_CHECK_TIMEOUT_MS,
   DEFAULT_IPYKERNEL_CHECK_TIMEOUT_MS,
-  DEFAULT_CONDA_LIST_TIMEOUT_MS,
   DEFAULT_KERNEL_INSTALL_TIMEOUT_MS,
   DEFAULT_REGISTRATION_TIMEOUT_MS,
 } from './types';
+import {
+  CondaLocatorContext,
+  collectCondaEnvs,
+  defaultCondaContext,
+  pythonExeForPrefix,
+} from './conda-locations';
 
 export interface DiscoveryServiceOptions {
   cacheFile?: string;
   cacheTtlHours?: number;
   versionCheckTimeoutMs?: number;
   ipykernelCheckTimeoutMs?: number;
-  condaListTimeoutMs?: number;
   kernelInstallTimeoutMs?: number;
   registrationTimeoutMs?: number;
+  /** Test seam: override home dir / env vars for the conda locator. */
+  condaLocator?: { home?: string; env?: Record<string, string | undefined> };
 }
 
 const DEFAULT_CACHE_FILE = path.join(os.homedir(), '.nebula-notebook', 'python-cache.json');
@@ -45,9 +51,9 @@ export class PythonDiscoveryService {
   private cacheTtlHours: number;
   private versionCheckTimeoutMs: number;
   private ipykernelCheckTimeoutMs: number;
-  private condaListTimeoutMs: number;
   private kernelInstallTimeoutMs: number;
   private registrationTimeoutMs: number;
+  private condaLocatorOverrides: { home?: string; env?: Record<string, string | undefined> };
   private backgroundRefreshInProgress: boolean = false;
 
   constructor(options: DiscoveryServiceOptions = {}) {
@@ -55,11 +61,19 @@ export class PythonDiscoveryService {
     this.cacheTtlHours = options.cacheTtlHours ?? DEFAULT_CACHE_TTL_HOURS;
     this.versionCheckTimeoutMs = options.versionCheckTimeoutMs ?? DEFAULT_VERSION_CHECK_TIMEOUT_MS;
     this.ipykernelCheckTimeoutMs = options.ipykernelCheckTimeoutMs ?? DEFAULT_IPYKERNEL_CHECK_TIMEOUT_MS;
-    this.condaListTimeoutMs = options.condaListTimeoutMs ?? DEFAULT_CONDA_LIST_TIMEOUT_MS;
     this.kernelInstallTimeoutMs = options.kernelInstallTimeoutMs ?? DEFAULT_KERNEL_INSTALL_TIMEOUT_MS;
     this.registrationTimeoutMs = options.registrationTimeoutMs ?? DEFAULT_REGISTRATION_TIMEOUT_MS;
+    this.condaLocatorOverrides = options.condaLocator ?? {};
 
     this.loadCache();
+  }
+
+  /** Context for the filesystem conda locator (test seam applied). */
+  condaContext(): CondaLocatorContext {
+    const ctx = defaultCondaContext();
+    if (this.condaLocatorOverrides.home) ctx.home = this.condaLocatorOverrides.home;
+    if (this.condaLocatorOverrides.env) ctx.env = this.condaLocatorOverrides.env;
+    return ctx;
   }
 
   /**
@@ -437,7 +451,13 @@ export class PythonDiscoveryService {
     // Installable in place: not externally managed → use the env's own manager.
     if (!externallyManaged) {
       if (envType === 'conda') {
-        return `conda install -n ${envName || 'base'} ipykernel`;
+        // -p <prefix> works for named, base AND path-based (-p created) envs;
+        // -n would silently target the wrong env for the path-based ones.
+        const prefix = path.basename(path.dirname(pythonPath)) === 'bin'
+          ? path.dirname(path.dirname(pythonPath))
+          : path.dirname(pythonPath);
+        const p = prefix.includes(' ') ? `"${prefix}"` : prefix;
+        return `conda install -p ${p} ipykernel -y`;
       }
       if (envType === 'pixi') {
         return `pixi add ipykernel`;
@@ -455,89 +475,29 @@ export class PythonDiscoveryService {
   }
 
   /**
-   * Find conda environments
+   * Find conda environments — pure filesystem forensics (see conda-locations.ts).
+   * conda/mamba are never executed: envs come from ~/.conda/environments.txt,
+   * .condarc envs_dirs, well-known roots, the CONDA_ and MAMBA_ env vars, and
+   * roots derived from conda-like binaries found on PATH.
    */
   private async findCondaEnvs(): Promise<DiscoveryCandidate[]> {
+    const ctx = this.condaContext();
     const envs: DiscoveryCandidate[] = [];
     const seenPaths = new Set<string>();
 
-    // Possible conda executable paths
-    const condaPaths = [
-      '/opt/anaconda3/bin/conda',
-      '/opt/miniconda3/bin/conda',
-      '/opt/homebrew/bin/conda',
-      '/opt/homebrew/anaconda3/bin/conda',
-      path.join(os.homedir(), 'anaconda3', 'bin', 'conda'),
-      path.join(os.homedir(), 'miniconda3', 'bin', 'conda'),
-      path.join(os.homedir(), 'miniforge3', 'bin', 'conda'),
-      path.join(os.homedir(), 'mambaforge', 'bin', 'conda'),
-      '/usr/local/anaconda3/bin/conda',
-      '/usr/local/miniconda3/bin/conda',
-    ];
-
-    // Try to get envs from conda command
-    for (const condaPath of condaPaths) {
-      if (!(await this.fsExists(condaPath))) continue;
-
-      try {
-        const { stdout } = await this.runCommand(condaPath, ['env', 'list', '--json'], this.condaListTimeoutMs);
-        const data = JSON.parse(stdout);
-        for (const envPath of data.envs || []) {
-          const pythonPath = path.join(envPath, 'bin', 'python');
-          if (!seenPaths.has(pythonPath) && (await this.fsExists(pythonPath))) {
-            seenPaths.add(pythonPath);
-            const envName = path.basename(envPath);
-            const isBase = envPath === data.root_prefix || !envPath.includes('envs');
-            envs.push({
-              path: pythonPath,
-              envType: 'conda',
-              envName: isBase ? 'base' : envName,
-              base: envPath,
-            });
-          }
-        }
-      } catch (e) {
-        console.warn(`Error running conda env list: ${e}`);
-      }
-    }
-
-    // Also scan common conda base directories
-    for (const base of this.getCondaBasePaths()) {
-      if (!(await this.fsExists(base))) continue;
-
-      // Base environment
-      const basePython = path.join(base, 'bin', 'python');
-      if (!seenPaths.has(basePython) && (await this.fsExists(basePython))) {
-        seenPaths.add(basePython);
-        envs.push({
-          path: basePython,
-          envType: 'conda',
-          envName: 'base',
-          base,
-        });
-      }
-
-      // Sub-environments
-      const envsDir = path.join(base, 'envs');
-      try {
-        // withFileTypes: one readdir instead of a statSync per entry
-        const entries = await fsp.readdir(envsDir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-          const pythonPath = path.join(envsDir, entry.name, 'bin', 'python');
-          if (!seenPaths.has(pythonPath) && (await this.fsExists(pythonPath))) {
-            seenPaths.add(pythonPath);
-            envs.push({
-              path: pythonPath,
-              envType: 'conda',
-              envName: entry.name,
-              base,
-            });
-          }
-        }
-      } catch {
-        // envs dir missing/unreadable — nothing to scan
-      }
+    for (const loc of await collectCondaEnvs(ctx)) {
+      const pythonPath = pythonExeForPrefix(loc.prefix, ctx.platform);
+      if (seenPaths.has(pythonPath)) continue;
+      // An env can legitimately lack python (e.g. `conda create` without it) —
+      // nothing to offer as a kernel, skip.
+      if (!(await this.fsExists(pythonPath))) continue;
+      seenPaths.add(pythonPath);
+      envs.push({
+        path: pythonPath,
+        envType: 'conda',
+        envName: loc.envName,
+        base: loc.base ?? loc.prefix,
+      });
     }
 
     return envs;
