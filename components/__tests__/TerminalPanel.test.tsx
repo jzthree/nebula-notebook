@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { TerminalPanel } from '../TerminalPanel';
+import { NotificationProvider } from '../NotificationSystem';
 
 let resizeSpy: ReturnType<typeof vi.fn> | null = null;
 let rafSpy: ReturnType<typeof vi.spyOn> | null = null;
@@ -40,7 +41,9 @@ describe('TerminalPanel', () => {
 
   it('uses a transparent container that clips overflow', async () => {
     render(
-      <TerminalPanel isOpen={true} onClose={() => {}} notebookPath="/tmp/test.ipynb" />
+      <NotificationProvider>
+        <TerminalPanel isOpen={true} onClose={() => {}} notebookPath="/tmp/test.ipynb" />
+      </NotificationProvider>
     );
     const panel = await screen.findByTestId('terminal-panel');
     expect(panel.className).toContain('bg-transparent');
@@ -49,7 +52,9 @@ describe('TerminalPanel', () => {
 
   it('triggers terminal resize during drag', async () => {
     render(
-      <TerminalPanel isOpen={true} onClose={() => {}} notebookPath="/tmp/test.ipynb" />
+      <NotificationProvider>
+        <TerminalPanel isOpen={true} onClose={() => {}} notebookPath="/tmp/test.ipynb" />
+      </NotificationProvider>
     );
 
     await waitFor(() => {

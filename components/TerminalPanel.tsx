@@ -21,6 +21,7 @@ import {
   TerminalInfo,
 } from '../services/terminalService';
 import { agentTerminalService } from '../services/agentTerminalService';
+import { useNotification } from './NotificationSystem';
 import { getSettings, saveSettings, ensureRemoteAgentPort } from '../services/settingsService';
 import { fetchEnvironment, serverIsRemote } from '../services/environmentService';
 import { probeRemoteBins } from '../services/aiAutocompleteService';
@@ -130,6 +131,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const [activeAgentId, setActiveAgent] = useState<string | null>(() => getActiveAgentId());
   const [workdirOverride, setWorkdirOverride] = useState<string | null>(null);
   const [showAgentManager, setShowAgentManager] = useState(false);
+  const [showWorkdirMenu, setShowWorkdirMenu] = useState(false);
+  const { promptText } = useNotification();
   const notebookDir = notebookDirOf(notebookPath);
   const agentWorkdir = workdirOverride ?? notebookDir ?? '~';
   const activeAgentRecord = activeAgentId ? agents.find((a) => a.terminalId === activeAgentId) ?? null : null;
@@ -630,17 +633,60 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           >
             Continue project…
           </button>
-          {!remoteAgentCfg && (
-            <input
-              type="text"
-              value={agentWorkdir}
-              onChange={(e) => setWorkdirOverride(e.target.value)}
-              onBlur={() => { if (!getActiveAgentId()) setAgentTerm(null); /* re-resolve the pty in the edited dir */ }}
-              className="w-40 px-1.5 py-0.5 text-xs font-mono border border-purple-200 rounded bg-white text-purple-900"
-              title="Where the agent runs — its project scope. Defaults to this notebook's directory."
-              aria-label="Agent working directory"
-            />
-          )}
+          <div className="relative flex-shrink-0">
+            <button
+              onClick={() => setShowWorkdirMenu((v) => !v)}
+              className="px-1.5 py-0.5 rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-100 font-mono max-w-[10rem] truncate"
+              title={`Project scope: ${agentWorkdir}${remoteAgentCfg ? ' (mirrored into ~/.nebula/agent on your machine)' : ''} — click to change`}
+            >
+              in {agentWorkdir.split('/').pop() || agentWorkdir} ▾
+            </button>
+            {showWorkdirMenu && (
+              <div className="absolute bottom-full mb-1 left-0 z-20 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[14rem] max-w-[22rem] text-xs">
+                <div className="px-3 py-1 text-[0.625rem] uppercase tracking-wide text-slate-400">Agent project folder</div>
+                {notebookDir && (
+                  <button
+                    onClick={() => { setWorkdirOverride(null); setShowWorkdirMenu(false); if (!getActiveAgentId()) setAgentTerm(null); }}
+                    className={`w-full text-left px-3 py-1 hover:bg-purple-50 ${agentWorkdir === notebookDir ? 'text-purple-700 font-medium' : 'text-slate-700'}`}
+                  >
+                    <div>This notebook’s folder{agentWorkdir === notebookDir ? ' ✓' : ''}</div>
+                    <div className="font-mono text-slate-400 truncate">{notebookDir}</div>
+                  </button>
+                )}
+                {[...new Set(agents.map((a) => a.workdir))]
+                  .filter((d) => d && d !== notebookDir)
+                  .slice(0, 6)
+                  .map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => { setWorkdirOverride(d); setShowWorkdirMenu(false); if (!getActiveAgentId()) setAgentTerm(null); }}
+                      className={`w-full text-left px-3 py-1 hover:bg-purple-50 ${agentWorkdir === d ? 'text-purple-700 font-medium' : 'text-slate-700'}`}
+                    >
+                      <div>{d.split('/').pop()}{agentWorkdir === d ? ' ✓' : ''} <span className="text-slate-400">(existing agent)</span></div>
+                      <div className="font-mono text-slate-400 truncate">{d}</div>
+                    </button>
+                  ))}
+                <button
+                  onClick={async () => {
+                    setShowWorkdirMenu(false);
+                    const dir = await promptText({
+                      title: 'Agent project folder',
+                      message: remoteAgentCfg
+                        ? 'Server path that defines this agent’s project scope (the agent itself runs in a mirrored folder on your machine).'
+                        : 'Directory the agent will run in — its project scope.',
+                      placeholder: notebookDir || '/path/to/project',
+                      defaultValue: agentWorkdir,
+                      confirmLabel: 'Use folder',
+                    });
+                    if (dir) { setWorkdirOverride(dir); if (!getActiveAgentId()) setAgentTerm(null); }
+                  }}
+                  className="w-full text-left px-3 py-1 text-slate-700 hover:bg-purple-50 border-t border-slate-100"
+                >
+                  Other folder…
+                </button>
+              </div>
+            )}
+          </div>
           {/* Where the agent runs is only a question when the server is remote.
               On a local install the server IS your machine — no selector. */}
           {serverRemote && (
