@@ -8,7 +8,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { KernelService } from '../kernel/kernel-service';
-import { getKernelSearchPaths, getKernelSpec } from '../kernel/kernelspec';
+import { getKernelSearchPaths, getKernelSpec, resolveKernelSpec, envKernelPythonPath } from '../kernel/kernelspec';
+import { pythonDiscovery } from '../discovery/discovery-service';
+import { KernelProvisionError } from '../discovery/types';
 import { fsService } from '../fs/fs-service';
 import { operationRouter } from '../notebook/operation-router';
 import {
@@ -86,7 +88,11 @@ kernelService.initialize().catch(err => {
 });
 
 function buildKernelMetadata(kernelName: string): Record<string, unknown> {
-  const spec = getKernelSpec(kernelName);
+  // env: kernels have no on-disk spec — synthesize one, preferring the
+  // discovery cache's label ("Python 3.10 (conda: hypir)") over the raw path.
+  const envPython = envKernelPythonPath(kernelName);
+  const cachedLabel = envPython ? pythonDiscovery.getFromCache()?.[envPython]?.displayName : undefined;
+  const spec = resolveKernelSpec(kernelName, cachedLabel);
   return {
     kernelspec: {
       name: kernelName,
@@ -94,6 +100,20 @@ function buildKernelMetadata(kernelName: string): Record<string, unknown> {
       language: spec?.language || 'python',
     },
   };
+}
+
+/**
+ * Map provisioning failures to structured responses (matching routes/python.ts)
+ * so the UI can branch on `code` — e.g. open the ipykernel install prompt —
+ * instead of parsing error prose. Returns true if the error was handled.
+ */
+function sendProvisionError(reply: FastifyReply, err: unknown): boolean {
+  if (!(err instanceof KernelProvisionError)) return false;
+  const status = err.code === 'python_not_found' ? 404
+    : err.code === 'externally_managed' || err.code === 'needs_ipykernel' ? 422
+    : 500;
+  reply.code(status).send({ detail: err.message, code: err.code, install_hint: err.installHint });
+  return true;
 }
 
 async function persistNotebookKernelMetadata(
@@ -510,6 +530,7 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
       }
       return reply.send({ session_id: sessionId, kernel_name, server_id: localServerId, mtime: notebookMtime });
     } catch (err) {
+      if (sendProvisionError(reply, err)) return reply;
       const message = err instanceof Error ? err.message : 'Unknown error';
       return reply.code(500).send({ detail: message });
     }
@@ -631,6 +652,7 @@ export default async function kernelRoutes(fastify: FastifyInstance) {
         mtime: metadataResult.mtime,
       });
     } catch (err) {
+      if (sendProvisionError(reply, err)) return reply;
       const message = err instanceof Error ? err.message : 'Unknown error';
       return reply.code(500).send({ detail: message });
     }

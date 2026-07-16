@@ -3,7 +3,7 @@ import { getPathExtension, stripNotebookExtension, isTextNotebookExtension } fro
 import React, { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo, startTransition } from 'react';
 import { Cell as CellComponent } from './Cell';
 import { Cell, CellType, NotebookMetadata } from '../types';
-import { kernelService, KernelSpec, PythonEnvironment, KernelProvisionError } from '../services/kernelService';
+import { kernelService, KernelSpec, PythonEnvironment, KernelProvisionError, envKernelName, isEnvKernelName } from '../services/kernelService';
 import { getClusterInfo, ClusterServer, ClusterInfo } from '../services/clusterService';
 import { getComputeStatus } from '../services/computeService';
 import { setAutocompleteContext, isAiCompletionInFlight } from '../services/aiAutocompleteService';
@@ -523,7 +523,6 @@ export const Notebook: React.FC = () => {
   const [kernelStatus, setKernelStatus] = useState<'idle' | 'busy' | 'starting' | 'disconnected' | 'dead'>('disconnected');
   const [kernelCreatedAt, setKernelCreatedAt] = useState<number | null>(null);
   const [isDiscoveringPythons, setIsDiscoveringPythons] = useState(false);
-  const [isInstallingKernel, setIsInstallingKernel] = useState<string | null>(null);
 
   // Cluster State
   const [clusterInfo, setClusterInfo] = useState<ClusterInfo | null>(null);
@@ -1912,8 +1911,9 @@ export const Notebook: React.FC = () => {
       const data = await kernelService.getPythonEnvironments(refresh, targetServerId);
       setAvailableKernels(data.kernelspecs);
       setPythonEnvironments(data.environments);
-      // Only auto-select first kernel if requested (skip during server switch)
-      if (autoSelectKernel && data.kernelspecs.length > 0 && !data.kernelspecs.some(k => k.name === currentKernel)) {
+      // Only auto-select first kernel if requested (skip during server switch).
+      // env: kernels are valid without a kernelspec — never auto-switch away.
+      if (autoSelectKernel && data.kernelspecs.length > 0 && !isEnvKernelName(currentKernel) && !data.kernelspecs.some(k => k.name === currentKernel)) {
         setCurrentKernel(data.kernelspecs[0].name);
       }
     } catch (error) {
@@ -2471,9 +2471,10 @@ export const Notebook: React.FC = () => {
       }
     }
 
-    // Use preferred kernel and verify it exists
+    // Use preferred kernel and verify it exists. env: kernels don't live in
+    // the kernelspec list — the backend validates the interpreter at start.
     let kernelToUse = preferredKernel;
-    const kernelExists = kernelsForCheck.some(k => k.name === kernelToUse);
+    const kernelExists = isEnvKernelName(kernelToUse) || kernelsForCheck.some(k => k.name === kernelToUse);
     if (!kernelExists && kernelsForCheck.length > 0) {
       // Fall back to first available kernel if the specified one doesn't exist
       kernelToUse = kernelsForCheck[0].name;
@@ -2981,32 +2982,24 @@ export const Notebook: React.FC = () => {
     await switchKernel(kernelName, serverId, true, 'mcp', true);
   };
 
-  // Register an environment that already has ipykernel as a Jupyter kernel.
-  const installKernelForPython = useCallback(async (pythonPath: string) => {
-    try {
-      setIsInstallingKernel(pythonPath);
-      const result = await kernelService.installKernel(pythonPath, undefined, selectedServerId);
-
-      // Refresh the environments list to show the new kernel
-      await loadPythonEnvironments(true, selectedServerId);
-
-      // Optionally switch to the new kernel
-      if (result.kernel_name) {
-        await switchKernel(result.kernel_name);
-      }
-    } catch (error) {
-      // Externally-managed / missing-ipykernel: show actionable guidance, not a raw error.
-      if (error instanceof KernelProvisionError && error.installHint) {
-        try { await navigator.clipboard.writeText(error.installHint); } catch { /* clipboard optional */ }
-        toast(`Can't register directly: ${error.message} Copied a setup command — run it, then Refresh.`, 'warning', 9000);
-      } else {
-        console.error('Failed to register kernel:', error);
-        toast(`Failed to register kernel: ${error instanceof Error ? error.message : error}`, 'error');
-      }
-    } finally {
-      setIsInstallingKernel(null);
+  // Select a Python environment as the kernel. Raw launch (VSCode-style):
+  // envs with ipykernel start directly via env:<path> — no registration step.
+  // A registered kernelspec for the same interpreter is preferred, purely so
+  // existing sessions/metadata keep their names.
+  const handleEnvClick = async (env: PythonEnvironment, registeredName?: string) => {
+    if (registeredName) {
+      switchKernel(registeredName);
+      return;
     }
-  }, [loadPythonEnvironments, selectedServerId, switchKernel, toast]);
+    if (!env.has_ipykernel) {
+      copyInstallHint(env);
+      return;
+    }
+    const result = await switchKernel(envKernelName(env.path));
+    if (!result.success && result.error !== 'login-node kernel gated') {
+      toast(`Failed to start kernel: ${result.error}`, 'error', 8000);
+    }
+  };
 
   // Guidance path for envs without ipykernel: copy the ecosystem-specific install
   // command so the user can run it themselves, then Refresh + Register. Nebula
@@ -4004,6 +3997,12 @@ export const Notebook: React.FC = () => {
 
   const getKernelDisplayName = () => {
     if (kernelSelectionRequired || !currentKernel) return 'Select kernel';
+    if (isEnvKernelName(currentKernel)) {
+      const pythonPath = currentKernel.slice('env:'.length);
+      const env = pythonEnvironments.find(e => e.path === pythonPath);
+      // Friendly label from discovery, else a compact tail of the path
+      return env?.display_name || `Python (${pythonPath.split('/').slice(-3).join('/')})`;
+    }
     const kernel = availableKernels.find(k => k.name === currentKernel);
     return kernel?.display_name || currentKernel;
   };
@@ -4452,11 +4451,10 @@ export const Notebook: React.FC = () => {
                                   <AlertCircle className="w-3.5 h-3.5" /> No Jupyter kernels yet
                                 </div>
                                 <p className="text-[0.6875rem] leading-relaxed text-slate-600">
-                                  To run code, you need a kernel. Pick a Python environment below:
-                                  click <span className="font-medium text-amber-700">Register</span> if it's offered, or{' '}
-                                  <span className="font-medium text-slate-700">Setup</span> to copy the command that installs{' '}
-                                  <code className="px-1 py-0.5 rounded bg-white/70 text-slate-700">ipykernel</code>, then{' '}
-                                  <span className="font-medium">Refresh</span>.
+                                  To run code, you need a kernel. Click a Python environment below to
+                                  start one there directly — no setup needed when{' '}
+                                  <code className="px-1 py-0.5 rounded bg-white/70 text-slate-700">ipykernel</code>{' '}
+                                  is present (green dot).
                                   {pythonEnvironments.length === 0 && !isDiscoveringPythons && (
                                     <span className="block mt-1 text-slate-500">No Python environments detected — install Python (or uv/conda/pixi), then Refresh.</span>
                                   )}
@@ -4509,42 +4507,41 @@ export const Notebook: React.FC = () => {
                                   {isDiscoveringPythons && <Loader2 className="w-3 h-3 animate-spin" />}
                                 </div>
                                 {pythonEnvironments.map(env => {
-                                  // Check if this env is already a registered kernel using the actual Python path
-                                  const isRegistered = availableKernels.some(k =>
+                                  // Prefer a registered kernelspec for the same interpreter
+                                  // (keeps existing session/metadata names); otherwise the
+                                  // env is launched directly as env:<path> — no registration.
+                                  const registeredKernel = availableKernels.find(k =>
                                     (k.python_path && k.python_path === env.path) ||
                                     env.kernel_name === k.name
+                                  );
+                                  const launchable = !!registeredKernel || env.has_ipykernel;
+                                  const isSelected = !kernelSelectionRequired && (
+                                    currentKernel === envKernelName(env.path) ||
+                                    (!!registeredKernel && currentKernel === registeredKernel.name)
                                   );
 
                                   return (
                                     <div
                                       key={env.path}
-                                      className="w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 text-slate-600"
+                                      role="button"
+                                      tabIndex={0}
+                                      onClick={() => handleEnvClick(env, registeredKernel?.name)}
+                                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleEnvClick(env, registeredKernel?.name); } }}
+                                      className={`w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 cursor-pointer ${
+                                        isSelected ? 'bg-green-50 text-green-700' : 'text-slate-600'
+                                      }`}
+                                      title={launchable
+                                        ? 'Start a kernel in this environment'
+                                        : 'ipykernel is missing — set it up to use this environment'}
                                     >
                                       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                                        isRegistered ? 'bg-green-500' : env.has_ipykernel ? 'bg-amber-400' : 'bg-slate-300'
+                                        launchable ? 'bg-green-500' : 'bg-slate-300'
                                       }`}></span>
                                       <div className="flex-1 min-w-0">
                                         <div className="truncate">{env.display_name}</div>
                                         <div className="text-[0.625rem] text-slate-400 truncate">{env.path}</div>
                                       </div>
-                                      {isRegistered ? (
-                                        <span className="text-[0.625rem] text-green-600 flex-shrink-0">Registered</span>
-                                      ) : env.has_ipykernel ? (
-                                        // ipykernel present → one-click Register (safe everywhere).
-                                        <button
-                                          onClick={(e) => { e.stopPropagation(); installKernelForPython(env.path); }}
-                                          disabled={isInstallingKernel === env.path}
-                                          className="flex items-center gap-1 px-2 py-1 text-[0.625rem] rounded transition-colors flex-shrink-0 bg-amber-50 text-amber-600 hover:bg-amber-100"
-                                          title="Register as Jupyter kernel"
-                                        >
-                                          {isInstallingKernel === env.path ? (
-                                            <Loader2 className="w-3 h-3 animate-spin" />
-                                          ) : (
-                                            <Download className="w-3 h-3" />
-                                          )}
-                                          <span>{isInstallingKernel === env.path ? 'Registering…' : 'Register'}</span>
-                                        </button>
-                                      ) : (
+                                      {!launchable && (
                                         // No ipykernel → copy the ecosystem-specific install command (guide, don't install).
                                         <button
                                           onClick={(e) => { e.stopPropagation(); copyInstallHint(env); }}

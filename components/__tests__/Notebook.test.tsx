@@ -33,6 +33,13 @@ vi.mock('../../services/kernelService', () => ({
   },
   KernelSpec: {},
   PythonEnvironment: {},
+  ENV_KERNEL_PREFIX: 'env:',
+  envKernelName: (pythonPath: string) => `env:${pythonPath}`,
+  isEnvKernelName: (name: string | null | undefined) => !!name && name.startsWith('env:'),
+  KernelProvisionError: class KernelProvisionError extends Error {
+    code?: string;
+    installHint?: string;
+  },
 }));
 
 vi.mock('../../services/fileService', () => ({

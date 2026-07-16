@@ -475,6 +475,30 @@ export class PythonDiscoveryService {
   }
 
   /**
+   * Public probe for kernel provisioning: does this interpreter have ipykernel,
+   * can we install into it, and if not — what should the user run instead?
+   * Uses the discovery cache for env-type context (better hints) but always
+   * probes the interpreter live, so a just-installed ipykernel is seen
+   * immediately even with a stale cache.
+   */
+  async probeForKernel(pythonPath: string): Promise<{
+    hasIpykernel: boolean;
+    externallyManaged: boolean;
+    installHint: string | null;
+  }> {
+    const { hasIpykernel, externallyManaged } = await this.probeEnvironment(pythonPath);
+    const cached = this.cache[pythonPath];
+    const installHint = this.buildInstallHint(
+      pythonPath,
+      cached?.envType ?? 'system',
+      cached?.envName ?? null,
+      hasIpykernel,
+      externallyManaged
+    );
+    return { hasIpykernel, externallyManaged, installHint };
+  }
+
+  /**
    * Find conda environments — pure filesystem forensics (see conda-locations.ts).
    * conda/mamba are never executed: envs come from ~/.conda/environments.txt,
    * .condarc envs_dirs, well-known roots, the CONDA_ and MAMBA_ env vars, and

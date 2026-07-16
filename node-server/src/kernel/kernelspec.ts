@@ -192,6 +192,44 @@ export function getKernelSpec(name: string): KernelSpec | null {
 }
 
 /**
+ * Env kernels (VSCode-style raw launch): any Python environment can be used
+ * as a kernel WITHOUT registering a kernelspec on disk. The kernel name
+ * `env:<pythonPath>` resolves to a synthetic in-memory spec that launches
+ * `<python> -m ipykernel_launcher` directly — only ipykernel needs to be
+ * importable in the environment; jupyter itself is never required.
+ */
+export const ENV_KERNEL_PREFIX = 'env:';
+
+export function isEnvKernelName(name: string): boolean {
+  return name.startsWith(ENV_KERNEL_PREFIX);
+}
+
+/** The interpreter path encoded in an env: kernel name, or null. */
+export function envKernelPythonPath(name: string): string | null {
+  return isEnvKernelName(name) ? name.slice(ENV_KERNEL_PREFIX.length) : null;
+}
+
+export function makeEnvKernelSpec(pythonPath: string, displayName?: string): KernelSpec {
+  return {
+    name: ENV_KERNEL_PREFIX + pythonPath,
+    displayName: displayName || `Python (${pythonPath})`,
+    language: 'python',
+    path: '', // synthetic — no kernelspec directory on disk
+    argv: [pythonPath, '-m', 'ipykernel_launcher', '-f', '{connection_file}'],
+  };
+}
+
+/**
+ * Resolve a kernel name to a spec: env: names produce a synthetic raw-launch
+ * spec, anything else falls back to registered kernelspecs on disk.
+ */
+export function resolveKernelSpec(name: string, displayName?: string): KernelSpec | null {
+  const pythonPath = envKernelPythonPath(name);
+  if (pythonPath) return makeEnvKernelSpec(pythonPath, displayName);
+  return getKernelSpec(name);
+}
+
+/**
  * Check if a kernelspec exists
  */
 export function hasKernelSpec(name: string): boolean {

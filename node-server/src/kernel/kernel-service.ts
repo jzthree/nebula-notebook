@@ -35,7 +35,15 @@ import {
   MAX_OUTPUT_CHARS_ERROR,
 } from '../config/output-limits';
 import { SessionStore } from './session-store';
-import { discoverKernelSpecs, getKernelSpec, KernelSpec } from './kernelspec';
+import {
+  discoverKernelSpecs,
+  getKernelSpec,
+  envKernelPythonPath,
+  makeEnvKernelSpec,
+  KernelSpec,
+} from './kernelspec';
+import { pythonDiscovery } from '../discovery/discovery-service';
+import { KernelProvisionError } from '../discovery/types';
 
 // ZeroMQ types - imported dynamically to handle missing native bindings
 type ZmqSocket = {
@@ -689,7 +697,31 @@ export class KernelService {
    */
   async startKernel(options: StartKernelOptions = {}): Promise<string> {
     const kernelName = options.kernelName || 'python3';
-    const spec = getKernelSpec(kernelName);
+
+    // env:<pythonPath> kernels raw-launch a Python environment directly
+    // (VSCode-style) — no kernelspec registration involved. Preflight here so
+    // callers get a crisp, coded error instead of a spawn failure + ready
+    // timeout: python_not_found for a dead path, needs_ipykernel (with an
+    // ecosystem-appropriate install hint) when the env can't host a kernel yet.
+    const envPython = envKernelPythonPath(kernelName);
+    let spec: KernelSpec | null;
+    if (envPython) {
+      if (!fs.existsSync(envPython)) {
+        throw new KernelProvisionError(`Python not found: ${envPython}`, 'python_not_found');
+      }
+      const probe = await pythonDiscovery.probeForKernel(envPython);
+      if (!probe.hasIpykernel) {
+        throw new KernelProvisionError(
+          `ipykernel is not installed in ${envPython}`,
+          'needs_ipykernel',
+          probe.installHint || undefined
+        );
+      }
+      const cached = pythonDiscovery.getFromCache()?.[envPython];
+      spec = makeEnvKernelSpec(envPython, cached?.displayName);
+    } else {
+      spec = getKernelSpec(kernelName);
+    }
 
     if (!spec) {
       throw new Error(`Kernel '${kernelName}' not found`);

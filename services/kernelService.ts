@@ -78,6 +78,33 @@ export class KernelProvisionError extends Error {
   }
 }
 
+/**
+ * Env kernels (raw launch): a Python environment used as a kernel directly,
+ * no kernelspec registration. The name encodes the interpreter path and is
+ * understood by the backend's kernel start endpoints.
+ */
+export const ENV_KERNEL_PREFIX = 'env:';
+
+export function envKernelName(pythonPath: string): string {
+  return ENV_KERNEL_PREFIX + pythonPath;
+}
+
+export function isEnvKernelName(name: string | null | undefined): boolean {
+  return !!name && name.startsWith(ENV_KERNEL_PREFIX);
+}
+
+/** Parse a failed kernel-API response into the richest error we can throw. */
+function provisionErrorFrom(error: { detail?: string; code?: string; install_hint?: string }, fallback: string): Error {
+  if (error.code) {
+    return new KernelProvisionError(
+      error.detail || fallback,
+      error.code as KernelProvisionErrorCode,
+      error.install_hint
+    );
+  }
+  return new Error(error.detail || fallback);
+}
+
 export interface PythonEnvironmentsResponse {
   kernelspecs: KernelSpec[];
   environments: PythonEnvironment[];
@@ -221,7 +248,9 @@ class KernelService {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: 'Failed to start kernel' }));
-      throw new Error(error.detail || 'Failed to start kernel');
+      // Structured provisioning errors (needs_ipykernel, …) drive the
+      // install-prompt UI — preserve code + hint instead of flattening to text.
+      throw provisionErrorFrom(error, 'Failed to start kernel');
     }
 
     const data = await response.json();
@@ -274,7 +303,7 @@ class KernelService {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: 'Failed to get/create kernel' }));
-      throw new Error(error.detail || 'Failed to get/create kernel');
+      throw provisionErrorFrom(error, 'Failed to get/create kernel');
     }
 
     const data = await response.json();
