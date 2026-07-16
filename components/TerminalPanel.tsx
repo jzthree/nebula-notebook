@@ -582,7 +582,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           <span className="flex-shrink-0">⚠</span>
           <span className="min-w-0">
             Agent didn’t start: <span className="font-mono break-all">{agentState.launchError || 'unknown error'}</span>
-            {' '}— check it’s installed{remoteAgentCfg ? ' on your machine' : ' on this server'} and on PATH, then try again.
+            {/(not found|not recognized|no such file|permission denied|cannot execute)/i.test(agentState.launchError || '') && (
+              <> — check it’s installed{remoteAgentCfg ? ' on your machine' : ' on this server'} and on PATH, then try again.</>
+            )}
           </span>
         </div>
       )}

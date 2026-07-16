@@ -515,8 +515,19 @@ class AgentTerminalService {
     w.raw = (w.raw + data).slice(-4000);
     if (w.phase === 'launch') {
       const stripped = w.raw.replace(ANSI_RE, '');
-      if (LAUNCH_FAILURE_RE.test(stripped)) {
-        const line = (stripped.split('\n').reverse().find((l) => LAUNCH_FAILURE_RE.test(l)) || '').trim();
+      const failMatch = stripped.match(LAUNCH_FAILURE_RE);
+      if (failMatch) {
+        // Excerpt FROM the match, not the whole line: the rolling buffer can
+        // slice an escape sequence at its edge, leaving fragments ("78No
+        // conversation found…") that ANSI stripping can't recognize.
+        const from = stripped.slice(stripped.indexOf(failMatch[0]));
+        const line = (from.split('\n')[0] || '').trim();
+        // `--continue` with no prior conversation is NOT an install problem —
+        // the CLI ran fine and said so. Route to the accurate next step.
+        if (/no conversation found/i.test(line)) {
+          this.markLaunchFailed('no previous conversation in this directory — start a fresh agent instead (Claude Code / Codex)');
+          return;
+        }
         this.markLaunchFailed(line.slice(0, MAX_ERROR_EXCERPT_CHARS) || 'launch failed');
         return;
       }
