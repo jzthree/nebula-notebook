@@ -35,8 +35,12 @@ interface TerminalSession {
   lastActivity: number;
   outputBuffer: string;
   activeModes: Set<number>; // tracked sticky input modes (see TRACKED_INPUT_MODES)
-  onData: ((data: string) => void) | null;
-  onExit: ((code: number) => void) | null;
+  // Listener SETS, not single slots: several websocket clients can mirror one
+  // pty (same agent open in multiple notebook tabs), and the agent registry
+  // subscribes to exit independently. The old single-callback model meant a
+  // second subscriber silently replaced the first.
+  dataListeners: Set<(data: string) => void>;
+  exitListeners: Set<(code: number) => void>;
 }
 
 export class PtyManager {
@@ -117,8 +121,8 @@ export class PtyManager {
       lastActivity: Date.now(),
       outputBuffer: '',
       activeModes: new Set<number>(),
-      onData: null,
-      onExit: null,
+      dataListeners: new Set(),
+      exitListeners: new Set(),
     };
 
     // Handle PTY output
@@ -148,16 +152,16 @@ export class PtyManager {
         session.outputBuffer = session.outputBuffer.slice(-OUTPUT_BUFFER_TRIM_SIZE);
       }
 
-      // Forward to listener if connected
-      if (session.onData) {
-        session.onData(data);
+      // Forward to all listeners (websocket clients, watchers)
+      for (const cb of session.dataListeners) {
+        try { cb(data); } catch { /* one bad listener must not break the rest */ }
       }
     });
 
     // Handle PTY exit
     ptyProcess.onExit(({ exitCode }) => {
-      if (session.onExit) {
-        session.onExit(exitCode);
+      for (const cb of session.exitListeners) {
+        try { cb(exitCode); } catch { /* see above */ }
       }
       this.sessions.delete(id);
     });
@@ -271,23 +275,24 @@ export class PtyManager {
   }
 
   /**
-   * Set data listener for a terminal (for WebSocket connection)
+   * Subscribe to a terminal's output. Returns an unsubscribe function
+   * (no-op if the terminal is gone).
    */
-  setOnData(id: string, callback: ((data: string) => void) | null): void {
+  addDataListener(id: string, callback: (data: string) => void): () => void {
     const session = this.sessions.get(id);
-    if (session) {
-      session.onData = callback;
-    }
+    if (!session) return () => {};
+    session.dataListeners.add(callback);
+    return () => { this.sessions.get(id)?.dataListeners.delete(callback); };
   }
 
   /**
-   * Set exit listener for a terminal
+   * Subscribe to a terminal's exit. Returns an unsubscribe function.
    */
-  setOnExit(id: string, callback: ((code: number) => void) | null): void {
+  addExitListener(id: string, callback: (code: number) => void): () => void {
     const session = this.sessions.get(id);
-    if (session) {
-      session.onExit = callback;
-    }
+    if (!session) return () => {};
+    session.exitListeners.add(callback);
+    return () => { this.sessions.get(id)?.exitListeners.delete(callback); };
   }
 
   /**

@@ -9,6 +9,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
+import { agentRegistry } from './agent-registry';
 import { fsService } from '../fs/fs-service';
 import {
   CreateTerminalRequest,
@@ -81,6 +82,42 @@ export async function setupTerminalRoutes(fastify: FastifyInstance): Promise<voi
   });
 
   // List all terminals
+  // ---- Agent registry: project-scoped agent sessions (see agent-registry.ts) ----
+  fastify.get('/api/agents', async (_request: FastifyRequest, reply: FastifyReply) => {
+    return reply.send({ agents: agentRegistry.list() });
+  });
+
+  fastify.post('/api/agents/register', async (request: FastifyRequest, reply: FastifyReply) => {
+    const b = (request.body ?? {}) as Partial<{
+      terminalId: string; kind: 'claude' | 'codex'; workdir: string;
+      location: 'server' | 'remote'; sessionId: string; launchedFrom: string;
+    }>;
+    if (!b.terminalId || !b.kind || !b.workdir) {
+      return reply.code(400).send({ error: 'terminalId, kind, workdir required' });
+    }
+    const record = agentRegistry.register({
+      terminalId: b.terminalId,
+      kind: b.kind === 'codex' ? 'codex' : 'claude',
+      workdir: b.workdir,
+      location: b.location === 'remote' ? 'remote' : 'server',
+      sessionId: b.sessionId,
+      launchedFrom: b.launchedFrom,
+    });
+    return reply.send(record);
+  });
+
+  fastify.post('/api/agents/:id/hibernate', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    if (!agentRegistry.hibernate(id)) return reply.code(404).send({ error: 'unknown agent' });
+    return reply.send({ ok: true });
+  });
+
+  fastify.delete('/api/agents/:id', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    if (!agentRegistry.remove(id)) return reply.code(404).send({ error: 'unknown agent' });
+    return reply.send({ ok: true });
+  });
+
   fastify.get('/api/terminals', async (_request: FastifyRequest, reply: FastifyReply) => {
     return reply.send(ptyManager.list());
   });
@@ -237,26 +274,16 @@ export function setupTerminalWebSocket(server: HttpServer): WebSocketServer {
       ws.send(JSON.stringify(replayMsg));
     }
 
-    // Collaborative mode: broadcast output to ALL connected clients
-    const broadcastOutput = (data: string) => {
-      const msg: ServerMessage = { type: 'output', data };
-      const msgStr = JSON.stringify(msg);
-      for (const conn of connections) {
-        if (conn.readyState === WebSocket.OPEN) {
-          conn.send(msgStr);
-        }
+    // One subscription per websocket, sending only to ITS socket — the pty
+    // layer now multicasts, so no shared-closure broadcast trickery needed.
+    const unsubData = ptyManager.addDataListener(terminalId, (data: string) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'output', data } satisfies ServerMessage));
       }
-    };
-    ptyManager.setOnData(terminalId, broadcastOutput);
-
-    // Set up exit listener - broadcast to all connections
-    ptyManager.setOnExit(terminalId, (code: number) => {
-      const msg: ServerMessage = { type: 'exit', code };
-      const msgStr = JSON.stringify(msg);
-      for (const conn of connections) {
-        if (conn.readyState === WebSocket.OPEN) {
-          conn.send(msgStr);
-        }
+    });
+    const unsubExit = ptyManager.addExitListener(terminalId, (code: number) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'exit', code } satisfies ServerMessage));
       }
     });
 
@@ -286,13 +313,13 @@ export function setupTerminalWebSocket(server: HttpServer): WebSocketServer {
     ws.on('close', () => {
       console.log(`[Terminal] WebSocket disconnected from terminal ${terminalId}`);
 
+      unsubData();
+      unsubExit();
       const connections = wsConnections.get(terminalId);
       if (connections) {
         connections.delete(ws);
         if (connections.size === 0) {
           wsConnections.delete(terminalId);
-          // Clear the data listener when no connections
-          ptyManager.setOnData(terminalId, null);
         }
       }
     });

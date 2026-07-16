@@ -19,6 +19,7 @@
  */
 
 import { getSettings } from './settingsService';
+import { registerAgent, setActiveAgentId } from './agentRegistryService';
 import { markOnboardingStep } from './onboardingService';
 
 // Optimistic 'running' on launch; flips to 'failed' if the post-launch output
@@ -277,7 +278,12 @@ class AgentTerminalService {
    * (`--continue` as a fallback if no id is stored) plus a short reorientation
    * prompt. Codex has no equivalent flag; it relaunches fresh.
    */
-  private buildAgentCommand(kind: 'claude' | 'codex', resume: boolean, envPrefix = '', sessionId?: string): string {
+  private buildAgentCommand(kind: 'claude' | 'codex', resume: boolean, envPrefix = '', sessionId?: string, continueProject = false): string {
+    if (continueProject) {
+      // Native project resume: claude keys conversations by cwd, codex has a
+      // session picker — both find trajectories created outside Nebula too.
+      return kind === 'claude' ? `${envPrefix}claude --continue` : `${envPrefix}codex resume`;
+    }
     if (resume && kind === 'claude') {
       const reorient = sanitizePromptText(
         'We were disconnected — this is the same Nebula notebook session as before. ' +
@@ -300,7 +306,7 @@ class AgentTerminalService {
    * there, run the agent with the bootstrap prompt as its first argument.
    * accept-new pins the host key on first use without an interactive prompt.
    */
-  buildRemoteLaunchCommand(kind: 'claude' | 'codex', resume = false, sessionId?: string): string | null {
+  buildRemoteLaunchCommand(kind: 'claude' | 'codex', resume = false, sessionId?: string, continueProject = false): string | null {
     const cfg = this.getRemoteAgentConfig();
     if (!cfg) return null;
     // The notebook lives on the SERVER, so its folder doesn't exist on the
@@ -311,7 +317,7 @@ class AgentTerminalService {
     // `nebula` CLI over the tunnel, not via local files, so the cwd is inert.
     const cwd = '"$HOME/.nebula/agent"';
     const agentCmd = `mkdir -p ${cwd} && cd ${cwd} && ` +
-      this.buildAgentCommand(kind, resume, `NEBULA_URL=${cfg.localUrl} `, sessionId);
+      this.buildAgentCommand(kind, resume, `NEBULA_URL=${cfg.localUrl} `, sessionId, continueProject);
     // `ssh host cmd` runs a non-login, non-interactive shell on the user's
     // machine — PATH additions from .zprofile/.zshrc (homebrew, nvm, npm -g)
     // are absent and the agent CLI isn't found. Re-enter the user's own shell
@@ -385,6 +391,12 @@ class AgentTerminalService {
     return `${terminalId}:${this.where()}`;
   }
 
+  /** Adopt a resume pointer from the server-side agent record, so "Resume"
+   *  works in a browser that never launched this agent. */
+  adoptSessionId(terminalId: string, sessionId: string): void {
+    writeAgentSessionId(`${terminalId}:${this.where()}`, sessionId);
+  }
+
   /** 'claude' when this notebook has a stored session to resume at this location. */
   getResumableKind(): 'claude' | null {
     return this.state.terminalId && readAgentSessionId(this.sessionKey(this.state.terminalId)) ? 'claude' : null;
@@ -415,15 +427,16 @@ class AgentTerminalService {
    * CLI's initial prompt argument, so the agent starts by connecting to the
    * right server and reading the right notebook — no guessing across tabs.
    */
-  launchAgent(kind: 'claude' | 'codex', opts: { resume?: boolean } = {}): SendResult {
+  launchAgent(kind: 'claude' | 'codex', opts: { resume?: boolean; continueProject?: boolean; workdir?: string | null } = {}): SendResult {
     const send = this.getAgentSender();
     if (!send.ok) return send;
     const resume = !!opts.resume;
+    const continueProject = !!opts.continueProject;
     // Per-notebook Claude session id: a fresh launch mints and stores a new one;
     // resume reuses the stored one. Keyed by run location (server vs. the user's
     // machine) since those conversations live on different hosts.
     let sessionId: string | undefined;
-    if (kind === 'claude' && this.state.terminalId) {
+    if (kind === 'claude' && this.state.terminalId && !continueProject) {
       const key = this.sessionKey(this.state.terminalId);
       if (resume) {
         sessionId = readAgentSessionId(key) ?? undefined;
@@ -434,9 +447,23 @@ class AgentTerminalService {
     }
     // Remote-agent mode: the launch line hops back to the user's machine over
     // the reverse SSH channel and runs the agent there instead.
-    const remoteLine = this.buildRemoteLaunchCommand(kind, resume, sessionId);
-    send.sender(remoteLine ? `${remoteLine}\r` : `${this.buildAgentCommand(kind, resume, '', sessionId)}\r`);
+    const remoteLine = this.buildRemoteLaunchCommand(kind, resume, sessionId, continueProject);
+    send.sender(remoteLine ? `${remoteLine}\r` : `${this.buildAgentCommand(kind, resume, '', sessionId, continueProject)}\r`);
     markOnboardingStep('launchedAgent');
+    // Project-scoped agent ledger: tell the server what launched where, and
+    // make this the browser's active agent (agents are decoupled from
+    // notebooks; the active pointer is what the Agent tab attaches to).
+    if (this.state.terminalId) {
+      setActiveAgentId(this.state.terminalId);
+      void registerAgent({
+        terminalId: this.state.terminalId,
+        kind,
+        workdir: opts.workdir || '~',
+        location: this.getRemoteAgentConfig() ? 'remote' : 'server',
+        sessionId,
+        launchedFrom: this.notebookPath ?? undefined,
+      });
+    }
     // Report 'running' optimistically, then confirm via the output watcher: it
     // flips to 'failed' if the TUI never appears (or a known error prints), and
     // later to stopped when the agent exits back to the shell.

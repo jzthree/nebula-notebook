@@ -25,6 +25,10 @@ import { getSettings, saveSettings, ensureRemoteAgentPort } from '../services/se
 import { fetchEnvironment, serverIsRemote } from '../services/environmentService';
 import { probeRemoteBins } from '../services/aiAutocompleteService';
 import { RemoteAgentSetupModal } from './RemoteAgentSetupModal';
+import {
+  AgentRecord, agentTerminalNameFor, deleteAgent, getActiveAgentId,
+  hibernateAgent, listAgents, notebookDirOf, registerAgent, setActiveAgentId,
+} from '../services/agentRegistryService';
 
 /**
  * Stable per-notebook terminal name, so a page refresh reattaches to the SAME
@@ -118,6 +122,32 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     if (isOpen) setEverOpened(true);
   }, [isOpen]);
 
+  // ---- Project-scoped agents (decoupled from notebooks) ----
+  // The Agent tab attaches to the browser's ACTIVE agent wherever it lives;
+  // notebooks never auto-switch it. No active agent -> a fresh one scoped to
+  // this notebook's directory (workdir editable before launch).
+  const [agents, setAgents] = useState<AgentRecord[]>([]);
+  const [activeAgentId, setActiveAgent] = useState<string | null>(() => getActiveAgentId());
+  const [workdirOverride, setWorkdirOverride] = useState<string | null>(null);
+  const [showAgentManager, setShowAgentManager] = useState(false);
+  const notebookDir = notebookDirOf(notebookPath);
+  const agentWorkdir = workdirOverride ?? notebookDir ?? '~';
+  const activeAgentRecord = activeAgentId ? agents.find((a) => a.terminalId === activeAgentId) ?? null : null;
+
+  const refreshAgents = useCallback(async () => {
+    setAgents(await listAgents());
+  }, []);
+  useEffect(() => {
+    if (!isOpen || tab !== 'agent') return;
+    refreshAgents();
+  }, [isOpen, tab, refreshAgents]);
+
+  const selectAgent = useCallback((id: string | null) => {
+    setActiveAgentId(id);
+    setActiveAgent(id);
+    setAgentTerm(null); // re-resolve the pty to the newly selected agent
+  }, []);
+
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const resizeRafRef = useRef<number | null>(null);
@@ -139,20 +169,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     agentTerminalService.setAgentTerminal(agentTerm?.id ?? null);
   }, [agentTerm]);
 
-  // On notebook switch, DETACH from the old notebook's terminals but do NOT kill
-  // them: each notebook keeps its own persistent shell + agent session (with any
-  // running agent) alive server-side under a stable per-notebook pty name. So
-  // switching notebooks no longer shares — or destroys — a single agent session;
-  // every notebook has its own. Nulling the slots unmounts the old instances
-  // (closing only their WebSockets, not the ptys) and triggers reattachment to
-  // the new notebook's ptys. Switching back later reconnects with full scrollback
-  // replay, and the agent's status is restored from its per-terminal flag.
+  // On notebook switch, DETACH from the old notebook's shell (each notebook
+  // keeps its own persistent shell pty under a stable name) but NEVER touch
+  // the agent: agents are project-scoped and the user decides when to switch
+  // them (agent manager / "new agent here" chip). With an active agent the
+  // same pty stays attached across notebooks — that's the point. Without one,
+  // re-resolve so the launch card targets the new notebook's directory.
   useEffect(() => {
     const prevNotebook = currentNotebookRef.current;
     currentNotebookRef.current = notebookPath ?? null;
     if (prevNotebook && prevNotebook !== notebookPath) {
       setShellTerm(null);
-      setAgentTerm(null);
+      setWorkdirOverride(null);
+      if (!getActiveAgentId()) setAgentTerm(null);
     }
   }, [notebookPath]);
 
@@ -218,9 +247,22 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
         // Named get-or-create: after a refresh this reattaches to the existing
         // pty (server replays scrollback) instead of spawning a new one.
-        const newTerminal = await getOrCreateNamedTerminal(terminalNameFor(notebookPath, tab), { cwd });
-        if (tab === 'agent') setAgentTerm(newTerminal);
-        else setShellTerm(newTerminal);
+        // Shell: per-notebook. Agent: the ACTIVE agent's pty wherever it
+        // lives, else a fresh pty scoped to the chosen workdir.
+        if (tab === 'agent') {
+          const active = getActiveAgentId();
+          const record = active ? (await listAgents()).find((a) => a.terminalId === active) : null;
+          const name = record ? record.terminalId : agentTerminalNameFor(agentWorkdir);
+          const agentCwd = record ? record.workdir : agentWorkdir;
+          const newTerminal = await getOrCreateNamedTerminal(name, { cwd: agentCwd });
+          // Hand this browser the resume pointer recorded server-side, so
+          // "Resume" works even if the agent was launched from another browser.
+          if (record?.sessionId) agentTerminalService.adoptSessionId(newTerminal.id, record.sessionId);
+          setAgentTerm(newTerminal);
+        } else {
+          const newTerminal = await getOrCreateNamedTerminal(terminalNameFor(notebookPath, tab), { cwd });
+          setShellTerm(newTerminal);
+        }
       } catch (error) {
         console.error('[TerminalPanel] Failed to create terminal:', error);
       } finally {
@@ -229,7 +271,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     };
 
     createNewTerminal();
-  }, [isOpen, serverAvailable, activeTerm, isLoading, notebookPath, tab]);
+  }, [isOpen, serverAvailable, activeTerm, isLoading, notebookPath, tab, agentWorkdir]);
 
   // After a refresh (or switching back to a notebook), reattach BOTH of this
   // notebook's surviving ptys eagerly — not just the visible tab's. Reattachment
@@ -248,14 +290,21 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     (async () => {
       try {
         const existing = new Set((await listTerminals()).map((t) => t.id));
-        for (const role of ['shell', 'agent'] as const) {
-          const name = terminalNameFor(notebookPath, role);
-          if (!existing.has(normalizeTerminalName(name))) continue;
-          const info = await getOrCreateNamedTerminal(name, {});
+        const shellName = terminalNameFor(notebookPath, 'shell');
+        if (existing.has(normalizeTerminalName(shellName))) {
+          const info = await getOrCreateNamedTerminal(shellName, {});
           if (cancelled) return;
           // Keep whichever instance the lazy path may have set in the meantime.
-          if (role === 'agent') setAgentTerm((prev) => prev ?? info);
-          else setShellTerm((prev) => prev ?? info);
+          setShellTerm((prev) => prev ?? info);
+        }
+        // Agent: reattach the active agent's pty if it survived (project-
+        // scoped — same pty regardless of which notebook we're in).
+        const active = getActiveAgentId();
+        const agentName = active ?? agentTerminalNameFor(agentWorkdir);
+        if (existing.has(normalizeTerminalName(agentName))) {
+          const info = await getOrCreateNamedTerminal(agentName, {});
+          if (cancelled) return;
+          setAgentTerm((prev) => prev ?? info);
         }
       } catch { /* best-effort: the lazy path still covers the active tab */ }
     })();
@@ -393,6 +442,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             <span>Agent</span>
             {agentState.status === 'running' && <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>}
           </button>
+          {tab === 'agent' && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowAgentManager((v) => !v); refreshAgents(); }}
+              className={`px-1.5 py-0.5 rounded transition-colors text-[0.6875rem] ${showAgentManager ? 'bg-white shadow-sm text-purple-700' : 'text-slate-400 hover:text-purple-600'}`}
+              title="Agent manager — every agent on this server, live or hibernated. Agents persist until YOU hibernate or delete them."
+            >
+              {agents.filter((a) => a.state === 'live').length > 0
+                ? `agents (${agents.filter((a) => a.state === 'live').length})`
+                : 'agents'}
+            </button>
+          )}
         </div>
         <button
           onClick={onClose}
@@ -402,6 +462,74 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
+
+      {/* Agent manager — the ledger of agents; nothing here is auto-killed */}
+      {tab === 'agent' && showAgentManager && (
+        <div className="border-b border-slate-200 bg-slate-50 flex-shrink-0 max-h-40 overflow-y-auto text-xs">
+          {agents.length === 0 ? (
+            <div className="px-3 py-2 text-slate-400">No agents yet — launch one below. Agents persist (hibernated ones can be revived) until you delete them.</div>
+          ) : (
+            agents.map((a) => {
+              const isActive = a.terminalId === activeAgentId;
+              const dirName = a.workdir.split('/').pop() || a.workdir;
+              return (
+                <div key={a.terminalId} className={`flex items-center gap-2 px-3 py-1 border-b border-slate-100 last:border-b-0 ${isActive ? 'bg-purple-50' : ''}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${a.state === 'live' ? 'bg-green-500' : 'bg-slate-300'}`} title={a.state} />
+                  <span className="font-medium text-slate-700 flex-shrink-0">{a.kind}</span>
+                  <span className="text-slate-500 truncate" title={a.workdir}>{dirName}</span>
+                  {a.location === 'remote' && <span className="px-1 rounded bg-blue-100 text-blue-700 text-[0.625rem] flex-shrink-0">your machine</span>}
+                  {isActive && <span className="px-1 rounded bg-purple-100 text-purple-700 text-[0.625rem] flex-shrink-0">attached</span>}
+                  <span className="flex-1" />
+                  {!isActive && (
+                    <button
+                      onClick={() => { selectAgent(a.terminalId); setShowAgentManager(false); }}
+                      className="px-1.5 py-0.5 rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-100 flex-shrink-0"
+                      title={a.state === 'live' ? 'Attach this tab to the running agent' : 'Attach — then use Resume to revive the conversation'}
+                    >
+                      {a.state === 'live' ? 'attach' : 'revive…'}
+                    </button>
+                  )}
+                  {a.state === 'live' && (
+                    <button
+                      onClick={async () => { await hibernateAgent(a.terminalId); if (isActive) selectAgent(null); refreshAgents(); }}
+                      className="px-1.5 py-0.5 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 flex-shrink-0"
+                      title="Stop the process but keep the conversation on disk — revive it any time with Resume"
+                    >
+                      hibernate
+                    </button>
+                  )}
+                  <button
+                    onClick={async () => { await deleteAgent(a.terminalId); if (isActive) selectAgent(null); refreshAgents(); }}
+                    className="px-1.5 py-0.5 rounded border border-red-100 bg-white text-red-500 hover:bg-red-50 flex-shrink-0"
+                    title="Kill the process and forget this agent (its CLI transcript remains on disk)"
+                  >
+                    delete
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* Working elsewhere chip — the agent follows YOU, not the notebook.
+          Only offer (never force) a project-local agent when dirs differ. */}
+      {tab === 'agent' && !showAgentManager && activeAgentRecord && notebookDir && activeAgentRecord.workdir !== notebookDir && (
+        <div className="flex items-center gap-2 px-2 py-1 bg-indigo-50 border-b border-indigo-100 flex-shrink-0 text-xs">
+          <Bot className="w-3.5 h-3.5 text-indigo-500 flex-shrink-0" />
+          <span className="text-indigo-800 truncate">
+            This agent works in <span className="font-mono" title={activeAgentRecord.workdir}>{activeAgentRecord.workdir.split('/').pop()}</span> — this notebook lives elsewhere. It can still read and edit it.
+          </span>
+          <span className="flex-1" />
+          <button
+            onClick={() => { selectAgent(null); setWorkdirOverride(null); }}
+            className="px-1.5 py-0.5 rounded border border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-100 flex-shrink-0"
+            title="Detach and set up a fresh agent scoped to this notebook's directory (the current agent keeps running — find it under agents)"
+          >
+            new agent here
+          </button>
+        </div>
+      )}
 
       {/* Remote-agent tunnel guide — reverse channel not connected yet */}
       {tab === 'agent' && agentTerm && agentState.status !== 'running' && remoteAgentCfg && reverseTunnelUp === false && (
@@ -468,16 +596,16 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           </span>
           {agentTerminalService.getResumableKind() === 'claude' && (
             <button
-              onClick={() => agentTerminalService.launchAgent('claude', { resume: true })}
+              onClick={() => agentTerminalService.launchAgent('claude', { resume: true, workdir: agentWorkdir })}
               disabled={!agentConnected}
               className="px-2 py-0.5 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 disabled:opacity-40 transition-colors"
-              title="Resume this notebook's own Claude conversation (claude --resume) and keep going"
+              title="Resume this agent's own conversation (claude --resume) and keep going"
             >
               ⟳ Resume Claude
             </button>
           )}
           <button
-            onClick={() => agentTerminalService.launchAgent('claude')}
+            onClick={() => agentTerminalService.launchAgent('claude', { workdir: agentWorkdir })}
             disabled={!agentConnected}
             className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
             title={remoteAgentCfg ? 'Start Claude Code on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Type `claude` into this terminal and start driving the notebook'}
@@ -485,13 +613,32 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             Claude Code
           </button>
           <button
-            onClick={() => agentTerminalService.launchAgent('codex')}
+            onClick={() => agentTerminalService.launchAgent('codex', { workdir: agentWorkdir })}
             disabled={!agentConnected}
             className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
             title={remoteAgentCfg ? 'Start Codex on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Type `codex` into this terminal and start driving the notebook'}
           >
             Codex
           </button>
+          <button
+            onClick={() => agentTerminalService.launchAgent(agentState.agentKind === 'codex' ? 'codex' : 'claude', { continueProject: true, workdir: agentWorkdir })}
+            disabled={!agentConnected}
+            className="px-2 py-0.5 rounded border border-purple-300 bg-white text-purple-700 font-medium hover:bg-purple-100 disabled:opacity-40 transition-colors"
+            title={'Pick up an existing conversation from this project directory — including ones you started outside Nebula (claude --continue / codex resume)'}
+          >
+            Continue project…
+          </button>
+          {!remoteAgentCfg && (
+            <input
+              type="text"
+              value={agentWorkdir}
+              onChange={(e) => setWorkdirOverride(e.target.value)}
+              onBlur={() => { if (!getActiveAgentId()) setAgentTerm(null); /* re-resolve the pty in the edited dir */ }}
+              className="w-40 px-1.5 py-0.5 text-xs font-mono border border-purple-200 rounded bg-white text-purple-900"
+              title="Where the agent runs — its project scope. Defaults to this notebook's directory."
+              aria-label="Agent working directory"
+            />
+          )}
           {/* Where the agent runs is only a question when the server is remote.
               On a local install the server IS your machine — no selector. */}
           {serverRemote && (
