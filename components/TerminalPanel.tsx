@@ -11,6 +11,7 @@ import {
   X,
   AlertCircle,
   Bot,
+  ListTree,
 } from 'lucide-react';
 import { TerminalInstance } from './TerminalInstance';
 import {
@@ -593,37 +594,47 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             <span>Agent</span>
             {agentState.status === 'running' && <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>}
           </button>
-          {tab === 'agent' && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowAgentManager((v) => !v);
-                refreshAgents();
-                listTerminals().then(setManagerTerms).catch(() => { /* section just stays empty */ });
-              }}
-              className={`px-1.5 py-0.5 rounded transition-colors text-[0.6875rem] ${showAgentManager ? 'bg-white shadow-sm text-purple-700' : 'text-slate-400 hover:text-purple-600'}`}
-              title="Terminals & agents — every pty and agent on this server, live or hibernated. Nothing here is auto-killed."
-            >
-              {agents.filter((a) => a.state === 'live').length > 0
-                ? `agents (${agents.filter((a) => a.state === 'live').length})`
-                : 'agents'}
-            </button>
-          )}
         </div>
-        <button
-          onClick={onClose}
-          className="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded transition-colors"
-          title="Close"
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
+        <div className="flex items-center gap-1.5">
+          {/* Manager toggle — a CONTROL, not a tab: bordered chip on the right,
+              away from the tab group it used to be mistaken for. */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowAgentManager((v) => !v);
+              refreshAgents();
+              listTerminals().then(setManagerTerms).catch(() => { /* section just stays empty */ });
+            }}
+            className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[0.6875rem] transition-colors ${
+              showAgentManager
+                ? 'border-purple-300 bg-purple-50 text-purple-700'
+                : 'border-slate-200 bg-white text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+            }`}
+            title="Terminals & agents — every pty and agent on this server, live or hibernated. Nothing here is auto-killed."
+          >
+            <ListTree className="w-3 h-3" />
+            <span>manage</span>
+            {agents.filter((a) => a.state === 'live').length > 0 && (
+              <span className="px-1 rounded-full bg-purple-100 text-purple-700 text-[0.625rem] leading-4">
+                {agents.filter((a) => a.state === 'live').length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={onClose}
+            className="p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded transition-colors"
+            title="Close"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Agent manager — the ledger of agents; nothing here is auto-killed */}
-      {tab === 'agent' && showAgentManager && (
+      {showAgentManager && (
         <div className="border-b border-slate-200 bg-slate-50 flex-shrink-0 max-h-40 overflow-y-auto text-xs">
           {agents.length === 0 ? (
-            <div className="px-3 py-2 text-slate-400">No agents yet — launch one below. Agents persist (hibernated ones can be revived) until you delete them.</div>
+            <div className="px-3 py-2 text-slate-400">No agents yet — launch one from the Agent tab. Agents persist (hibernated ones can be revived) until you delete them.</div>
           ) : (
             agents.map((a) => {
               const isActive = a.terminalId === activeAgentId;
@@ -645,6 +656,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                         onClick={() => {
                           if (tunnelBlocked) return;
                           setShowAgentManager(false);
+                          setTab('agent'); // manager is reachable from both tabs now
                           if (a.state === 'live') selectAgent(a.terminalId);
                           else continueAgentRecord(a);
                         }}
