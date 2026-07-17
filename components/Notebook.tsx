@@ -514,6 +514,15 @@ export const Notebook: React.FC = () => {
   const [ipykernelPrompt, setIpykernelPrompt] = useState<PythonEnvironment | null>(null);
   const [isInstallingIpykernel, setIsInstallingIpykernel] = useState(false);
   const [ipykernelInstallError, setIpykernelInstallError] = useState<{ message: string; hint?: string } | null>(null);
+  // Live installer output (streamed from the backend) shown in the modal so
+  // the user can see exactly what ran and whether it's progressing.
+  const [ipykernelInstallOutput, setIpykernelInstallOutput] = useState('');
+  const installOutputRef = useRef<HTMLPreElement | null>(null);
+  useEffect(() => {
+    // Follow the tail as new installer output streams in
+    const el = installOutputRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [ipykernelInstallOutput]);
   // Manual interpreter entry ("Enter interpreter path…") in the kernel picker.
   const [manualPathOpen, setManualPathOpen] = useState(false);
   const [manualPath, setManualPath] = useState('');
@@ -3054,16 +3063,24 @@ export const Notebook: React.FC = () => {
   const installIpykernelForEnv = async (env: PythonEnvironment) => {
     setIsInstallingIpykernel(true);
     setIpykernelInstallError(null);
+    setIpykernelInstallOutput('');
     try {
-      await kernelService.installIpykernel(env.path, selectedServerId);
+      const result = await kernelService.installIpykernel(
+        env.path,
+        selectedServerId,
+        (chunk) => setIpykernelInstallOutput(prev => prev + chunk)
+      );
       setIpykernelPrompt(null);
+      toast(`ipykernel installed via ${result.installer} — starting kernel…`, 'success', 5000);
       // Refresh the picker's env list in the background; launch right away.
       loadPythonEnvironments(true, selectedServerId, false);
-      const result = await switchKernel(envKernelName(env.path));
-      if (!result.success && result.error !== 'login-node kernel gated') {
-        toast(`ipykernel installed, but the kernel failed to start: ${result.error}`, 'error', 8000);
+      const switched = await switchKernel(envKernelName(env.path));
+      if (!switched.success && switched.error !== 'login-node kernel gated') {
+        toast(`ipykernel installed, but the kernel failed to start: ${switched.error}`, 'error', 8000);
       }
     } catch (error) {
+      // Failure keeps the modal open: the streamed output above the error box
+      // shows exactly what the installer did before it died.
       if (error instanceof KernelProvisionError) {
         setIpykernelInstallError({ message: error.message, hint: error.installHint });
       } else {
@@ -5405,12 +5422,24 @@ export const Notebook: React.FC = () => {
             </p>
             <p className="text-[0.7rem] text-slate-400 font-mono truncate mb-3" title={ipykernelPrompt.path}>{ipykernelPrompt.path}</p>
 
-            {ipykernelPrompt.externally_managed ? (
+            {ipykernelPrompt.externally_managed && (
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded p-2 mb-3">
                 This Python is externally managed (PEP 668), so Nebula won't install into it.
                 Copy the command below to set up ipykernel in an isolated environment, then Refresh.
               </p>
-            ) : ipykernelInstallError && (
+            )}
+
+            {/* Live installer output — streamed from the backend as it runs */}
+            {(isInstallingIpykernel || ipykernelInstallOutput) && !ipykernelPrompt.externally_managed && (
+              <pre
+                ref={installOutputRef}
+                className="text-[0.65rem] font-mono whitespace-pre-wrap break-all bg-slate-900 text-slate-200 rounded p-2 mb-3 max-h-40 overflow-y-auto"
+              >
+                {ipykernelInstallOutput || 'Choosing installer…'}
+              </pre>
+            )}
+
+            {!ipykernelPrompt.externally_managed && ipykernelInstallError && (
               <div className="text-xs text-red-700 bg-red-50 border border-red-100 rounded p-2 mb-3">
                 <div className="font-medium mb-1">Install failed</div>
                 <pre className="whitespace-pre-wrap break-all max-h-32 overflow-y-auto font-mono text-[0.65rem]">{ipykernelInstallError.message}</pre>

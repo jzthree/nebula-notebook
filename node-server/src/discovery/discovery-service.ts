@@ -155,9 +155,16 @@ export class PythonDiscoveryService {
   }
 
   /**
-   * Run a command asynchronously with timeout
+   * Run a command asynchronously with timeout. `onData` receives every
+   * stdout/stderr chunk as it arrives (interleaved), for callers that
+   * surface live progress (the ipykernel install modal).
    */
-  private runCommand(command: string, args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+  private runCommand(
+    command: string,
+    args: string[],
+    timeoutMs: number,
+    onData?: (chunk: string) => void
+  ): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
@@ -173,9 +180,11 @@ export class PythonDiscoveryService {
 
       child.stdout?.on('data', (data) => {
         stdout += data.toString();
+        onData?.(data.toString());
       });
       child.stderr?.on('data', (data) => {
         stderr += data.toString();
+        onData?.(data.toString());
       });
       child.on('error', (err) => {
         if (finished) return;
@@ -897,7 +906,10 @@ export class PythonDiscoveryService {
    * interpreters up front (with guidance). Failure carries the installer's
    * output — no silent fallback to a different installer.
    */
-  async installIpykernel(pythonPath: string): Promise<{ installer: 'none' | 'conda' | 'uv' | 'pip'; message: string }> {
+  async installIpykernel(
+    pythonPath: string,
+    onOutput?: (chunk: string) => void
+  ): Promise<{ installer: 'none' | 'conda' | 'uv' | 'pip'; message: string }> {
     if (!(await this.fsExists(pythonPath))) {
       throw new KernelProvisionError(`Python not found: ${pythonPath}`, 'python_not_found');
     }
@@ -921,8 +933,10 @@ export class PythonDiscoveryService {
 
     const plan = await this.planIpykernelInstall(pythonPath);
     console.log(`Installing ipykernel via ${plan.kind}: ${plan.argv.join(' ')}`);
+    // Echo the exact command first so the user sees WHAT ran, then live output.
+    onOutput?.(`$ ${plan.argv.join(' ')}\n`);
     try {
-      await this.runCommand(plan.argv[0], plan.argv.slice(1), this.kernelInstallTimeoutMs);
+      await this.runCommand(plan.argv[0], plan.argv.slice(1), this.kernelInstallTimeoutMs, onOutput);
     } catch (e) {
       const detail = this.errorOutput(e);
       if (this.isExternallyManagedError(detail)) {

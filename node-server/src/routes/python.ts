@@ -86,60 +86,74 @@ export default async function pythonRoutes(fastify: FastifyInstance) {
 
   /**
    * Install ipykernel into an environment (no kernelspec registration — env
-   * kernels raw-launch). One installer chosen up front (conda → uv → pip),
-   * honest structured failure. Powers the picker's Install button.
+   * kernels raw-launch). One installer chosen up front (conda → uv → pip).
+   *
+   * Responds with an NDJSON stream so the UI can show installer output LIVE:
+   *   {"type":"output","data":"…"}    — stdout/stderr chunks as they arrive
+   *   {"type":"done","installer":…}   — success terminator
+   *   {"type":"error","detail":…,"code":…,"install_hint":…} — failure terminator
+   * Pre-stream validation failures are plain JSON error responses.
    */
   fastify.post('/python/install-ipykernel', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const { python_path, server_id } = request.body as { python_path?: string; server_id?: string };
-      if (!python_path) {
-        return reply.code(400).send({ detail: 'python_path is required' });
-      }
+    const { python_path, server_id } = request.body as { python_path?: string; server_id?: string };
+    if (!python_path) {
+      return reply.code(400).send({ detail: 'python_path is required' });
+    }
 
-      const localServerId = serverRegistry.getLocalServerId();
-      if (server_id && server_id !== localServerId && server_id !== 'local') {
-        const server = serverRegistry.getServer(server_id);
-        if (!server) {
-          return reply.code(404).send({ detail: `Server not found: ${server_id}` });
-        }
-        if (server.status !== 'online') {
-          return reply.code(503).send({ detail: `Server is offline: ${server_id}` });
-        }
-        const response = await fetch(`${server.url}/api/python/install-ipykernel`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(process.env.NEBULA_CLUSTER_SECRET ? { 'X-Nebula-Cluster-Secret': process.env.NEBULA_CLUSTER_SECRET } : {}),
-          },
-          body: JSON.stringify({ python_path }),
-        });
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string; code?: string; install_hint?: string };
-          return reply.code(response.status).send({
-            detail: error.detail || 'Failed to install ipykernel',
-            code: error.code,
-            install_hint: error.install_hint,
-          });
-        }
-        return reply.send(await response.json());
+    const localServerId = serverRegistry.getLocalServerId();
+    if (server_id && server_id !== localServerId && server_id !== 'local') {
+      const server = serverRegistry.getServer(server_id);
+      if (!server) {
+        return reply.code(404).send({ detail: `Server not found: ${server_id}` });
       }
-
-      const result = await discoveryService.installIpykernel(python_path);
-      return reply.send({
-        python_path,
-        installer: result.installer,
-        message: result.message,
+      if (server.status !== 'online') {
+        return reply.code(503).send({ detail: `Server is offline: ${server_id}` });
+      }
+      const response = await fetch(`${server.url}/api/python/install-ipykernel`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(process.env.NEBULA_CLUSTER_SECRET ? { 'X-Nebula-Cluster-Secret': process.env.NEBULA_CLUSTER_SECRET } : {}),
+        },
+        body: JSON.stringify({ python_path }),
       });
+      if (!response.ok || !response.body) {
+        const error = await response.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string; code?: string; install_hint?: string };
+        return reply.code(response.status).send({
+          detail: error.detail || 'Failed to install ipykernel',
+          code: error.code,
+          install_hint: error.install_hint,
+        });
+      }
+      // Pipe the remote NDJSON stream through untouched.
+      reply.hijack();
+      reply.raw.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' });
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for await (const chunk of response.body as any) {
+          reply.raw.write(chunk);
+        }
+      } catch { /* upstream died — terminate what we have */ }
+      reply.raw.end();
+      return reply;
+    }
+
+    // Local install: stream output as it happens, then a terminator event.
+    reply.hijack();
+    reply.raw.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' });
+    const send = (obj: Record<string, unknown>) => reply.raw.write(`${JSON.stringify(obj)}\n`);
+    try {
+      const result = await discoveryService.installIpykernel(python_path, (chunk) => send({ type: 'output', data: chunk }));
+      send({ type: 'done', installer: result.installer, message: result.message, python_path });
     } catch (err) {
       if (err instanceof KernelProvisionError) {
-        const status = err.code === 'python_not_found' ? 404
-          : err.code === 'externally_managed' || err.code === 'needs_ipykernel' ? 422
-          : 500;
-        return reply.code(status).send({ detail: err.message, code: err.code, install_hint: err.installHint });
+        send({ type: 'error', detail: err.message, code: err.code, install_hint: err.installHint });
+      } else {
+        send({ type: 'error', detail: err instanceof Error ? err.message : 'Unknown error' });
       }
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      return reply.code(500).send({ detail: message });
     }
+    reply.raw.end();
+    return reply;
   });
 
   /**

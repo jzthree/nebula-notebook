@@ -1150,9 +1150,15 @@ class KernelService {
   /**
    * Install ipykernel into an environment (no registration — env kernels
    * raw-launch). The backend picks ONE installer (conda → uv → pip) and
-   * reports failure honestly with code + output + hint.
+   * streams its output as NDJSON; `onOutput` receives chunks live so the UI
+   * can show exactly what the installer is doing. Resolves on the `done`
+   * event, throws KernelProvisionError (code + hint) on the `error` event.
    */
-  async installIpykernel(pythonPath: string, serverId?: string | null): Promise<{ installer: string; message: string }> {
+  async installIpykernel(
+    pythonPath: string,
+    serverId?: string | null,
+    onOutput?: (chunk: string) => void
+  ): Promise<{ installer: string; message: string }> {
     const response = await fetch(`${API_BASE}/python/install-ipykernel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1162,7 +1168,8 @@ class KernelService {
       })
     });
 
-    if (!response.ok) {
+    // Pre-stream failures (validation, server offline) are plain JSON.
+    if (!response.ok || !response.body) {
       const error = await response.json().catch(() => ({}));
       throw new KernelProvisionError(
         error.detail || 'Failed to install ipykernel',
@@ -1171,7 +1178,48 @@ class KernelService {
       );
     }
 
-    return response.json();
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = '';
+
+    const handleEvent = (line: string): { installer: string; message: string } | null => {
+      if (!line.trim()) return null;
+      let event: { type?: string; data?: string; installer?: string; message?: string; detail?: string; code?: string; install_hint?: string };
+      try { event = JSON.parse(line); } catch { return null; }
+      if (event.type === 'output' && event.data) {
+        onOutput?.(event.data);
+        return null;
+      }
+      if (event.type === 'done') {
+        return { installer: event.installer || 'unknown', message: event.message || 'Installed ipykernel' };
+      }
+      if (event.type === 'error') {
+        throw new KernelProvisionError(
+          event.detail || 'Failed to install ipykernel',
+          event.code as KernelProvisionErrorCode | undefined,
+          event.install_hint
+        );
+      }
+      return null;
+    };
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      let newlineIdx: number;
+      while ((newlineIdx = buffered.indexOf('\n')) >= 0) {
+        const line = buffered.slice(0, newlineIdx);
+        buffered = buffered.slice(newlineIdx + 1);
+        const result = handleEvent(line);
+        if (result) return result;
+      }
+    }
+    // Flush a possible unterminated final line
+    const result = handleEvent(buffered);
+    if (result) return result;
+
+    throw new Error('Install stream ended unexpectedly — the server may have restarted mid-install');
   }
 
   /**

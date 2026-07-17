@@ -106,6 +106,26 @@ describe('ipykernel install', () => {
       expect(fs.existsSync(flag)).toBe(true);
     });
 
+    it('streams installer output to the onOutput callback as it runs', async () => {
+      const flag = path.join(tmp, 'ik-flag-stream');
+      const py = path.join(tmp, 'venv', 'bin', 'python');
+      writeStubPython(py, flag);
+      const uv = path.join(tmp, 'bin', 'uv');
+      fs.writeFileSync(
+        uv,
+        `#!/bin/sh\necho "Resolved 5 packages in 120ms"\necho "warning: hash mismatch retried" >&2\ntouch "${flag}"\n`,
+        { mode: 0o755 }
+      );
+
+      const chunks: string[] = [];
+      const result = await service.installIpykernel(py, (c) => chunks.push(c));
+      expect(result.installer).toBe('uv');
+      const all = chunks.join('');
+      expect(all).toContain('Resolved 5 packages');          // stdout streamed
+      expect(all).toContain('hash mismatch retried');        // stderr streamed too
+      expect(all).toContain('uv pip install');               // the command line itself
+    });
+
     it('reports already-installed without running any installer', async () => {
       const flag = path.join(tmp, 'ik-flag2');
       fs.writeFileSync(flag, '');

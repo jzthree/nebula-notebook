@@ -368,4 +368,54 @@ describe('KernelService', () => {
       expect(onBuffered.mock.calls[0][1].id).not.toMatch(/^kseq:/);
     });
   });
+
+  describe('installIpykernel (NDJSON streaming)', () => {
+    function ndjsonResponse(lines: object[]): Partial<Response> {
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const line of lines) {
+            controller.enqueue(encoder.encode(`${JSON.stringify(line)}\n`));
+          }
+          controller.close();
+        },
+      });
+      return { ok: true, body: body as Response['body'] };
+    }
+
+    it('streams output chunks to onOutput and resolves on done', async () => {
+      mockFetch.mockResolvedValueOnce(ndjsonResponse([
+        { type: 'output', data: '$ uv pip install --python /x ipykernel\n' },
+        { type: 'output', data: 'Resolved 5 packages\n' },
+        { type: 'done', installer: 'uv', message: 'Installed ipykernel via uv' },
+      ]));
+
+      const chunks: string[] = [];
+      const result = await kernelService.installIpykernel('/x', null, (c) => chunks.push(c));
+      expect(result.installer).toBe('uv');
+      expect(chunks.join('')).toContain('Resolved 5 packages');
+    });
+
+    it('throws KernelProvisionError with code + hint on an error event', async () => {
+      mockFetch.mockResolvedValueOnce(ndjsonResponse([
+        { type: 'output', data: 'solving environment...\n' },
+        { type: 'error', detail: 'conda failed: solver panic', code: 'install_failed', install_hint: 'conda install -p /p ipykernel -y' },
+      ]));
+
+      const err = await kernelService.installIpykernel('/x').then(() => null, (e: unknown) => e);
+      expect((err as { name?: string }).name).toBe('KernelProvisionError');
+      expect((err as { code?: string }).code).toBe('install_failed');
+      expect((err as { installHint?: string }).installHint).toContain('conda install');
+    });
+
+    it('throws if the stream ends without a terminator (server died mid-install)', async () => {
+      mockFetch.mockResolvedValueOnce(ndjsonResponse([
+        { type: 'output', data: 'Downloading ipykernel...\n' },
+      ]));
+
+      const err = await kernelService.installIpykernel('/x').then(() => null, (e: unknown) => e);
+      expect(err).toBeTruthy();
+      expect((err as Error).message).toMatch(/ended unexpectedly/i);
+    });
+  });
 });
