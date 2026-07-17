@@ -45,7 +45,7 @@ export interface AgentRecord {
   lastLaunchAt: number;
 }
 
-const STATE_FILE = path.join(os.homedir(), '.nebula', 'agents.json');
+const STATE_FILE = process.env.NEBULA_AGENTS_FILE || path.join(os.homedir(), '.nebula', 'agents.json');
 const MAX_RECORDS = 50; // oldest hibernated records beyond this are dropped
 
 class AgentRegistry {
@@ -86,12 +86,22 @@ class AgentRegistry {
     }
   }
 
-  /** Register (or re-register on revive) an agent launched in a terminal. */
+  /**
+   * Register (or re-register on revive) an agent launched in a terminal.
+   * MERGE semantics: fields the caller didn't supply NEVER overwrite stored
+   * truth — a resume relaunch that doesn't know the sessionId must not erase
+   * the registry's copy (that id is the conversation; losing it downgrades
+   * every later Continue to a picker).
+   */
   register(rec: Omit<AgentRecord, 'state' | 'createdAt' | 'lastLaunchAt'>): AgentRecord {
     this.ensureLoaded();
     const existing = this.records.get(rec.terminalId);
     const record: AgentRecord = {
+      ...existing,
       ...rec,
+      sessionId: rec.sessionId ?? existing?.sessionId,
+      mirrorSlug: rec.mirrorSlug ?? existing?.mirrorSlug,
+      launchedFrom: rec.launchedFrom ?? existing?.launchedFrom,
       state: 'live',
       createdAt: existing?.createdAt ?? Date.now(),
       lastLaunchAt: Date.now(),
@@ -111,8 +121,50 @@ class AgentRegistry {
       this.exitUnsubs.delete(rec.terminalId);
     });
     this.exitUnsubs.set(rec.terminalId, unsub);
+
+    // SERVER-SIDE liveness: the pty stream passes through this process, so the
+    // agent-alive state machine lives HERE, not in whichever browser happens to
+    // be attached. TUI teardown with no re-init within the grace window means
+    // the agent exited to the shell — the record flips to 'hibernated' even
+    // though the pty lives on (revive types the resume command into it).
+    this.watchLiveness(rec.terminalId);
     this.persist();
     return record;
+  }
+
+  private static TUI_INIT_RE = /\x1b\[\?(1049|1004|1000|1002|1003)h/;
+  private static TUI_TEARDOWN_RE = /\x1b\[\?(1049|1004|1000|1002|1003)l/;
+  private dataUnsubs = new Map<string, () => void>();
+  private graceTimers = new Map<string, NodeJS.Timeout>();
+
+  private watchLiveness(terminalId: string): void {
+    this.dataUnsubs.get(terminalId)?.();
+    const unsub = ptyManager.addDataListener(terminalId, (chunk: string) => {
+      this.observeOutput(terminalId, chunk);
+    });
+    if (unsub) this.dataUnsubs.set(terminalId, unsub);
+  }
+
+  /** Feed pty output through the liveness machine (public for tests). */
+  observeOutput(terminalId: string, chunk: string): void {
+    const r = this.records.get(terminalId);
+    if (!r) return;
+    if (AgentRegistry.TUI_INIT_RE.test(chunk)) {
+      const t = this.graceTimers.get(terminalId);
+      if (t) { clearTimeout(t); this.graceTimers.delete(terminalId); }
+      if (r.state !== 'live') { r.state = 'live'; r.lastLaunchAt = Date.now(); this.persist(); }
+      return;
+    }
+    if (AgentRegistry.TUI_TEARDOWN_RE.test(chunk) && r.state === 'live' && !this.graceTimers.has(terminalId)) {
+      this.graceTimers.set(terminalId, setTimeout(() => {
+        this.graceTimers.delete(terminalId);
+        const rec = this.records.get(terminalId);
+        if (rec && rec.state === 'live') {
+          rec.state = 'hibernated'; // agent exited; pty may still be a plain shell
+          this.persist();
+        }
+      }, 2000));
+    }
   }
 
   /** List all agents, reconciling 'live' against actual pty existence. */
