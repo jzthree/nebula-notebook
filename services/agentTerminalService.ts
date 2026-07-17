@@ -385,7 +385,8 @@ class AgentTerminalService {
    * live. (Legacy fallback: the old shared dir when no workdir is known.)
    */
   buildLocalLaunchCommand(kind: 'claude' | 'codex', resume = false, sessionId?: string, continueProject = false, workdir?: string | null, mirrorSlug?: string | null, legacyRealCwd?: string | null): string {
-    // Legacy migration: records from before the mirror-cwd change hold
+    // LEGACY-COMPAT(2026-07): remove with TerminalPanel's legacyRealCwd.
+    // Records from before the mirror-cwd change hold
     // conversations keyed to the REAL project dir — resume them from there
     // (moving transcripts inside ~/.claude would be invasive and could sweep
     // up the user's own CLI sessions). New sessions always use the mirror,

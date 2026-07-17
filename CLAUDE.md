@@ -372,3 +372,19 @@ Cell metadata is preserved across load/save:
 4. Run tests to confirm they pass
 5. Refactor while keeping tests green
 6. Commit when tests pass
+
+## Legacy-Compat Registry
+
+Compat shims are tagged `LEGACY-COMPAT(<date>, …)` in code — `grep -rn "LEGACY-COMPAT"`
+finds them all. Each states its removal condition; none should outlive it:
+
+- **Grandfathered per-notebook shells** (TerminalPanel `resolveShellTerminal`):
+  self-expiring — ptys die on server restart. Remove the legacy-name check and
+  old-server fallback in the next release.
+- **Slug-less agent records resume from real workdir** (TerminalPanel
+  `continueAgentRecord` + `legacyRealCwd` plumbing in agentTerminalService):
+  remove once `~/.nebula/agents.json` has no server records without `mirrorSlug`
+  (registry caps at 50; every relaunch re-pins).
+- **`POST /api/python/install-kernel`** (install + kernelspec registration):
+  kept as a supported API for MCP/scripted callers, NOT a shim — the UI uses raw
+  launch. Reevaluate only if the MCP surface migrates.

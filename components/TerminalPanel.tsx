@@ -236,8 +236,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     // Exact resume when we have the conversation id; otherwise the CLI's own
     // cwd-scoped picker. Always the record's OWN workdir — the conversation
     // lives in that dir (claude keys sessions by cwd).
-    // No pinned slug on a server-side record = created before the mirror-cwd
-    // change: its conversation is keyed to the REAL workdir — resume there.
+    // LEGACY-COMPAT(2026-07, self-expiring): records without a pinned slug
+    // predate the mirror-cwd change; their conversations are keyed to the
+    // REAL workdir. Registry caps at 50 records and every relaunch re-pins,
+    // so delete this (and legacyRealCwd plumbing in agentTerminalService)
+    // once agents.json shows no slug-less server records.
     const legacyRealCwd = !rec.mirrorSlug && (rec.location ?? 'server') === 'server' ? rec.workdir : undefined;
     // Direct resume whenever it's unambiguous: an exact session id, OR no id
     // but an EXCLUSIVE mirror cwd (one agent per mirror ⇒ `--continue`'s
@@ -346,7 +349,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   /**
    * Resolve which pty name the shell plane binds to. Binding rules:
    *   - a stored binding wins;
-   *   - otherwise, a still-live legacy per-notebook shell is grandfathered
+   *   - LEGACY-COMPAT(2026-07, self-expiring): a still-live legacy
+   *     per-notebook shell is grandfathered — ptys don't survive server
+   *     restarts, so this branch is dead once post-binding servers cycle;
+   *     remove the legacy-name check (and the old-server fallback below)
+   *     in the next release
    *     (running jobs must not be orphaned by the shared-default rollout);
    *   - otherwise the default: the server-shared terminal (srv-main).
    * cwd is only meaningful at CREATE time (get-or-create ignores it for live
