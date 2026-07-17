@@ -248,10 +248,22 @@ The notebook supports Jupyter-style keyboard shortcuts with two modes:
 - Filter to notebooks only (preference persisted)
 - Inline rename by clicking filename
 
-### Terminals
-- Integrated terminal panel (`Ctrl+\``)
-- Persistent named terminals via `?terminal=name` URL
-- Multiple tabs can share same terminal session
+### Terminals (binding model)
+- Terminals are named ptys; attach is always get-or-create on the name — duplicates are
+  impossible. A notebook has exactly ONE binding per plane (shell / agent) deciding which
+  pty its panel attaches to; bindings persist server-side (`~/.nebula/terminal-bindings.json`)
+  and follow the notebook across browsers (`GET/PUT/DELETE /api/terminals/binding`).
+- Shell plane default: server-shared `srv-main` (rebindable via the panel chip to
+  project / notebook-private / any name). cwd applies on CREATE only — attaching never
+  cds a shared terminal. Live legacy per-notebook shells are grandfathered.
+- Agent plane default: project (workdir) scope — records in `~/.nebula/agents.json` carry
+  the conversation id (`--session-id`), location (server / user's machine), and pinned
+  mirror-dir slug; the launch bar is a state machine over them (attach live → continue
+  hibernated → start fresh), with an honest chip when the session lives at the other
+  location. Shared agents get `[now driving: <path>]` origin tags on notebook switch.
+- Integrated terminal panel (`Ctrl+\``); full-screen named terminals via `?terminal=name`;
+  multiple tabs can attach to the same pty; the panel's "agents" button opens the
+  Terminals & agents manager (attach / continue / hibernate / kill).
 
 ### Kernel Selection (VSCode-style)
 
