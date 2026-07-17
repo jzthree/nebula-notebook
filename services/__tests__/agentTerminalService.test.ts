@@ -259,6 +259,18 @@ describe('agentTerminalService prompt injection', () => {
     expect(agentTerminalService.getResumableKind()).toBe('claude');
   });
 
+  it('recovers from a premature no-TUI verdict when the TUI shows up late (remote launches)', () => {
+    agentTerminalService.registerSender('t1', () => true);
+    agentTerminalService.launchAgent('claude');
+    // The launch watch gives up before the slow remote chain finishes booting…
+    vi.advanceTimersByTime(60000);
+    expect(agentTerminalService.getState().status).toBe('failed');
+    // …then the TUI appears anyway: the agent IS up — recover, don't stay red.
+    agentTerminalService.observeOutput('t1', '\x1b[?1049h\x1b[?1004h');
+    expect(agentTerminalService.getState().status).toBe('running');
+    expect(agentTerminalService.getState().agentKind).toBe('claude');
+  });
+
   it('survives picker→session screen transitions (teardown followed by a new TUI)', () => {
     agentTerminalService.registerSender('t1', () => true);
     agentTerminalService.launchAgent('claude', { continueProject: true });

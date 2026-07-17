@@ -140,6 +140,9 @@ class AgentTerminalService {
   private lastTaggedNotebook: string | null = null;
   // Pending "TUI tore down" verdict — cancelled if a new TUI appears in time.
   private teardownGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  // Kind of the most recent launch — used when a late TUI proves a launch we
+  // had already written off actually succeeded.
+  private lastLaunchKind: 'claude' | 'codex' | null = null;
   private serverBaseUrl: string | null = null;
   private repoRoot: string | null = null;
   // Output watcher over the agent terminal. phase 'launch' = confirming the TUI
@@ -515,6 +518,7 @@ class AgentTerminalService {
   launchAgent(kind: 'claude' | 'codex', opts: { resume?: boolean; continueProject?: boolean; workdir?: string | null; mirrorSlug?: string | null; legacyRealCwd?: string | null } = {}): SendResult {
     const send = this.getAgentSender();
     if (!send.ok) return send;
+    this.lastLaunchKind = kind;
     const resume = !!opts.resume;
     const continueProject = !!opts.continueProject;
     // Per-notebook Claude session id: a fresh launch mints and stores a new one;
@@ -605,6 +609,19 @@ class AgentTerminalService {
    * and offers Resume.
    */
   observeOutput(terminalId: string, data: string): void {
+    // Self-healing invariant: a TUI initializing on the DESIGNATED agent pty
+    // means an agent is up — whatever we believed. Recovers from a premature
+    // no-TUI verdict (remote launches: ssh handshake + login shell + CLI boot
+    // can outrun the watch window, and 'failed' used to be terminal), and
+    // from agents started by hand in the pty.
+    if (
+      terminalId === this.state.terminalId &&
+      this.state.status !== 'running' &&
+      TUI_INIT_RE.test(data)
+    ) {
+      this.adoptRunningState(this.lastLaunchKind === 'codex' ? 'codex' : 'claude');
+      return;
+    }
     const w = this.launchWatch;
     if (!w || this.state.status !== 'running' || w.terminalId !== terminalId) return;
     // Keep the tail UNstripped — the private-mode escapes are the signal.
