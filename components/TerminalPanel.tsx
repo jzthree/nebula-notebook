@@ -191,7 +191,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     // No pinned slug on a server-side record = created before the mirror-cwd
     // change: its conversation is keyed to the REAL workdir — resume there.
     const legacyRealCwd = !rec.mirrorSlug && (rec.location ?? 'server') === 'server' ? rec.workdir : undefined;
-    const opts = kind === 'claude' && rec.sessionId
+    // Direct resume whenever it's unambiguous: an exact session id, OR no id
+    // but an EXCLUSIVE mirror cwd (one agent per mirror ⇒ `--continue`'s
+    // "most recent in cwd" is exactly this agent's last conversation). Only
+    // legacy shared real dirs without an id need the interactive picker.
+    const direct = kind === 'claude' && (!!rec.sessionId || !legacyRealCwd);
+    const opts = direct
       ? { resume: true, workdir: rec.workdir, mirrorSlug: rec.mirrorSlug, legacyRealCwd }
       : { continueProject: true, workdir: rec.workdir, mirrorSlug: rec.mirrorSlug, legacyRealCwd };
     if (rec.terminalId === (agentTerm?.id ?? null) && agentConnected) {
@@ -675,7 +680,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                   })()}
                   {a.state === 'live' && (
                     <button
-                      onClick={async () => { await hibernateAgent(a.terminalId); if (isActive) selectAgent(null); refreshAgents(); }}
+                      onClick={async () => {
+                        await hibernateAgent(a.terminalId);
+                        // Detach based on the ATTACHED pty, not the selected id —
+                        // auto-attach (workdir resolution) attaches without selecting,
+                        // and leaving a killed pty mounted reconnect-loops forever.
+                        if (agentTerm?.id === a.terminalId) setAgentTerm(null);
+                        if (isActive) selectAgent(null);
+                        refreshAgents();
+                      }}
                       className="px-1.5 py-0.5 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 flex-shrink-0"
                       title="Stop the process but keep the conversation on disk — revive it any time with Resume"
                     >
@@ -683,7 +696,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                     </button>
                   )}
                   <button
-                    onClick={async () => { await deleteAgent(a.terminalId); if (isActive) selectAgent(null); refreshAgents(); }}
+                    onClick={async () => {
+                      await deleteAgent(a.terminalId);
+                      if (agentTerm?.id === a.terminalId) setAgentTerm(null); // same stale-pty hazard as hibernate
+                      if (isActive) selectAgent(null);
+                      refreshAgents();
+                    }}
                     className="px-1.5 py-0.5 rounded border border-red-100 bg-white text-red-500 hover:bg-red-50 flex-shrink-0"
                     title="Kill the process and forget this agent (its CLI transcript remains on disk)"
                   >

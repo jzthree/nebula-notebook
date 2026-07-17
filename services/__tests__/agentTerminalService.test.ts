@@ -173,6 +173,16 @@ describe('agentTerminalService prompt injection', () => {
     expect(line).toContain('--resume sess-123');
   });
 
+  it('resume without a stored id continues the mirror cwd directly (no picker)', () => {
+    // One agent per mirror dir ⇒ --continue's "most recent here" is exact.
+    const line = agentTerminalService.buildLocalLaunchCommand(
+      'claude', true, undefined, false, '/w/proj', 'p-abc123-proj'
+    );
+    expect(line).toContain('--continue');
+    expect(line).not.toContain('--resume');
+    expect(line).toContain('.nebula/agent/p-abc123-proj');
+  });
+
   it('records with a pinned slug resume from the pinned mirror dir', () => {
     const line = agentTerminalService.buildLocalLaunchCommand(
       'claude', true, 'sess-123', false, '/home/u/proj', 'p-cafe01-proj'
