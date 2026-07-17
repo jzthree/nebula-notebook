@@ -307,7 +307,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
   // Lazily create the active tab's terminal when the panel is open
   const activeTerm = tab === 'agent' ? agentTerm : shellTerm;
-  const pendingTerm = isOpen && serverAvailable === true && !activeTerm;
+  // Overlay ONLY when there is truly nothing to show — a parked agent tab has
+  // its own placeholder, and an attached terminal shows its content.
+  const pendingTerm = isOpen && serverAvailable === true && !activeTerm && !(tab === 'agent' && agentParked);
   useEffect(() => {
     if (!pendingTerm) { setShowPendingOverlay(false); return; }
     const t = setTimeout(() => setShowPendingOverlay(true), 250);

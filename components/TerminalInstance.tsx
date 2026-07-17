@@ -375,11 +375,15 @@ export const TerminalInstance: React.FC<TerminalInstanceProps> = ({
         className="h-full w-full"
         style={{ padding: '4px 8px' }}
       />
-      {status !== 'ready' && (
+      {/* Pill only for the INITIAL connect, when the screen is blank. During a
+          reconnect the last screen content stays visible and the terminal
+          already shows an inline "[Disconnected — reconnecting…]" line —
+          floating a spinner over real content would only hide information. */}
+      {status === 'connecting' && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none z-10">
           <div className="flex items-center gap-1.5 rounded-full bg-slate-800/90 text-slate-100 text-xs px-2.5 py-1 shadow-sm">
             <span className="inline-block w-3 h-3 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
-            {status === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
+            Connecting…
           </div>
         </div>
       )}
