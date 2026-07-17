@@ -95,8 +95,15 @@ export class PtyManager {
     // can drive notebooks without any MCP registration.
     const nebulaCliBinDir = path.resolve(__dirname, '..', '..', '..', 'packages', 'mcp', 'bin');
 
-    // Spawn PTY process
-    const ptyProcess = pty.spawn(shell, [], {
+    // Spawn as a LOGIN shell (-l): Nebula terminals must see the same
+    // environment as the user's ssh sessions. Non-login shells skip
+    // .zprofile/.bash_profile, so env set there (agent auth tokens like
+    // CLAUDE_CODE_OAUTH_TOKEN, module inits, PATH) silently vanished from
+    // server-side agent launches — Claude then fell back to its stored OAuth
+    // session and demanded /login whenever that had expired. Windows shells
+    // don't take -l; posix only.
+    const shellArgs = process.platform === 'win32' ? [] : ['-l'];
+    const ptyProcess = pty.spawn(shell, shellArgs, {
       name: 'xterm-256color',
       cols,
       rows,
