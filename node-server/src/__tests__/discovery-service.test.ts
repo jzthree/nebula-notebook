@@ -306,6 +306,77 @@ describe('PythonDiscoveryService', () => {
     });
   });
 
+  describe('probeAndRemember (manual interpreter entry)', () => {
+    let fixture: string;
+
+    beforeEach(() => {
+      fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nebula-probe-')));
+    });
+
+    afterEach(() => {
+      fs.rmSync(fixture, { recursive: true, force: true });
+    });
+
+    function writeStub(py: string, probeJson: string): void {
+      fs.mkdirSync(path.dirname(py), { recursive: true });
+      fs.writeFileSync(
+        py,
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "Python 3.12.3"; exit 0; fi\n' +
+        `echo '${probeJson}'\n`,
+        { mode: 0o755 }
+      );
+    }
+
+    it('classifies a conda interpreter, enriches it, and persists it to the cache', async () => {
+      const prefix = path.join(fixture, 'my-conda-env');
+      fs.mkdirSync(path.join(prefix, 'conda-meta'), { recursive: true });
+      const py = path.join(prefix, 'bin', 'python');
+      writeStub(py, '{"ipykernel": true, "externally_managed": false, "venv": false}');
+
+      const env = await service.probeAndRemember(py);
+      expect(env.envType).toBe('conda');
+      expect(env.envName).toBe('my-conda-env');
+      expect(env.version).toBe('3.12.3');
+      expect(env.hasIpykernel).toBe(true);
+
+      // Persisted: a fresh service instance sees it via the shared cache file
+      const service2 = new PythonDiscoveryService({ cacheFile: mockCacheFile });
+      expect(service2.getFromCache()?.[py]?.envType).toBe('conda');
+    });
+
+    it('classifies a venv via pyvenv.cfg', async () => {
+      const prefix = path.join(fixture, 'proj-venv');
+      fs.mkdirSync(prefix, { recursive: true });
+      fs.writeFileSync(path.join(prefix, 'pyvenv.cfg'), 'home = /usr/bin\n');
+      const py = path.join(prefix, 'bin', 'python');
+      writeStub(py, '{"ipykernel": false, "externally_managed": false, "venv": true}');
+
+      const env = await service.probeAndRemember(py);
+      expect(env.envType).toBe('venv');
+      expect(env.envName).toBe('proj-venv');
+      expect(env.hasIpykernel).toBe(false);
+      expect(env.installHint).toBeTruthy();
+    });
+
+    it('rejects a missing path with python_not_found', async () => {
+      const err = await service
+        .probeAndRemember(path.join(fixture, 'nope', 'python'))
+        .then(() => null, (e: unknown) => e);
+      expect(err).toBeTruthy();
+      expect((err as { code?: string }).code).toBe('python_not_found');
+    });
+
+    it('rejects a file that is not a working interpreter', async () => {
+      const py = path.join(fixture, 'not-python');
+      fs.writeFileSync(py, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      const err = await service
+        .probeAndRemember(py)
+        .then(() => null, (e: unknown) => e);
+      expect(err).toBeTruthy();
+      expect((err as { code?: string }).code).toBe('python_not_found');
+    });
+  });
+
   describe('Integration - Discovery', () => {
     it('should discover at least one Python environment on this system', async () => {
       // This test actually runs discovery on the current system

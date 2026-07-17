@@ -514,6 +514,10 @@ export const Notebook: React.FC = () => {
   const [ipykernelPrompt, setIpykernelPrompt] = useState<PythonEnvironment | null>(null);
   const [isInstallingIpykernel, setIsInstallingIpykernel] = useState(false);
   const [ipykernelInstallError, setIpykernelInstallError] = useState<{ message: string; hint?: string } | null>(null);
+  // Manual interpreter entry ("Enter interpreter path…") in the kernel picker.
+  const [manualPathOpen, setManualPathOpen] = useState(false);
+  const [manualPath, setManualPath] = useState('');
+  const [isProbingPath, setIsProbingPath] = useState(false);
   const [currentKernel, setCurrentKernel] = useState<string>('python3');
   const [kernelSelectionRequired, setKernelSelectionRequired] = useState(false);
   // Publish kernel + filename as autocomplete hints (the ghost-text fetcher reads
@@ -3008,6 +3012,27 @@ export const Notebook: React.FC = () => {
     }
   };
 
+  // Probe a manually-entered interpreter path; the backend validates it,
+  // remembers it in the discovery cache, and returns the enriched env — then
+  // it goes through the same click flow (launch, or install prompt).
+  const submitManualPath = async () => {
+    const p = manualPath.trim();
+    if (!p || isProbingPath) return;
+    setIsProbingPath(true);
+    try {
+      const env = await kernelService.probePythonPath(p, selectedServerId);
+      setPythonEnvironments(prev => [env, ...prev.filter(e => e.path !== env.path)]);
+      setManualPathOpen(false);
+      setManualPath('');
+      await handleEnvClick(env);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      toast(`Could not use interpreter: ${detail}`, 'error', 8000);
+    } finally {
+      setIsProbingPath(false);
+    }
+  };
+
   // Install ipykernel via the backend (one installer, chosen there), then
   // launch the env as a kernel. Failure keeps the modal open and shows the
   // installer's actual output plus a copyable manual command — no retries
@@ -4580,6 +4605,42 @@ export const Notebook: React.FC = () => {
                                 })}
                               </>
                             )}
+
+                            {/* Manual interpreter entry — VSCode's "Enter interpreter path…",
+                                for envs discovery can't see (containers, odd mounts, …) */}
+                            <div className="border-t border-slate-100">
+                              {manualPathOpen ? (
+                                <div className="px-3 py-2 flex items-center gap-1.5">
+                                  <input
+                                    autoFocus
+                                    value={manualPath}
+                                    onChange={(e) => setManualPath(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      e.stopPropagation();
+                                      if (e.key === 'Enter') submitManualPath();
+                                      if (e.key === 'Escape') { setManualPathOpen(false); setManualPath(''); }
+                                    }}
+                                    placeholder="/path/to/env/bin/python"
+                                    disabled={isProbingPath}
+                                    className="flex-1 min-w-0 px-2 py-1 text-xs font-mono border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-60"
+                                  />
+                                  <button
+                                    onClick={submitManualPath}
+                                    disabled={isProbingPath || !manualPath.trim()}
+                                    className="px-2 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 flex items-center gap-1 flex-shrink-0"
+                                  >
+                                    {isProbingPath ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Use'}
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => setManualPathOpen(true)}
+                                  className="w-full text-left px-3 py-2 text-xs text-slate-500 hover:bg-slate-50 flex items-center gap-2"
+                                >
+                                  <Plus className="w-3 h-3" /> Enter interpreter path…
+                                </button>
+                              )}
+                            </div>
                           </div>
 
                         </div>

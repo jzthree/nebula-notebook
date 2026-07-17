@@ -1175,6 +1175,32 @@ class KernelService {
   }
 
   /**
+   * Probe a manually-entered interpreter path. On success the backend
+   * remembers it in the discovery cache and returns the enriched environment.
+   */
+  async probePythonPath(pythonPath: string, serverId?: string | null): Promise<PythonEnvironment> {
+    const response = await fetch(`${API_BASE}/python/probe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        python_path: pythonPath,
+        server_id: serverId || undefined
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new KernelProvisionError(
+        error.detail || 'Failed to probe interpreter',
+        error.code,
+        error.install_hint
+      );
+    }
+
+    return response.json();
+  }
+
+  /**
    * Force refresh Python environment discovery cache
    */
   async refreshPythonEnvironments(serverId?: string | null): Promise<{ count: number }> {

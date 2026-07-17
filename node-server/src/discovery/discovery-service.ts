@@ -831,6 +831,41 @@ export class PythonDiscoveryService {
   }
 
   /**
+   * Probe a manually-entered interpreter path, classify it (conda-meta →
+   * conda, pyvenv.cfg → venv, else system + the usual uv/pixi refinement),
+   * and persist it into the discovery cache so it shows up in the picker from
+   * now on. VSCode's "Enter interpreter path…" equivalent.
+   */
+  async probeAndRemember(pythonPath: string): Promise<PythonEnvironment> {
+    if (!(await this.fsExists(pythonPath))) {
+      throw new KernelProvisionError(`Python not found: ${pythonPath}`, 'python_not_found');
+    }
+
+    const prefix = prefixForPythonExe(pythonPath);
+    let envType: PythonEnvType = 'system';
+    let envName: string | null = null;
+    if (await isCondaEnv(prefix)) {
+      envType = 'conda';
+      envName = path.basename(prefix);
+    } else if (await this.fsExists(path.join(prefix, 'pyvenv.cfg'))) {
+      envType = 'venv';
+      envName = path.basename(prefix);
+    }
+
+    const env = await this.enrichEnvironment({ path: pythonPath, envType, envName });
+    if (!env) {
+      throw new KernelProvisionError(
+        `${pythonPath} did not respond to --version — not a working Python interpreter`,
+        'python_not_found'
+      );
+    }
+
+    this.cache[pythonPath] = env;
+    this.saveToCache(this.cache);
+    return env;
+  }
+
+  /**
    * Pick ONE installer for ipykernel, up front (VSCode's shape — no fallback
    * chain at run time, so failures are attributable and honest):
    *   1. conda env → a conda-like binary (conda/mamba/micromamba; PATH first,

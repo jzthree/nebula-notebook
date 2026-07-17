@@ -139,6 +139,68 @@ export default async function pythonRoutes(fastify: FastifyInstance) {
   });
 
   /**
+   * Probe a manually-entered interpreter path ("Enter interpreter path…"):
+   * validate it runs, classify + enrich it, persist it into the discovery
+   * cache, and return it in the same snake_case shape as /python/environments.
+   */
+  fastify.post('/python/probe', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { python_path, server_id } = request.body as { python_path?: string; server_id?: string };
+      if (!python_path) {
+        return reply.code(400).send({ detail: 'python_path is required' });
+      }
+
+      const localServerId = serverRegistry.getLocalServerId();
+      if (server_id && server_id !== localServerId && server_id !== 'local') {
+        const server = serverRegistry.getServer(server_id);
+        if (!server) {
+          return reply.code(404).send({ detail: `Server not found: ${server_id}` });
+        }
+        if (server.status !== 'online') {
+          return reply.code(503).send({ detail: `Server is offline: ${server_id}` });
+        }
+        const response = await fetch(`${server.url}/api/python/probe`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(process.env.NEBULA_CLUSTER_SECRET ? { 'X-Nebula-Cluster-Secret': process.env.NEBULA_CLUSTER_SECRET } : {}),
+          },
+          body: JSON.stringify({ python_path }),
+        });
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ detail: 'Unknown error' })) as { detail?: string; code?: string; install_hint?: string };
+          return reply.code(response.status).send({
+            detail: error.detail || 'Failed to probe interpreter',
+            code: error.code,
+            install_hint: error.install_hint,
+          });
+        }
+        return reply.send(await response.json());
+      }
+
+      const env = await discoveryService.probeAndRemember(python_path);
+      return reply.send({
+        path: env.path,
+        version: env.version,
+        display_name: env.displayName,
+        env_type: env.envType,
+        env_name: env.envName,
+        has_ipykernel: env.hasIpykernel,
+        externally_managed: env.externallyManaged,
+        install_hint: env.installHint,
+        kernel_name: env.kernelName,
+      });
+    } catch (err) {
+      if (err instanceof KernelProvisionError) {
+        const status = err.code === 'python_not_found' ? 404 : 500;
+        return reply.code(status).send({ detail: err.message, code: err.code, install_hint: err.installHint });
+      }
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.code(500).send({ detail: message });
+    }
+  });
+
+  /**
    * Install ipykernel and register a Python environment as a Jupyter kernel
    */
   fastify.post('/python/install-kernel', async (request: FastifyRequest, reply: FastifyReply) => {
