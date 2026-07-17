@@ -942,7 +942,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                 ) : hereRecord ? (
                   <button
                     onClick={() => continueAgentRecord(hereRecord)}
-                    disabled={!agentConnected && activeAgentId === hereRecord.terminalId}
+                    disabled={!agentConnected && !agentParked && activeAgentId === hereRecord.terminalId}
                     className="px-2 py-0.5 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 disabled:opacity-40 transition-colors"
                     title={hereRecord.kind === 'claude' && hereRecord.sessionId
                       ? 'Reopen this project’s conversation exactly where it left off (claude --resume <id>)'
