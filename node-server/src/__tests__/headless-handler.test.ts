@@ -27,8 +27,13 @@ describe('HeadlessOperationHandler', () => {
     handler = new HeadlessOperationHandler(fsService, router);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    // Drain the handler's async persistence BEFORE deleting its directory —
+    // in-flight writes racing the teardown are the root of this suite's CI
+    // flakes (ENOTEMPTY on rmSync, ENOENT mkdir noise bleeding into the next
+    // test's assertions).
+    try { await handler.flush(); } catch { /* nothing pending */ }
     if (testDir && fs.existsSync(testDir)) {
       // maxRetries: rmSync intermittently hits ENOTEMPTY on macOS when the
       // suite runs under parallel load (async writes still landing) — retry
