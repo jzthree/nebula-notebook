@@ -2889,7 +2889,7 @@ export const Notebook: React.FC = () => {
     keepMenuOpen = false,
     source: EditSource = 'user',
     bypassLoginNodeGate = false
-  ): Promise<{ success: boolean; sessionId?: string; kernelName?: string; error?: string }> => {
+  ): Promise<{ success: boolean; sessionId?: string; kernelName?: string; error?: string; code?: string }> => {
     // Use provided serverId or fall back to currently selected server
     const targetServerId = serverId !== undefined ? serverId : selectedServerId;
 
@@ -2980,7 +2980,13 @@ export const Notebook: React.FC = () => {
     } catch (error) {
       console.error('Failed to switch kernel:', error);
       setKernelStatus('disconnected');
-      return { success: false, error: error instanceof Error ? error.message : String(error) };
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        // Preserve the provisioning code (needs_ipykernel, …) so callers can
+        // open the install prompt instead of showing a raw error.
+        code: error instanceof KernelProvisionError ? error.code : undefined,
+      };
     }
   };
   syncKernelFromBackendRef.current = async (kernelName: string, serverId?: string | null) => {
@@ -3007,6 +3013,14 @@ export const Notebook: React.FC = () => {
       return;
     }
     const result = await switchKernel(envKernelName(env.path));
+    if (result.code === 'needs_ipykernel') {
+      // Discovery cache said ipykernel was there but the live preflight
+      // disagreed — trust reality: open the install prompt and refresh.
+      setIpykernelInstallError(null);
+      setIpykernelPrompt({ ...env, has_ipykernel: false });
+      loadPythonEnvironments(true, selectedServerId, false);
+      return;
+    }
     if (!result.success && result.error !== 'login-node kernel gated') {
       toast(`Failed to start kernel: ${result.error}`, 'error', 8000);
     }
@@ -3060,9 +3074,9 @@ export const Notebook: React.FC = () => {
     }
   };
 
-  // Guidance path for envs without ipykernel: copy the ecosystem-specific install
-  // command so the user can run it themselves, then Refresh + Register. Nebula
-  // never installs packages or creates environments on the user's behalf.
+  // Copy the ecosystem-specific install command for users who prefer to run
+  // it themselves (or must — PEP 668 envs, offline nodes). The Install button
+  // is the primary path; this is the manual alternative.
   const copyInstallHint = useCallback(async (env: PythonEnvironment) => {
     const hint = env.install_hint || `"${env.path}" -m pip install ipykernel`;
     let copied = false;

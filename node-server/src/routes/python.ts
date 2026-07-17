@@ -3,14 +3,17 @@
  */
 
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { PythonDiscoveryService } from '../discovery/discovery-service';
+import { pythonDiscovery } from '../discovery/discovery-service';
 import { KernelProvisionError } from '../discovery/types';
 import { discoverKernelSpecs, invalidateKernelspecCache } from '../kernel/kernelspec';
 import { invalidateDefaultKernelName } from '../kernel/default-kernel';
 import { serverRegistry } from '../cluster/server-registry';
 import { kernelService } from './kernel';
 
-const discoveryService = new PythonDiscoveryService();
+// The shared singleton — kernel-service preflight/labels and per-env
+// kernelspec scanning read its in-memory cache, so routes must write through
+// the SAME instance (a second instance would leave the singleton stale).
+const discoveryService = pythonDiscovery;
 
 export default async function pythonRoutes(fastify: FastifyInstance) {
   /**
@@ -43,6 +46,10 @@ export default async function pythonRoutes(fastify: FastifyInstance) {
         return reply.send(data);
       }
 
+      // Discover Python environments FIRST: kernelspec discovery also scans
+      // each known env's share/jupyter/kernels, so it must see the fresh list.
+      const environments = await discoveryService.discover({ forceRefresh: refresh });
+
       // Get Jupyter kernelspecs and transform to snake_case
       const kernelspecs = discoverKernelSpecs(refresh).map(k => ({
         name: k.name,
@@ -52,9 +59,6 @@ export default async function pythonRoutes(fastify: FastifyInstance) {
         python_path: k.argv?.[0] || null, // First element of argv is typically the Python executable
       }));
       const kernelspecNames = new Set(kernelspecs.map(k => k.name));
-
-      // Get discovered Python environments
-      const environments = await discoveryService.discover({ forceRefresh: refresh });
 
       // Convert to snake_case and match with kernelspecs
       const envObjects = environments.map(env => ({

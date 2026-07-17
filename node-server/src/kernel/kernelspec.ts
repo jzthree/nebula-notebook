@@ -9,6 +9,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { KernelSpec } from './types';
+import { pythonDiscovery } from '../discovery/discovery-service';
+import { prefixForPythonExe } from '../discovery/conda-locations';
 
 // Re-export KernelSpec for convenience
 export type { KernelSpec } from './types';
@@ -114,13 +116,23 @@ function readKernelSpec(kernelDir: string): KernelSpec | null {
 }
 
 /**
- * Perform actual kernelspec discovery (disk I/O)
+ * Auto-registered default python specs (`python3`, `python3.11`, …) inside an
+ * environment duplicate what the env row in the picker already offers ("run
+ * Python here") — showing N identical "Python 3 (ipykernel)" entries would
+ * drown the real kernels. VSCode hides these the same way.
  */
-function performKernelspecDiscovery(): KernelSpec[] {
-  const specs: KernelSpec[] = [];
-  const seenNames = new Set<string>();
+const DEFAULT_PYTHON_SPEC_RE = /^python\d*(\.\d+)*$/i;
 
-  const searchPaths = getKernelSearchPaths();
+/**
+ * Read kernelspecs from a list of `…/kernels` directories. `seen` dedupes by
+ * kernel name across calls (first path wins — Jupyter precedence order).
+ */
+export function readKernelSpecsFromPaths(
+  searchPaths: string[],
+  options: { skipDefaultPythonSpecs?: boolean; seen?: Set<string> } = {}
+): KernelSpec[] {
+  const specs: KernelSpec[] = [];
+  const seenNames = options.seen ?? new Set<string>();
 
   for (const searchPath of searchPaths) {
     if (!fs.existsSync(searchPath)) {
@@ -139,6 +151,9 @@ function performKernelspecDiscovery(): KernelSpec[] {
         if (seenNames.has(kernelName)) {
           continue;
         }
+        if (options.skipDefaultPythonSpecs && DEFAULT_PYTHON_SPEC_RE.test(kernelName)) {
+          continue;
+        }
 
         const kernelDir = path.join(searchPath, kernelName);
         const spec = readKernelSpec(kernelDir);
@@ -153,6 +168,26 @@ function performKernelspecDiscovery(): KernelSpec[] {
     }
   }
 
+  return specs;
+}
+
+/** The `share/jupyter/kernels` dir belonging to each interpreter's prefix. */
+export function envKernelspecDirs(envPythonPaths: string[]): string[] {
+  const dirs = envPythonPaths.map(p => path.join(prefixForPythonExe(p), 'share', 'jupyter', 'kernels'));
+  return [...new Set(dirs)];
+}
+
+/**
+ * Perform actual kernelspec discovery (disk I/O): the standard Jupyter search
+ * paths first, then every discovered Python environment's own
+ * share/jupyter/kernels (how conda-installed kernels like R/Julia surface) —
+ * with each env's redundant default python spec hidden.
+ */
+function performKernelspecDiscovery(): KernelSpec[] {
+  const seen = new Set<string>();
+  const specs = readKernelSpecsFromPaths(getKernelSearchPaths(), { seen });
+  const envPaths = Object.keys(pythonDiscovery.getFromCache() ?? {});
+  specs.push(...readKernelSpecsFromPaths(envKernelspecDirs(envPaths), { seen, skipDefaultPythonSpecs: true }));
   return specs;
 }
 

@@ -150,7 +150,9 @@ cd node-server && npm test     # Run backend tests
 
 **Python Discovery** (protected)
 - `GET /api/python/environments` - List Python envs and kernelspecs
-- `POST /api/python/install-kernel` - Register Python env as kernel
+- `POST /api/python/install-ipykernel` - Install ipykernel into an env (one installer: conda → uv → pip)
+- `POST /api/python/probe` - Validate a manually-entered interpreter path, remember it in the cache
+- `POST /api/python/install-kernel` - Legacy: install + register a kernelspec (MCP/scripts; UI uses raw launch)
 
 ## URL Parameters
 
@@ -250,6 +252,22 @@ The notebook supports Jupyter-style keyboard shortcuts with two modes:
 - Integrated terminal panel (`Ctrl+\``)
 - Persistent named terminals via `?terminal=name` URL
 - Multiple tabs can share same terminal session
+
+### Kernel Selection (VSCode-style)
+
+- **Discovery is filesystem-only** (`discovery/conda-locations.ts`): conda envs come from
+  `~/.conda/environments.txt`, `.condarc` `envs_dirs`, well-known roots (incl. micromamba,
+  Homebrew), `CONDA_*`/`MAMBA_*` env vars, and roots derived from conda/mamba/micromamba
+  binaries on PATH — conda is never executed. A dir is a conda env iff it has `conda-meta/`.
+- **Raw launch**: any env with ipykernel starts directly via the kernel name `env:<pythonPath>`
+  (synthetic argv `python -m ipykernel_launcher`); no kernelspec registration.
+- **Install button**: envs without ipykernel prompt to install; the backend picks ONE
+  installer (conda-like binary `-p <prefix>` → `uv pip install --python` → pip), verifies
+  the import afterwards, and reports failure with the installer's output. PEP 668
+  externally-managed interpreters are refused with a copyable isolated-env command.
+- **Manual entry**: "Enter interpreter path…" probes and remembers arbitrary interpreters.
+- **Per-env kernelspecs**: each discovered env's `share/jupyter/kernels` is scanned (R,
+  Julia, etc.); the env's own default `python*` spec is hidden as redundant.
 
 ### AI Integration
 - Chat sidebar with full notebook context
