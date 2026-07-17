@@ -72,7 +72,14 @@ describe('ipykernel install', () => {
       const uv = path.join(tmp, 'bin', 'uv');
       fs.writeFileSync(uv, '#!/bin/sh\n', { mode: 0o755 });
 
-      const plan = await service.planIpykernelInstall(py);
+      // Injected finder: the default scans absolute well-known roots, so a
+      // machine with a system conda (CI runners!) would break the fixture.
+      const isolated = new PythonDiscoveryService({
+        cacheFile: path.join(tmp, 'cache2.json'),
+        condaLocator: { home, env: ctxEnv },
+        condaBinaryFinder: async () => [],
+      });
+      const plan = await isolated.planIpykernelInstall(py);
       expect(plan.kind).toBe('uv');
       expect(plan.argv).toEqual([uv, 'pip', 'install', '--python', py, 'ipykernel']);
     });

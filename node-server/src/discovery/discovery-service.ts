@@ -44,6 +44,12 @@ export interface DiscoveryServiceOptions {
   registrationTimeoutMs?: number;
   /** Test seam: override home dir / env vars for the conda locator. */
   condaLocator?: { home?: string; env?: Record<string, string | undefined> };
+  /**
+   * Test seam: conda-binary lookup for the install planner. The default
+   * (findCondaLikeBinaries) scans absolute well-known roots too, so a CI
+   * runner's system conda (/usr/share/miniconda) would leak into fixtures.
+   */
+  condaBinaryFinder?: (ctx: CondaLocatorContext) => Promise<string[]>;
 }
 
 const DEFAULT_CACHE_FILE = path.join(os.homedir(), '.nebula-notebook', 'python-cache.json');
@@ -58,6 +64,7 @@ export class PythonDiscoveryService {
   private kernelInstallTimeoutMs: number;
   private registrationTimeoutMs: number;
   private condaLocatorOverrides: { home?: string; env?: Record<string, string | undefined> };
+  private condaBinaryFinder: (ctx: CondaLocatorContext) => Promise<string[]>;
   private backgroundRefreshInProgress: boolean = false;
 
   constructor(options: DiscoveryServiceOptions = {}) {
@@ -68,6 +75,7 @@ export class PythonDiscoveryService {
     this.kernelInstallTimeoutMs = options.kernelInstallTimeoutMs ?? DEFAULT_KERNEL_INSTALL_TIMEOUT_MS;
     this.registrationTimeoutMs = options.registrationTimeoutMs ?? DEFAULT_REGISTRATION_TIMEOUT_MS;
     this.condaLocatorOverrides = options.condaLocator ?? {};
+    this.condaBinaryFinder = options.condaBinaryFinder ?? findCondaLikeBinaries;
 
     this.loadCache();
   }
@@ -888,7 +896,7 @@ export class PythonDiscoveryService {
     const ctx = this.condaContext();
     const prefix = prefixForPythonExe(pythonPath);
     if (await isCondaEnv(prefix)) {
-      const bins = await findCondaLikeBinaries(ctx);
+      const bins = await this.condaBinaryFinder(ctx);
       if (bins.length > 0) {
         return { kind: 'conda', argv: [bins[0], 'install', '-p', prefix, 'ipykernel', '-y'] };
       }
