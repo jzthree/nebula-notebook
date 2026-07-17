@@ -311,6 +311,30 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
                   </div>
                 </div>
 
+                {/* Output logging toggle visibility */}
+                <div>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                    <div className="flex-1">
+                      <p className="text-sm text-slate-700">Show "Save outputs to history" button</p>
+                      <p className="text-xs text-slate-500">
+                        Adds a toolbar toggle that logs full cell outputs into notebook history (larger history files)
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setSettings({ ...settings, showOutputLoggingToggle: !settings.showOutputLoggingToggle })}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        settings.showOutputLoggingToggle ? 'bg-blue-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          settings.showOutputLoggingToggle ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
                 {/* Cell IDs */}
                 <div>
                   <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">

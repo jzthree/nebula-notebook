@@ -21,6 +21,7 @@ export interface NebulaSettings {
   showLineNumbers?: boolean; // Show line numbers in code cells
   showCellIds?: boolean; // Show cell IDs in the cell header
   showResourceMonitor?: boolean; // Show RAM/GPU usage in notebook status bar (disabled by default for typing perf)
+  showOutputLoggingToggle?: boolean; // Show the save-outputs-to-history toolbar toggle (hidden by default — niche, and easy to hit by accident)
   smoothAutoScroll?: boolean; // Animate notebook-driven auto-scroll actions
   jupyterShortcuts?: boolean; // Jupyter classic cell-mode keys: dd delete, z undo, Shift+Z redo, 00 restart, ii interrupt
   // On a scheduler login node, whether to run kernels directly on this (shared) node.

@@ -705,6 +705,9 @@ export const Notebook: React.FC = () => {
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
   const [showLineNumbers, setShowLineNumbers] = useState<boolean>(() => getSettings().showLineNumbers ?? false);
+  // Hidden by default: the save-outputs-to-history toolbar toggle is niche and
+  // easy to hit by accident — surfaced only when enabled in Settings.
+  const [showOutputLoggingToggle, setShowOutputLoggingToggle] = useState<boolean>(() => getSettings().showOutputLoggingToggle ?? false);
   const [showCellIds, setShowCellIds] = useState<boolean>(() => getSettings().showCellIds ?? false);
   const [showResourceMonitor, setShowResourceMonitor] = useState<boolean>(() => getSettings().showResourceMonitor ?? false);
   const [smoothAutoScroll, setSmoothAutoScroll] = useState<boolean>(() => getSettings().smoothAutoScroll ?? true);
@@ -2240,6 +2243,7 @@ export const Notebook: React.FC = () => {
     refreshFileList();
     const settings = getSettings();
     setShowLineNumbers(settings.showLineNumbers ?? false);
+    setShowOutputLoggingToggle(settings.showOutputLoggingToggle ?? false);
     setShowCellIds(settings.showCellIds ?? false);
     setShowResourceMonitor(settings.showResourceMonitor ?? false);
     setSmoothAutoScroll(settings.smoothAutoScroll ?? true);
@@ -4955,23 +4959,26 @@ export const Notebook: React.FC = () => {
                     <Keyboard className="w-4 h-4" />
                   </button>
                   {/* Output Logging Mode Toggle — 'full' persists outputs into
-                      history (bigger history files; default 'minimal' keeps it lean) */}
-                  <button
-                    onClick={handleToggleOutputLogging}
-                    className={`p-1.5 rounded-md transition-colors ${
-                      outputLoggingMode === 'full'
-                        ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
-                        : 'hover:bg-slate-200 text-slate-600'
-                    }`}
-                    title={
-                      outputLoggingMode === 'full'
-                        ? 'Outputs are saved into notebook history (larger history files) - click for minimal'
-                        : 'Outputs are not saved into history - click to log full outputs into history'
-                    }
-                    aria-label="Toggle output logging in history"
-                  >
-                    <ScrollText className="w-4 h-4" />
-                  </button>
+                      history (bigger history files; default 'minimal' keeps it
+                      lean). Hidden unless enabled in Settings → General. */}
+                  {showOutputLoggingToggle && (
+                    <button
+                      onClick={handleToggleOutputLogging}
+                      className={`p-1.5 rounded-md transition-colors ${
+                        outputLoggingMode === 'full'
+                          ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
+                          : 'hover:bg-slate-200 text-slate-600'
+                      }`}
+                      title={
+                        outputLoggingMode === 'full'
+                          ? 'Outputs are saved into notebook history (larger history files) - click for minimal'
+                          : 'Outputs are not saved into history - click to log full outputs into history'
+                      }
+                      aria-label="Toggle output logging in history"
+                    >
+                      <ScrollText className="w-4 h-4" />
+                    </button>
+                  )}
                   {/* Agent Permission Toggle */}
                   <button
                     onClick={handleToggleAgentPermission}
