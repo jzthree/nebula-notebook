@@ -178,6 +178,26 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const [showAgentMoreMenu, setShowAgentMoreMenu] = useState(false);
   // Non-agent ptys shown in the manager's Terminals section.
   const [managerTerms, setManagerTerms] = useState<TerminalInfo[]>([]);
+  // Parked: agent tab with no pty and no launch requested (instant, no spinner).
+  const [agentParked, setAgentParked] = useState(false);
+  // Bumped when a launch is requested from the parked state, so the resolve
+  // effect re-runs even though agentTerm is already null.
+  const [agentLaunchNonce, setAgentLaunchNonce] = useState(0);
+
+  // Route a launch through the pty-resolution effect when nothing is attached
+  // yet: create the pty first, then the pending launch fires on WS connect.
+  const requestAgentLaunch = useCallback((kind: 'claude' | 'codex', opts: {
+    resume?: boolean; continueProject?: boolean; workdir?: string; mirrorSlug?: string; legacyRealCwd?: string;
+  }) => {
+    if (agentTerminalService.isConnected()) {
+      agentTerminalService.launchAgent(kind, opts);
+      return;
+    }
+    pendingAgentLaunchRef.current = { kind, opts };
+    setAgentParked(false);
+    setAgentTerm(null);
+    setAgentLaunchNonce((n) => n + 1);
+  }, []);
   const pendingAgentLaunchRef = useRef<{
     kind: 'claude' | 'codex';
     opts: { resume?: boolean; continueProject?: boolean; workdir?: string };
@@ -204,6 +224,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       return;
     }
     pendingAgentLaunchRef.current = { kind, opts };
+    setAgentParked(false);
+    setAgentLaunchNonce((n) => n + 1);
     selectAgent(rec.terminalId);
   }, [agentTerm, agentConnected, selectAgent]);
 
@@ -342,6 +364,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           const record = active ? (await listAgents()).find((a) => a.terminalId === active) : null;
           const name = record ? record.terminalId : agentTerminalNameFor(agentWorkdir);
           const agentCwd = record ? record.workdir : agentWorkdir;
+          // NEVER auto-create an agent pty: attach if one exists, otherwise
+          // PARK instantly (placeholder + launch bar, zero round trips —
+          // hibernate lands here immediately). A pty is created only when a
+          // launch was actually requested (pendingAgentLaunchRef).
+          if (!pendingAgentLaunchRef.current) {
+            const existing = new Set((await listTerminals()).map((t) => t.id));
+            if (!existing.has(normalizeTerminalName(name))) {
+              setAgentParked(true);
+              return;
+            }
+          }
+          setAgentParked(false);
           const newTerminal = await getOrCreateNamedTerminal(name, { cwd: agentCwd });
           // Hand this browser the resume pointer recorded server-side, so
           // "Resume" works even if the agent was launched from another browser.
@@ -361,7 +395,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     };
 
     createNewTerminal();
-  }, [isOpen, serverAvailable, activeTerm, isLoading, notebookPath, tab, agentWorkdir, resolveShellTerminal]);
+  }, [isOpen, serverAvailable, activeTerm, isLoading, notebookPath, tab, agentWorkdir, resolveShellTerminal, agentLaunchNonce]);
 
   // Rebind the shell plane and re-resolve. The old pty is left alone (it may
   // hold running jobs and remains reachable via the manager / ?terminal=).
@@ -685,7 +719,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                         // Detach based on the ATTACHED pty, not the selected id —
                         // auto-attach (workdir resolution) attaches without selecting,
                         // and leaving a killed pty mounted reconnect-loops forever.
-                        if (agentTerm?.id === a.terminalId) setAgentTerm(null);
+                        if (agentTerm?.id === a.terminalId) { setAgentParked(true); setAgentTerm(null); }
                         if (isActive) selectAgent(null);
                         refreshAgents();
                       }}
@@ -698,7 +732,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                   <button
                     onClick={async () => {
                       await deleteAgent(a.terminalId);
-                      if (agentTerm?.id === a.terminalId) setAgentTerm(null); // same stale-pty hazard as hibernate
+                      if (agentTerm?.id === a.terminalId) { setAgentParked(true); setAgentTerm(null); } // same stale-pty hazard as hibernate
                       if (isActive) selectAgent(null);
                       refreshAgents();
                     }}
@@ -781,7 +815,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       )}
 
       {/* Remote-agent tunnel guide — reverse channel not connected yet */}
-      {tab === 'agent' && agentTerm && agentState.status !== 'running' && remoteAgentCfg && reverseTunnelUp === false && (
+      {tab === 'agent' && (agentTerm || agentParked) && agentState.status !== 'running' && remoteAgentCfg && reverseTunnelUp === false && (
         <div className="flex items-center gap-2 px-2 py-1 bg-amber-50 border-b border-amber-200 flex-shrink-0 text-xs">
           <Bot className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
           <span className="text-amber-800 font-medium flex-shrink-0">
@@ -839,7 +873,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       )}
 
       {/* Agent guidance bar — the on-ramp for driving the notebook with an agent */}
-      {tab === 'agent' && agentTerm && agentState.status !== 'running' && !(remoteAgentCfg && reverseTunnelUp === false) && (
+      {tab === 'agent' && (agentTerm || agentParked) && agentState.status !== 'running' && !(remoteAgentCfg && reverseTunnelUp === false) && (
         <div className="flex items-center gap-2 px-2 py-1 bg-purple-50 border-b border-purple-100 flex-shrink-0 text-xs">
           <Bot className="w-3.5 h-3.5 text-purple-600 flex-shrink-0" />
           <span className="text-purple-800 font-medium truncate">
@@ -860,11 +894,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
             const startFresh = (kind: 'claude' | 'codex') => {
               setShowAgentMoreMenu(false);
-              agentTerminalService.launchAgent(kind, { workdir: agentWorkdir });
+              requestAgentLaunch(kind, { workdir: agentWorkdir });
             };
             const pickSession = (kind: 'claude' | 'codex') => {
               setShowAgentMoreMenu(false);
-              agentTerminalService.launchAgent(kind, { continueProject: true, workdir: agentWorkdir });
+              requestAgentLaunch(kind, { continueProject: true, workdir: agentWorkdir });
             };
 
             return (
@@ -891,7 +925,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                 ) : (
                   <button
                     onClick={() => startFresh('claude')}
-                    disabled={!agentConnected}
+                    disabled={!agentConnected && !agentParked}
                     className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
                     title={remoteAgentCfg ? 'Start Claude Code on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Start Claude Code in its agent workspace and drive this notebook'}
                   >
@@ -901,7 +935,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                 {!hereRecord && (
                   <button
                     onClick={() => startFresh('codex')}
-                    disabled={!agentConnected}
+                    disabled={!agentConnected && !agentParked}
                     className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
                     title={remoteAgentCfg ? 'Start Codex on YOUR machine (over the reverse tunnel)' : 'Start Codex in its agent workspace'}
                   >
@@ -919,7 +953,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                 <div className="relative flex-shrink-0">
                   <button
                     onClick={() => setShowAgentMoreMenu((v) => !v)}
-                    disabled={!agentConnected}
+                    disabled={!agentConnected && !agentParked}
                     className="px-1.5 py-0.5 rounded border border-purple-300 bg-white text-purple-700 font-medium hover:bg-purple-100 disabled:opacity-40 transition-colors"
                     title="More ways to start: fresh session, session picker, other agent"
                   >
@@ -1123,6 +1157,16 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             <div className="text-center text-slate-500">
               <Terminal className="w-8 h-8 mx-auto mb-2" />
               <p className="text-sm">Opening {tab === 'agent' ? 'agent ' : ''}terminal…</p>
+            </div>
+          </div>
+        )}
+
+        {tab === 'agent' && agentParked && !agentTerm && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-50">
+            <div className="text-center text-slate-500">
+              <Bot className="w-8 h-8 mx-auto mb-2 text-purple-300" />
+              <p className="text-sm">No agent terminal running</p>
+              <p className="text-xs mt-1">Start or continue an agent above — its terminal appears when needed.</p>
             </div>
           </div>
         )}
