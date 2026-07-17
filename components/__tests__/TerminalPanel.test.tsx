@@ -10,6 +10,10 @@ let rafSpy: ReturnType<typeof vi.spyOn> | null = null;
 vi.mock('../../services/terminalService', () => ({
   getTerminalServerInfo: vi.fn().mockResolvedValue({ available: true, repoRoot: '/srv/nebula' }),
   getOrCreateNamedTerminal: vi.fn().mockResolvedValue({ id: 'terminal-1' }),
+  listTerminals: vi.fn().mockResolvedValue([{ id: 'terminal-1', cwd: '/', pid: 1 }]),
+  checkReverseTunnel: vi.fn().mockResolvedValue({ up: false, ssh: null }),
+  getTerminalBinding: vi.fn().mockResolvedValue({ plane: 'shell', scope: 'server', name: 'srv-main', custom_name: null, stored: false }),
+  setTerminalBinding: vi.fn().mockResolvedValue({ plane: 'shell', scope: 'server', name: 'srv-main', custom_name: null, stored: true }),
   closeTerminal: vi.fn(),
 }));
 
