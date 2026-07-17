@@ -14,8 +14,8 @@ import { authenticator } from 'otplib';
 import * as jwt from 'jsonwebtoken';
 import * as qrcode from 'qrcode-terminal';
 
-// Config file location
-const NEBULA_DIR = path.join(os.homedir(), '.nebula');
+// Config file location (env override is a test seam)
+const NEBULA_DIR = process.env.NEBULA_AUTH_DIR || path.join(os.homedir(), '.nebula');
 const AUTH_CONFIG_FILE = path.join(NEBULA_DIR, 'auth.json');
 
 // JWT settings
@@ -104,6 +104,14 @@ class AuthService {
         return !this.config!.setupComplete;
       } catch (err) {
         console.error('[Auth] Failed to load auth config:', err);
+        // NEVER silently overwrite an existing-but-unreadable config: it may
+        // hold the user's only copy of their TOTP secret (e.g. truncated by a
+        // quota-full write). Preserve it for recovery before regenerating.
+        try {
+          const backup = `${AUTH_CONFIG_FILE}.corrupt-${Date.now()}`;
+          fs.copyFileSync(AUTH_CONFIG_FILE, backup);
+          console.error(`[Auth] Unreadable auth config backed up to ${backup} — regenerating fresh secrets.`);
+        } catch { /* backup is best-effort */ }
       }
     }
 
@@ -141,9 +149,26 @@ class AuthService {
   private saveConfig(): void {
     if (!this.config) return;
 
-    fs.writeFileSync(AUTH_CONFIG_FILE, JSON.stringify(this.config, null, 2), {
-      mode: 0o600, // Owner read/write only
-    });
+    // Atomic write (tmp + rename): a plain writeFileSync truncates BEFORE
+    // writing, so a quota-full/crashed write leaves an empty auth.json and
+    // the TOTP secret then exists only in this process's memory — exactly the
+    // failure that forces users to re-enroll after the next restart. With
+    // rename, a failed write leaves the previous file untouched.
+    const tmp = `${AUTH_CONFIG_FILE}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(this.config, null, 2), { mode: 0o600 });
+      fs.renameSync(tmp, AUTH_CONFIG_FILE);
+    } catch (err) {
+      try { fs.unlinkSync(tmp); } catch { /* nothing partial to clean */ }
+      // Loud, specific failure: the server keeps working from memory, but the
+      // secret will NOT survive a restart — the user must be able to see why.
+      console.error(
+        `[Auth] FAILED to persist auth config to ${AUTH_CONFIG_FILE} — ` +
+        `2FA secrets exist ONLY in memory and will be lost on restart. ` +
+        `Check disk quota/permissions. Error:`, err
+      );
+      throw err;
+    }
   }
 
   /**
