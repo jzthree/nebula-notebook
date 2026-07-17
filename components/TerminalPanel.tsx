@@ -158,6 +158,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const refreshAgents = useCallback(async () => {
     setAgents(await listAgents());
   }, []);
+  const refreshManagerTerms = useCallback(() => {
+    listTerminals().then(setManagerTerms).catch(() => { /* section stays as-is */ });
+  }, []);
   useEffect(() => {
     if (!isOpen || tab !== 'agent') return;
     refreshAgents();
@@ -749,6 +752,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                         if (agentTerm?.id === a.terminalId) { setAgentParked(true); setAgentTerm(null); }
                         if (isActive) selectAgent(null);
                         refreshAgents();
+                        refreshManagerTerms();
                       }}
                       className="px-1.5 py-0.5 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 flex-shrink-0"
                       title="Stop the process but keep the conversation on disk — revive it any time with Resume"
@@ -762,6 +766,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                       if (agentTerm?.id === a.terminalId) { setAgentParked(true); setAgentTerm(null); } // same stale-pty hazard as hibernate
                       if (isActive) selectAgent(null);
                       refreshAgents();
+                      refreshManagerTerms();
                     }}
                     className="px-1.5 py-0.5 rounded border border-red-100 bg-white text-red-500 hover:bg-red-50 flex-shrink-0"
                     title="Kill the process and forget this agent (its CLI transcript remains on disk)"
@@ -783,6 +788,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                 const hashSlug = (id: string) => id.split('-').slice(2).join('-');
                 const { label, role } = t.id === 'srv-main'
                   ? { label: 'Shared terminal', role: 'this server' }
+                  : t.id.startsWith('agent-')
+                  ? { label: t.id === 'agent-srv' ? 'Shared agent' : t.id.replace(/^agent-([0-9a-f]{6}-)?/, ''), role: 'agent · orphaned' }
                   : t.id.startsWith('proj-')
                   ? { label: `${hashSlug(t.id)}/`, role: 'project' }
                   : t.id.startsWith('nb-')
