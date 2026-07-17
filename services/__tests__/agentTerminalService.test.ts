@@ -6,6 +6,14 @@ import {
   shellSingleQuote,
 } from '../agentTerminalService';
 
+/** Invert the launch-time login-shell wrapper ("$SHELL" -l -i -c '…') so
+ *  tests keep asserting the inner command contract without escaping noise. */
+const unwrapLogin = (line: string): string => {
+  const body = line.endsWith('\r') ? line.slice(0, -1) : line;
+  const m = body.match(/^"\$SHELL" -l -i -c '([\s\S]*)'$/);
+  return (m ? m[1].replace(/'\\''/g, "'") : body) + (line.endsWith('\r') ? '\r' : '');
+};
+
 describe('sanitizePromptText', () => {
   it('collapses newlines and tabs to single spaces (raw \\n would submit a TUI prompt early)', () => {
     expect(sanitizePromptText('fix\nthis\r\nerror\tnow')).toBe('fix this error now');
@@ -223,11 +231,12 @@ describe('agentTerminalService prompt injection', () => {
     agentTerminalService.setNotebookContext("/tmp/my analysis's.ipynb");
 
     agentTerminalService.launchAgent('claude');
-    const cmd = sent[0];
+    expect(sent[0]).toMatch(/^"\$SHELL" -l -i -c '/); // login shell at LAUNCH time — env never stale
+    const cmd = unwrapLogin(sent[0]);
     // Local launches run the agent from its workspace dir (legacy shared dir
     // when no workdir is known), then a fresh Claude launch pins this
     // notebook's own session id, then the prompt.
-    expect(cmd).toMatch(/^mkdir -p "\$HOME\/\.nebula\/agent" && cd "\$HOME\/\.nebula\/agent" && claude --session-id [0-9a-f-]{36} '/);
+    expect(cmd).toMatch(/^mkdir -p "\$HOME\/\.nebula\/agent" && cd "\$HOME\/\.nebula\/agent" && claude --session-id [0-9a-f-]{36} /);
     expect(cmd.endsWith('\r')).toBe(true);
     expect(cmd).toContain('connect_server');
     expect(cmd).toContain('http://localhost:8000');
@@ -435,7 +444,8 @@ describe('remote-agent mode (agent on the user machine)', () => {
     const sent: string[] = [];
     agentTerminalService.registerSender('t9', (d) => { sent.push(d); return true; });
     agentTerminalService.launchAgent('codex');
-    expect(sent[0]).toMatch(/^mkdir -p "\$HOME\/\.nebula\/agent" && cd "\$HOME\/\.nebula\/agent" && codex '/);
+    expect(sent[0]).toMatch(/^"\$SHELL" -l -i -c '/);
+    expect(sent[0]).toMatch(/mkdir -p "\$HOME\/\.nebula\/agent" && cd "\$HOME\/\.nebula\/agent" && codex /);
     expect(sent[0]).not.toContain('ssh');
   });
 });
@@ -461,7 +471,7 @@ describe('local launch placement (agent workspace mirror)', () => {
     const sent: string[] = [];
     agentTerminalService.registerSender('t2', (d) => { sent.push(d); return true; });
     agentTerminalService.launchAgent('claude', { workdir: '/data/proj' });
-    const line = sent[0];
+    const line = unwrapLogin(sent[0]);
     // Agent chats are keyed to their cwd — run from the mirror so real project
     // dirs never accumulate Nebula agent trajectories…
     expect(line).toMatch(MIRROR_RE);
@@ -476,8 +486,8 @@ describe('local launch placement (agent workspace mirror)', () => {
     const sent: string[] = [];
     agentTerminalService.registerSender('t2', (d) => { sent.push(d); return true; });
     agentTerminalService.launchAgent('codex', { workdir: '/data/proj' });
-    expect(sent[0]).toMatch(MIRROR_RE);
-    expect(sent[0]).toContain(`codex -c 'sandbox_workspace_write.writable_roots=["/data/proj"]' '`);
+    expect(unwrapLogin(sent[0])).toMatch(MIRROR_RE);
+    expect(unwrapLogin(sent[0])).toContain(`codex -c 'sandbox_workspace_write.writable_roots=["/data/proj"]' '`);
   });
 
   it('resume and continue-project also run from the mirror (claude keys sessions by cwd)', () => {
@@ -489,13 +499,13 @@ describe('local launch placement (agent workspace mirror)', () => {
     sent.length = 0;
 
     agentTerminalService.launchAgent('claude', { resume: true, workdir: '/data/proj' });
-    expect(sent[0]).toMatch(MIRROR_RE);
-    expect(sent[0]).toContain(`claude --add-dir '/data/proj' --resume ${sessionId} '`);
+    expect(unwrapLogin(sent[0])).toMatch(MIRROR_RE);
+    expect(unwrapLogin(sent[0])).toContain(`claude --add-dir '/data/proj' --resume ${sessionId} '`);
     agentTerminalService.markStopped();
     sent.length = 0;
 
     agentTerminalService.launchAgent('codex', { continueProject: true, workdir: '/data/proj' });
-    expect(sent[0]).toMatch(MIRROR_RE);
-    expect(sent[0]).toContain(`codex resume -c 'sandbox_workspace_write.writable_roots=["/data/proj"]'`);
+    expect(unwrapLogin(sent[0])).toMatch(MIRROR_RE);
+    expect(unwrapLogin(sent[0])).toContain(`codex resume -c 'sandbox_workspace_write.writable_roots=["/data/proj"]'`);
   });
 });

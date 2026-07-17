@@ -403,8 +403,15 @@ class AgentTerminalService {
         ? ` --add-dir ${shellSingleQuote(workdir)}`
         : ` -c ${shellSingleQuote(`sandbox_workspace_write.writable_roots=[${JSON.stringify(workdir)}]`)}`)
       : '';
-    return `mkdir -p ${cwd} && cd ${cwd} && ` +
+    const inner = `mkdir -p ${cwd} && cd ${cwd} && ` +
       this.buildAgentCommand(kind, resume, '', sessionId, continueProject, accessFlags, workdir);
+    // Re-enter the user's login+interactive shell AT LAUNCH TIME (same wrapper
+    // remote launches use): a pty's env is frozen when its shell starts, so a
+    // long-lived pty predating an env change (agent auth tokens, PATH) would
+    // launch agents with stale env forever — the "Continue needs /login but
+    // hibernate+continue doesn't" mystery. Runs as a child (no exec): the
+    // original shell survives the agent's exit.
+    return `"$SHELL" -l -i -c ${shellSingleQuote(inner)}`;
   }
 
   /**
