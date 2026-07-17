@@ -50,6 +50,28 @@ describe('resolveBindingName', () => {
   });
 });
 
+describe('resolveBindingName — agent plane', () => {
+  const nb = '/home/u/proj/analysis.ipynb';
+
+  it('server scope resolves to the shared agent terminal (distinct from srv-main)', () => {
+    expect(resolveBindingName('agent', 'server', nb)).toBe('agent-srv');
+  });
+
+  it('notebook scope matches the legacy per-notebook agent naming', () => {
+    expect(resolveBindingName('agent', 'notebook', nb)).toMatch(/^nb-[0-9a-f]{6}-agent-analysis$/);
+  });
+
+  it('named scope is prefixed so it can never collide with a shell named terminal', () => {
+    expect(resolveBindingName('agent', 'named', nb, 'paper writer')).toBe('agent-paper-writer');
+    expect(resolveBindingName('agent', 'named', nb, 'gpu'))
+      .not.toBe(resolveBindingName('shell', 'named', nb, 'gpu'));
+  });
+
+  it('project scope resolves to null — the client derives it from the chosen workdir', () => {
+    expect(resolveBindingName('agent', 'project', nb)).toBeNull();
+  });
+});
+
 describe('TerminalBindingStore', () => {
   let tmp: string;
   let store: TerminalBindingStore;

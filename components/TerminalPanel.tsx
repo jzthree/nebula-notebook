@@ -140,7 +140,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const [showWorkdirMenu, setShowWorkdirMenu] = useState(false);
   const { promptText } = useNotification();
   const notebookDir = notebookDirOf(notebookPath);
-  const agentWorkdir = workdirOverride ?? notebookDir ?? '~';
+  // Agent-plane binding: the scope this notebook's Agent tab targets. The
+  // binding decides the agent terminal's IDENTITY (records key on it too);
+  // 'project' derives it from the chosen workdir (legacy-compatible).
+  const [agentBinding, setAgentBinding] = useState<TerminalBindingInfo | null>(null);
+  useEffect(() => {
+    if (!isOpen || !notebookPath) return;
+    getTerminalBinding(notebookPath, 'agent').then(setAgentBinding).catch(() => setAgentBinding(null));
+  }, [isOpen, notebookPath]);
+  const agentScope = agentBinding?.scope ?? 'project';
+  const agentWorkdir = workdirOverride ?? (agentScope === 'server' ? '~' : notebookDir) ?? '~';
+  const boundAgentName = (agentScope === 'project' || !agentBinding?.name)
+    ? agentTerminalNameFor(agentWorkdir)
+    : agentBinding.name;
   const activeAgentRecord = activeAgentId ? agents.find((a) => a.terminalId === activeAgentId) ?? null : null;
 
   const refreshAgents = useCallback(async () => {
@@ -183,6 +195,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   // Bumped when a launch is requested from the parked state, so the resolve
   // effect re-runs even though agentTerm is already null.
   const [agentLaunchNonce, setAgentLaunchNonce] = useState(0);
+
+  // Change the agent-plane binding scope; persists server-side per notebook.
+  const rebindAgent = useCallback(async (scope: TerminalBindingScope, name?: string) => {
+    setShowWorkdirMenu(false);
+    try {
+      const b = await setTerminalBinding(notebookPath || 'scratch', 'agent', scope, name);
+      setAgentBinding(b);
+      setWorkdirOverride(null);
+      if (!getActiveAgentId()) { setAgentParked(false); setAgentTerm(null); setAgentLaunchNonce((n) => n + 1); }
+    } catch (e) {
+      console.error('[TerminalPanel] Failed to rebind agent scope:', e);
+    }
+  }, [notebookPath]);
 
   // Route a launch through the pty-resolution effect when nothing is attached
   // yet: create the pty first, then the pending launch fires on WS connect.
@@ -364,7 +389,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         if (tab === 'agent') {
           const active = getActiveAgentId();
           const record = active ? (await listAgents()).find((a) => a.terminalId === active) : null;
-          const name = record ? record.terminalId : agentTerminalNameFor(agentWorkdir);
+          const name = record ? record.terminalId : boundAgentName;
           const agentCwd = record ? record.workdir : agentWorkdir;
           // NEVER auto-create an agent pty: attach if one exists, otherwise
           // PARK instantly (placeholder + launch bar, zero round trips —
@@ -442,7 +467,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         // Agent: reattach the active agent's pty if it survived (project-
         // scoped — same pty regardless of which notebook we're in).
         const active = getActiveAgentId();
-        const agentName = active ?? agentTerminalNameFor(agentWorkdir);
+        const agentName = active ?? boundAgentName;
         if (existing.has(normalizeTerminalName(agentName))) {
           const info = await getOrCreateNamedTerminal(agentName, {});
           if (cancelled) return;
@@ -887,11 +912,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             // alternatives live in the "more" menu.
             const loc = remoteAgentCfg ? 'remote' : 'server';
             const byRecency = (a: AgentRecord, b: AgentRecord) => (b.lastLaunchAt ?? 0) - (a.lastLaunchAt ?? 0);
+            const boundId = normalizeTerminalName(boundAgentName);
             const hereRecord = agents
-              .filter((a) => a.workdir === agentWorkdir && (a.location ?? 'server') === loc)
+              .filter((a) => a.terminalId === boundId && (a.location ?? 'server') === loc)
               .sort(byRecency)[0] ?? null;
             const elsewhereRecord = !hereRecord ? (agents
-              .filter((a) => a.workdir === agentWorkdir && (a.location ?? 'server') !== loc)
+              .filter((a) => a.terminalId === boundId && (a.location ?? 'server') !== loc)
               .sort(byRecency)[0] ?? null) : null;
 
             const startFresh = (kind: 'claude' | 'codex') => {
@@ -988,10 +1014,44 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               className="px-1.5 py-0.5 rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-100 font-mono max-w-[10rem] truncate"
               title={`Project scope: ${agentWorkdir} (the agent itself runs in a mirrored ~/.nebula/agent workspace${remoteAgentCfg ? ' on your machine' : ''}) — click to change`}
             >
-              in {agentWorkdir.split('/').pop() || agentWorkdir} ▾
+              {agentScope === 'server' ? 'shared agent ▾'
+                : agentScope === 'notebook' ? 'this notebook ▾'
+                : agentScope === 'named' ? `${agentBinding?.custom_name || 'named'} ▾`
+                : `in ${agentWorkdir.split('/').pop() || agentWorkdir} ▾`}
             </button>
             {showWorkdirMenu && (
               <div className="absolute bottom-full mb-1 left-0 z-20 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[14rem] max-w-[22rem] text-xs">
+                <div className="px-3 py-1 text-[0.625rem] uppercase tracking-wide text-slate-400">Agent scope</div>
+                <button onClick={() => rebindAgent('project')} className={`w-full text-left px-3 py-1 hover:bg-purple-50 ${agentScope === 'project' ? 'text-purple-700 font-medium' : 'text-slate-700'}`}>
+                  This project{agentScope === 'project' ? ' ✓' : ''}
+                  <div className="text-[0.625rem] text-slate-400">One agent per folder (default) — folder below</div>
+                </button>
+                <button onClick={() => rebindAgent('server')} className={`w-full text-left px-3 py-1 hover:bg-purple-50 ${agentScope === 'server' ? 'text-purple-700 font-medium' : 'text-slate-700'}`}>
+                  Shared on this server{agentScope === 'server' ? ' ✓' : ''}
+                  <div className="text-[0.625rem] text-slate-400">One agent for all notebooks — messages are tagged per notebook</div>
+                </button>
+                <button onClick={() => rebindAgent('notebook')} className={`w-full text-left px-3 py-1 hover:bg-purple-50 ${agentScope === 'notebook' ? 'text-purple-700 font-medium' : 'text-slate-700'}`}>
+                  Private to this notebook{agentScope === 'notebook' ? ' ✓' : ''}
+                  <div className="text-[0.625rem] text-slate-400">Own agent even when notebooks share a folder</div>
+                </button>
+                <button
+                  onClick={async () => {
+                    setShowWorkdirMenu(false);
+                    const name = await promptText({
+                      title: 'Named agent',
+                      message: 'Notebooks bound to the same name share this agent (e.g. paper-writer).',
+                      placeholder: 'paper-writer',
+                      defaultValue: agentBinding?.custom_name || '',
+                      confirmLabel: 'Use name',
+                    });
+                    if (name && name.trim()) rebindAgent('named', name.trim());
+                  }}
+                  className={`w-full text-left px-3 py-1 hover:bg-purple-50 ${agentScope === 'named' ? 'text-purple-700 font-medium' : 'text-slate-700'}`}
+                >
+                  Named…{agentScope === 'named' ? ` (${agentBinding?.custom_name || agentBinding?.name}) ✓` : ''}
+                  <div className="text-[0.625rem] text-slate-400">A deliberately shared agent, picked by name</div>
+                </button>
+                <div className="border-t border-slate-100 my-1" />
                 <div className="px-3 py-1 text-[0.625rem] uppercase tracking-wide text-slate-400">Agent project folder</div>
                 {notebookDir && (
                   <button
