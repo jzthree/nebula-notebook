@@ -239,10 +239,29 @@ describe('agentTerminalService prompt injection', () => {
     vi.advanceTimersByTime(20000);
     expect(agentTerminalService.getState().status).toBe('running');
     // Later the agent quits: focus-events reset (?1004l) = exited to the shell.
+    // The verdict lands after a short grace window (screen transitions also
+    // emit teardown — see the picker test below).
     agentTerminalService.observeOutput('t1', 'goodbye \x1b[?1004l');
+    expect(agentTerminalService.getState().status).toBe('running');
+    vi.advanceTimersByTime(2100);
     expect(agentTerminalService.getState().status).toBe('none');
     // …and the conversation stays resumable (session id persists).
     expect(agentTerminalService.getResumableKind()).toBe('claude');
+  });
+
+  it('survives picker→session screen transitions (teardown followed by a new TUI)', () => {
+    agentTerminalService.registerSender('t1', () => true);
+    agentTerminalService.launchAgent('claude', { continueProject: true });
+    // The --resume session picker draws its own TUI…
+    agentTerminalService.observeOutput('t1', 'pick a session \x1b[?1049h');
+    expect(agentTerminalService.getState().status).toBe('running');
+    // …the user picks one: picker tears down, chosen session's TUI comes up.
+    agentTerminalService.observeOutput('t1', '\x1b[?1049l');
+    vi.advanceTimersByTime(800); // within the grace window
+    agentTerminalService.observeOutput('t1', '\x1b[?1049h\x1b[?1004h');
+    vi.advanceTimersByTime(5000);
+    // No limbo: still running, no bootstrap re-injection needed.
+    expect(agentTerminalService.getState().status).toBe('running');
   });
 
   it('fails the launch if no interface ever appears (positive check)', () => {

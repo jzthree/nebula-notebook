@@ -138,6 +138,8 @@ class AgentTerminalService {
   private notebookPath: string | null = null;
   // Last notebook the live agent was told about (origin tagging for shared agents).
   private lastTaggedNotebook: string | null = null;
+  // Pending "TUI tore down" verdict — cancelled if a new TUI appears in time.
+  private teardownGraceTimer: ReturnType<typeof setTimeout> | null = null;
   private serverBaseUrl: string | null = null;
   private repoRoot: string | null = null;
   // Output watcher over the agent terminal. phase 'launch' = confirming the TUI
@@ -570,6 +572,7 @@ class AgentTerminalService {
   private clearWatch(): void {
     if (this.launchWatch?.timer) clearTimeout(this.launchWatch.timer);
     this.launchWatch = null;
+    if (this.teardownGraceTimer) { clearTimeout(this.teardownGraceTimer); this.teardownGraceTimer = null; }
   }
 
   /** Watch a just-launched agent: confirm its TUI comes up, else fail it. */
@@ -632,8 +635,24 @@ class AgentTerminalService {
       }
       return;
     }
-    // phase 'run'
-    if (TUI_TEARDOWN_RE.test(w.raw)) this.markStopped();
+    // phase 'run': a teardown only counts as an exit if no TUI re-appears
+    // shortly after. Screen TRANSITIONS also emit teardown+init pairs — the
+    // `claude --resume` session picker tearing down before the chosen session's
+    // TUI starts was read as "exited to shell", leaving resumed agents in
+    // limbo until the user clicked "already running".
+    if (TUI_INIT_RE.test(w.raw)) {
+      if (this.teardownGraceTimer) { clearTimeout(this.teardownGraceTimer); this.teardownGraceTimer = null; }
+      w.raw = '';
+      return;
+    }
+    if (TUI_TEARDOWN_RE.test(w.raw)) {
+      w.raw = '';
+      if (this.teardownGraceTimer) return; // already counting down
+      this.teardownGraceTimer = setTimeout(() => {
+        this.teardownGraceTimer = null;
+        this.markStopped();
+      }, 2000);
+    }
   }
 
   private markLaunchFailed(reason: string): void {
