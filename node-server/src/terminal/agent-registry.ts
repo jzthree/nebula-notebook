@@ -34,6 +34,12 @@ export interface AgentRecord {
   sessionId?: string;
   /** Notebook that launched it (informational only — agents are not bound to notebooks). */
   launchedFrom?: string;
+  /**
+   * Pinned workspace-mirror dir slug (`p-<hash>-<name>` under ~/.nebula/agent).
+   * Stored at launch so record-driven resumes keep finding the conversation
+   * even if the slug derivation ever changes — paths in records don't drift.
+   */
+  mirrorSlug?: string;
   state: 'live' | 'hibernated';
   createdAt: number;
   lastLaunchAt: number;

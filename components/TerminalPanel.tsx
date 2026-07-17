@@ -20,6 +20,7 @@ import {
   checkReverseTunnel,
   getTerminalBinding,
   setTerminalBinding,
+  closeTerminal,
   TerminalBindingInfo,
   TerminalBindingScope,
   TerminalInfo,
@@ -174,6 +175,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   // One-click continue: select the record's pty, then fire the launch as soon
   // as the terminal connects (the sender isn't registered until WS open).
   const [showAgentMoreMenu, setShowAgentMoreMenu] = useState(false);
+  // Non-agent ptys shown in the manager's Terminals section.
+  const [managerTerms, setManagerTerms] = useState<TerminalInfo[]>([]);
   const pendingAgentLaunchRef = useRef<{
     kind: 'claude' | 'codex';
     opts: { resume?: boolean; continueProject?: boolean; workdir?: string };
@@ -185,8 +188,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     // cwd-scoped picker. Always the record's OWN workdir — the conversation
     // lives in that dir (claude keys sessions by cwd).
     const opts = kind === 'claude' && rec.sessionId
-      ? { resume: true, workdir: rec.workdir }
-      : { continueProject: true, workdir: rec.workdir };
+      ? { resume: true, workdir: rec.workdir, mirrorSlug: rec.mirrorSlug }
+      : { continueProject: true, workdir: rec.workdir, mirrorSlug: rec.mirrorSlug };
     if (rec.terminalId === (agentTerm?.id ?? null) && agentConnected) {
       agentTerminalService.launchAgent(kind, opts);
       return;
@@ -589,9 +592,14 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           </button>
           {tab === 'agent' && (
             <button
-              onClick={(e) => { e.stopPropagation(); setShowAgentManager((v) => !v); refreshAgents(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowAgentManager((v) => !v);
+                refreshAgents();
+                listTerminals().then(setManagerTerms).catch(() => { /* section just stays empty */ });
+              }}
               className={`px-1.5 py-0.5 rounded transition-colors text-[0.6875rem] ${showAgentManager ? 'bg-white shadow-sm text-purple-700' : 'text-slate-400 hover:text-purple-600'}`}
-              title="Agent manager — every agent on this server, live or hibernated. Agents persist until YOU hibernate or delete them."
+              title="Terminals & agents — every pty and agent on this server, live or hibernated. Nothing here is auto-killed."
             >
               {agents.filter((a) => a.state === 'live').length > 0
                 ? `agents (${agents.filter((a) => a.state === 'live').length})`
@@ -625,15 +633,28 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                   {a.location === 'remote' && <span className="px-1 rounded bg-blue-100 text-blue-700 text-[0.625rem] flex-shrink-0">your machine</span>}
                   {isActive && <span className="px-1 rounded bg-purple-100 text-purple-700 text-[0.625rem] flex-shrink-0">attached</span>}
                   <span className="flex-1" />
-                  {!isActive && (
-                    <button
-                      onClick={() => { selectAgent(a.terminalId); setShowAgentManager(false); }}
-                      className="px-1.5 py-0.5 rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-100 flex-shrink-0"
-                      title={a.state === 'live' ? 'Attach this tab to the running agent' : 'Attach — then use Resume to revive the conversation'}
-                    >
-                      {a.state === 'live' ? 'attach' : 'revive…'}
-                    </button>
-                  )}
+                  {!isActive && (() => {
+                    // Reviving a your-machine agent needs the reverse tunnel —
+                    // disable with the reason instead of failing after launch.
+                    const tunnelBlocked = a.state !== 'live' && a.location === 'remote' && reverseTunnelUp === false;
+                    return (
+                      <button
+                        onClick={() => {
+                          if (tunnelBlocked) return;
+                          setShowAgentManager(false);
+                          if (a.state === 'live') selectAgent(a.terminalId);
+                          else continueAgentRecord(a);
+                        }}
+                        disabled={tunnelBlocked}
+                        className="px-1.5 py-0.5 rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-100 disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                        title={tunnelBlocked
+                          ? 'This agent runs on YOUR machine — connect the reverse tunnel (Burrow/ssh) first'
+                          : a.state === 'live' ? 'Attach this tab to the running agent' : 'Reopen this agent’s conversation where it left off'}
+                      >
+                        {a.state === 'live' ? 'attach' : 'continue'}
+                      </button>
+                    );
+                  })()}
                   {a.state === 'live' && (
                     <button
                       onClick={async () => { await hibernateAgent(a.terminalId); if (isActive) selectAgent(null); refreshAgents(); }}
@@ -653,6 +674,44 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                 </div>
               );
             })
+          )}
+          {/* Terminals: every non-agent pty on this server, with its binding role */}
+          {managerTerms.filter((t) => !agents.some((a) => a.terminalId === t.id)).length > 0 && (
+            <>
+              <div className="px-3 py-1 text-[0.625rem] uppercase tracking-wide text-slate-400 bg-slate-100">Terminals</div>
+              {managerTerms.filter((t) => !agents.some((a) => a.terminalId === t.id)).map((t) => {
+                const role = t.id === 'srv-main' ? 'shared'
+                  : t.id.startsWith('proj-') ? 'project'
+                  : t.id.startsWith('nb-') ? 'notebook'
+                  : t.id.length > 32 ? 'session' : 'named';
+                return (
+                  <div key={t.id} className="flex items-center gap-2 px-3 py-1 border-b border-slate-100 last:border-b-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" title="live pty" />
+                    <span className="font-mono text-slate-600 truncate" title={t.id}>{t.id}</span>
+                    <span className="px-1 rounded bg-slate-200 text-slate-500 text-[0.625rem] flex-shrink-0">{role}</span>
+                    <span className="text-slate-400 truncate" title={t.cwd}>{t.cwd.split('/').pop() || t.cwd}</span>
+                    <span className="flex-1" />
+                    <button
+                      onClick={() => window.open(`/?terminal=${encodeURIComponent(t.id)}`, '_blank')}
+                      className="px-1.5 py-0.5 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 flex-shrink-0"
+                      title="Open full-screen in a new tab"
+                    >
+                      open
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try { await closeTerminal(t.id); } catch { /* already gone */ }
+                        try { setManagerTerms(await listTerminals()); } catch { /* refresh best-effort */ }
+                      }}
+                      className="px-1.5 py-0.5 rounded border border-red-100 bg-white text-red-500 hover:bg-red-50 flex-shrink-0"
+                      title="Kill this terminal (anything running in it stops)"
+                    >
+                      kill
+                    </button>
+                  </div>
+                );
+              })}
+            </>
           )}
         </div>
       )}

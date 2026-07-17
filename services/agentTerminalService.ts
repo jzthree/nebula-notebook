@@ -342,7 +342,7 @@ class AgentTerminalService {
    * there, run the agent with the bootstrap prompt as its first argument.
    * accept-new pins the host key on first use without an interactive prompt.
    */
-  buildRemoteLaunchCommand(kind: 'claude' | 'codex', resume = false, sessionId?: string, continueProject = false, workdir?: string | null): string | null {
+  buildRemoteLaunchCommand(kind: 'claude' | 'codex', resume = false, sessionId?: string, continueProject = false, workdir?: string | null, mirrorSlug?: string | null): string | null {
     const cfg = this.getRemoteAgentConfig();
     if (!cfg) return null;
     // The project lives on the SERVER, so its folder doesn't exist on the
@@ -352,7 +352,9 @@ class AgentTerminalService {
     // behave like local ones for project/context management: per-project
     // trajectories, `--continue` scoped to the project, hibernate/revive.
     // (Legacy fallback: the old shared dir when no workdir is known.)
-    const cwd = workdir ? `"$HOME/.nebula/agent/${remoteMirrorSlug(workdir)}"` : '"$HOME/.nebula/agent"';
+    // A record-pinned slug wins over re-derivation — stored paths don't drift.
+    const slug = mirrorSlug || (workdir ? remoteMirrorSlug(workdir) : null);
+    const cwd = slug ? `"$HOME/.nebula/agent/${slug}"` : '"$HOME/.nebula/agent"';
     const agentCmd = `mkdir -p ${cwd} && cd ${cwd} && ` +
       this.buildAgentCommand(kind, resume, `NEBULA_URL=${cfg.localUrl} `, sessionId, continueProject);
     // `ssh host cmd` runs a non-login, non-interactive shell on the user's
@@ -377,8 +379,9 @@ class AgentTerminalService {
    * Resume/continue also run from the mirror — that's where the sessions
    * live. (Legacy fallback: the old shared dir when no workdir is known.)
    */
-  buildLocalLaunchCommand(kind: 'claude' | 'codex', resume = false, sessionId?: string, continueProject = false, workdir?: string | null): string {
-    const cwd = workdir ? `"$HOME/.nebula/agent/${remoteMirrorSlug(workdir)}"` : '"$HOME/.nebula/agent"';
+  buildLocalLaunchCommand(kind: 'claude' | 'codex', resume = false, sessionId?: string, continueProject = false, workdir?: string | null, mirrorSlug?: string | null): string {
+    const slug = mirrorSlug || (workdir ? remoteMirrorSlug(workdir) : null);
+    const cwd = slug ? `"$HOME/.nebula/agent/${slug}"` : '"$HOME/.nebula/agent"';
     // Only absolute paths can be granted verbatim ('~' would pass literally
     // inside quotes); non-absolute scopes just fall back to the CLIs' own
     // ask/deny rules for paths outside the cwd.
@@ -500,7 +503,7 @@ class AgentTerminalService {
    * CLI's initial prompt argument, so the agent starts by connecting to the
    * right server and reading the right notebook — no guessing across tabs.
    */
-  launchAgent(kind: 'claude' | 'codex', opts: { resume?: boolean; continueProject?: boolean; workdir?: string | null } = {}): SendResult {
+  launchAgent(kind: 'claude' | 'codex', opts: { resume?: boolean; continueProject?: boolean; workdir?: string | null; mirrorSlug?: string | null } = {}): SendResult {
     const send = this.getAgentSender();
     if (!send.ok) return send;
     const resume = !!opts.resume;
@@ -522,8 +525,8 @@ class AgentTerminalService {
     // the reverse SSH channel and runs the agent there instead. Either way the
     // agent process itself runs in its `~/.nebula/agent/p-…` workspace mirror,
     // never in the real project dir.
-    const remoteLine = this.buildRemoteLaunchCommand(kind, resume, sessionId, continueProject, opts.workdir);
-    const launchLine = remoteLine ?? this.buildLocalLaunchCommand(kind, resume, sessionId, continueProject, opts.workdir);
+    const remoteLine = this.buildRemoteLaunchCommand(kind, resume, sessionId, continueProject, opts.workdir, opts.mirrorSlug);
+    const launchLine = remoteLine ?? this.buildLocalLaunchCommand(kind, resume, sessionId, continueProject, opts.workdir, opts.mirrorSlug);
     send.sender(`${launchLine}\r`);
     markOnboardingStep('launchedAgent');
     // Project-scoped agent ledger: tell the server what launched where, and
@@ -538,6 +541,9 @@ class AgentTerminalService {
         location: this.getRemoteAgentConfig() ? 'remote' : 'server',
         sessionId,
         launchedFrom: this.notebookPath ?? undefined,
+        // Pin the mirror slug: record-driven resumes must keep finding this
+        // conversation even if the slug derivation changes in a future build.
+        mirrorSlug: opts.workdir ? remoteMirrorSlug(opts.workdir) : undefined,
       });
     }
     // Report 'running' optimistically, then confirm via the output watcher: it

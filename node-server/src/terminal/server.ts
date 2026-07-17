@@ -92,6 +92,7 @@ export async function setupTerminalRoutes(fastify: FastifyInstance): Promise<voi
     const b = (request.body ?? {}) as Partial<{
       terminalId: string; kind: 'claude' | 'codex'; workdir: string;
       location: 'server' | 'remote'; sessionId: string; launchedFrom: string;
+      mirrorSlug: string;
     }>;
     if (!b.terminalId || !b.kind || !b.workdir) {
       return reply.code(400).send({ error: 'terminalId, kind, workdir required' });
@@ -103,6 +104,7 @@ export async function setupTerminalRoutes(fastify: FastifyInstance): Promise<voi
       location: b.location === 'remote' ? 'remote' : 'server',
       sessionId: b.sessionId,
       launchedFrom: b.launchedFrom,
+      mirrorSlug: b.mirrorSlug,
     });
     return reply.send(record);
   });

@@ -16,6 +16,8 @@ export interface AgentRecord {
   location: 'server' | 'remote';
   sessionId?: string;
   launchedFrom?: string;
+  /** Pinned workspace-mirror slug (p-<hash>-<name>) — resumes never re-derive it. */
+  mirrorSlug?: string;
   state: 'live' | 'hibernated';
   createdAt: number;
   lastLaunchAt: number;
@@ -70,6 +72,7 @@ export async function listAgents(): Promise<AgentRecord[]> {
 export async function registerAgent(rec: {
   terminalId: string; kind: 'claude' | 'codex'; workdir: string;
   location: 'server' | 'remote'; sessionId?: string; launchedFrom?: string;
+  mirrorSlug?: string;
 }): Promise<void> {
   try {
     await fetch('/api/agents/register', {
