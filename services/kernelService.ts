@@ -1148,6 +1148,33 @@ class KernelService {
   }
 
   /**
+   * Install ipykernel into an environment (no registration — env kernels
+   * raw-launch). The backend picks ONE installer (conda → uv → pip) and
+   * reports failure honestly with code + output + hint.
+   */
+  async installIpykernel(pythonPath: string, serverId?: string | null): Promise<{ installer: string; message: string }> {
+    const response = await fetch(`${API_BASE}/python/install-ipykernel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        python_path: pythonPath,
+        server_id: serverId || undefined
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new KernelProvisionError(
+        error.detail || 'Failed to install ipykernel',
+        error.code,
+        error.install_hint
+      );
+    }
+
+    return response.json();
+  }
+
+  /**
    * Force refresh Python environment discovery cache
    */
   async refreshPythonEnvironments(serverId?: string | null): Promise<{ count: number }> {

@@ -29,6 +29,10 @@ import {
   collectCondaEnvs,
   defaultCondaContext,
   pythonExeForPrefix,
+  prefixForPythonExe,
+  isCondaEnv,
+  findCondaLikeBinaries,
+  findExecutableOnPath,
 } from './conda-locations';
 
 export interface DiscoveryServiceOptions {
@@ -824,6 +828,101 @@ export class PythonDiscoveryService {
       pythonPath,
       message: `Successfully registered kernel '${kernelName}'`,
     };
+  }
+
+  /**
+   * Pick ONE installer for ipykernel, up front (VSCode's shape — no fallback
+   * chain at run time, so failures are attributable and honest):
+   *   1. conda env → a conda-like binary (conda/mamba/micromamba; PATH first,
+   *      then known roots) with `-p <prefix>` — correct for named, base and
+   *      path-based envs alike.
+   *   2. uv on PATH → `uv pip install --python <exe>` — works on ANY env,
+   *      including conda envs without a conda binary and envs without pip.
+   *   3. the env's own pip.
+   */
+  async planIpykernelInstall(pythonPath: string): Promise<{ kind: 'conda' | 'uv' | 'pip'; argv: string[] }> {
+    const ctx = this.condaContext();
+    const prefix = prefixForPythonExe(pythonPath);
+    if (await isCondaEnv(prefix)) {
+      const bins = await findCondaLikeBinaries(ctx);
+      if (bins.length > 0) {
+        return { kind: 'conda', argv: [bins[0], 'install', '-p', prefix, 'ipykernel', '-y'] };
+      }
+    }
+    const uv = await findExecutableOnPath('uv', ctx);
+    if (uv) {
+      return { kind: 'uv', argv: [uv, 'pip', 'install', '--python', pythonPath, 'ipykernel'] };
+    }
+    return { kind: 'pip', argv: [pythonPath, '-m', 'pip', 'install', 'ipykernel'] };
+  }
+
+  /**
+   * Install ipykernel into an environment with the planned installer, then
+   * VERIFY it actually became importable. Refuses PEP 668 externally-managed
+   * interpreters up front (with guidance). Failure carries the installer's
+   * output — no silent fallback to a different installer.
+   */
+  async installIpykernel(pythonPath: string): Promise<{ installer: 'none' | 'conda' | 'uv' | 'pip'; message: string }> {
+    if (!(await this.fsExists(pythonPath))) {
+      throw new KernelProvisionError(`Python not found: ${pythonPath}`, 'python_not_found');
+    }
+
+    const before = await this.probeEnvironment(pythonPath);
+    if (before.hasIpykernel) {
+      return { installer: 'none', message: 'ipykernel is already installed' };
+    }
+    const cached = this.cache[pythonPath];
+    const hint = this.buildInstallHint(
+      pythonPath, cached?.envType ?? 'system', cached?.envName ?? null, false, before.externallyManaged
+    );
+    if (before.externallyManaged) {
+      throw new KernelProvisionError(
+        `This Python is externally managed (PEP 668) — Nebula won't install into it. ` +
+        `Set up ipykernel in an isolated environment instead.`,
+        'externally_managed',
+        hint || undefined
+      );
+    }
+
+    const plan = await this.planIpykernelInstall(pythonPath);
+    console.log(`Installing ipykernel via ${plan.kind}: ${plan.argv.join(' ')}`);
+    try {
+      await this.runCommand(plan.argv[0], plan.argv.slice(1), this.kernelInstallTimeoutMs);
+    } catch (e) {
+      const detail = this.errorOutput(e);
+      if (this.isExternallyManagedError(detail)) {
+        throw new KernelProvisionError(
+          'This Python blocks package installation (PEP 668). Set up ipykernel in an isolated environment instead.',
+          'externally_managed',
+          hint || undefined
+        );
+      }
+      // Honest failure: name the installer and surface the tail of its output.
+      const tail = detail.trim().split('\n').slice(-8).join('\n').slice(-600);
+      throw new KernelProvisionError(
+        `${plan.kind} failed to install ipykernel${tail ? `:\n${tail}` : ''}`,
+        'install_failed',
+        hint || undefined
+      );
+    }
+
+    const after = await this.probeEnvironment(pythonPath);
+    if (!after.hasIpykernel) {
+      throw new KernelProvisionError(
+        `${plan.kind} reported success but ipykernel is still not importable in ${pythonPath}`,
+        'install_failed',
+        hint || undefined
+      );
+    }
+
+    // Reflect reality in the cache so the picker updates without a rescan.
+    if (this.cache[pythonPath]) {
+      this.cache[pythonPath].hasIpykernel = true;
+      this.cache[pythonPath].installHint = null;
+      this.saveToCache(this.cache);
+    }
+
+    return { installer: plan.kind, message: `Installed ipykernel via ${plan.kind}` };
   }
 
   /** Extract combined stdout+stderr text from a child_process error. */

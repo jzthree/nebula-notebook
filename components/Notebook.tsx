@@ -509,6 +509,11 @@ export const Notebook: React.FC = () => {
   const [isExecutionQueueOpen, setIsExecutionQueueOpen] = useState(false);
   const [availableKernels, setAvailableKernels] = useState<KernelSpec[]>([]);
   const [pythonEnvironments, setPythonEnvironments] = useState<PythonEnvironment[]>([]);
+  // ipykernel install prompt: env awaiting user confirmation, in-flight flag,
+  // and the honest failure (message + manual command) when an install fails.
+  const [ipykernelPrompt, setIpykernelPrompt] = useState<PythonEnvironment | null>(null);
+  const [isInstallingIpykernel, setIsInstallingIpykernel] = useState(false);
+  const [ipykernelInstallError, setIpykernelInstallError] = useState<{ message: string; hint?: string } | null>(null);
   const [currentKernel, setCurrentKernel] = useState<string>('python3');
   const [kernelSelectionRequired, setKernelSelectionRequired] = useState(false);
   // Publish kernel + filename as autocomplete hints (the ghost-text fetcher reads
@@ -2985,19 +2990,48 @@ export const Notebook: React.FC = () => {
   // Select a Python environment as the kernel. Raw launch (VSCode-style):
   // envs with ipykernel start directly via env:<path> — no registration step.
   // A registered kernelspec for the same interpreter is preferred, purely so
-  // existing sessions/metadata keep their names.
+  // existing sessions/metadata keep their names. Envs without ipykernel get
+  // the install prompt ("requires the ipykernel package → Install").
   const handleEnvClick = async (env: PythonEnvironment, registeredName?: string) => {
     if (registeredName) {
       switchKernel(registeredName);
       return;
     }
     if (!env.has_ipykernel) {
-      copyInstallHint(env);
+      setIpykernelInstallError(null);
+      setIpykernelPrompt(env);
       return;
     }
     const result = await switchKernel(envKernelName(env.path));
     if (!result.success && result.error !== 'login-node kernel gated') {
       toast(`Failed to start kernel: ${result.error}`, 'error', 8000);
+    }
+  };
+
+  // Install ipykernel via the backend (one installer, chosen there), then
+  // launch the env as a kernel. Failure keeps the modal open and shows the
+  // installer's actual output plus a copyable manual command — no retries
+  // behind the user's back.
+  const installIpykernelForEnv = async (env: PythonEnvironment) => {
+    setIsInstallingIpykernel(true);
+    setIpykernelInstallError(null);
+    try {
+      await kernelService.installIpykernel(env.path, selectedServerId);
+      setIpykernelPrompt(null);
+      // Refresh the picker's env list in the background; launch right away.
+      loadPythonEnvironments(true, selectedServerId, false);
+      const result = await switchKernel(envKernelName(env.path));
+      if (!result.success && result.error !== 'login-node kernel gated') {
+        toast(`ipykernel installed, but the kernel failed to start: ${result.error}`, 'error', 8000);
+      }
+    } catch (error) {
+      if (error instanceof KernelProvisionError) {
+        setIpykernelInstallError({ message: error.message, hint: error.installHint });
+      } else {
+        setIpykernelInstallError({ message: error instanceof Error ? error.message : String(error) });
+      }
+    } finally {
+      setIsInstallingIpykernel(false);
     }
   };
 
@@ -4521,18 +4555,15 @@ export const Notebook: React.FC = () => {
                                   );
 
                                   return (
-                                    <div
+                                    <button
                                       key={env.path}
-                                      role="button"
-                                      tabIndex={0}
                                       onClick={() => handleEnvClick(env, registeredKernel?.name)}
-                                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleEnvClick(env, registeredKernel?.name); } }}
-                                      className={`w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 cursor-pointer ${
+                                      className={`w-full text-left px-3 py-2 text-xs hover:bg-slate-50 flex items-center gap-2 ${
                                         isSelected ? 'bg-green-50 text-green-700' : 'text-slate-600'
                                       }`}
                                       title={launchable
                                         ? 'Start a kernel in this environment'
-                                        : 'ipykernel is missing — set it up to use this environment'}
+                                        : 'ipykernel is missing — click to install it'}
                                     >
                                       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
                                         launchable ? 'bg-green-500' : 'bg-slate-300'
@@ -4542,19 +4573,9 @@ export const Notebook: React.FC = () => {
                                         <div className="text-[0.625rem] text-slate-400 truncate">{env.path}</div>
                                       </div>
                                       {!launchable && (
-                                        // No ipykernel → copy the ecosystem-specific install command (guide, don't install).
-                                        <button
-                                          onClick={(e) => { e.stopPropagation(); copyInstallHint(env); }}
-                                          className="flex items-center gap-1 px-2 py-1 text-[0.625rem] rounded transition-colors flex-shrink-0 bg-slate-100 text-slate-500 hover:bg-slate-200"
-                                          title={env.externally_managed
-                                            ? "Externally managed (PEP 668) — copy a command to set up ipykernel in an isolated env"
-                                            : "Copy the command to install ipykernel for this environment"}
-                                        >
-                                          <Terminal className="w-3 h-3" />
-                                          <span>Setup</span>
-                                        </button>
+                                        <span className="text-[0.625rem] text-slate-400 flex-shrink-0">needs ipykernel</span>
                                       )}
-                                    </div>
+                                    </button>
                                   );
                                 })}
                               </>
@@ -5291,6 +5312,68 @@ export const Notebook: React.FC = () => {
             <p className="text-[0.7rem] text-slate-400 mt-3 text-center">
               Remembered for next time — change it under Settings → General.
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* ipykernel install prompt (VSCode-style: one Install button, honest failure) */}
+      {ipykernelPrompt && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4" onClick={() => { if (!isInstallingIpykernel) setIpykernelPrompt(null); }}>
+          <div className="bg-white rounded-lg shadow-xl border border-slate-200 w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-2">
+              <Download className="w-4 h-4 text-blue-600" />
+              <h3 className="text-sm font-semibold text-slate-900">ipykernel required</h3>
+            </div>
+            <p className="text-sm text-slate-600 mb-1">
+              Running cells with <span className="font-medium text-slate-800">{ipykernelPrompt.display_name}</span> requires
+              the <code className="px-1 py-0.5 rounded bg-slate-100 text-slate-700">ipykernel</code> package.
+            </p>
+            <p className="text-[0.7rem] text-slate-400 font-mono truncate mb-3" title={ipykernelPrompt.path}>{ipykernelPrompt.path}</p>
+
+            {ipykernelPrompt.externally_managed ? (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded p-2 mb-3">
+                This Python is externally managed (PEP 668), so Nebula won't install into it.
+                Copy the command below to set up ipykernel in an isolated environment, then Refresh.
+              </p>
+            ) : ipykernelInstallError && (
+              <div className="text-xs text-red-700 bg-red-50 border border-red-100 rounded p-2 mb-3">
+                <div className="font-medium mb-1">Install failed</div>
+                <pre className="whitespace-pre-wrap break-all max-h-32 overflow-y-auto font-mono text-[0.65rem]">{ipykernelInstallError.message}</pre>
+                {ipykernelInstallError.hint && (
+                  <div className="mt-1.5 text-slate-600">
+                    Manual alternative: <code className="px-1 py-0.5 rounded bg-white/80 break-all">{ipykernelInstallError.hint}</code>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex flex-col gap-2">
+              {!ipykernelPrompt.externally_managed && (
+                <button
+                  onClick={() => installIpykernelForEnv(ipykernelPrompt)}
+                  disabled={isInstallingIpykernel}
+                  className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium rounded-md flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  {isInstallingIpykernel
+                    ? (<><Loader2 className="w-3.5 h-3.5 animate-spin" /> Installing ipykernel…</>)
+                    : (<><Download className="w-3.5 h-3.5" /> {ipykernelInstallError ? 'Retry install' : 'Install ipykernel'}</>)}
+                </button>
+              )}
+              <button
+                onClick={() => { copyInstallHint(ipykernelPrompt); }}
+                disabled={isInstallingIpykernel}
+                className="w-full px-3 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 text-sm font-medium rounded-md flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <Terminal className="w-3.5 h-3.5" /> Copy command to run myself
+              </button>
+              <button
+                onClick={() => setIpykernelPrompt(null)}
+                disabled={isInstallingIpykernel}
+                className="w-full px-3 py-1.5 text-slate-500 hover:text-slate-700 text-xs transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}

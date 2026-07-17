@@ -265,6 +265,27 @@ export function pythonExeForPrefix(prefix: string, platform: NodeJS.Platform): s
     : path.join(prefix, 'bin', 'python');
 }
 
+/** Inverse of pythonExeForPrefix: the env prefix a python executable lives in. */
+export function prefixForPythonExe(pythonPath: string): string {
+  const parent = path.dirname(pythonPath);
+  return ['bin', 'scripts'].includes(path.basename(parent).toLowerCase())
+    ? path.dirname(parent)
+    : parent;
+}
+
+/** First match for an executable name on the context's PATH (fs check only). */
+export async function findExecutableOnPath(
+  name: string,
+  ctx: CondaLocatorContext = defaultCondaContext()
+): Promise<string | null> {
+  for (const dir of pathEntries(ctx)) {
+    for (const exe of binaryCandidates(dir, name, ctx.platform)) {
+      if (await isFile(exe)) return exe;
+    }
+  }
+  return null;
+}
+
 /**
  * Name an env prefix the way conda users know it: install roots are 'base',
  * children of an install's envs/ keep their dirname (and remember the owning
