@@ -6,6 +6,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { fsService } from '../fs/fs-service';
 import * as path from 'path';
 import * as os from 'os';
+import { privateTmpDir } from '../private-tmp';
 import * as nodeFs from 'fs';
 
 export default async function fsRoutes(fastify: FastifyInstance) {
@@ -317,7 +318,7 @@ export default async function fsRoutes(fastify: FastifyInstance) {
       }
 
       // Save the uploaded file to a temp location first
-      const tmpPath = path.join(os.tmpdir(), `upload-${Date.now()}-${path.basename(data.filename || 'file')}`);
+      const tmpPath = path.join(privateTmpDir('uploads'), `upload-${Date.now()}-${path.basename(data.filename || 'file')}`);
       const writeStream = nodeFs.createWriteStream(tmpPath);
       await new Promise<void>((resolve, reject) => {
         data.file.pipe(writeStream);

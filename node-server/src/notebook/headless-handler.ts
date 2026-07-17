@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import { hashCellContent } from './cell-hash';
 import * as path from 'path';
 import * as os from 'os';
+import { privateTmpDir } from '../private-tmp';
 import { v4 as uuidv4 } from 'uuid';
 import { getFormatAdapter } from '../fs/notebook-formats/registry';
 import { FilesystemService } from '../fs/fs-service';
@@ -1245,7 +1246,7 @@ export class HeadlessOperationHandler {
   }
 
   private saveOutputToTempFile(content: string, cellId: string): string {
-    const tempDir = path.join(os.tmpdir(), 'nebula', 'outputs');
+    const tempDir = privateTmpDir('outputs');
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }

@@ -35,6 +35,7 @@ import {
   MAX_OUTPUT_CHARS_ERROR,
 } from '../config/output-limits';
 import { SessionStore } from './session-store';
+import { privateTmpDir } from '../private-tmp';
 import {
   discoverKernelSpecs,
   getKernelSpec,
@@ -671,8 +672,9 @@ export class KernelService {
     };
 
     // Write connection file
-    const connDir = path.join(os.tmpdir(), 'nebula-kernels');
-    fs.mkdirSync(connDir, { recursive: true });
+    // Per-user private dir (0700): connection files carry the HMAC key —
+    // world-readable means arbitrary code execution as this user.
+    const connDir = privateTmpDir('kernels');
 
     const connFile = path.join(connDir, `kernel-${sessionId}.json`);
     const connData = {
@@ -687,7 +689,7 @@ export class KernelService {
       hb_port: config.hbPort,
     };
 
-    fs.writeFileSync(connFile, JSON.stringify(connData, null, 2));
+    fs.writeFileSync(connFile, JSON.stringify(connData, null, 2), { mode: 0o600 });
 
     return { config, filePath: connFile };
   }
