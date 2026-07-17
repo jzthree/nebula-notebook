@@ -131,6 +131,51 @@ describe('agentTerminalService prompt injection', () => {
     expect(opener).toHaveBeenCalled();
   });
 
+  it('"pick a session" opens the interactive picker (claude --resume), never --continue', () => {
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t1', (d) => { sent.push(d); return true; });
+    agentTerminalService.launchAgent('claude', { continueProject: true });
+    expect(sent[0]).toContain('claude');
+    expect(sent[0]).toContain('--resume');
+    expect(sent[0]).not.toContain('--continue');
+  });
+
+  it('tags the driving notebook when it changes while an agent is live, once per switch', () => {
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t1', (d) => { sent.push(d); return true; });
+    agentTerminalService.setNotebookContext('/a/nb1.ipynb');
+    agentTerminalService.launchAgent('claude');
+    const launchCount = sent.length;
+
+    agentTerminalService.setNotebookContext('/a/nb2.ipynb');
+    expect(sent[launchCount]).toBe('[now driving: /a/nb2.ipynb] ');
+    expect(sent[launchCount].endsWith('\r')).toBe(false); // prefill, not submit
+
+    // Same notebook again — no duplicate tag
+    agentTerminalService.setNotebookContext('/a/nb2.ipynb');
+    expect(sent).toHaveLength(launchCount + 1);
+  });
+
+  it('does not tag when no agent is running', () => {
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t1', (d) => { sent.push(d); return true; });
+    agentTerminalService.setNotebookContext('/a/nb1.ipynb');
+    agentTerminalService.setNotebookContext('/a/nb2.ipynb');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('bootstrap prompt explains the [now driving:] convention', () => {
+    expect(agentTerminalService.buildBootstrapPrompt()).toContain('now driving');
+  });
+
+  it('adoptRunningState marks a record-live agent as running (cross-browser attach)', () => {
+    agentTerminalService.registerSender('t1', () => true);
+    expect(agentTerminalService.getState().status).toBe('none');
+    agentTerminalService.adoptRunningState('claude');
+    expect(agentTerminalService.getState().status).toBe('running');
+    expect(agentTerminalService.getState().agentKind).toBe('claude');
+  });
+
   it('sends sanitized text first, then Enter after a delay', () => {
     const sent: string[] = [];
     agentTerminalService.registerSender('t1', (d) => { sent.push(d); return true; });

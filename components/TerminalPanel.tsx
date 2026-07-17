@@ -155,6 +155,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     setAgentTerm(null); // re-resolve the pty to the newly selected agent
   }, []);
 
+
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const resizeRafRef = useRef<number | null>(null);
@@ -169,6 +170,47 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     useCallback((cb) => agentTerminalService.subscribe(cb), []),
     () => agentTerminalService.isConnected()
   );
+
+  // One-click continue: select the record's pty, then fire the launch as soon
+  // as the terminal connects (the sender isn't registered until WS open).
+  const [showAgentMoreMenu, setShowAgentMoreMenu] = useState(false);
+  const pendingAgentLaunchRef = useRef<{
+    kind: 'claude' | 'codex';
+    opts: { resume?: boolean; continueProject?: boolean; workdir?: string };
+  } | null>(null);
+
+  const continueAgentRecord = useCallback((rec: AgentRecord) => {
+    const kind: 'claude' | 'codex' = rec.kind === 'codex' ? 'codex' : 'claude';
+    // Exact resume when we have the conversation id; otherwise the CLI's own
+    // cwd-scoped picker. Always the record's OWN workdir — the conversation
+    // lives in that dir (claude keys sessions by cwd).
+    const opts = kind === 'claude' && rec.sessionId
+      ? { resume: true, workdir: rec.workdir }
+      : { continueProject: true, workdir: rec.workdir };
+    if (rec.terminalId === (agentTerm?.id ?? null) && agentConnected) {
+      agentTerminalService.launchAgent(kind, opts);
+      return;
+    }
+    pendingAgentLaunchRef.current = { kind, opts };
+    selectAgent(rec.terminalId);
+  }, [agentTerm, agentConnected, selectAgent]);
+
+  // When the agent pty connects: fire a pending continue, and adopt "running"
+  // from a record the server knows is live (cross-browser attach — the
+  // sessionStorage running-flag is per-browser, the record is not).
+  useEffect(() => {
+    if (!agentConnected || !agentTerm) return;
+    const pending = pendingAgentLaunchRef.current;
+    if (pending) {
+      pendingAgentLaunchRef.current = null;
+      agentTerminalService.launchAgent(pending.kind, pending.opts);
+      return;
+    }
+    const rec = agents.find((a) => a.terminalId === agentTerm.id);
+    if (rec?.state === 'live' && (rec.kind === 'claude' || rec.kind === 'codex') && agentState.status !== 'running') {
+      agentTerminalService.adoptRunningState(rec.kind);
+    }
+  }, [agentConnected, agentTerm, agents, agentState.status]);
 
   // Only the Agent tab's pty receives injected prompts — the shell stays a
   // plain terminal.
@@ -699,43 +741,107 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           <span className="text-purple-800 font-medium truncate">
             Drive <span className="font-semibold">{notebookName}</span> with
           </span>
-          {agentTerminalService.getResumableKind() === 'claude' && (
-            <button
-              // Resume must reuse the agent's OWN workdir: its conversation
-              // lives in that dir's `~/.nebula/agent/p-…` workspace mirror
-              // (claude keys sessions by cwd), wherever this notebook is.
-              onClick={() => agentTerminalService.launchAgent('claude', { resume: true, workdir: activeAgentRecord?.workdir ?? agentWorkdir })}
-              disabled={!agentConnected}
-              className="px-2 py-0.5 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 disabled:opacity-40 transition-colors"
-              title="Resume this agent's own conversation (claude --resume) and keep going"
-            >
-              ⟳ Resume Claude
-            </button>
-          )}
-          <button
-            onClick={() => agentTerminalService.launchAgent('claude', { workdir: agentWorkdir })}
-            disabled={!agentConnected}
-            className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
-            title={remoteAgentCfg ? 'Start Claude Code on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Start Claude Code in its agent workspace (~/.nebula/agent) and drive this notebook'}
-          >
-            Claude Code
-          </button>
-          <button
-            onClick={() => agentTerminalService.launchAgent('codex', { workdir: agentWorkdir })}
-            disabled={!agentConnected}
-            className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
-            title={remoteAgentCfg ? 'Start Codex on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Start Codex in its agent workspace (~/.nebula/agent) and drive this notebook'}
-          >
-            Codex
-          </button>
-          <button
-            onClick={() => agentTerminalService.launchAgent(agentState.agentKind === 'codex' ? 'codex' : 'claude', { continueProject: true, workdir: agentWorkdir })}
-            disabled={!agentConnected}
-            className="px-2 py-0.5 rounded border border-purple-300 bg-white text-purple-700 font-medium hover:bg-purple-100 disabled:opacity-40 transition-colors"
-            title={'Pick up an existing conversation from this project directory — including ones you started outside Nebula (claude --continue / codex resume)'}
-          >
-            Continue project…
-          </button>
+          {(() => {
+            // Primary-button state machine: ONE obvious action derived from
+            // the server-side agent records for this workdir + location;
+            // alternatives live in the "more" menu.
+            const loc = remoteAgentCfg ? 'remote' : 'server';
+            const byRecency = (a: AgentRecord, b: AgentRecord) => (b.lastLaunchAt ?? 0) - (a.lastLaunchAt ?? 0);
+            const hereRecord = agents
+              .filter((a) => a.workdir === agentWorkdir && (a.location ?? 'server') === loc)
+              .sort(byRecency)[0] ?? null;
+            const elsewhereRecord = !hereRecord ? (agents
+              .filter((a) => a.workdir === agentWorkdir && (a.location ?? 'server') !== loc)
+              .sort(byRecency)[0] ?? null) : null;
+
+            const startFresh = (kind: 'claude' | 'codex') => {
+              setShowAgentMoreMenu(false);
+              agentTerminalService.launchAgent(kind, { workdir: agentWorkdir });
+            };
+            const pickSession = (kind: 'claude' | 'codex') => {
+              setShowAgentMoreMenu(false);
+              agentTerminalService.launchAgent(kind, { continueProject: true, workdir: agentWorkdir });
+            };
+
+            return (
+              <>
+                {hereRecord && hereRecord.state === 'live' ? (
+                  <button
+                    onClick={() => selectAgent(hereRecord.terminalId)}
+                    className="px-2 py-0.5 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 transition-colors"
+                    title={`A ${hereRecord.kind} agent is already running for this project — attach to it`}
+                  >
+                    Attach agent
+                  </button>
+                ) : hereRecord ? (
+                  <button
+                    onClick={() => continueAgentRecord(hereRecord)}
+                    disabled={!agentConnected && activeAgentId === hereRecord.terminalId}
+                    className="px-2 py-0.5 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 disabled:opacity-40 transition-colors"
+                    title={hereRecord.kind === 'claude' && hereRecord.sessionId
+                      ? 'Reopen this project’s conversation exactly where it left off (claude --resume <id>)'
+                      : 'Reopen this project’s sessions (interactive picker)'}
+                  >
+                    ⟳ Continue session
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => startFresh('claude')}
+                    disabled={!agentConnected}
+                    className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
+                    title={remoteAgentCfg ? 'Start Claude Code on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Start Claude Code in its agent workspace and drive this notebook'}
+                  >
+                    Claude Code
+                  </button>
+                )}
+                {!hereRecord && (
+                  <button
+                    onClick={() => startFresh('codex')}
+                    disabled={!agentConnected}
+                    className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
+                    title={remoteAgentCfg ? 'Start Codex on YOUR machine (over the reverse tunnel)' : 'Start Codex in its agent workspace'}
+                  >
+                    Codex
+                  </button>
+                )}
+                {elsewhereRecord && (
+                  <span
+                    className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-600 text-[0.6875rem] flex-shrink-0"
+                    title={`This project has a ${elsewhereRecord.kind} session ${elsewhereRecord.location === 'remote' ? 'on your machine' : 'on the server'} — conversations can't move between machines. Switch the agent location (settings) to continue it there.`}
+                  >
+                    session {elsewhereRecord.location === 'remote' ? 'on your machine' : 'on server'} ↗
+                  </span>
+                )}
+                <div className="relative flex-shrink-0">
+                  <button
+                    onClick={() => setShowAgentMoreMenu((v) => !v)}
+                    disabled={!agentConnected}
+                    className="px-1.5 py-0.5 rounded border border-purple-300 bg-white text-purple-700 font-medium hover:bg-purple-100 disabled:opacity-40 transition-colors"
+                    title="More ways to start: fresh session, session picker, other agent"
+                  >
+                    more ▾
+                  </button>
+                  {showAgentMoreMenu && (
+                    <div className="absolute bottom-full mb-1 left-0 z-20 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[14rem] text-xs">
+                      <button onClick={() => startFresh('claude')} className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50">
+                        New Claude session
+                      </button>
+                      <button onClick={() => startFresh('codex')} className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50">
+                        New Codex session
+                      </button>
+                      <button onClick={() => pickSession('claude')} className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50">
+                        Pick a Claude session…
+                        <div className="text-[0.625rem] text-slate-400">This project's conversations, incl. outside Nebula</div>
+                      </button>
+                      <button onClick={() => pickSession('codex')} className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50">
+                        Pick a Codex session…
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
           <div className="relative flex-shrink-0">
             <button
               onClick={() => setShowWorkdirMenu((v) => !v)}

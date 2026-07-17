@@ -136,6 +136,8 @@ class AgentTerminalService {
   private listeners = new Set<() => void>();
   private panelOpener: (() => void) | null = null;
   private notebookPath: string | null = null;
+  // Last notebook the live agent was told about (origin tagging for shared agents).
+  private lastTaggedNotebook: string | null = null;
   private serverBaseUrl: string | null = null;
   private repoRoot: string | null = null;
   // Output watcher over the agent terminal. phase 'launch' = confirming the TUI
@@ -197,7 +199,22 @@ class AgentTerminalService {
   }
 
   setNotebookContext(path: string | null): void {
+    const prev = this.notebookPath;
     this.notebookPath = path;
+    // Shared-agent origin tagging: when the driving notebook changes while an
+    // agent is live, prefill the TUI input with a context tag (NO newline —
+    // it becomes the prefix of the user's next message and is easy to delete;
+    // sending \r here would submit a message and burn a turn).
+    if (
+      path && prev && path !== prev &&
+      this.state.status === 'running' &&
+      this.lastTaggedNotebook !== path
+    ) {
+      const sender = this.state.terminalId ? this.senders.get(this.state.terminalId) : undefined;
+      if (sender && sender(`[now driving: ${path}] `)) {
+        this.lastTaggedNotebook = path;
+      }
+    }
   }
 
   /**
@@ -296,10 +313,12 @@ class AgentTerminalService {
    */
   private buildAgentCommand(kind: 'claude' | 'codex', resume: boolean, envPrefix = '', sessionId?: string, continueProject = false, accessFlags = '', workdir?: string | null): string {
     if (continueProject) {
-      // Native project resume: claude keys conversations by cwd, codex has a
-      // session picker — run from the workspace mirror, both find every
-      // trajectory this project's agents created there.
-      return kind === 'claude' ? `${envPrefix}claude${accessFlags} --continue` : `${envPrefix}codex resume${accessFlags}`;
+      // "Pick a session": both open the CLI's own cwd-scoped INTERACTIVE
+      // picker (claude --resume with no id; codex resume) — finding every
+      // trajectory this project's agents created, including outside Nebula.
+      // Deliberately NOT `claude --continue`: that silently grabs the most
+      // recent thread, which in a shared cwd may not be yours.
+      return kind === 'claude' ? `${envPrefix}claude${accessFlags} --resume` : `${envPrefix}codex resume${accessFlags}`;
     }
     if (resume && kind === 'claude') {
       const reorient = sanitizePromptText(
@@ -420,6 +439,12 @@ class AgentTerminalService {
     } else {
       parts.push('No notebook is open yet; confirm you are ready and wait for instructions.');
     }
+    // Shared agents serve several notebooks from one conversation: the UI
+    // tags messages when the driving notebook changes.
+    parts.push(
+      'If a message begins with "[now driving: <path>]", the user has switched notebooks — ' +
+      'operate on that notebook from then on (nebula commands always take explicit paths).'
+    );
     return sanitizePromptText(parts.join(' '));
   }
 
@@ -520,6 +545,8 @@ class AgentTerminalService {
     // later to stopped when the agent exits back to the shell.
     this.state = { ...this.state, status: 'running', agentKind: kind, launchError: undefined };
     if (this.state.terminalId) writeAgentFlag(this.state.terminalId, kind);
+    // The bootstrap/reorient prompt already names the current notebook.
+    this.lastTaggedNotebook = this.notebookPath;
     this.startLaunchWatch(kind);
     this.notify();
     return { ok: true };
@@ -606,6 +633,21 @@ class AgentTerminalService {
    * bootstrap context the launch chips provide, so a manually started agent
    * still learns which server and notebook this tab is driving.
    */
+  /**
+   * Adopt "running" from a server-side agent record (state==='live') when
+   * attaching in a browser that never launched this agent — the sessionStorage
+   * running-flag is per-browser, but the record knows the pty hosts a live
+   * agent, so the launch bar must not render over its TUI.
+   */
+  adoptRunningState(kind: 'claude' | 'codex'): void {
+    if (this.state.status === 'running') return;
+    if (this.state.terminalId) this.armExitWatch(this.state.terminalId, kind);
+    this.state = { ...this.state, status: 'running', agentKind: kind, launchError: undefined };
+    if (this.state.terminalId) writeAgentFlag(this.state.terminalId, kind);
+    this.lastTaggedNotebook = this.notebookPath;
+    this.notify();
+  }
+
   markRunning(): void {
     markOnboardingStep('launchedAgent');
     // Manually started: assume it's up and watch for it exiting to the shell.
