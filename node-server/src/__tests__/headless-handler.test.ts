@@ -30,7 +30,10 @@ describe('HeadlessOperationHandler', () => {
   afterEach(() => {
     vi.useRealTimers();
     if (testDir && fs.existsSync(testDir)) {
-      fs.rmSync(testDir, { recursive: true, force: true });
+      // maxRetries: rmSync intermittently hits ENOTEMPTY on macOS when the
+      // suite runs under parallel load (async writes still landing) — retry
+      // instead of flaking the whole file.
+      fs.rmSync(testDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
