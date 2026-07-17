@@ -153,8 +153,10 @@ describe('agentTerminalService prompt injection', () => {
 
     agentTerminalService.launchAgent('claude');
     const cmd = sent[0];
-    // Fresh Claude launch pins this notebook's own session id, then the prompt.
-    expect(cmd).toMatch(/^claude --session-id [0-9a-f-]{36} '/);
+    // Local launches run the agent from its workspace dir (legacy shared dir
+    // when no workdir is known), then a fresh Claude launch pins this
+    // notebook's own session id, then the prompt.
+    expect(cmd).toMatch(/^mkdir -p "\$HOME\/\.nebula\/agent" && cd "\$HOME\/\.nebula\/agent" && claude --session-id [0-9a-f-]{36} '/);
     expect(cmd.endsWith('\r')).toBe(true);
     expect(cmd).toContain('connect_server');
     expect(cmd).toContain('http://localhost:8000');
@@ -326,12 +328,72 @@ describe('remote-agent mode (agent on the user machine)', () => {
     expect(line).not.toContain('PREFERRED: use the `nebula` CLI'); // short prompt, not the full bootstrap
   });
 
-  it('local launch is unchanged when the mode is disabled', () => {
+  it('local launch (mode disabled) runs in the agent workspace with no ssh hop', () => {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({ remoteAgentEnabled: false }));
     const sent: string[] = [];
     agentTerminalService.registerSender('t9', (d) => { sent.push(d); return true; });
     agentTerminalService.launchAgent('codex');
-    expect(sent[0].startsWith('codex ')).toBe(true);
+    expect(sent[0]).toMatch(/^mkdir -p "\$HOME\/\.nebula\/agent" && cd "\$HOME\/\.nebula\/agent" && codex '/);
     expect(sent[0]).not.toContain('ssh');
+  });
+});
+
+describe('local launch placement (agent workspace mirror)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    agentTerminalService.setAgentTerminal('t2');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    agentTerminalService.unregisterSender('t2');
+    agentTerminalService.setAgentTerminal(null);
+    agentTerminalService.setNotebookContext(null);
+    agentTerminalService.setServerContext(null);
+    window.sessionStorage.clear();
+  });
+
+  const MIRROR_RE = /^mkdir -p "\$HOME\/\.nebula\/agent\/p-[0-9a-f]{6}-proj" && cd "\$HOME\/\.nebula\/agent\/p-[0-9a-f]{6}-proj" && /;
+
+  it('launches claude in the workdir mirror with --add-dir back to the project', () => {
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t2', (d) => { sent.push(d); return true; });
+    agentTerminalService.launchAgent('claude', { workdir: '/data/proj' });
+    const line = sent[0];
+    // Agent chats are keyed to their cwd — run from the mirror so real project
+    // dirs never accumulate Nebula agent trajectories…
+    expect(line).toMatch(MIRROR_RE);
+    // …while --add-dir keeps read/write access to the real project…
+    expect(line).toContain("claude --add-dir '/data/proj' --session-id ");
+    // …and the bootstrap tells the agent where the project actually lives.
+    expect(line).toContain('The project lives at /data/proj');
+    expect(line).not.toContain('ssh');
+  });
+
+  it('gives codex write access to the project from the mirror cwd', () => {
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t2', (d) => { sent.push(d); return true; });
+    agentTerminalService.launchAgent('codex', { workdir: '/data/proj' });
+    expect(sent[0]).toMatch(MIRROR_RE);
+    expect(sent[0]).toContain(`codex -c 'sandbox_workspace_write.writable_roots=["/data/proj"]' '`);
+  });
+
+  it('resume and continue-project also run from the mirror (claude keys sessions by cwd)', () => {
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t2', (d) => { sent.push(d); return true; });
+    agentTerminalService.launchAgent('claude', { workdir: '/data/proj' });
+    const sessionId = sent[0].match(/--session-id ([0-9a-f-]{36})/)?.[1];
+    agentTerminalService.markStopped();
+    sent.length = 0;
+
+    agentTerminalService.launchAgent('claude', { resume: true, workdir: '/data/proj' });
+    expect(sent[0]).toMatch(MIRROR_RE);
+    expect(sent[0]).toContain(`claude --add-dir '/data/proj' --resume ${sessionId} '`);
+    agentTerminalService.markStopped();
+    sent.length = 0;
+
+    agentTerminalService.launchAgent('codex', { continueProject: true, workdir: '/data/proj' });
+    expect(sent[0]).toMatch(MIRROR_RE);
+    expect(sent[0]).toContain(`codex resume -c 'sandbox_workspace_write.writable_roots=["/data/proj"]'`);
   });
 });

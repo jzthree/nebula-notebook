@@ -18,6 +18,10 @@ import {
   listTerminals,
   getTerminalServerInfo,
   checkReverseTunnel,
+  getTerminalBinding,
+  setTerminalBinding,
+  TerminalBindingInfo,
+  TerminalBindingScope,
   TerminalInfo,
 } from '../services/terminalService';
 import { agentTerminalService } from '../services/agentTerminalService';
@@ -233,25 +237,52 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     const t = setTimeout(() => setShowPendingOverlay(true), 250);
     return () => clearTimeout(t);
   }, [pendingTerm]);
+  /**
+   * Resolve which pty name the shell plane binds to. Binding rules:
+   *   - a stored binding wins;
+   *   - otherwise, a still-live legacy per-notebook shell is grandfathered
+   *     (running jobs must not be orphaned by the shared-default rollout);
+   *   - otherwise the default: the server-shared terminal (srv-main).
+   * cwd is only meaningful at CREATE time (get-or-create ignores it for live
+   * ptys) and only set for notebook/project scopes — attaching a notebook to
+   * the shared shell must never cd it out from under other notebooks.
+   */
+  const resolveShellTerminal = useCallback(async (
+    existingIds?: Set<string>
+  ): Promise<{ name: string; cwd?: string; binding: TerminalBindingInfo }> => {
+    const filePath = notebookPath || 'scratch';
+    let binding: TerminalBindingInfo;
+    try {
+      binding = await getTerminalBinding(filePath, 'shell');
+    } catch {
+      // Binding endpoint unavailable (old server) — behave like before.
+      binding = { plane: 'shell', scope: 'notebook', name: terminalNameFor(notebookPath, 'shell'), custom_name: null, stored: false };
+    }
+    if (!binding.stored && binding.scope === 'server') {
+      const legacyName = normalizeTerminalName(terminalNameFor(notebookPath, 'shell'));
+      const ids = existingIds ?? new Set((await listTerminals()).map((t) => t.id));
+      if (ids.has(legacyName)) {
+        binding = { ...binding, scope: 'notebook', name: legacyName };
+      }
+    }
+    const scopedCwd = (binding.scope === 'notebook' || binding.scope === 'project') ? notebookDir ?? undefined : undefined;
+    return { name: binding.name || terminalNameFor(notebookPath, 'shell'), cwd: scopedCwd, binding };
+  }, [notebookPath, notebookDir]);
+
+  const [shellBinding, setShellBinding] = useState<TerminalBindingInfo | null>(null);
+  const [showShellBindingMenu, setShowShellBindingMenu] = useState(false);
+
   useEffect(() => {
     if (!isOpen || !serverAvailable || activeTerm || isLoading) return;
 
     const createNewTerminal = async () => {
       setIsLoading(true);
       try {
-        // Get cwd from notebook path (parent directory)
-        let cwd: string | undefined;
-        if (notebookPath) {
-          const lastSlash = notebookPath.lastIndexOf('/');
-          if (lastSlash > 0) {
-            cwd = notebookPath.substring(0, lastSlash);
-          }
-        }
-
         // Named get-or-create: after a refresh this reattaches to the existing
         // pty (server replays scrollback) instead of spawning a new one.
-        // Shell: per-notebook. Agent: the ACTIVE agent's pty wherever it
-        // lives, else a fresh pty scoped to the chosen workdir.
+        // Shell: via the notebook's binding (default: server-shared). Agent:
+        // the ACTIVE agent's pty wherever it lives, else a fresh pty scoped
+        // to the chosen workdir.
         if (tab === 'agent') {
           const active = getActiveAgentId();
           const record = active ? (await listAgents()).find((a) => a.terminalId === active) : null;
@@ -263,7 +294,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           if (record?.sessionId) agentTerminalService.adoptSessionId(newTerminal.id, record.sessionId);
           setAgentTerm(newTerminal);
         } else {
-          const newTerminal = await getOrCreateNamedTerminal(terminalNameFor(notebookPath, tab), { cwd });
+          const resolved = await resolveShellTerminal();
+          setShellBinding(resolved.binding);
+          const newTerminal = await getOrCreateNamedTerminal(resolved.name, resolved.cwd ? { cwd: resolved.cwd } : {});
           setShellTerm(newTerminal);
         }
       } catch (error) {
@@ -274,7 +307,21 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     };
 
     createNewTerminal();
-  }, [isOpen, serverAvailable, activeTerm, isLoading, notebookPath, tab, agentWorkdir]);
+  }, [isOpen, serverAvailable, activeTerm, isLoading, notebookPath, tab, agentWorkdir, resolveShellTerminal]);
+
+  // Rebind the shell plane and re-resolve. The old pty is left alone (it may
+  // hold running jobs and remains reachable via the manager / ?terminal=).
+  const rebindShell = async (scope: TerminalBindingScope, name?: string) => {
+    setShowShellBindingMenu(false);
+    try {
+      const binding = await setTerminalBinding(notebookPath || 'scratch', 'shell', scope, name);
+      setShellBinding(binding);
+      eagerReattachKeyRef.current = null;
+      setShellTerm(null); // re-resolve on next effect pass
+    } catch (error) {
+      console.error('[TerminalPanel] Failed to rebind terminal:', error);
+    }
+  };
 
   // After a refresh (or switching back to a notebook), reattach BOTH of this
   // notebook's surviving ptys eagerly — not just the visible tab's. Reattachment
@@ -293,9 +340,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     (async () => {
       try {
         const existing = new Set((await listTerminals()).map((t) => t.id));
-        const shellName = terminalNameFor(notebookPath, 'shell');
-        if (existing.has(normalizeTerminalName(shellName))) {
-          const info = await getOrCreateNamedTerminal(shellName, {});
+        const resolved = await resolveShellTerminal(existing);
+        if (cancelled) return;
+        setShellBinding(resolved.binding);
+        if (existing.has(normalizeTerminalName(resolved.name))) {
+          const info = await getOrCreateNamedTerminal(resolved.name, {});
           if (cancelled) return;
           // Keep whichever instance the lazy path may have set in the meantime.
           setShellTerm((prev) => prev ?? info);
@@ -434,6 +483,57 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             <Terminal className="w-3 h-3" />
             <span>{notebookName}</span>
           </button>
+          {tab === 'shell' && shellBinding && (
+            <div className="relative" onClick={(e) => e.stopPropagation()}>
+              <button
+                onClick={() => setShowShellBindingMenu((v) => !v)}
+                className="px-1.5 py-0.5 rounded text-[0.6875rem] text-slate-400 hover:text-slate-600 hover:bg-white transition-colors font-mono"
+                title={`This notebook's terminal binding: ${shellBinding.name || ''} — click to change. Attach is always deterministic; rebinding never kills the old terminal.`}
+              >
+                {shellBinding.scope === 'server' ? 'shared ▾'
+                  : shellBinding.scope === 'project' ? 'project ▾'
+                  : shellBinding.scope === 'notebook' ? 'this notebook ▾'
+                  : `${shellBinding.custom_name || shellBinding.name} ▾`}
+              </button>
+              {showShellBindingMenu && (
+                <div className="absolute top-full mt-1 left-0 z-30 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[15rem] text-xs" onClick={(e) => e.stopPropagation()}>
+                  <div className="px-3 py-1 text-[0.625rem] uppercase tracking-wide text-slate-400">Terminal for this notebook</div>
+                  <button
+                    onClick={() => rebindShell('server')}
+                    className={`w-full text-left px-3 py-1.5 hover:bg-slate-50 ${shellBinding.scope === 'server' ? 'text-slate-800 font-medium' : 'text-slate-600'}`}
+                  >
+                    Shared on this server{shellBinding.scope === 'server' ? ' ✓' : ''}
+                    <div className="text-[0.625rem] text-slate-400">One terminal for all notebooks (default)</div>
+                  </button>
+                  <button
+                    onClick={() => rebindShell('project')}
+                    className={`w-full text-left px-3 py-1.5 hover:bg-slate-50 ${shellBinding.scope === 'project' ? 'text-slate-800 font-medium' : 'text-slate-600'}`}
+                  >
+                    This project{shellBinding.scope === 'project' ? ' ✓' : ''}
+                    <div className="text-[0.625rem] text-slate-400 truncate">Shared by notebooks in {notebookDir?.split('/').pop() || 'this folder'}/</div>
+                  </button>
+                  <button
+                    onClick={() => rebindShell('notebook')}
+                    className={`w-full text-left px-3 py-1.5 hover:bg-slate-50 ${shellBinding.scope === 'notebook' ? 'text-slate-800 font-medium' : 'text-slate-600'}`}
+                  >
+                    Private to this notebook{shellBinding.scope === 'notebook' ? ' ✓' : ''}
+                    <div className="text-[0.625rem] text-slate-400">Own terminal, starts in the notebook's folder</div>
+                  </button>
+                  <button
+                    onClick={() => {
+                      const name = window.prompt('Terminal name (shared by anything bound to the same name):', shellBinding.custom_name || '');
+                      if (name && name.trim()) rebindShell('named', name.trim());
+                      else setShowShellBindingMenu(false);
+                    }}
+                    className={`w-full text-left px-3 py-1.5 hover:bg-slate-50 ${shellBinding.scope === 'named' ? 'text-slate-800 font-medium' : 'text-slate-600'}`}
+                  >
+                    Named…{shellBinding.scope === 'named' ? ` (${shellBinding.custom_name || shellBinding.name}) ✓` : ''}
+                    <div className="text-[0.625rem] text-slate-400">Pick or create a named terminal</div>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <button
             onClick={(e) => { e.stopPropagation(); setTab('agent'); }}
             className={`flex items-center gap-1.5 px-2 py-0.5 rounded transition-colors ${
@@ -601,7 +701,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           </span>
           {agentTerminalService.getResumableKind() === 'claude' && (
             <button
-              onClick={() => agentTerminalService.launchAgent('claude', { resume: true, workdir: agentWorkdir })}
+              // Resume must reuse the agent's OWN workdir: its conversation
+              // lives in that dir's `~/.nebula/agent/p-…` workspace mirror
+              // (claude keys sessions by cwd), wherever this notebook is.
+              onClick={() => agentTerminalService.launchAgent('claude', { resume: true, workdir: activeAgentRecord?.workdir ?? agentWorkdir })}
               disabled={!agentConnected}
               className="px-2 py-0.5 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 disabled:opacity-40 transition-colors"
               title="Resume this agent's own conversation (claude --resume) and keep going"
@@ -613,7 +716,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             onClick={() => agentTerminalService.launchAgent('claude', { workdir: agentWorkdir })}
             disabled={!agentConnected}
             className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
-            title={remoteAgentCfg ? 'Start Claude Code on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Type `claude` into this terminal and start driving the notebook'}
+            title={remoteAgentCfg ? 'Start Claude Code on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Start Claude Code in its agent workspace (~/.nebula/agent) and drive this notebook'}
           >
             Claude Code
           </button>
@@ -621,7 +724,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             onClick={() => agentTerminalService.launchAgent('codex', { workdir: agentWorkdir })}
             disabled={!agentConnected}
             className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
-            title={remoteAgentCfg ? 'Start Codex on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Type `codex` into this terminal and start driving the notebook'}
+            title={remoteAgentCfg ? 'Start Codex on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Start Codex in its agent workspace (~/.nebula/agent) and drive this notebook'}
           >
             Codex
           </button>
@@ -637,7 +740,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             <button
               onClick={() => setShowWorkdirMenu((v) => !v)}
               className="px-1.5 py-0.5 rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-100 font-mono max-w-[10rem] truncate"
-              title={`Project scope: ${agentWorkdir}${remoteAgentCfg ? ' (mirrored into ~/.nebula/agent on your machine)' : ''} — click to change`}
+              title={`Project scope: ${agentWorkdir} (the agent itself runs in a mirrored ~/.nebula/agent workspace${remoteAgentCfg ? ' on your machine' : ''}) — click to change`}
             >
               in {agentWorkdir.split('/').pop() || agentWorkdir} ▾
             </button>
@@ -673,7 +776,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                       title: 'Agent project folder',
                       message: remoteAgentCfg
                         ? 'Server path that defines this agent’s project scope (the agent itself runs in a mirrored folder on your machine).'
-                        : 'Directory the agent will run in — its project scope.',
+                        : 'Directory that defines this agent’s project scope (the agent itself runs in a mirrored ~/.nebula/agent folder).',
                       placeholder: notebookDir || '/path/to/project',
                       defaultValue: agentWorkdir,
                       confirmLabel: 'Use folder',

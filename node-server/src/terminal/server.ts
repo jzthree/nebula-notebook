@@ -10,6 +10,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { agentRegistry } from './agent-registry';
+import { terminalBindings, SHARED_SHELL_NAME, TerminalBindingScope } from './binding-store';
 import { fsService } from '../fs/fs-service';
 import {
   CreateTerminalRequest,
@@ -159,6 +160,58 @@ export async function setupTerminalRoutes(fastify: FastifyInstance): Promise<voi
         message: error instanceof Error ? error.message : 'Unknown error',
       });
     }
+  });
+
+  // --- Terminal bindings: which named pty a notebook's panel attaches to ---
+  // GET returns the stored binding, or the plane default when none is stored
+  // (shell → server-shared srv-main; agent → project scope, name resolved
+  // client-side from the chosen workdir).
+  fastify.get('/api/terminals/binding', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { file_path, plane } = request.query as { file_path?: string; plane?: string };
+    if (!file_path || (plane !== 'shell' && plane !== 'agent')) {
+      return reply.code(400).send({ detail: 'file_path and plane (shell|agent) are required' });
+    }
+    const stored = terminalBindings.get(file_path, plane);
+    if (stored) {
+      return reply.send({
+        plane, scope: stored.scope, name: stored.name,
+        custom_name: stored.customName ?? null, stored: true,
+      });
+    }
+    if (plane === 'shell') {
+      return reply.send({ plane, scope: 'server', name: SHARED_SHELL_NAME, custom_name: null, stored: false });
+    }
+    return reply.send({ plane, scope: 'project', name: null, custom_name: null, stored: false });
+  });
+
+  fastify.put('/api/terminals/binding', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { file_path, plane, scope, name } = (request.body as {
+      file_path?: string; plane?: string; scope?: string; name?: string;
+    }) || {};
+    if (!file_path || (plane !== 'shell' && plane !== 'agent')) {
+      return reply.code(400).send({ detail: 'file_path and plane (shell|agent) are required' });
+    }
+    if (!['server', 'project', 'notebook', 'named'].includes(scope || '')) {
+      return reply.code(400).send({ detail: 'scope must be server|project|notebook|named' });
+    }
+    try {
+      const binding = terminalBindings.set(file_path, plane, scope as TerminalBindingScope, name);
+      return reply.send({
+        plane, scope: binding.scope, name: binding.name,
+        custom_name: binding.customName ?? null, stored: true,
+      });
+    } catch (e) {
+      return reply.code(400).send({ detail: e instanceof Error ? e.message : 'Invalid binding' });
+    }
+  });
+
+  fastify.delete('/api/terminals/binding', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { file_path, plane } = request.query as { file_path?: string; plane?: string };
+    if (!file_path || (plane !== 'shell' && plane !== 'agent')) {
+      return reply.code(400).send({ detail: 'file_path and plane (shell|agent) are required' });
+    }
+    terminalBindings.delete(file_path, plane);
+    return reply.send({ ok: true });
   });
 
   // Get terminal info

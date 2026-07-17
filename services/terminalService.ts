@@ -177,6 +177,52 @@ export async function getOrCreateNamedTerminal(
 }
 
 /**
+ * Terminal bindings: which named pty a notebook's panel attaches to, per
+ * plane (shell/agent). Persisted server-side so the binding follows the
+ * notebook across browsers.
+ */
+export type TerminalBindingScope = 'server' | 'project' | 'notebook' | 'named';
+
+export interface TerminalBindingInfo {
+  plane: 'shell' | 'agent';
+  scope: TerminalBindingScope;
+  /** Resolved pty name; null for unstored agent default (client resolves). */
+  name: string | null;
+  custom_name: string | null;
+  stored: boolean;
+}
+
+export async function getTerminalBinding(
+  filePath: string,
+  plane: 'shell' | 'agent'
+): Promise<TerminalBindingInfo> {
+  const params = new URLSearchParams({ file_path: filePath, plane });
+  const response = await fetch(`${TERMINAL_API_PREFIX}/terminals/binding?${params}`);
+  if (!response.ok) {
+    throw new Error('Failed to load terminal binding');
+  }
+  return response.json();
+}
+
+export async function setTerminalBinding(
+  filePath: string,
+  plane: 'shell' | 'agent',
+  scope: TerminalBindingScope,
+  name?: string
+): Promise<TerminalBindingInfo> {
+  const response = await fetch(`${TERMINAL_API_PREFIX}/terminals/binding`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file_path: filePath, plane, scope, name }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || 'Failed to set terminal binding');
+  }
+  return response.json();
+}
+
+/**
  * Connect to a terminal via WebSocket
  */
 export function connectTerminal(id: string): WebSocket {

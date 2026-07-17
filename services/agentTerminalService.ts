@@ -106,7 +106,10 @@ function writeAgentSessionId(key: string, id: string | null): void {
   } catch { /* storage unavailable — resume just won't persist */ }
 }
 
-/** Deterministic, shell-safe mirror-dir name for a server project dir. */
+/** Deterministic, shell-safe mirror-dir name for a project dir — the
+ *  `~/.nebula/agent/p-…` agent-workspace convention shared by remote AND
+ *  local launches (the agent process always runs in its workspace dir,
+ *  never in the real project dir). */
 function remoteMirrorSlug(workdir: string): string {
   let hash = 0;
   for (let i = 0; i < workdir.length; i++) hash = ((hash << 5) - hash + workdir.charCodeAt(i)) | 0;
@@ -286,12 +289,17 @@ class AgentTerminalService {
    * directory; resume launches reopen exactly that thread with `--resume <id>`
    * (`--continue` as a fallback if no id is stored) plus a short reorientation
    * prompt. Codex has no equivalent flag; it relaunches fresh.
+   *
+   * `accessFlags` (pre-quoted, leading-space) grant the real project dir to an
+   * agent whose cwd is its workspace mirror; `workdir` rides into the local
+   * bootstrap prompt so the agent knows where the project actually lives.
    */
-  private buildAgentCommand(kind: 'claude' | 'codex', resume: boolean, envPrefix = '', sessionId?: string, continueProject = false): string {
+  private buildAgentCommand(kind: 'claude' | 'codex', resume: boolean, envPrefix = '', sessionId?: string, continueProject = false, accessFlags = '', workdir?: string | null): string {
     if (continueProject) {
       // Native project resume: claude keys conversations by cwd, codex has a
-      // session picker — both find trajectories created outside Nebula too.
-      return kind === 'claude' ? `${envPrefix}claude --continue` : `${envPrefix}codex resume`;
+      // session picker — run from the workspace mirror, both find every
+      // trajectory this project's agents created there.
+      return kind === 'claude' ? `${envPrefix}claude${accessFlags} --continue` : `${envPrefix}codex resume${accessFlags}`;
     }
     if (resume && kind === 'claude') {
       const reorient = sanitizePromptText(
@@ -300,13 +308,13 @@ class AgentTerminalService {
         'Re-read the notebook if you need to re-orient, then continue where you left off.'
       );
       const flag = sessionId ? `--resume ${sessionId}` : '--continue';
-      return `${envPrefix}claude ${flag} ${shellSingleQuote(reorient)}`;
+      return `${envPrefix}claude${accessFlags} ${flag} ${shellSingleQuote(reorient)}`;
     }
-    const bootstrap = shellSingleQuote(this.buildBootstrapPrompt(envPrefix !== ''));
+    const bootstrap = shellSingleQuote(this.buildBootstrapPrompt(envPrefix !== '', workdir));
     if (kind === 'claude' && sessionId) {
-      return `${envPrefix}claude --session-id ${sessionId} ${bootstrap}`;
+      return `${envPrefix}claude${accessFlags} --session-id ${sessionId} ${bootstrap}`;
     }
-    return `${envPrefix}${kind} ${bootstrap}`;
+    return `${envPrefix}${kind}${accessFlags} ${bootstrap}`;
   }
 
   /**
@@ -340,14 +348,41 @@ class AgentTerminalService {
   }
 
   /**
+   * The line typed into the terminal to start the agent ON THIS SERVER — the
+   * same placement rule as remote launches: the agent process runs in its own
+   * workspace dir (`~/.nebula/agent/p-<hash>-<name>`), never in the real
+   * project dir. The CLIs key their conversation history to their cwd, so
+   * agent chats launched in real project dirs would pollute those projects'
+   * own trajectory history. Project access is granted explicitly instead:
+   * `--add-dir` for claude, a sandbox writable-roots override for codex.
+   * Resume/continue also run from the mirror — that's where the sessions
+   * live. (Legacy fallback: the old shared dir when no workdir is known.)
+   */
+  buildLocalLaunchCommand(kind: 'claude' | 'codex', resume = false, sessionId?: string, continueProject = false, workdir?: string | null): string {
+    const cwd = workdir ? `"$HOME/.nebula/agent/${remoteMirrorSlug(workdir)}"` : '"$HOME/.nebula/agent"';
+    // Only absolute paths can be granted verbatim ('~' would pass literally
+    // inside quotes); non-absolute scopes just fall back to the CLIs' own
+    // ask/deny rules for paths outside the cwd.
+    const accessFlags = workdir?.startsWith('/')
+      ? (kind === 'claude'
+        ? ` --add-dir ${shellSingleQuote(workdir)}`
+        : ` -c ${shellSingleQuote(`sandbox_workspace_write.writable_roots=[${JSON.stringify(workdir)}]`)}`)
+      : '';
+    return `mkdir -p ${cwd} && cd ${cwd} && ` +
+      this.buildAgentCommand(kind, resume, '', sessionId, continueProject, accessFlags, workdir);
+  }
+
+  /**
    * Orientation prompt handed to a freshly started agent: which server to
    * connect_server to (the MCP intentionally ignores env config and requires
    * an explicit base_url per session) and which notebook this tab is driving.
    * `remote` = the agent runs on the user's machine (remote-agent mode), so
    * URLs must be the ones visible from THERE (the -L forward), and `nebula`
-   * may not be on PATH.
+   * may not be on PATH. `scratchWorkdir` = the real project dir when a local
+   * launch parked the agent's shell in its workspace mirror, so the prompt
+   * can point back at the project.
    */
-  buildBootstrapPrompt(remote = false): string {
+  buildBootstrapPrompt(remote = false, scratchWorkdir?: string | null): string {
     const cfg = remote ? this.getRemoteAgentConfig() : null;
     const baseUrl = remote ? (cfg?.localUrl || 'http://localhost:3000') : this.serverBaseUrl;
     const parts: string[] = ['You are driving a Nebula notebook.'];
@@ -359,7 +394,10 @@ class AgentTerminalService {
         ? `PREFERRED: use the \`nebula\` CLI (NEBULA_URL is already set to ${baseUrl}, your SSH-forwarded Nebula server; notebook paths are paths on the SERVER, not this machine). ` +
           'Your shell here runs in a scratch dir on your own machine — the notebook and its data files live on the server, reachable only through nebula. ' +
           'If `nebula` is not on PATH, use `npx -p nebula-notebook-mcp nebula …`. '
-        : 'PREFERRED: use the `nebula` CLI available in this terminal (NEBULA_URL is already set). ') +
+        : 'PREFERRED: use the `nebula` CLI available in this terminal (NEBULA_URL is already set). ' +
+          (scratchWorkdir
+            ? `The project lives at ${scratchWorkdir}; your shell is in a scratch workspace, not the project dir — use absolute paths (or the nebula CLI) to work with its files. `
+            : '')) +
       'Start with `nebula --help`; key commands: `nebula nb read <path>` (list cells), ' +
       '`nebula run <path> <cell-id>` (execute AND get output in one call), ' +
       '`nebula nb edit <path> <cell-id> -` (content from stdin; or --content \'…\'), `nebula nb search <path> <query>`, ' +
@@ -456,9 +494,12 @@ class AgentTerminalService {
       }
     }
     // Remote-agent mode: the launch line hops back to the user's machine over
-    // the reverse SSH channel and runs the agent there instead.
+    // the reverse SSH channel and runs the agent there instead. Either way the
+    // agent process itself runs in its `~/.nebula/agent/p-…` workspace mirror,
+    // never in the real project dir.
     const remoteLine = this.buildRemoteLaunchCommand(kind, resume, sessionId, continueProject, opts.workdir);
-    send.sender(remoteLine ? `${remoteLine}\r` : `${this.buildAgentCommand(kind, resume, '', sessionId, continueProject)}\r`);
+    const launchLine = remoteLine ?? this.buildLocalLaunchCommand(kind, resume, sessionId, continueProject, opts.workdir);
+    send.sender(`${launchLine}\r`);
     markOnboardingStep('launchedAgent');
     // Project-scoped agent ledger: tell the server what launched where, and
     // make this the browser's active agent (agents are decoupled from
