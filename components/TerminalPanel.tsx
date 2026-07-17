@@ -615,7 +615,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             <ListTree className="w-3 h-3" />
             <span>manage</span>
             {agents.filter((a) => a.state === 'live').length > 0 && (
-              <span className="px-1 rounded-full bg-purple-100 text-purple-700 text-[0.625rem] leading-4">
+              <span
+                className="px-1 rounded-full bg-purple-100 text-purple-700 text-[0.625rem] leading-4"
+                title={`${agents.filter((a) => a.state === 'live').length} live agent${agents.filter((a) => a.state === 'live').length === 1 ? '' : 's'}`}
+              >
                 {agents.filter((a) => a.state === 'live').length}
               </span>
             )}
@@ -695,14 +698,23 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             <>
               <div className="px-3 py-1 text-[0.625rem] uppercase tracking-wide text-slate-400 bg-slate-100">Terminals</div>
               {managerTerms.filter((t) => !agents.some((a) => a.terminalId === t.id)).map((t) => {
-                const role = t.id === 'srv-main' ? 'shared'
-                  : t.id.startsWith('proj-') ? 'project'
-                  : t.id.startsWith('nb-') ? 'notebook'
-                  : t.id.length > 32 ? 'session' : 'named';
+                // Pty ids are namespaced identities (srv-/proj-/nb- prefixes keep
+                // scopes collision-free) — show the human meaning, keep the raw
+                // id in the tooltip for anyone who needs ?terminal=<id>.
+                const hashSlug = (id: string) => id.split('-').slice(2).join('-');
+                const { label, role } = t.id === 'srv-main'
+                  ? { label: 'Shared terminal', role: 'this server' }
+                  : t.id.startsWith('proj-')
+                  ? { label: `${hashSlug(t.id)}/`, role: 'project' }
+                  : t.id.startsWith('nb-')
+                  ? { label: hashSlug(t.id).replace(/^(shell|agent)-/, ''), role: 'notebook' }
+                  : t.id.length > 32
+                  ? { label: t.id.slice(0, 8) + '…', role: 'session' }
+                  : { label: t.id, role: 'named' };
                 return (
                   <div key={t.id} className="flex items-center gap-2 px-3 py-1 border-b border-slate-100 last:border-b-0">
                     <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" title="live pty" />
-                    <span className="font-mono text-slate-600 truncate" title={t.id}>{t.id}</span>
+                    <span className="text-slate-700 truncate" title={t.id}>{label}</span>
                     <span className="px-1 rounded bg-slate-200 text-slate-500 text-[0.625rem] flex-shrink-0">{role}</span>
                     <span className="text-slate-400 truncate" title={t.cwd}>{t.cwd.split('/').pop() || t.cwd}</span>
                     <span className="flex-1" />
