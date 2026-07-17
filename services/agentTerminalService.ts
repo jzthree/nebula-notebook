@@ -379,9 +379,16 @@ class AgentTerminalService {
    * Resume/continue also run from the mirror — that's where the sessions
    * live. (Legacy fallback: the old shared dir when no workdir is known.)
    */
-  buildLocalLaunchCommand(kind: 'claude' | 'codex', resume = false, sessionId?: string, continueProject = false, workdir?: string | null, mirrorSlug?: string | null): string {
-    const slug = mirrorSlug || (workdir ? remoteMirrorSlug(workdir) : null);
-    const cwd = slug ? `"$HOME/.nebula/agent/${slug}"` : '"$HOME/.nebula/agent"';
+  buildLocalLaunchCommand(kind: 'claude' | 'codex', resume = false, sessionId?: string, continueProject = false, workdir?: string | null, mirrorSlug?: string | null, legacyRealCwd?: string | null): string {
+    // Legacy migration: records from before the mirror-cwd change hold
+    // conversations keyed to the REAL project dir — resume them from there
+    // (moving transcripts inside ~/.claude would be invasive and could sweep
+    // up the user's own CLI sessions). New sessions always use the mirror,
+    // so legacy placements age out on their own.
+    const slug = legacyRealCwd ? null : (mirrorSlug || (workdir ? remoteMirrorSlug(workdir) : null));
+    const cwd = legacyRealCwd
+      ? `"${legacyRealCwd.replace(/"/g, '\\"')}"`
+      : slug ? `"$HOME/.nebula/agent/${slug}"` : '"$HOME/.nebula/agent"';
     // Only absolute paths can be granted verbatim ('~' would pass literally
     // inside quotes); non-absolute scopes just fall back to the CLIs' own
     // ask/deny rules for paths outside the cwd.
@@ -503,7 +510,7 @@ class AgentTerminalService {
    * CLI's initial prompt argument, so the agent starts by connecting to the
    * right server and reading the right notebook — no guessing across tabs.
    */
-  launchAgent(kind: 'claude' | 'codex', opts: { resume?: boolean; continueProject?: boolean; workdir?: string | null; mirrorSlug?: string | null } = {}): SendResult {
+  launchAgent(kind: 'claude' | 'codex', opts: { resume?: boolean; continueProject?: boolean; workdir?: string | null; mirrorSlug?: string | null; legacyRealCwd?: string | null } = {}): SendResult {
     const send = this.getAgentSender();
     if (!send.ok) return send;
     const resume = !!opts.resume;
@@ -526,7 +533,7 @@ class AgentTerminalService {
     // agent process itself runs in its `~/.nebula/agent/p-…` workspace mirror,
     // never in the real project dir.
     const remoteLine = this.buildRemoteLaunchCommand(kind, resume, sessionId, continueProject, opts.workdir, opts.mirrorSlug);
-    const launchLine = remoteLine ?? this.buildLocalLaunchCommand(kind, resume, sessionId, continueProject, opts.workdir, opts.mirrorSlug);
+    const launchLine = remoteLine ?? this.buildLocalLaunchCommand(kind, resume, sessionId, continueProject, opts.workdir, opts.mirrorSlug, opts.legacyRealCwd);
     send.sender(`${launchLine}\r`);
     markOnboardingStep('launchedAgent');
     // Project-scoped agent ledger: tell the server what launched where, and
@@ -543,7 +550,9 @@ class AgentTerminalService {
         launchedFrom: this.notebookPath ?? undefined,
         // Pin the mirror slug: record-driven resumes must keep finding this
         // conversation even if the slug derivation changes in a future build.
-        mirrorSlug: opts.workdir ? remoteMirrorSlug(opts.workdir) : undefined,
+        // Legacy resumes keep the record slug-less so they KEEP resuming from
+        // the real dir where their conversation lives.
+        mirrorSlug: opts.legacyRealCwd ? undefined : (opts.workdir ? remoteMirrorSlug(opts.workdir) : undefined),
       });
     }
     // Report 'running' optimistically, then confirm via the output watcher: it

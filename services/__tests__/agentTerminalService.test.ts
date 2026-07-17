@@ -164,6 +164,22 @@ describe('agentTerminalService prompt injection', () => {
     expect(sent).toHaveLength(0);
   });
 
+  it('legacy records (no pinned mirror slug) resume from their REAL workdir', () => {
+    const line = agentTerminalService.buildLocalLaunchCommand(
+      'claude', true, 'sess-123', false, '/home/u/real proj', null, '/home/u/real proj'
+    );
+    expect(line).toContain('cd "/home/u/real proj"');
+    expect(line).not.toContain('.nebula/agent/p-');
+    expect(line).toContain('--resume sess-123');
+  });
+
+  it('records with a pinned slug resume from the pinned mirror dir', () => {
+    const line = agentTerminalService.buildLocalLaunchCommand(
+      'claude', true, 'sess-123', false, '/home/u/proj', 'p-cafe01-proj'
+    );
+    expect(line).toContain('.nebula/agent/p-cafe01-proj');
+  });
+
   it('bootstrap prompt explains the [now driving:] convention', () => {
     expect(agentTerminalService.buildBootstrapPrompt()).toContain('now driving');
   });

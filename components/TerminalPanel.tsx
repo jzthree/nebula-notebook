@@ -187,9 +187,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     // Exact resume when we have the conversation id; otherwise the CLI's own
     // cwd-scoped picker. Always the record's OWN workdir — the conversation
     // lives in that dir (claude keys sessions by cwd).
+    // No pinned slug on a server-side record = created before the mirror-cwd
+    // change: its conversation is keyed to the REAL workdir — resume there.
+    const legacyRealCwd = !rec.mirrorSlug && (rec.location ?? 'server') === 'server' ? rec.workdir : undefined;
     const opts = kind === 'claude' && rec.sessionId
-      ? { resume: true, workdir: rec.workdir, mirrorSlug: rec.mirrorSlug }
-      : { continueProject: true, workdir: rec.workdir, mirrorSlug: rec.mirrorSlug };
+      ? { resume: true, workdir: rec.workdir, mirrorSlug: rec.mirrorSlug, legacyRealCwd }
+      : { continueProject: true, workdir: rec.workdir, mirrorSlug: rec.mirrorSlug, legacyRealCwd };
     if (rec.terminalId === (agentTerm?.id ?? null) && agentConnected) {
       agentTerminalService.launchAgent(kind, opts);
       return;
@@ -890,7 +893,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                       </button>
                       <button onClick={() => pickSession('claude')} className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50">
                         Pick a Claude session…
-                        <div className="text-[0.625rem] text-slate-400">This project's conversations, incl. outside Nebula</div>
+                        <div className="text-[0.625rem] text-slate-400">This project's Nebula agent conversations</div>
                       </button>
                       <button onClick={() => pickSession('codex')} className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50">
                         Pick a Codex session…
