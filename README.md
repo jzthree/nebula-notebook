@@ -89,6 +89,8 @@ npx nebula-notebook-mcp setup-mcp
 
 Then open a notebook, click **Agent**, and launch Claude Code or Codex right in the notebook's terminal. Prefer a command line? The same package ships the shell-first `nebula` CLI (`npx -p nebula-notebook-mcp nebula --help`); run `nebula setup-skill` to install it as a **Claude Code skill** so agents outside a Nebula terminal know how to drive it.
 
+**Prerequisite when the agent runs on your own machine** (Agent tab → *on: my machine*, or any terminal outside Nebula): that machine needs the `nebula` CLI available. Node.js ≥ 20 is enough — the agent is briefed to fall back to `npx -p nebula-notebook-mcp nebula …` when `nebula` isn't on PATH; installing `npm i -g nebula-notebook-mcp` skips the npx download. Agents launched in a Nebula terminal on the server need nothing extra — the CLI is pre-wired there.
+
 ### From source (latest)
 
 npm releases are point-in-time snapshots — to get the latest changes, install from source:
@@ -96,10 +98,18 @@ npm releases are point-in-time snapshots — to get the latest changes, install 
 ```bash
 git clone https://github.com/jzthree/nebula-notebook.git
 cd nebula-notebook
-npm install
-
-npm run start
+npm install                # dependencies only (root + subpackages) — no build yet
 ```
+
+To run the same production server `npx nebula-notebook` gives you (UI + API on :3000), build both halves once, then start it:
+
+```bash
+npm run build              # frontend → dist/
+npm run node-server:build  # backend  → node-server/dist/
+node bin/nebula-notebook.js          # accepts the same flags, e.g. --workdir
+```
+
+For hacking on Nebula itself there's also a dev mode with hot reload (`npm run start` — Vite on :3000, API on :8000); rebuild with the two build commands above after `git pull` to refresh a production install.
 
 ## Root Directory
 

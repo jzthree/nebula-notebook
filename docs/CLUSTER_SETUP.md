@@ -83,6 +83,12 @@ Detection-gated — none of this appears on a laptop install:
 | **On your laptop, terminal in the page** | Cluster blocks the agent's API, or login node is memory-tight | Agent tab → *on: my machine*. Guided setup composes the reverse-tunnel command (random per-user port) and detects when it's connected. |
 | **On your laptop, plain terminal** | You just want CLI access from anywhere | `NEBULA_URL=http://localhost:3000` (through your tunnel) + the `nebula` CLI or MCP. `nebula setup-skill` teaches Claude Code the rest. |
 
+For both laptop placements the laptop itself needs the `nebula` CLI: Node.js ≥ 20
+with `npx` is sufficient (the agent's launch briefing falls back to
+`npx -p nebula-notebook-mcp nebula …` when `nebula` isn't on PATH), or install it
+once with `npm i -g nebula-notebook-mcp`. Only the on-cluster placement comes with
+the CLI pre-wired.
+
 ## 5. Troubleshooting
 
 - **Can't ssh to the server host directly** — internal nodes usually accept SSH
