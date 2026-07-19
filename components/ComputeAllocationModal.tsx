@@ -49,6 +49,41 @@ const inputClass =
   'w-full px-2 py-1.5 text-sm border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500';
 const labelClass = 'block text-xs font-medium text-slate-600 mb-1';
 
+/**
+ * Number input that tolerates transient edit states: the field can be emptied
+ * and retyped from scratch (clamping on every keystroke made that impossible).
+ * Valid values commit as they are typed, clamped to min; blur snaps the
+ * display back to the committed value.
+ */
+function NumberField({ value, min, step, onCommit, className, disabled, ariaLabel }: {
+  value: number;
+  min: number;
+  step?: number;
+  onCommit: (n: number) => void;
+  className: string;
+  disabled?: boolean;
+  ariaLabel?: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null); // null = not editing
+  return (
+    <input
+      type="number"
+      min={min}
+      step={step}
+      className={className}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      value={draft ?? String(value)}
+      onChange={(e) => {
+        setDraft(e.target.value);
+        const n = Number(e.target.value);
+        if (e.target.value.trim() !== '' && Number.isFinite(n)) onCommit(Math.max(min, n));
+      }}
+      onBlur={() => setDraft(null)}
+    />
+  );
+}
+
 const STATE_BADGE: Record<Allocation['state'], string> = {
   pending: 'bg-amber-100 text-amber-700',
   running: 'bg-blue-100 text-blue-700',
@@ -343,23 +378,23 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
                 </div>
                 <div>
                   <label className={labelClass}>Walltime (hours)</label>
-                  <input type="number" min={0.25} step={0.25} className={inputClass} value={walltimeHours}
-                    onChange={(e) => setWalltimeHours(Math.max(0.25, Number(e.target.value) || 0.25))} />
+                  <NumberField min={0.25} step={0.25} className={inputClass} value={walltimeHours}
+                    onCommit={setWalltimeHours} ariaLabel="Walltime in hours" />
                 </div>
                 <div>
                   <label className={labelClass}>CPUs</label>
-                  <input type="number" min={1} className={inputClass} value={cpus}
-                    onChange={(e) => setCpus(Math.max(1, Number(e.target.value) || 1))} />
+                  <NumberField min={1} className={inputClass} value={cpus}
+                    onCommit={setCpus} ariaLabel="Number of CPUs" />
                 </div>
                 <div>
                   <label className={labelClass}>Memory (GB)</label>
-                  <input type="number" min={1} className={inputClass} value={memGb}
-                    onChange={(e) => setMemGb(Math.max(1, Number(e.target.value) || 1))} />
+                  <NumberField min={1} className={inputClass} value={memGb}
+                    onCommit={setMemGb} ariaLabel="Memory in GB" />
                 </div>
                 <div>
                   <label className={labelClass}>GPUs (0 = none)</label>
-                  <input type="number" min={0} className={inputClass} value={gpus}
-                    onChange={(e) => setGpus(Math.max(0, Number(e.target.value) || 0))} />
+                  <NumberField min={0} className={inputClass} value={gpus}
+                    onCommit={setGpus} ariaLabel="Number of GPUs" />
                 </div>
                 <div>
                   <label className={labelClass}>GPU type</label>
@@ -384,12 +419,12 @@ export default function ComputeAllocationModal({ isOpen, onClose, onChanged, onU
                     <input type="checkbox" checked={idleRelease} onChange={(e) => setIdleRelease(e.target.checked)} />
                     End automatically when idle
                   </label>
-                  <input
-                    type="number" min={10} step={5}
+                  <NumberField
+                    min={10} step={5}
                     className="w-20 px-2 py-1 text-xs border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
                     value={idleMinutes} disabled={!idleRelease}
-                    onChange={(e) => setIdleMinutes(Math.max(10, Number(e.target.value) || 10))}
-                    aria-label="Idle minutes before auto-end"
+                    onCommit={setIdleMinutes}
+                    ariaLabel="Idle minutes before auto-end"
                   />
                   <span className={idleRelease ? '' : 'text-slate-400'}>idle minutes (no running cells or terminal use)</span>
                 </div>
