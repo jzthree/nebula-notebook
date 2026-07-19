@@ -54,6 +54,7 @@ interface KernelSession {
 const TIPS = [
   { text: <>Open any notebook → <strong>Agent</strong> tab → one-click launch <strong>Claude Code</strong> or <strong>Codex</strong>, pre-briefed on your notebook</> },
   { text: <>Agents can also drive notebooks via the <code className="bg-slate-200 px-1 rounded">nebula</code> CLI or MCP — <code className="bg-slate-200 px-1 rounded">npx nebula-notebook-mcp setup-mcp</code></> },
+  { text: <>Running an agent <strong>on your machine</strong>? It needs Node.js ≥ 20 there — the agent uses <code className="bg-slate-200 px-1 rounded">npx -p nebula-notebook-mcp nebula</code> (or install with <code className="bg-slate-200 px-1 rounded">npm i -g nebula-notebook-mcp</code>)</> },
   { text: <>On a cluster login node, the kernel menu can allocate a compute-node job — no <code className="bg-slate-200 px-1 rounded">sbatch</code> needed</> },
   { text: <>Run several cells back-to-back — they queue up; the header chip shows the queue and jumps to what's running</> },
   { text: <><code className="bg-slate-200 px-1 rounded">Ctrl+`</code> toggles the integrated terminal</> },

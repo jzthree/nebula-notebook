@@ -213,7 +213,29 @@ export const RemoteAgentSetupModal: React.FC<Props> = ({ onClose }) => {
 
           <div className="border-t border-slate-100 pt-2">
             <p className="text-xs text-slate-600 mb-1 font-medium">
-              <span className="font-medium">3.</span> Sign-in token — <span className="text-red-600">required for Claude Code</span>
+              <span className="font-medium">3.</span> nebula CLI on your machine
+            </p>
+            <p className="text-xs text-slate-500 mb-1">
+              <Where loc="local" /> The launched agent drives your notebook through the{' '}
+              <code className="bg-slate-100 px-1 rounded">nebula</code> CLI. Any{' '}
+              <span className="font-medium">Node.js ≥ 20</span> install is enough — the agent falls back to{' '}
+              <code className="bg-slate-100 px-1 rounded">npx -p nebula-notebook-mcp nebula</code> when the CLI
+              isn't on PATH. Install it once to skip the npx download on every call:
+            </p>
+            <div className="flex items-start gap-1.5">
+              <code className="flex-1 px-2 py-1.5 text-xs bg-slate-800 text-slate-100 rounded break-all select-all">npm install -g nebula-notebook-mcp</code>
+              <button
+                onClick={() => copy('npm install -g nebula-notebook-mcp', 'nebulacli')}
+                className="px-2 py-1.5 text-xs bg-slate-200 hover:bg-slate-300 rounded flex-shrink-0"
+              >
+                {copied === 'nebulacli' ? 'Copied ✓' : 'Copy'}
+              </button>
+            </div>
+          </div>
+
+          <div className="border-t border-slate-100 pt-2">
+            <p className="text-xs text-slate-600 mb-1 font-medium">
+              <span className="font-medium">4.</span> Sign-in token — <span className="text-red-600">required for Claude Code</span>
             </p>
             <p className="text-xs text-slate-500 mb-1">
               <Where loc="local" /> Claude Code keeps its credentials in the macOS Keychain, which ssh
@@ -238,7 +260,7 @@ export const RemoteAgentSetupModal: React.FC<Props> = ({ onClose }) => {
 
           <div className="border-t border-slate-100 pt-2">
             <p className="text-xs text-slate-600 mb-1 font-medium">
-              <span className="font-medium">4.</span> No password prompt — optional
+              <span className="font-medium">5.</span> No password prompt — optional
             </p>
             <p className="text-xs text-slate-500 mb-1">
               <Where loc="server" /> Trust your cluster key so each launch skips the password:
