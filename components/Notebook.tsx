@@ -2091,7 +2091,7 @@ export const Notebook: React.FC = () => {
 
   // Refs for functions used in keyboard handler (defined later in component)
   const deleteCellRef = useRef<((id: string) => void) | null>(null);
-  const addCellRef = useRef<((type: CellType, content?: string, afterIndex?: number) => void) | null>(null);
+  const addCellRef = useRef<((type: CellType, content?: string, afterIndex?: number, noScroll?: boolean | 'cell' | 'editor') => void) | null>(null);
   const changeCellTypeRef = useRef<((id: string, type: CellType) => void) | null>(null);
   const runAndAdvanceRef = useRef<((id: string, focusMode: 'cell' | 'editor') => void) | null>(null);
   const queueExecutionRef = useRef<((id: string) => void) | null>(null);
@@ -3313,6 +3313,11 @@ export const Notebook: React.FC = () => {
     if (focusMode) {
       // Set pending focus for the new cell
       setPendingFocus({ cellId: newCell.id, mode: focusMode });
+      // Cell-mode focus uses preventScroll; bring the new cell into view only
+      // when it isn't visible (same conditional-scroll path as undo/redo).
+      if (focusMode === 'cell') {
+        pendingScrollCellIdRef.current = newCell.id;
+      }
     }
 
     // Only scroll if not explicitly disabled (e.g., toolbar plus button shouldn't scroll)

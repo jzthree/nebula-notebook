@@ -217,6 +217,7 @@ The notebook supports Jupyter-style keyboard shortcuts with two modes:
 | `X` / `C` / `V` | Cut / Copy / Paste cell |
 | `Shift+V` | Paste cell above |
 | `E` / `D` | Enqueue / Dequeue cell for batch execution |
+| `Z` / `Shift+Z` | Undo / Redo cell operations (notebook-level history) |
 | `Delete/Backspace` | Delete cell |
 | `Arrow Up/Down` | Navigate between cells |
 | `Ctrl/Cmd+Shift+↑/↓` | Move cell up / down |

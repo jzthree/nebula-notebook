@@ -373,8 +373,8 @@ const SettingsModalContent: React.FC<Props> = ({ isOpen, onClose, onRefresh, isL
                     <div className="flex-1">
                       <p className="text-sm text-slate-700">Jupyter classic shortcuts</p>
                       <p className="text-xs text-slate-500">
-                        In cell mode: dd deletes, z undoes, Shift+Z redoes, 00 restarts the kernel, ii interrupts.
-                        (Suspends the D dequeue key while on.)
+                        In cell mode: dd deletes, 00 restarts the kernel, ii interrupts.
+                        (Suspends the D dequeue key while on. Z undo / Shift+Z redo are always active.)
                       </p>
                     </div>
                     <button

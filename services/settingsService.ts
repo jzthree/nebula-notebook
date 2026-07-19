@@ -23,7 +23,7 @@ export interface NebulaSettings {
   showResourceMonitor?: boolean; // Show RAM/GPU usage in notebook status bar (disabled by default for typing perf)
   showOutputLoggingToggle?: boolean; // Show the save-outputs-to-history toolbar toggle (hidden by default — niche, and easy to hit by accident)
   smoothAutoScroll?: boolean; // Animate notebook-driven auto-scroll actions
-  jupyterShortcuts?: boolean; // Jupyter classic cell-mode keys: dd delete, z undo, Shift+Z redo, 00 restart, ii interrupt
+  jupyterShortcuts?: boolean; // Jupyter classic double-key cell-mode bindings: dd delete, 00 restart, ii interrupt (z / Shift+Z undo/redo are always on)
   // On a scheduler login node, whether to run kernels directly on this (shared) node.
   // undefined = undecided → the user is asked once, on first login-node kernel start.
   allowLoginNodeKernels?: 'allow' | 'deny';

@@ -9,8 +9,8 @@
  *
  * Dual undo/redo architecture note (preserved from the original site):
  * keyboard Ctrl/Cmd+Z goes to CodeMirror's per-cell text history; the
- * toolbar (and Jupyter-mode 'z') drives the notebook-level structural
- * history. This split is intentional.
+ * toolbar (and cell-mode 'z' / Shift+Z) drives the notebook-level
+ * structural history. This split is intentional.
  */
 import { useEffect, useRef } from 'react';
 import { EditorView } from '@codemirror/view';
@@ -42,7 +42,7 @@ export interface NotebookShortcutDeps {
 
   // Operations (refs where Notebook already maintains them, else stable fns)
   handleManualSaveRef: React.RefObject<() => Promise<void>>;
-  addCellRef: React.RefObject<((type: CellType, content: string, afterIndex?: number) => void) | null>;
+  addCellRef: React.RefObject<((type: CellType, content: string, afterIndex?: number, focus?: boolean | 'cell' | 'editor') => void) | null>;
   deleteCellRef: React.RefObject<((cellId: string) => void) | null>;
   changeCellTypeRef: React.RefObject<((cellId: string, type: CellType) => void) | null>;
   pasteClipboardCellsRef: React.RefObject<((items: ShortcutClipboardItem[], insertAt: number) => void) | null>;
@@ -210,18 +210,22 @@ export function useNotebookKeyboardShortcuts(deps: NotebookShortcutDeps): void {
         }
       }
 
+      // Z / Shift+Z — undo / redo notebook-level cell operations. Always on
+      // (Jupyter default): unlike the classic double-key bindings below, 'z'
+      // conflicts with nothing in the default cell-mode keymap.
+      if (key === 'z' && !e.altKey) {
+        e.preventDefault();
+        lastKeyRef.current = null;
+        if (e.shiftKey) d.redoFnRef.current?.(); else d.undoFnRef.current?.();
+        return;
+      }
+
       // Jupyter classic keybindings (opt-in via Settings): dd delete,
-      // z undo, Shift+Z redo, 00 restart kernel, ii interrupt.
+      // 00 restart kernel, ii interrupt.
       // While enabled, single 'd' is consumed (the FIFO dequeue key is
       // suspended) so 'dd' can't accidentally paste a queued cell first.
       if (d.jupyterShortcutsRef.current && !e.altKey) {
         const doubleKeys = ['d', '0', 'i'];
-        if (key === 'z') {
-          e.preventDefault();
-          lastKeyRef.current = null;
-          if (e.shiftKey) d.redoFnRef.current?.(); else d.undoFnRef.current?.();
-          return;
-        }
         if (doubleKeys.includes(key)) {
           e.preventDefault();
           if (e.repeat) return; // holding the key must not fire the double action
@@ -255,21 +259,21 @@ export function useNotebookKeyboardShortcuts(deps: NotebookShortcutDeps): void {
       const currentCells = d.cellsRef.current;
       const currentIndex = currentCells.findIndex(c => c.id === focusedCellId);
 
-      // A - Insert cell above
+      // A - Insert cell above, selecting the new cell (Jupyter behavior)
       if (key === 'a' && d.addCellRef.current) {
         e.preventDefault();
         // Insert above = insert after (currentIndex - 1), so new cell appears at currentIndex
         const afterIdx = currentIndex === -1 ? undefined : currentIndex - 1;
-        d.addCellRef.current('code', '', afterIdx);
+        d.addCellRef.current('code', '', afterIdx, 'cell');
         return;
       }
 
-      // B - Insert cell below
+      // B - Insert cell below, selecting the new cell (Jupyter behavior)
       if (key === 'b' && d.addCellRef.current) {
         e.preventDefault();
         // Insert below = insert after currentIndex
         const afterIdx = currentIndex !== -1 ? currentIndex : currentCells.length - 1;
-        d.addCellRef.current('code', '', afterIdx);
+        d.addCellRef.current('code', '', afterIdx, 'cell');
         return;
       }
 

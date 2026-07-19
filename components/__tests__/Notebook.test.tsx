@@ -151,10 +151,23 @@ vi.mock('../NotebookBreadcrumb', () => ({
   NotebookBreadcrumb: () => null,
 }));
 
-// Mock Cell component to avoid CodeMirror DOM measurement issues in tests
-vi.mock('../Cell', () => ({
-  Cell: ({ cell, index, isActive, onClick, onDelete, onMove, onChangeType, onRun }: any) => (
+// Mock Cell component to avoid CodeMirror DOM measurement issues in tests.
+// Mirrors the real Cell's requestedFocusMode contract: mode 'cell' focuses the div.
+vi.mock('../Cell', async () => {
+  const React = await import('react');
+  return {
+  Cell: ({ cell, index, isActive, onClick, onDelete, onMove, onChangeType, onRun, requestedFocusMode, onFocusModeApplied }: any) => {
+    const ref = React.useRef<HTMLDivElement>(null);
+    React.useEffect(() => {
+      if (requestedFocusMode === 'cell') {
+        ref.current?.focus();
+        onFocusModeApplied?.();
+      }
+    }, [requestedFocusMode, onFocusModeApplied]);
+    return (
     <div
+      ref={ref}
+      tabIndex={0}
       data-testid={`cell-${cell.id}`}
       data-cell-id={cell.id}
       data-cell-type={cell.type}
@@ -172,8 +185,10 @@ vi.mock('../Cell', () => ({
       <button data-testid={`to-code-${cell.id}`} onClick={(e) => { e.stopPropagation(); onChangeType(cell.id, 'code'); }}>Y</button>
       <button data-testid={`run-${cell.id}`} onClick={(e) => { e.stopPropagation(); onRun(cell.id); }}>Run</button>
     </div>
-  ),
-}));
+    );
+  },
+  };
+});
 
 // Import after mocks
 import { Notebook } from '../Notebook';
@@ -295,6 +310,74 @@ describe('Notebook', () => {
       // Should now have 3 cells
       await waitFor(() => {
         expect(screen.getByText('#3')).toBeInTheDocument();
+      });
+    });
+
+    it('pressing "a" moves selection to the inserted cell (Jupyter behavior)', async () => {
+      renderNotebook();
+      await waitFor(() => {
+        expect(screen.getByText('#1')).toBeInTheDocument();
+      });
+
+      const cell2 = screen.getByTestId('cell-cell-2');
+      fireEvent.click(cell2);
+      fireEvent.keyDown(cell2, { key: 'a' });
+
+      await waitFor(() => {
+        const ids = getOrderedCellIds();
+        expect(ids).toHaveLength(3);
+        // New cell sits where cell-2 was (index 1) and must hold the focus,
+        // so the next keystroke operates on it — not on the original cell.
+        const newCellEl = document.querySelector(`[data-cell-id="${ids[1]}"]`);
+        expect(ids[1]).not.toBe('cell-2');
+        expect(document.activeElement).toBe(newCellEl);
+      });
+    });
+
+    it('pressing "b" moves selection to the inserted cell (Jupyter behavior)', async () => {
+      renderNotebook();
+      await waitFor(() => {
+        expect(screen.getByText('#1')).toBeInTheDocument();
+      });
+
+      const cell1 = screen.getByTestId('cell-cell-1');
+      fireEvent.click(cell1);
+      fireEvent.keyDown(cell1, { key: 'b' });
+
+      await waitFor(() => {
+        const ids = getOrderedCellIds();
+        expect(ids).toHaveLength(3);
+        const newCellEl = document.querySelector(`[data-cell-id="${ids[1]}"]`);
+        expect(ids[1]).not.toBe('cell-2');
+        expect(document.activeElement).toBe(newCellEl);
+      });
+    });
+  });
+
+  describe('keyboard shortcuts - cell-mode undo/redo', () => {
+    it('pressing "z" undoes the last cell operation, Shift+Z redoes it (no opt-in needed)', async () => {
+      renderNotebook();
+      await waitFor(() => {
+        expect(screen.getByText('#1')).toBeInTheDocument();
+      });
+
+      const cell1 = screen.getByTestId('cell-cell-1');
+      fireEvent.click(cell1);
+      fireEvent.keyDown(cell1, { key: 'b' });
+      await waitFor(() => {
+        expect(getOrderedCellIds()).toHaveLength(3);
+      });
+
+      // z (cell mode, default keymap) undoes the insert
+      fireEvent.keyDown(screen.getByTestId('cell-cell-1'), { key: 'z' });
+      await waitFor(() => {
+        expect(getOrderedCellIds()).toHaveLength(2);
+      });
+
+      // Shift+Z redoes it
+      fireEvent.keyDown(screen.getByTestId('cell-cell-1'), { key: 'Z', shiftKey: true });
+      await waitFor(() => {
+        expect(getOrderedCellIds()).toHaveLength(3);
       });
     });
 
