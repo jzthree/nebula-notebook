@@ -110,6 +110,86 @@ export function canApplyPatch(text: string, patch: Patch): boolean {
 }
 
 /**
+ * One row of a line-level diff, ready for Cursor-style rendering:
+ * context rows carry both line numbers, added/removed carry one side,
+ * gap rows stand in for a collapsed run of unchanged lines.
+ */
+export interface LineDiffRow {
+  kind: 'context' | 'added' | 'removed' | 'gap';
+  text: string;
+  oldLine?: number;
+  newLine?: number;
+  hiddenCount?: number;
+}
+
+/** Split diff-op text into lines, dropping the phantom empty line a trailing \n produces. */
+function opLines(text: string): string[] {
+  const lines = text.split('\n');
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
+/**
+ * Line-level diff between two texts (history preview rendering).
+ * Runs diff-match-patch in line mode, then collapses unchanged runs longer
+ * than the context window into 'gap' rows so long cells stay scannable.
+ */
+export function computeLineDiff(oldText: string, newText: string, context = 2): LineDiffRow[] {
+  // Normalize trailing newlines so "keep2" vs "keep2\n" (same visible line,
+  // newline appended after it) doesn't render as removed+added noise.
+  const oldNorm = oldText === '' || oldText.endsWith('\n') ? oldText : `${oldText}\n`;
+  const newNorm = newText === '' || newText.endsWith('\n') ? newText : `${newText}\n`;
+  // Line mode: map each unique line to a char, diff the char strings, map back.
+  const encoded = dmp.diff_linesToChars_(oldNorm, newNorm);
+  const diffs = dmp.diff_main(encoded.chars1, encoded.chars2, false);
+  dmp.diff_charsToLines_(diffs, encoded.lineArray);
+
+  const rows: LineDiffRow[] = [];
+  let oldLine = 1;
+  let newLine = 1;
+  for (const [op, text] of diffs) {
+    if (text === '') continue;
+    for (const line of opLines(text)) {
+      if (op === 0) {
+        rows.push({ kind: 'context', text: line, oldLine: oldLine++, newLine: newLine++ });
+      } else if (op === -1) {
+        rows.push({ kind: 'removed', text: line, oldLine: oldLine++ });
+      } else {
+        rows.push({ kind: 'added', text: line, newLine: newLine++ });
+      }
+    }
+  }
+
+  // Collapse context runs: keep `context` lines adjacent to each change; a run
+  // at the very start keeps only its tail, one at the very end only its head.
+  const collapsed: LineDiffRow[] = [];
+  let i = 0;
+  while (i < rows.length) {
+    if (rows[i].kind !== 'context') {
+      collapsed.push(rows[i]);
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < rows.length && rows[j].kind === 'context') j++;
+    const run = rows.slice(i, j);
+    const keepHead = i > 0 ? context : 0; // no change above → nothing to anchor to
+    const keepTail = j < rows.length ? context : 0; // no change below
+    if (run.length > keepHead + keepTail) {
+      collapsed.push(...run.slice(0, keepHead));
+      const hidden = run.length - keepHead - keepTail;
+      collapsed.push({ kind: 'gap', text: '', hiddenCount: hidden });
+      if (keepTail > 0) collapsed.push(...run.slice(run.length - keepTail));
+    } else {
+      collapsed.push(...run);
+    }
+    i = j;
+  }
+
+  return collapsed;
+}
+
+/**
  * Compute a hash of text for integrity checking
  * Simple but effective for detecting changes
  */

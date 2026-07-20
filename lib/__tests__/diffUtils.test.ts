@@ -355,3 +355,58 @@ df.head()`;
     });
   });
 });
+
+// Appended: line-level diff for history preview (Cursor-style rendering)
+import { computeLineDiff } from '../diffUtils';
+
+describe('computeLineDiff', () => {
+  it('marks added and removed lines with line numbers', () => {
+    const oldText = 'a\nb\nc';
+    const newText = 'a\nB\nc';
+    const rows = computeLineDiff(oldText, newText);
+
+    expect(rows).toEqual([
+      { kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
+      { kind: 'removed', text: 'b', oldLine: 2 },
+      { kind: 'added', text: 'B', newLine: 2 },
+      { kind: 'context', text: 'c', oldLine: 3, newLine: 3 },
+    ]);
+  });
+
+  it('collapses long unchanged runs into a gap with counts', () => {
+    const unchanged = Array.from({ length: 20 }, (_, i) => `line${i}`).join('\n');
+    const oldText = `${unchanged}\nend-old`;
+    const newText = `${unchanged}\nend-new`;
+    const rows = computeLineDiff(oldText, newText, 2);
+
+    const gap = rows.find(r => r.kind === 'gap');
+    expect(gap).toBeDefined();
+    expect(gap!.hiddenCount).toBe(18); // 20 unchanged minus 2 kept as trailing context
+    // Two context lines survive right before the change
+    const contexts = rows.filter(r => r.kind === 'context');
+    expect(contexts.map(r => r.text)).toEqual(['line18', 'line19']);
+    expect(rows.filter(r => r.kind === 'removed').map(r => r.text)).toEqual(['end-old']);
+    expect(rows.filter(r => r.kind === 'added').map(r => r.text)).toEqual(['end-new']);
+  });
+
+  it('treats a wholly deleted cell as all-removed lines', () => {
+    const rows = computeLineDiff('x\ny', '');
+    expect(rows.filter(r => r.kind === 'removed').map(r => r.text)).toEqual(['x', 'y']);
+    expect(rows.some(r => r.kind === 'added' && r.text !== '')).toBe(false);
+  });
+
+  it('handles pure insertion into empty content', () => {
+    const rows = computeLineDiff('', 'new line');
+    expect(rows.filter(r => r.kind === 'added').map(r => r.text)).toEqual(['new line']);
+  });
+
+  it('numbers lines correctly across mixed hunks', () => {
+    const oldText = 'keep1\ndrop\nkeep2';
+    const newText = 'keep1\nkeep2\nadd1\nadd2';
+    const rows = computeLineDiff(oldText, newText);
+    const added = rows.filter(r => r.kind === 'added');
+    expect(added.map(r => r.newLine)).toEqual([3, 4]);
+    const removed = rows.filter(r => r.kind === 'removed');
+    expect(removed.map(r => r.oldLine)).toEqual([2]);
+  });
+});

@@ -156,7 +156,7 @@ vi.mock('../NotebookBreadcrumb', () => ({
 vi.mock('../Cell', async () => {
   const React = await import('react');
   return {
-  Cell: ({ cell, index, isActive, onClick, onDelete, onMove, onChangeType, onRun, requestedFocusMode, onFocusModeApplied }: any) => {
+  Cell: ({ cell, index, isActive, isHighlighted, onClick, onDelete, onMove, onChangeType, onRun, requestedFocusMode, onFocusModeApplied }: any) => {
     const ref = React.useRef<HTMLDivElement>(null);
     React.useEffect(() => {
       if (requestedFocusMode === 'cell') {
@@ -172,6 +172,7 @@ vi.mock('../Cell', async () => {
       data-cell-id={cell.id}
       data-cell-type={cell.type}
       data-active={isActive}
+      data-highlighted={String(!!isHighlighted)}
       onClick={(e: React.MouseEvent) => onClick(cell.id, e)}
     >
       <span data-testid={`cell-index-${index}`}>#{index + 1}</span>
@@ -351,6 +352,31 @@ describe('Notebook', () => {
         expect(ids[1]).not.toBe('cell-2');
         expect(document.activeElement).toBe(newCellEl);
       });
+    });
+  });
+
+  describe('recently updated cell highlighting', () => {
+    it('pulses the highlight on cells whose content an agent operation changed', async () => {
+      renderNotebook();
+      await waitFor(() => {
+        expect(screen.getByText('#1')).toBeInTheDocument();
+      });
+
+      // Grab the onAgentOperation callback the Notebook passed into the hook
+      const hookOptions = vi.mocked(useOperationHandler).mock.calls.at(-1)?.[0] as any;
+      expect(typeof hookOptions.onAgentOperation).toBe('function');
+
+      act(() => {
+        hookOptions.onAgentOperation(
+          { type: 'updateContent', cellId: 'cell-2', content: 'x = 2' },
+          { success: true, cellId: 'cell-2' }
+        );
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('cell-cell-2').getAttribute('data-highlighted')).toBe('true');
+      });
+      expect(screen.getByTestId('cell-cell-1').getAttribute('data-highlighted')).toBe('false');
     });
   });
 

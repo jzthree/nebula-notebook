@@ -702,6 +702,24 @@ export const Notebook: React.FC = () => {
     return map;
   }, [previewCells, currentCellMap]);
 
+  // Line-diff targets for preview mode: modified cells diff old vs current
+  // content, deleted cells diff old vs '' (all lines shown as removed).
+  // Toggleable from the preview banner; on by default.
+  const [previewLineDiffEnabled, setPreviewLineDiffEnabled] = useState(true);
+  const previewDiffAgainstMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!previewCells) return map;
+    for (const previewCell of previewCells) {
+      const status = previewDiffMap.get(previewCell.id);
+      if (status === 'modified') {
+        map.set(previewCell.id, currentCellMap.get(previewCell.id)?.content ?? '');
+      } else if (status === 'deleted') {
+        map.set(previewCell.id, '');
+      }
+    }
+    return map;
+  }, [previewCells, previewDiffMap, currentCellMap]);
+
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [indentConfig, setIndentConfig] = useState<IndentationConfig>(DEFAULT_INDENTATION);
   const [showLineNumbers, setShowLineNumbers] = useState<boolean>(() => getSettings().showLineNumbers ?? false);
@@ -1071,6 +1089,10 @@ export const Notebook: React.FC = () => {
     return currentCells.length;
   }, [batch]);
 
+  // Callable before showUndoRedoFeedback is defined below (same shadow-ref
+  // pattern as addCellRef): pulses the "recently updated" highlight on cells.
+  const highlightCellsFnRef = useRef<((cellIds: string[]) => void) | null>(null);
+
   const { activeOperation: agentOperation, agentSession, forceEndAgentSession } = useOperationHandler({
     filePath: currentFileId,
     cells,
@@ -1115,6 +1137,20 @@ export const Notebook: React.FC = () => {
 
       // Skip read-only operations
       if (operation.type === 'readCell' || operation.type === 'readCellOutput') return;
+
+      // Recently-updated pulse for cells whose CONTENT the agent changed.
+      // Outputs/executions churn constantly — the presence ring covers those.
+      if (
+        operation.type === 'updateContent' || operation.type === 'insertCell' ||
+        operation.type === 'insertCells' || operation.type === 'duplicateCell'
+      ) {
+        const op = operation as { cellId?: string; cellIds?: string[] };
+        const res = result as { cellId?: string; cellIds?: string[] };
+        const changed = [op.cellId, res.cellId, ...(op.cellIds ?? []), ...(res.cellIds ?? [])].filter(
+          (id): id is string => typeof id === 'string'
+        );
+        if (changed.length > 0) highlightCellsFnRef.current?.(changed);
+      }
 
       // Handle output updates - only show toast when execution completes (has executionCount)
       if (operation.type === 'updateOutputs') {
@@ -1433,6 +1469,7 @@ export const Notebook: React.FC = () => {
       setHighlightedCellIds(new Set());
     }, 1500); // Match CSS animation duration
   }, []);
+  highlightCellsFnRef.current = showUndoRedoFeedback;
 
   // Helper to apply undo/redo with scroll and feedback
   // - If operation DELETES a cell: scroll first (so user sees the cell), then operate
@@ -2680,12 +2717,17 @@ export const Notebook: React.FC = () => {
       undoableDeleteCell(index);
     }
 
+    // Cells the restore actually changes — pulsed after applying so the user
+    // sees where the notebook moved (deleted cells are gone, nothing to pulse).
+    const restoredCellIds: string[] = [];
+
     // 2. Update content for cells that exist in both but have different content
     // Need to re-compute current indices after deletions
     const remainingCells = cellsRef.current.filter(c => previewMap.has(c.id));
     for (const currentCell of remainingCells) {
       const previewData = previewMap.get(currentCell.id);
       if (previewData && (currentCell.content !== previewData.cell.content || currentCell.type !== previewData.cell.type)) {
+        restoredCellIds.push(currentCell.id);
         // Update content
         updateContent(currentCell.id, previewData.cell.content);
         // Update type if different
@@ -2716,6 +2758,7 @@ export const Notebook: React.FC = () => {
     let insertionOffset = 0;
     for (const { cell, targetIndex } of cellsToInsert) {
       undoableInsertCell(targetIndex + insertionOffset, cell);
+      restoredCellIds.push(cell.id);
       insertionOffset++;
     }
 
@@ -2723,9 +2766,13 @@ export const Notebook: React.FC = () => {
     setPreviewTimestamp(null);
     setRestoreDialogTimestamp(null);
 
+    if (restoredCellIds.length > 0) {
+      showUndoRedoFeedback(restoredCellIds);
+    }
+
     toast('Notebook restored to previous state', 'success', 2000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restoreDialogTimestamp, previewCells, flushActiveCell, commitHistoryBeforeKeyframe, undoableDeleteCell, updateContent, changeType, undoableInsertCell, toast]); // uses cellsRef
+  }, [restoreDialogTimestamp, previewCells, flushActiveCell, commitHistoryBeforeKeyframe, undoableDeleteCell, updateContent, changeType, undoableInsertCell, showUndoRedoFeedback, toast]); // uses cellsRef
 
   // Handle "Save as New File" - creates new file with truncated history
   const handleSaveAsNew = useCallback(async () => {
@@ -5103,14 +5150,32 @@ export const Notebook: React.FC = () => {
                   <span className="w-3 h-3 rounded border-2 border-red-400 bg-red-50"></span>
                   <span className="text-slate-500">Deleted</span>
                 </span>
+                {previewLineDiffEnabled && (
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded bg-red-100"></span>
+                    <span className="text-slate-500">− then</span>
+                    <span className="w-3 h-3 rounded bg-green-100 ml-1"></span>
+                    <span className="text-slate-500">+ now</span>
+                  </span>
+                )}
               </span>
             </div>
-            <button
-              onClick={() => setPreviewTimestamp(null)}
-              className="flex items-center gap-1.5 px-3 py-1 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded transition-colors"
-            >
-              Return to present
-            </button>
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-1.5 text-xs text-blue-700 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={previewLineDiffEnabled}
+                  onChange={(e) => setPreviewLineDiffEnabled(e.target.checked)}
+                />
+                Line diffs
+              </label>
+              <button
+                onClick={() => setPreviewTimestamp(null)}
+                className="flex items-center gap-1.5 px-3 py-1 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded transition-colors"
+              >
+                Return to present
+              </button>
+            </div>
           </div>
         )}
 
@@ -5234,6 +5299,7 @@ export const Notebook: React.FC = () => {
                   showLineNumbers={showLineNumbers}
                   showCellIds={showCellIds}
                   previewDiffStatus={isPreviewMode ? previewDiffMap.get(cell.id) : undefined}
+                  previewDiffAgainst={isPreviewMode && previewLineDiffEnabled ? previewDiffAgainstMap.get(cell.id) : undefined}
                   kernelSessionId={kernelSessionId ?? undefined}
                 />
               )}

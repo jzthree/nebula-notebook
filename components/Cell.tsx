@@ -1,8 +1,9 @@
-import React, { useState, useCallback, memo, useRef, useEffect } from 'react';
+import React, { useState, useCallback, memo, useRef, useEffect, useMemo } from 'react';
 import { Cell as ICell, CellType } from '../types';
 import { CellOutput } from './CellOutput';
 import { CodeEditor } from './CodeEditor';
 import { MarkdownPreview } from './MarkdownPreview';
+import { computeLineDiff } from '../lib/diffUtils';
 import { Play, Trash2, ArrowUp, ArrowDown, Bot, Loader2, FileText, Code as CodeIcon, Plus, GripVertical } from 'lucide-react';
 import { agentTerminalService, SendResult } from '../services/agentTerminalService';
 import { useNotification } from './NotificationSystem';
@@ -17,6 +18,45 @@ interface SearchHighlight {
 }
 
 type FocusMode = 'cell' | 'editor';
+
+/**
+ * Cursor-style inline line diff shown while previewing history: red lines
+ * exist in this (old) version but are gone now, green lines were added since.
+ * Read-only; long unchanged runs collapse into "⋯ N unchanged lines".
+ */
+const PreviewLineDiff: React.FC<{ oldContent: string; newContent: string }> = ({ oldContent, newContent }) => {
+  const rows = useMemo(() => computeLineDiff(oldContent, newContent), [oldContent, newContent]);
+  let removedIdx = 0;
+  let addedIdx = 0;
+  return (
+    <div className="font-mono text-xs leading-5 overflow-x-auto py-1" data-testid="preview-line-diff">
+      {rows.map((row, i) => {
+        if (row.kind === 'gap') {
+          return (
+            <div key={i} className="px-3 py-0.5 text-slate-400 bg-slate-50 select-none">
+              ⋯ {row.hiddenCount} unchanged line{row.hiddenCount === 1 ? '' : 's'}
+            </div>
+          );
+        }
+        const testId =
+          row.kind === 'removed' ? `diff-line-removed-${removedIdx++}` :
+          row.kind === 'added' ? `diff-line-added-${addedIdx++}` :
+          undefined;
+        const rowClass =
+          row.kind === 'removed' ? 'bg-red-50 text-red-800' :
+          row.kind === 'added' ? 'bg-green-50 text-green-800' :
+          'text-slate-600';
+        const marker = row.kind === 'removed' ? '−' : row.kind === 'added' ? '+' : ' ';
+        return (
+          <div key={i} data-testid={testId} className={`flex px-3 whitespace-pre ${rowClass}`}>
+            <span className="w-4 flex-shrink-0 select-none opacity-60">{marker}</span>
+            <span>{row.text || ' '}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
 interface Props {
   cell: ICell;
@@ -56,6 +96,7 @@ interface Props {
   showLineNumbers?: boolean; // Show line numbers in editor
   showCellIds?: boolean; // Show cell IDs in the cell header
   previewDiffStatus?: 'same' | 'modified' | 'deleted'; // For history preview: how this cell differs from current
+  previewDiffAgainst?: string; // Current content to line-diff against (preview shows the OLD content); '' for deleted cells
   kernelSessionId?: string; // Kernel session for live completions
 }
 
@@ -97,6 +138,7 @@ const CellComponent: React.FC<Props> = ({
   showLineNumbers = false,
   showCellIds = false,
   previewDiffStatus,
+  previewDiffAgainst,
   kernelSessionId,
 }) => {
   const { toast } = useNotification();
@@ -679,7 +721,9 @@ const CellComponent: React.FC<Props> = ({
         if (!editorMounted && !showsMarkdownPreview) setEditorMounted(true);
         onClick(cell.id, e);
       }}>
-        {showsMarkdownPreview ? (
+        {previewDiffAgainst !== undefined && (previewDiffStatus === 'modified' || previewDiffStatus === 'deleted') ? (
+          <PreviewLineDiff oldContent={cell.content} newContent={previewDiffAgainst} />
+        ) : showsMarkdownPreview ? (
           <div
             className="cursor-default"
             onClick={handleMarkdownPreviewClick}
@@ -762,6 +806,7 @@ export const Cell = memo(CellComponent, (prevProps, nextProps) => {
     prevProps.indentConfig === nextProps.indentConfig &&
     prevProps.requestedFocusMode === nextProps.requestedFocusMode &&
     prevProps.previewDiffStatus === nextProps.previewDiffStatus &&
+    prevProps.previewDiffAgainst === nextProps.previewDiffAgainst &&
     prevProps.showLineNumbers === nextProps.showLineNumbers &&
     prevProps.showCellIds === nextProps.showCellIds &&
     // kernelSessionId changes rarely (kernel start/restart) but widget outputs

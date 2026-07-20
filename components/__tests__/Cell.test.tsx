@@ -311,3 +311,63 @@ describe('Cell', () => {
     });
   });
 });
+
+describe('Cell history preview line diff', () => {
+  const mockCell: ICell = {
+    id: 'diff-cell',
+    type: 'code',
+    content: 'a = 1\nb = 2',
+    outputs: [],
+    isExecuting: false
+  };
+
+  const baseProps = {
+    cell: mockCell,
+    index: 0,
+    isActive: false,
+    allCellsRef: { current: [mockCell] },
+    cellIndexMapRef: { current: new Map([[mockCell.id, 0]]) },
+    onUpdate: vi.fn(),
+    onRun: vi.fn(),
+    onRunAndAdvance: vi.fn(),
+    onDelete: vi.fn(),
+    onMove: vi.fn(),
+    onChangeType: vi.fn(),
+    onClick: vi.fn(),
+    onAddCell: vi.fn(),
+    onActivate: vi.fn(),
+    onNavigateCell: vi.fn(),
+  };
+
+  it('renders removed and added lines when previewing a modified cell', () => {
+    // Cell shows the OLD (preview) content; diffAgainst is the CURRENT content.
+    renderCell({
+      ...baseProps,
+      previewDiffStatus: 'modified',
+      previewDiffAgainst: 'a = 1\nb = 3',
+    });
+
+    const removed = screen.getByTestId('diff-line-removed-0');
+    const added = screen.getByTestId('diff-line-added-0');
+    expect(removed.textContent).toContain('b = 2');
+    expect(added.textContent).toContain('b = 3');
+  });
+
+  it('renders a wholly deleted cell as all removed lines', () => {
+    renderCell({
+      ...baseProps,
+      previewDiffStatus: 'deleted',
+      previewDiffAgainst: '',
+    });
+    expect(screen.getByTestId('diff-line-removed-0').textContent).toContain('a = 1');
+    expect(screen.getByTestId('diff-line-removed-1').textContent).toContain('b = 2');
+  });
+
+  it('shows plain content without a diff view when no diffAgainst is provided', () => {
+    const { container } = renderCell({
+      ...baseProps,
+      previewDiffStatus: 'modified',
+    });
+    expect(container.querySelector('[data-testid^="diff-line-"]')).toBeNull();
+  });
+});
