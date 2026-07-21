@@ -22,8 +22,25 @@ for (const dir of [path.join('packages', 'autocomplete'), 'node-server', path.jo
   const pkg = path.join(root, dir, 'package.json');
   if (!fs.existsSync(pkg)) continue;
   try {
-    execSync('npm install', { cwd: path.join(root, dir), stdio: 'inherit' });
+    // --include=dev: the subpackage builds (tsc) need their devDependencies
+    // even when the environment forces production installs (NODE_ENV=production
+    // in server shells, npm production config) — without it, tsc is missing
+    // and the prepare builds are skipped.
+    execSync('npm install --include=dev', { cwd: path.join(root, dir), stdio: 'inherit' });
   } catch {
     console.warn(`⚠️  postinstall: npm install failed in ${dir}`);
+  }
+}
+
+// The autocomplete build is load-bearing (the root depends on its dist/ via
+// file:). Its prepare skips quietly when typescript is absent, so verify the
+// artifact exists and fall back to an explicit build.
+const autocompleteDir = path.join(root, 'packages', 'autocomplete');
+if (fs.existsSync(path.join(autocompleteDir, 'package.json')) &&
+    !fs.existsSync(path.join(autocompleteDir, 'dist', 'index.js'))) {
+  try {
+    execSync('npm run build', { cwd: autocompleteDir, stdio: 'inherit' });
+  } catch {
+    console.warn('⚠️  postinstall: nebula-autocomplete build failed — run "npm install --include=dev && npm run build" in packages/autocomplete');
   }
 }

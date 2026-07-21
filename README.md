@@ -101,6 +101,10 @@ cd nebula-notebook
 npm install                # dependencies only (root + subpackages) — no build yet
 ```
 
+> Building from source needs devDependencies. If your shell sets `NODE_ENV=production`
+> (common on servers), use `npm install --include=dev` — otherwise the build tools
+> (`tsc`, `vite`) are skipped and the build steps below fail with "command not found".
+
 To run the same production server `npx nebula-notebook` gives you (UI + API on :3000), build both halves once, then start it:
 
 ```bash

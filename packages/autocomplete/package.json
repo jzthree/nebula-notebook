@@ -32,7 +32,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prepare": "tsc -p tsconfig.json",
+    "prepare": "node scripts/prepare.cjs",
     "test": "vitest run",
     "smoke": "node scripts/smoke.mjs"
   },
