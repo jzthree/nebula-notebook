@@ -85,7 +85,7 @@ export async function setupTerminalRoutes(fastify: FastifyInstance): Promise<voi
   // List all terminals
   // ---- Agent registry: project-scoped agent sessions (see agent-registry.ts) ----
   fastify.get('/api/agents', async (_request: FastifyRequest, reply: FastifyReply) => {
-    return reply.send({ agents: agentRegistry.list() });
+    return reply.send({ agents: await agentRegistry.listEnriched() });
   });
 
   fastify.post('/api/agents/register', async (request: FastifyRequest, reply: FastifyReply) => {

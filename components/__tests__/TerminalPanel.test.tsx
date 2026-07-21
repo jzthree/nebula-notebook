@@ -104,6 +104,36 @@ describe('TerminalPanel', () => {
     }
   });
 
+  it('treats a live record with an idle shell as resumable, not attachable-running', async () => {
+    const { agentTerminalService } = await import('../../services/agentTerminalService');
+    const { listAgents } = await import('../../services/agentRegistryService');
+    // Server says: pty alive ('live') but its shell has NO child — the agent
+    // (or its ssh hop) is gone. Attaching must not adopt a phantom "running".
+    vi.mocked(listAgents).mockResolvedValue([{
+      terminalId: 'terminal-1', kind: 'codex', workdir: '/tmp', location: 'server',
+      state: 'live', idleShell: true, createdAt: 1, lastLaunchAt: 1,
+    } as any]);
+
+    try {
+      render(
+        <NotificationProvider>
+          <TerminalPanel isOpen={true} onClose={() => {}} notebookPath="/tmp/test.ipynb" />
+        </NotificationProvider>
+      );
+      fireEvent.click(screen.getByText('Agent'));
+
+      // Guidance bar offers Continue (the conversation is resumable), not
+      // Attach (there is nothing running to attach to).
+      await screen.findByText('⟳ Continue session');
+      expect(screen.queryByText('Attach agent')).toBeNull();
+      expect(agentTerminalService.getState().status).not.toBe('running');
+    } finally {
+      vi.mocked(listAgents).mockResolvedValue([]);
+      agentTerminalService.markStopped();
+      agentTerminalService.setAgentTerminal(null);
+    }
+  });
+
   it('uses a transparent container that clips overflow', async () => {
     render(
       <NotificationProvider>

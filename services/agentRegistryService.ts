@@ -19,6 +19,12 @@ export interface AgentRecord {
   /** Pinned workspace-mirror slug (p-<hash>-<name>) — resumes never re-derive it. */
   mirrorSlug?: string;
   state: 'live' | 'hibernated';
+  /**
+   * Server-observed: the live pty's shell has no child process — nothing is
+   * actually running in it (agent gone, or its ssh hop died). The record is
+   * resumable, but there is no running agent to attach to.
+   */
+  idleShell?: boolean;
   createdAt: number;
   lastLaunchAt: number;
 }

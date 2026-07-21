@@ -278,7 +278,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       return;
     }
     const rec = agents.find((a) => a.terminalId === agentTerm.id);
-    if (rec?.state === 'live' && (rec.kind === 'claude' || rec.kind === 'codex') && agentState.status !== 'running') {
+    // idleShell: the server saw a bare shell in that pty — 'live' is a pty
+    // fact, not an agent fact. Adopting would freeze the tab on nothing.
+    if (rec?.state === 'live' && !rec.idleShell && (rec.kind === 'claude' || rec.kind === 'codex') && agentState.status !== 'running') {
       agentTerminalService.adoptRunningState(rec.kind);
     }
   }, [agentConnected, agentTerm, agents, agentState.status]);
@@ -742,25 +744,28 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                   {isActive && <span className="px-1 rounded bg-purple-100 text-purple-700 text-[0.625rem] flex-shrink-0">attached</span>}
                   <span className="flex-1" />
                   {!isActive && (() => {
+                    // idleShell: pty alive but nothing running in it — the
+                    // agent is gone; offer continue (resume), not attach.
+                    const attachable = a.state === 'live' && !a.idleShell;
                     // Reviving a your-machine agent needs the reverse tunnel —
                     // disable with the reason instead of failing after launch.
-                    const tunnelBlocked = a.state !== 'live' && a.location === 'remote' && reverseTunnelUp === false;
+                    const tunnelBlocked = !attachable && a.location === 'remote' && reverseTunnelUp === false;
                     return (
                       <button
                         onClick={() => {
                           if (tunnelBlocked) return;
                           setShowAgentManager(false);
                           setTab('agent'); // manager is reachable from both tabs now
-                          if (a.state === 'live') selectAgent(a.terminalId);
+                          if (attachable) selectAgent(a.terminalId);
                           else continueAgentRecord(a);
                         }}
                         disabled={tunnelBlocked}
                         className="px-1.5 py-0.5 rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-100 disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
                         title={tunnelBlocked
                           ? 'This agent runs on YOUR machine — connect the reverse tunnel (Burrow/ssh) first'
-                          : a.state === 'live' ? 'Attach this tab to the running agent' : 'Reopen this agent’s conversation where it left off'}
+                          : attachable ? 'Attach this tab to the running agent' : 'Reopen this agent’s conversation where it left off'}
                       >
-                        {a.state === 'live' ? 'attach' : 'continue'}
+                        {attachable ? 'attach' : 'continue'}
                       </button>
                     );
                   })()}
@@ -1015,7 +1020,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
             return (
               <>
-                {hereRecord && hereRecord.state === 'live' ? (
+                {hereRecord && hereRecord.state === 'live' && !hereRecord.idleShell ? (
                   <button
                     onClick={() => selectAgent(hereRecord.terminalId)}
                     className="px-2 py-0.5 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 transition-colors"

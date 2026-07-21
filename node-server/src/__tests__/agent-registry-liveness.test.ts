@@ -19,6 +19,7 @@ process.env.NEBULA_AGENTS_FILE = path.join(
 );
 // The registry consults ptyManager for reconciliation ('live' requires a pty)
 // and subscribes listeners — stub it so unit tests need no real ptys.
+let stubHasLiveChild: boolean | null = true;
 vi.mock('../terminal/pty-manager', () => ({
   ptyManager: {
     get: () => ({ id: 'stub' }),
@@ -26,6 +27,7 @@ vi.mock('../terminal/pty-manager', () => ({
     addExitListener: () => () => {},
     addDataListener: () => () => {},
     kill: () => true,
+    hasLiveChild: async () => stubHasLiveChild,
   },
 }));
 const { agentRegistry } = await import('../terminal/agent-registry');
@@ -41,6 +43,7 @@ describe('agent registry', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     agentRegistry.remove(base.terminalId);
+    stubHasLiveChild = true;
   });
   afterEach(() => vi.useRealTimers());
 
@@ -72,6 +75,24 @@ describe('agent registry', () => {
     agentRegistry.observeOutput(base.terminalId, '\x1b[?1049h'); // session TUI up
     vi.advanceTimersByTime(5000);
     expect(agentRegistry.list().find(r => r.terminalId === base.terminalId)?.state).toBe('live');
+  });
+
+  it('listEnriched marks a live record idleShell when its pty shell has no child', async () => {
+    // A dead ssh hop (or an agent that died without TUI teardown) leaves the
+    // pty at a bare shell while the record still says 'live' — the enriched
+    // list exposes that so clients don't adopt a phantom running agent.
+    agentRegistry.register({ ...base });
+    stubHasLiveChild = false;
+    const idle = await agentRegistry.listEnriched();
+    expect(idle.find(r => r.terminalId === base.terminalId)?.idleShell).toBe(true);
+
+    stubHasLiveChild = true; // something is running in the pty — not idle
+    const busy = await agentRegistry.listEnriched();
+    expect(busy.find(r => r.terminalId === base.terminalId)?.idleShell).toBe(false);
+
+    stubHasLiveChild = null; // unknown (pgrep unavailable) — claim nothing
+    const unknown = await agentRegistry.listEnriched();
+    expect(unknown.find(r => r.terminalId === base.terminalId)?.idleShell).toBeUndefined();
   });
 
   it('a manual relaunch in the same pty revives the record (init after hibernated)', () => {

@@ -377,7 +377,10 @@ class AgentTerminalService {
     // ProxyCommand=none: IPA/SSSD-managed clusters wrap ALL ssh in
     // sss_ssh_knownhostsproxy via the system ssh_config, which breaks a plain
     // loopback hop — this connection must go straight to 127.0.0.1:<port>.
-    return `ssh -t -p ${cfg.port} -o ProxyCommand=none -o StrictHostKeyChecking=accept-new ${cfg.user}@localhost ${shellSingleQuote(remoteCmd)}`;
+    // ServerAlive*: a tunnel that dies without a TCP reset would otherwise
+    // leave this hop hung FOREVER (frozen TUI, no exit for the liveness
+    // machinery to see); keepalives turn that into a clean exit within ~60s.
+    return `ssh -t -p ${cfg.port} -o ProxyCommand=none -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=4 ${cfg.user}@localhost ${shellSingleQuote(remoteCmd)}`;
   }
 
   /**

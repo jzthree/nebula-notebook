@@ -3,6 +3,7 @@
  */
 
 import * as path from 'path';
+import { execFile } from 'child_process';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -199,6 +200,25 @@ export class PtyManager {
    */
   get(id: string): TerminalSession | undefined {
     return this.sessions.get(id);
+  }
+
+  /**
+   * Whether the pty's shell has any child process — i.e. something (an agent
+   * CLI, an ssh hop, a user command) is actually running in it. `false` means
+   * a bare idle shell with certainty; `null` means unknown (no such pty, or
+   * pgrep unavailable) and callers must not conclude anything from it.
+   */
+  async hasLiveChild(id: string): Promise<boolean | null> {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+    return new Promise((resolve) => {
+      execFile('pgrep', ['-P', String(session.pty.pid)], (error) => {
+        if (!error) return resolve(true); // exit 0: at least one child
+        // pgrep exits 1 for "no processes matched" — that's a definitive no.
+        const code = (error as { code?: number | string }).code;
+        resolve(code === 1 ? false : null);
+      });
+    });
   }
 
   /**

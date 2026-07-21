@@ -409,7 +409,10 @@ describe('remote-agent mode (agent on the user machine)', () => {
     agentTerminalService.launchAgent('claude');
 
     const line = sent[0];
-    expect(line).toMatch(/^ssh -t -p 34567 -o ProxyCommand=none -o StrictHostKeyChecking=accept-new jane@localhost '/);
+    expect(line).toMatch(/^ssh -t -p 34567 -o ProxyCommand=none -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=4 jane@localhost '/);
+    // Keepalives make a hung transport self-terminate (~60s) instead of
+    // freezing the pty forever — the liveness machinery then sees a clean
+    // exit-to-shell it can act on.
     expect(line).toContain('NEBULA_URL=http://localhost:3000 claude ');
     expect(line).toContain('exec "$SHELL" -l -i -c ');
     // no tmux/daemons: resume rides `claude --continue` instead

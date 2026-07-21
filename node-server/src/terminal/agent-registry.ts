@@ -178,6 +178,21 @@ class AgentRegistry {
     return [...this.records.values()].sort((a, b) => b.lastLaunchAt - a.lastLaunchAt);
   }
 
+  /**
+   * list() plus `idleShell` on live records: true when the pty's shell has no
+   * child process — nothing is running in it, so 'live' is a pty fact, not an
+   * agent fact (a hung-then-dead ssh hop leaves exactly this). The TUI-stream
+   * liveness machine can't see that case (a dead transport emits no teardown),
+   * but the process table can. Unknown checks claim nothing.
+   */
+  async listEnriched(): Promise<(AgentRecord & { idleShell?: boolean })[]> {
+    return Promise.all(this.list().map(async (r) => {
+      if (r.state !== 'live') return r;
+      const hasChild = await ptyManager.hasLiveChild(r.terminalId);
+      return hasChild === null ? r : { ...r, idleShell: !hasChild };
+    }));
+  }
+
   /** Hibernate: close the pty; the record (and on-disk trajectory) remain. */
   hibernate(terminalId: string): boolean {
     this.ensureLoaded();
