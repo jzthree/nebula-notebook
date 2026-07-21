@@ -355,6 +355,19 @@ describe('Notebook', () => {
     });
   });
 
+  describe('browser tab title', () => {
+    it('matches the displayed notebook name (extension stripped), like the in-app header', async () => {
+      renderNotebook();
+      await waitFor(() => {
+        expect(screen.getByText('#1')).toBeInTheDocument();
+      });
+      // Header shows "notebook" (stripNotebookExtension) — the tab must agree.
+      await waitFor(() => {
+        expect(document.title).toBe('notebook - Nebula Notebook');
+      });
+    });
+  });
+
   describe('recently updated cell highlighting', () => {
     it('pulses the highlight on cells whose content an agent operation changed', async () => {
       renderNotebook();

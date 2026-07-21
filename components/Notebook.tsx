@@ -2108,8 +2108,9 @@ export const Notebook: React.FC = () => {
   // Update browser tab title, URL, and favicon when file changes
   useEffect(() => {
     if (currentFileId) {
-      // Update tab title from file path
-      const filename = getFilenameFromPath(currentFileId);
+      // Tab title mirrors the in-app header exactly (extension stripped) —
+      // "model-prediction", not "model-prediction.ipynb".
+      const filename = stripNotebookExtension(getFilenameFromPath(currentFileId));
       document.title = `${filename} - Nebula Notebook`;
 
       // Update URL - don't encode slashes for readability
