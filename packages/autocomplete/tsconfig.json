@@ -9,7 +9,12 @@
     "rootDir": "src",
     "strict": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    // Only @types/node — never implicitly include ancestor node_modules/@types.
+    // When this builds as the repo's file: dep, the parent tree carries @types
+    // for Jupyter widgets (backbone, jquery, …) that can be mid-extraction
+    // during install and TS2688 the build; this package uses none of them.
+    "types": ["node"]
   },
   "include": ["src"]
 }

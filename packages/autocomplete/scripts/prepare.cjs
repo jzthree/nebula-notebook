@@ -13,11 +13,14 @@ const path = require('path');
 
 try {
   require.resolve('typescript');
+  // tsconfig sets "types": ["node"] — without @types/node the build fails
+  // just as hard as without tsc, so gate on it the same way.
+  require.resolve('@types/node/package.json');
 } catch {
   console.warn(
-    '[nebula-autocomplete] prepare: typescript is not installed (production-mode ' +
-    'install?) — skipping the build. The repo postinstall builds it with dev deps; ' +
-    'standalone users: npm install --include=dev'
+    '[nebula-autocomplete] prepare: typescript/@types/node not installed ' +
+    '(production-mode install?) — skipping the build. The repo postinstall builds ' +
+    'it with dev deps; standalone users: npm install --include=dev'
   );
   process.exit(0);
 }
