@@ -71,7 +71,11 @@ export const RemoteAgentSetupModal: React.FC<Props> = ({ onClose }) => {
   const burrowCommand = `burrow add --name nebula-agent --host ${host}${jumpBurrow} --local ${localPort}:localhost:${port} --remote ${settings.remoteAgentPort}:localhost:${sshPort}`;
   const sshCommand = `ssh${jumpSsh} -L ${localPort}:localhost:${port} -R ${settings.remoteAgentPort}:localhost:${sshPort} ${host}`;
   const sshCopyIdCommand = `ssh-copy-id -o ProxyCommand=none -p ${settings.remoteAgentPort} ${settings.remoteAgentUser?.trim() || '<your-mac-user>'}@localhost`;
-  const tokenExportCommand = `echo 'export CLAUDE_CODE_OAUTH_TOKEN=PASTE-TOKEN-HERE' >> ~/.zshenv && chmod 600 ~/.zshenv`;
+  // NEBULA-scoped name: a bare CLAUDE_CODE_OAUTH_TOKEN in ~/.zshenv would also
+  // hijack the user's own interactive claude sessions (overriding their normal
+  // Keychain login); the launch command maps _NEBULA to the real var, scoped to
+  // Nebula-launched agents only.
+  const tokenExportCommand = `echo 'export CLAUDE_CODE_OAUTH_TOKEN_NEBULA=PASTE-TOKEN-HERE' >> ~/.zshenv && chmod 600 ~/.zshenv`;
 
   const copy = async (text: string, which: string) => {
     try {
@@ -241,7 +245,9 @@ export const RemoteAgentSetupModal: React.FC<Props> = ({ onClose }) => {
               <Where loc="local" /> Claude Code keeps its credentials in the macOS Keychain, which ssh
               sessions can't read — without this step, ssh-launched claude asks you to log in every
               time. Run <code className="bg-slate-100 px-1 rounded">claude setup-token</code> (browser
-              approval, prints a token), then store the token where ssh shells find it:
+              approval, prints a token), then store the token where ssh shells find it — under the
+              Nebula-scoped name, so your own <code className="bg-slate-100 px-1 rounded">claude</code>{' '}
+              sessions keep using their normal login:
             </p>
             <div className="flex items-start gap-1.5">
               <code className="flex-1 px-2 py-1.5 text-xs bg-slate-800 text-slate-100 rounded break-all select-all">{tokenExportCommand}</code>
@@ -253,8 +259,10 @@ export const RemoteAgentSetupModal: React.FC<Props> = ({ onClose }) => {
               </button>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Verify with <code className="bg-slate-100 px-1 rounded">zsh -lic 'echo ${'{'}CLAUDE_CODE_OAUTH_TOKEN:+set{'}'}'</code>.
+              Verify with <code className="bg-slate-100 px-1 rounded">zsh -lic 'echo ${'{'}CLAUDE_CODE_OAUTH_TOKEN_NEBULA:+set{'}'}'</code>.
               {' '}Codex needs no token — its credentials are file-based (<code className="bg-slate-100 px-1 rounded">~/.codex</code>) and work over ssh.
+              {' '}(Set the plain <code className="bg-slate-100 px-1 rounded">CLAUDE_CODE_OAUTH_TOKEN</code> earlier? It still works, but
+              also overrides the login your own terminal sessions use — moving it to the _NEBULA name keeps them separate.)
             </p>
           </div>
 

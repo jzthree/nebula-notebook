@@ -421,6 +421,27 @@ describe('remote-agent mode (agent on the user machine)', () => {
     expect(agentTerminalService.getState().agentKind).toBe('claude');
   });
 
+  it('maps the Nebula-scoped OAuth token to claude, leaving the user\'s own var alone', () => {
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t9', (d) => { sent.push(d); return true; });
+    agentTerminalService.setNotebookContext('/data/proj/nb.ipynb');
+    agentTerminalService.launchAgent('claude');
+
+    const line = sent[0];
+    // The launched shell exports CLAUDE_CODE_OAUTH_TOKEN from the NEBULA-scoped
+    // var, only when that is set — so the user's interactive claude sessions
+    // never see a Nebula-injected token, and legacy plain-var setups still work.
+    expect(line).toContain('CLAUDE_CODE_OAUTH_TOKEN_NEBULA');
+    expect(line).toMatch(/\[ -z "\$CLAUDE_CODE_OAUTH_TOKEN_NEBULA" \] \|\| export CLAUDE_CODE_OAUTH_TOKEN="\$CLAUDE_CODE_OAUTH_TOKEN_NEBULA"/);
+  });
+
+  it('does not inject the OAuth token mapping for codex (file-based credentials)', () => {
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t9', (d) => { sent.push(d); return true; });
+    agentTerminalService.launchAgent('codex');
+    expect(sent[0]).not.toContain('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
   it('resume reopens this notebook\'s own session id with a short reorientation prompt', () => {
     const sent: string[] = [];
     agentTerminalService.registerSender('t9', (d) => { sent.push(d); return true; });

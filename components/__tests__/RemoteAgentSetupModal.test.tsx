@@ -18,6 +18,19 @@ describe('RemoteAgentSetupModal', () => {
     localStorage.clear();
   });
 
+  it('instructs storing the token under the Nebula-scoped name, not the global var', () => {
+    render(<RemoteAgentSetupModal onClose={() => {}} />);
+
+    // Storing the token as CLAUDE_CODE_OAUTH_TOKEN would hijack the user's own
+    // interactive claude sessions; the setup must use the NEBULA-scoped name.
+    expect(
+      screen.getByText(/export CLAUDE_CODE_OAUTH_TOKEN_NEBULA=PASTE-TOKEN-HERE/)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/export CLAUDE_CODE_OAUTH_TOKEN=PASTE-TOKEN-HERE/)
+    ).toBeNull();
+  });
+
   it('states the nebula CLI prerequisite for the user machine', () => {
     render(<RemoteAgentSetupModal onClose={() => {}} />);
 

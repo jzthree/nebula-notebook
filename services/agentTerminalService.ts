@@ -360,7 +360,14 @@ class AgentTerminalService {
     // A record-pinned slug wins over re-derivation — stored paths don't drift.
     const slug = mirrorSlug || (workdir ? remoteMirrorSlug(workdir) : null);
     const cwd = slug ? `"$HOME/.nebula/agent/${slug}"` : '"$HOME/.nebula/agent"';
-    const agentCmd = `mkdir -p ${cwd} && cd ${cwd} && ` +
+    // Nebula-scoped sign-in token: the setup dialog has users store the token
+    // as CLAUDE_CODE_OAUTH_TOKEN_NEBULA so their OWN interactive claude
+    // sessions keep using their normal login; only this launch maps it to the
+    // real variable, and only when set (legacy plain-var setups untouched).
+    const tokenMap = kind === 'claude'
+      ? '[ -z "$CLAUDE_CODE_OAUTH_TOKEN_NEBULA" ] || export CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_NEBULA"; '
+      : '';
+    const agentCmd = tokenMap + `mkdir -p ${cwd} && cd ${cwd} && ` +
       this.buildAgentCommand(kind, resume, `NEBULA_URL=${cfg.localUrl} `, sessionId, continueProject);
     // `ssh host cmd` runs a non-login, non-interactive shell on the user's
     // machine — PATH additions from .zprofile/.zshrc (homebrew, nvm, npm -g)
