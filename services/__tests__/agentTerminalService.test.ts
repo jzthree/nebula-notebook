@@ -460,6 +460,27 @@ describe('remote-agent mode (agent on the user machine)', () => {
     expect(line).not.toContain('PREFERRED: use the `nebula` CLI'); // short prompt, not the full bootstrap
   });
 
+  it('breakRemoteConnection types the ssh escape and resets agent state', () => {
+    const sent: string[] = [];
+    agentTerminalService.registerSender('t9', (d) => { sent.push(d); return true; });
+    agentTerminalService.setNotebookContext('/data/proj/nb.ipynb');
+    agentTerminalService.launchAgent('claude');
+    expect(agentTerminalService.getState().status).toBe('running');
+    sent.length = 0;
+
+    agentTerminalService.breakRemoteConnection();
+
+    // "\r~." — newline puts ssh at line start, where ~. force-closes the
+    // client even when the transport hangs (frozen tunnel).
+    expect(sent).toContain('\r~.');
+    expect(agentTerminalService.getState().status).toBe('none');
+  });
+
+  it('breakRemoteConnection is a no-op with no attached terminal', () => {
+    agentTerminalService.setAgentTerminal(null);
+    expect(() => agentTerminalService.breakRemoteConnection()).not.toThrow();
+  });
+
   it('local launch (mode disabled) runs in the agent workspace with no ssh hop', () => {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({ remoteAgentEnabled: false }));
     const sent: string[] = [];

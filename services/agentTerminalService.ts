@@ -724,6 +724,19 @@ class AgentTerminalService {
     this.sendPrompt(this.buildBootstrapPrompt());
   }
 
+  /**
+   * Escape hatch for a remote agent whose ssh transport hung (tunnel dropped
+   * without a TCP reset): the TUI freezes, no teardown sequence ever arrives,
+   * and the status stays 'running' forever. Types ssh's client-side escape
+   * (`~.` at line start — honored even when the connection is dead) to kill
+   * the hop, then resets state so the launch bar comes back.
+   */
+  breakRemoteConnection(): void {
+    const sender = this.state.terminalId ? this.senders.get(this.state.terminalId) : undefined;
+    if (sender) sender('\r~.');
+    this.markStopped();
+  }
+
   /** Agent exited (user quit it, or terminal process ended). */
   markStopped(): void {
     this.clearWatch();

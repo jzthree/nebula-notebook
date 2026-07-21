@@ -109,6 +109,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   // ready = listener up AND nothing said "not ssh" (banner unknown counts as OK).
   const [reverseTunnel, setReverseTunnel] = useState<{ up: boolean; ssh: boolean | null } | null>(null);
   const reverseTunnelUp = reverseTunnel === null ? null : (reverseTunnel.up && reverseTunnel.ssh !== false);
+  // Sticky "the remote agent's ssh transport is dead" flag: a dropped tunnel
+  // freezes the TUI with no teardown output, so status stays 'running' and the
+  // launch bar never returns. Set while the tunnel is observed down with a
+  // running remote agent; sticky because the OLD connection stays dead even
+  // after the tunnel reconnects. Cleared when the agent state resets.
+  const [agentConnLost, setAgentConnLost] = useState(false);
   // Bumped when this panel changes agent settings, so remoteAgentCfg recomputes.
   const [, setSettingsNonce] = useState(0);
   // Is the Nebula server remote from the user? Only then does "run the agent on
@@ -335,6 +341,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     const interval = setInterval(check, 5000);
     return () => { stopped = true; clearInterval(interval); };
   }, [isOpen, tab, remoteAgentPort]);
+
+  // Arm / clear the sticky connection-lost flag (see its declaration).
+  useEffect(() => {
+    if (agentState.status !== 'running') {
+      setAgentConnLost(false);
+    } else if (remoteAgentCfg && reverseTunnelUp === false) {
+      setAgentConnLost(true);
+    }
+  }, [agentState.status, remoteAgentCfg, reverseTunnelUp]);
 
   // Lazily create the active tab's terminal when the panel is open
   const activeTerm = tab === 'agent' ? agentTerm : shellTerm;
@@ -899,6 +914,61 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           </button>
         </div>
       )}
+
+      {/* Remote agent frozen — the tunnel dropped under a running agent, so the
+          TUI is dead but no exit ever fires. Offer recovery without a trip to
+          the manage tab (previously the only way out was deleting the records). */}
+      {tab === 'agent' && agentConnLost && agentState.status === 'running' && remoteAgentCfg && (() => {
+        const boundId = normalizeTerminalName(boundAgentName);
+        const rec = agents
+          .filter((a) => a.terminalId === boundId && (a.location ?? 'server') === 'remote')
+          .sort((a, b) => (b.lastLaunchAt ?? 0) - (a.lastLaunchAt ?? 0))[0] ?? null;
+        const kind: 'claude' | 'codex' = rec?.kind === 'codex' ? 'codex' : 'claude';
+        const breakThen = (next: () => void) => {
+          agentTerminalService.breakRemoteConnection();
+          setAgentConnLost(false);
+          // Give ssh a beat to die and the shell prompt to return before typing.
+          window.setTimeout(next, 700);
+        };
+        return (
+          <div data-testid="agent-conn-lost-bar" className="flex items-center gap-2 px-2 py-1 bg-amber-50 border-b border-amber-200 flex-shrink-0 text-xs">
+            <Bot className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+            <span className="text-amber-800 font-medium truncate">
+              {reverseTunnelUp === false
+                ? <>Connection to your machine lost — this agent session is frozen. Reconnect the tunnel, then:</>
+                : <>Tunnel is back, but this agent session died with the old connection:</>}
+            </span>
+            <button
+              onClick={() => breakThen(() => {
+                if (rec) continueAgentRecord(rec);
+                else requestAgentLaunch(kind, { resume: true, workdir: agentWorkdir });
+              })}
+              className="px-2 py-0.5 rounded bg-amber-600 text-white font-medium hover:bg-amber-700 flex-shrink-0"
+              title="End the dead ssh hop, then reopen this conversation where it left off"
+            >
+              ⟳ Restart & continue
+            </button>
+            <button
+              onClick={() => breakThen(() => requestAgentLaunch(kind, { workdir: agentWorkdir }))}
+              className="px-2 py-0.5 rounded border border-amber-400 bg-white text-amber-700 font-medium hover:bg-amber-100 flex-shrink-0"
+              title="End the dead ssh hop and start a brand-new agent session"
+            >
+              start new agent
+            </button>
+            {reverseTunnelUp === false && (
+              <button
+                onClick={async () => {
+                  try { await navigator.clipboard.writeText(agentTerminalService.buildBurrowCommand(serverHostInfo.hostname, serverHostInfo.port)); } catch { /* clipboard optional */ }
+                }}
+                className="text-amber-700 hover:text-amber-900 underline decoration-dotted flex-shrink-0"
+                title={`Reconnect with Burrow:\n${agentTerminalService.buildBurrowCommand(serverHostInfo.hostname, serverHostInfo.port)}`}
+              >
+                copy Burrow command
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Launch failed — show the shell error, keep the launch buttons for retry */}
       {tab === 'agent' && agentTerm && agentState.status === 'failed' && (
