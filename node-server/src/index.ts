@@ -722,7 +722,7 @@ async function main(): Promise<void> {
     const clientServerId = `${os.hostname()}:${boundPort}`;
     serverRegistry.setLocalServerId(clientServerId);
     kernelService.setServerIdentity(clientServerId, serverInstanceId);
-    clientRegistration.initFromEnv(boundPort);
+    void clientRegistration.initFromEnv(boundPort); // async: resolves the controller-routable IP first
 
     // Opt-in idle auto-release: exit this process after N idle minutes so the
     // batch job completes and the allocation ends naturally (no scancel needed).

@@ -8,6 +8,7 @@
 import { serverRegistry } from './server-registry';
 import { getResourceService } from '../resources/resource-service';
 import * as os from 'os';
+import * as net from 'net';
 
 interface RegistrationConfig {
   mainServerUrl: string;
@@ -29,16 +30,48 @@ class ClientRegistration {
   private serverId: string | null = null;
 
   /**
+   * The local IP on the interface that ROUTES TO the main server, learned by
+   * opening a TCP connection to it. Registering os.hostname() broke on
+   * clusters where compute nodes report an FQDN the controller cannot
+   * resolve (cri22cn416.cri.uchicago.edu vs the resolvable cri22cn416):
+   * every controller→node fetch died as 500 "fetch failed" while heartbeats
+   * (outbound) kept the allocation looking healthy. An IP needs no DNS at
+   * all, and the interface that reaches the controller is the one the
+   * controller can reach back on.
+   */
+  private routableLocalAddress(mainServerUrl: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      try {
+        const u = new URL(mainServerUrl);
+        const port = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
+        const sock = net.connect({ host: u.hostname, port, timeout: 3000 }, () => {
+          const addr = sock.localAddress || null;
+          sock.destroy();
+          resolve(addr);
+        });
+        sock.on('error', () => resolve(null));
+        sock.on('timeout', () => { sock.destroy(); resolve(null); });
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  /**
    * Initialize client registration from environment variables
    */
-  initFromEnv(localPort: number): void {
+  async initFromEnv(localPort: number): Promise<void> {
     const mainServerUrl = process.env.NEBULA_MAIN_SERVER;
     if (!mainServerUrl) {
       console.log('[ClientRegistration] No NEBULA_MAIN_SERVER set, running as standalone');
       return;
     }
 
-    const localHost = process.env.NEBULA_HOST || os.hostname();
+    // Explicit override → routable IP → hostname (last resort; may be an
+    // FQDN the controller can't resolve).
+    const localHost = process.env.NEBULA_HOST
+      || (await this.routableLocalAddress(mainServerUrl))
+      || os.hostname();
     const serverName = process.env.NEBULA_SERVER_NAME || os.hostname();
     const secret = process.env.NEBULA_CLUSTER_SECRET;
     const allocationToken = process.env.NEBULA_ALLOCATION_TOKEN;
