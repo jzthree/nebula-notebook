@@ -1,5 +1,6 @@
 import { isNotebookExtension } from '../utils/notebookFormats';
 import { classifyFileView, inlineViewUrl } from '../lib/fileViewer';
+import { FileViewerModal } from './FileViewerModal';
 import { authService } from '../services/authService';
 import React, { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { NotebookMetadata } from '../types';
@@ -647,6 +648,14 @@ const FileBrowserComponent: React.FC<Props> = ({
     window.open(inlineViewUrl(item.path, getAuthToken()), '_blank', 'noopener,noreferrer');
   }, [onOpenImageFile]);
 
+  // pdf / video / audio: default to an IN-TAB modal viewer on click (the modal
+  // itself carries an "Open in new tab" button); browser-native rendering, no
+  // bundled library, memory reclaimed on close.
+  const [viewerItem, setViewerItem] = useState<FileItem | null>(null);
+  const handleOpenViewer = useCallback((item: FileItem) => {
+    setViewerItem(item);
+  }, []);
+
   const handleSelectFile = useCallback((path: string) => {
     onSelect(path);
     // Close sidebar on mobile for sidebar variant
@@ -689,6 +698,14 @@ const FileBrowserComponent: React.FC<Props> = ({
   // Shared content for both variants
   const browserContent = (
     <>
+      {viewerItem && (
+        <FileViewerModal
+          path={viewerItem.path}
+          name={viewerItem.name}
+          token={getAuthToken()}
+          onClose={() => setViewerItem(null)}
+        />
+      )}
       {/* Hidden file input for upload */}
       <input
         type="file"
@@ -966,6 +983,7 @@ const FileBrowserComponent: React.FC<Props> = ({
             onOpenNewTab={handleOpenNewTab}
             onOpenTextFile={handleOpenTextFile}
             onOpenImageFile={handleOpenImageFile}
+            onOpenViewer={handleOpenViewer}
             onRename={handleRenameItem}
             onDuplicate={handleDuplicateItem}
             onDownload={handleDownloadItem}

@@ -30,6 +30,8 @@ interface FileListItemProps {
   onOpenNewTab?: (path: string) => void;
   onOpenTextFile?: (item: FileItem) => void;
   onOpenImageFile?: (item: FileItem) => void;
+  /** pdf / video / audio: open in the in-tab viewer modal (default on click). */
+  onOpenViewer?: (item: FileItem) => void;
   onRename?: (item: FileItem, newName: string) => void;
   onDuplicate?: (item: FileItem) => void;
   onDownload?: (item: FileItem) => void;
@@ -84,6 +86,7 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
   onOpenNewTab,
   onOpenTextFile,
   onOpenImageFile,
+  onOpenViewer,
   onRename,
   onDuplicate,
   onDownload,
@@ -108,7 +111,8 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
   // pdf / video / audio and other browser-native types → open in a new tab.
   const isNewTabViewable = view === 'newtab' && !isImageFile;
   const isOpenableInTab = isNotebook || isHtml || isTextFile || view === 'newtab';
-  const isClickable = (item.isDirectory || isNotebook || isTextFile || isHtml || isNewTabViewable
+  const isClickable = (item.isDirectory || isNotebook || isTextFile || isHtml
+    || (isNewTabViewable && onOpenViewer)
     || (isImageFile && onOpenImageFile)) && !isEditing;
 
   // Focus input when entering edit mode
@@ -136,9 +140,11 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
       onOpenTextFile(item);
     } else if (isImageFile && onOpenImageFile) {
       onOpenImageFile(item);
-    } else if ((isHtml || isNewTabViewable) && onOpenNewTab) {
-      // HTML → trust-gated page; pdf/media → browser-native viewer. Both are
-      // new-tab navigations handled by the parent's onOpenNewTab.
+    } else if (isNewTabViewable && onOpenViewer) {
+      // pdf / video / audio: in-tab viewer by default (it has a new-tab button).
+      onOpenViewer(item);
+    } else if (isHtml && onOpenNewTab) {
+      // HTML → trust-gated page (its own sandboxed view).
       onOpenNewTab(item.path);
     }
   };
