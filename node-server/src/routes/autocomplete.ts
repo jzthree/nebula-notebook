@@ -187,7 +187,7 @@ async function checkCliUsable(name: BackendName): Promise<{ installed: boolean; 
     const args =
       name === 'claude'
         ? ['-p', 'reply with just: ok', '--model', 'haiku']
-        : ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only', '--color', 'never', '--ephemeral', '-m', 'gpt-5.4-mini', 'reply ok'];
+        : ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only', '--color', 'never', '--ephemeral', '-m', 'gpt-5.6-luna', 'reply ok'];
     const env = { ...process.env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64', CLAUDE_CONFIG_DIR: cfg } as NodeJS.ProcessEnv;
     let out = '', err = '', done = false;
     const finish = (r: { installed: boolean; usable: boolean; detail: string }) => { if (!done) { done = true; resolve(r); } };

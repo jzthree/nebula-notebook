@@ -7,8 +7,10 @@ import { planSpawn, type Transport } from "../transport.js";
 
 export interface CodexBackendOptions {
   /**
-   * Model. Default "gpt-5.4-mini" — the fast model available with
-   * ChatGPT-subscription auth (the *-codex-mini variants are API-only).
+   * Model. Default "gpt-5.6-luna" — the fast model available with
+   * ChatGPT-subscription auth (measured ~2× faster than the retired
+   * gpt-5.4-mini on warm autocomplete requests). The *-codex-mini
+   * variants are API-key-only.
    */
   model?: string;
   /** Reasoning effort. Default "low" ("minimal" is rejected by codex's built-in tools). */
@@ -43,7 +45,7 @@ export class CodexBackend implements CompletionBackend {
 
   constructor(options: CodexBackendOptions = {}) {
     this.opts = {
-      model: options.model ?? "gpt-5.4-mini",
+      model: options.model ?? "gpt-5.6-luna",
       reasoningEffort: options.reasoningEffort ?? "low",
       codexHome: options.codexHome,
       timeoutMs: options.timeoutMs ?? 60_000,

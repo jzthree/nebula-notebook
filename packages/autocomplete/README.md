@@ -21,7 +21,7 @@ LLM code autocomplete for notebook editors, backed by **Claude Code CLI** or
 | Backend | Model | Warm TTFB | Notes |
 |---|---|---|---|
 | `ClaudeBackend` | haiku 4.5 | ~1.4–2.1s | token-streamed; warm process pool |
-| `CodexBackend` | gpt-5.4-mini, low effort | ~2.5–3.2s | buffered; one-shot exec |
+| `CodexBackend` | gpt-5.6-luna, low effort | ~2.2–2.7s | buffered; one-shot exec |
 
 Cache hits return in 0ms. Claude's harness costs ~24k input tokens per
 completion, codex ~12.6k — that overhead is inherent to CLI backends and is
@@ -48,7 +48,7 @@ process.on("exit", () => engine.dispose());
 `CodexBackend` tip: create a clean `CODEX_HOME` containing only `auth.json`
 (`mkdir -p .codex-home && cp ~/.codex/auth.json .codex-home/`) and pass it as
 `codexHome` — it skips global MCP servers/plugins/hooks (~2s/request faster).
-`gpt-5.4-mini` is the fast model that works with ChatGPT-subscription auth;
+`gpt-5.6-luna` is the fast model that works with ChatGPT-subscription auth;
 `*-codex-mini` variants are API-key-only.
 
 ## Quick start (client side, CodeMirror 6)
