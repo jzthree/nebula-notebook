@@ -107,9 +107,12 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
   const isHtml = view === 'html';
   const isImageFile = item.fileType === 'image'
     || ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.avif'].includes((item.extension || '').toLowerCase());
-  const isTextFile = view === 'text';
-  // pdf / video / audio and other browser-native types → open in a new tab.
-  const isNewTabViewable = view === 'newtab' && !isImageFile;
+  // CSV/TSV: a tabular file — open the in-tab table viewer by default (it has
+  // a raw-text fallback + open-in-new-tab), rather than the raw text editor.
+  const isTabular = ['.csv', '.tsv'].includes((item.extension || '').toLowerCase());
+  const isTextFile = view === 'text' && !isTabular;
+  // pdf / video / audio (+ tabular) → open in the in-tab viewer modal.
+  const isNewTabViewable = (view === 'newtab' && !isImageFile) || isTabular;
   const isOpenableInTab = isNotebook || isHtml || isTextFile || view === 'newtab';
   const isClickable = (item.isDirectory || isNotebook || isTextFile || isHtml
     || (isNewTabViewable && onOpenViewer)
