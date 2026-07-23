@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ExternalLink, Download, X } from 'lucide-react';
 import { classifyFileView, inlineViewUrl, fileExtension } from '../lib/fileViewer';
 import { detectDelimiter, parseDelimited, inferHeader, CANDIDATE_DELIMITERS } from '../lib/csvTable';
@@ -37,12 +38,19 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({ path, name, to
   const isPdf = ext === '.pdf';
   const isTabular = ['.csv', '.tsv'].includes(ext);
 
-  return (
+  // Portal to <body>: both FileBrowser variants would otherwise trap this —
+  // the inline card clips via overflow-hidden, and the sidebar's transform
+  // makes position:fixed resolve against the pane instead of the viewport.
+  return createPortal(
     <div
-      className="fixed inset-0 z-[70] bg-black/60 flex flex-col"
-      onClick={onClose}
+      className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4 sm:p-8"
+      onClick={onClose} // clicking anywhere outside the panel closes
     >
-      <div className="flex items-center gap-2 px-3 py-2 bg-slate-900 text-slate-100 text-sm flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="w-full h-full max-w-6xl flex flex-col rounded-lg overflow-hidden shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+      <div className="flex items-center gap-2 px-3 py-2 bg-slate-900 text-slate-100 text-sm flex-shrink-0">
         <span className="font-medium truncate flex-1" title={path}>{name}</span>
         <a
           href={url}
@@ -68,7 +76,7 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({ path, name, to
           <X className="w-4 h-4" />
         </button>
       </div>
-      <div className="flex-1 min-h-0 bg-slate-800 flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+      <div className="flex-1 min-h-0 bg-slate-800 flex items-center justify-center">
         {isPdf ? (
           <iframe title={name} src={url} className="w-full h-full border-0 bg-white" />
         ) : isVideo ? (
@@ -84,7 +92,9 @@ export const FileViewerModal: React.FC<FileViewerModalProps> = ({ path, name, to
           </div>
         )}
       </div>
-    </div>
+      </div>
+    </div>,
+    document.body
   );
 };
 
