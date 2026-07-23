@@ -1,4 +1,6 @@
 import { isNotebookExtension } from '../utils/notebookFormats';
+import { classifyFileView, inlineViewUrl } from '../lib/fileViewer';
+import { authService } from '../services/authService';
 import React, { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { NotebookMetadata } from '../types';
 import {
@@ -143,12 +145,7 @@ const FileBrowserComponent: React.FC<Props> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'modified'>('modified');
   const maxTextEditorBytes = 2 * 1024 * 1024;
-  const isEditableTextFile = (filePath: string): boolean => {
-    const lower = filePath.toLowerCase();
-    return [
-      '.py', '.r', '.jl', '.json', '.txt', '.md', '.yaml', '.yml', '.js', '.ts', '.tsx', '.css', '.csv', '.log', '.toml', '.ini'
-    ].some(ext => lower.endsWith(ext));
-  };
+  const getAuthToken = () => authService.getToken();
 
   // Persist notebook filter preference
   const toggleNotebooksOnly = () => {
@@ -612,42 +609,42 @@ const FileBrowserComponent: React.FC<Props> = ({
 
   const handleOpenNewTab = useCallback((path: string) => {
     const baseUrl = window.location.pathname;
-    const lower = path.toLowerCase();
-    if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+    const view = classifyFileView(path);
+    if (view === 'html') {
       window.open(`${baseUrl}?html=${encodeURIComponent(path)}`, '_blank', 'noopener,noreferrer');
-      return;
-    }
-    if (isEditableTextFile(path)) {
-      const item = items.find(entry => entry.path === path);
-      if (item && item.sizeBytes > maxTextEditorBytes) {
-        toast(`File is too large to open in editor (${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB).`, 'warning');
-        return;
-      }
+    } else if (view === 'text') {
       window.open(`${baseUrl}?text=${encodeURIComponent(path)}`, '_blank', 'noopener,noreferrer');
-      return;
+    } else if (view === 'notebook') {
+      window.open(`${baseUrl}?file=${path}`, '_blank');
+    } else {
+      // pdf / media / images (and unknown fallback): browser-native viewer.
+      window.open(inlineViewUrl(path, getAuthToken()), '_blank', 'noopener,noreferrer');
     }
-    window.open(`${baseUrl}?file=${path}`, '_blank');
-  }, [items, maxTextEditorBytes, toast]);
+  }, []);
 
   const handleOpenTextFile = useCallback((item: FileItem) => {
+    // Warn on huge files (slow to render) — but never REFUSE. The user asked
+    // to be trusted to open a big file if they mean to.
     if (item.sizeBytes > maxTextEditorBytes) {
-      toast(`File is too large to open in editor (${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB).`, 'warning');
-      return;
+      const mb = (item.sizeBytes / (1024 * 1024)).toFixed(1);
+      if (!window.confirm(`${item.name} is large (${mb} MB) and may be slow to open. Open it anyway?`)) {
+        return;
+      }
     }
     if (onOpenTextFile) {
       onOpenTextFile(item.path);
     } else {
-      handleOpenNewTab(item.path);
+      const baseUrl = window.location.pathname;
+      window.open(`${baseUrl}?text=${encodeURIComponent(item.path)}`, '_blank', 'noopener,noreferrer');
     }
-  }, [handleOpenNewTab, maxTextEditorBytes, onOpenTextFile, toast]);
+  }, [maxTextEditorBytes, onOpenTextFile]);
 
   const handleOpenImageFile = useCallback((item: FileItem) => {
     if (onOpenImageFile) {
       onOpenImageFile(item.path);
       return;
     }
-    const downloadUrl = `/api/fs/download?path=${encodeURIComponent(item.path)}`;
-    window.open(downloadUrl, '_blank', 'noopener,noreferrer');
+    window.open(inlineViewUrl(item.path, getAuthToken()), '_blank', 'noopener,noreferrer');
   }, [onOpenImageFile]);
 
   const handleSelectFile = useCallback((path: string) => {

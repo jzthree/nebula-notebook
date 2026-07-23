@@ -279,10 +279,28 @@ export default async function fsRoutes(fastify: FastifyInstance) {
 
       const contentType = mimeTypes[extension] || 'application/octet-stream';
 
+      // Inline viewing (?inline=1): hand the file to the browser's own viewer
+      // in a new tab instead of forcing a download. Restricted to an allowlist
+      // of types the browser renders SAFELY as data (PDF/images/media/text).
+      // HTML is intentionally excluded — served inline same-origin, its JS
+      // could read the Nebula auth token; it goes through the trust-gated
+      // /?html= view instead. nosniff stops the browser from re-interpreting a
+      // mislabeled file as something executable.
+      const wantInline = (request.query as any).inline === '1' || (request.query as any).inline === 'true';
+      const INLINE_OK = new Set([
+        '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.avif',
+        '.mp4', '.webm', '.mov', '.m4v', '.ogv',
+        '.mp3', '.wav', '.ogg', '.oga', '.flac', '.m4a', '.aac',
+        '.txt', '.csv', '.tsv', '.log', '.json', '.md',
+      ]);
+      const inline = wantInline && INLINE_OK.has(extension);
+      const disposition = inline ? 'inline' : 'attachment';
+
       const stream = nodeFs.createReadStream(normalizedPath);
       return reply
         .header('Content-Type', contentType)
-        .header('Content-Disposition', `attachment; filename="${filename}"`)
+        .header('X-Content-Type-Options', 'nosniff')
+        .header('Content-Disposition', `${disposition}; filename="${filename}"`)
         .header('Content-Length', stat.size)
         .send(stream);
     } catch (err) {

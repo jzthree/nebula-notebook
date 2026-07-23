@@ -5,6 +5,7 @@
  */
 
 import { isNotebookExtension, isScriptNotebookExtension } from '../utils/notebookFormats';
+import { classifyFileView } from '../lib/fileViewer';
 import { readFile } from '../services/fileService';
 import React, { useRef, useEffect, useState, memo } from 'react';
 import {
@@ -98,14 +99,17 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
+  const view = classifyFileView(item.name || item.path);
   const isNotebook = isNotebookExtension(item.extension);
-  const isHtml = item.extension === '.html' || item.extension === '.htm';
+  const isHtml = view === 'html';
   const isImageFile = item.fileType === 'image'
-    || ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(item.extension || '');
-  const isTextFile = ['.py', '.r', '.jl', '.json', '.txt', '.md', '.yaml', '.yml', '.js', '.ts', '.tsx', '.css', '.csv', '.log', '.toml', '.ini']
-    .includes((item.extension || '').toLowerCase());
-  const isOpenableInTab = isNotebook || isHtml || isTextFile;
-  const isClickable = (item.isDirectory || isNotebook || (isTextFile && onOpenTextFile) || (isImageFile && onOpenImageFile)) && !isEditing;
+    || ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.avif'].includes((item.extension || '').toLowerCase());
+  const isTextFile = view === 'text';
+  // pdf / video / audio and other browser-native types → open in a new tab.
+  const isNewTabViewable = view === 'newtab' && !isImageFile;
+  const isOpenableInTab = isNotebook || isHtml || isTextFile || view === 'newtab';
+  const isClickable = (item.isDirectory || isNotebook || isTextFile || isHtml || isNewTabViewable
+    || (isImageFile && onOpenImageFile)) && !isEditing;
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -132,6 +136,10 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
       onOpenTextFile(item);
     } else if (isImageFile && onOpenImageFile) {
       onOpenImageFile(item);
+    } else if ((isHtml || isNewTabViewable) && onOpenNewTab) {
+      // HTML → trust-gated page; pdf/media → browser-native viewer. Both are
+      // new-tab navigations handled by the parent's onOpenNewTab.
+      onOpenNewTab(item.path);
     }
   };
 
