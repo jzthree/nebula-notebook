@@ -144,6 +144,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const [workdirOverride, setWorkdirOverride] = useState<string | null>(null);
   const [showAgentManager, setShowAgentManager] = useState(false);
   const [showWorkdirMenu, setShowWorkdirMenu] = useState(false);
+  // Menu anchor rects captured at open: menus render position:fixed from
+  // these so the panel's overflow-hidden can never clip them.
+  const [workdirMenuRect, setWorkdirMenuRect] = useState<DOMRect | null>(null);
+  const [moreMenuRect, setMoreMenuRect] = useState<DOMRect | null>(null);
+  const [shellMenuRect, setShellMenuRect] = useState<DOMRect | null>(null);
   const { promptText } = useNotification();
   const notebookDir = notebookDirOf(notebookPath);
   // Agent-plane binding: the scope this notebook's Agent tab targets. The
@@ -628,7 +633,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           {tab === 'shell' && shellBinding && (
             <div className="relative" onClick={(e) => e.stopPropagation()}>
               <button
-                onClick={() => setShowShellBindingMenu((v) => !v)}
+                onClick={(e) => { setShellMenuRect(e.currentTarget.getBoundingClientRect()); setShowShellBindingMenu((v) => !v); }}
                 className="px-1.5 py-0.5 rounded text-[0.6875rem] text-slate-400 hover:text-slate-600 hover:bg-white transition-colors font-mono"
                 title={`This notebook's terminal binding: ${shellBinding.name || ''} — click to change. Attach is always deterministic; rebinding never kills the old terminal.`}
               >
@@ -638,7 +643,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                   : `${shellBinding.custom_name || shellBinding.name} ▾`}
               </button>
               {showShellBindingMenu && (
-                <div className="absolute top-full mt-1 left-0 z-30 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[15rem] text-xs" onClick={(e) => e.stopPropagation()}>
+                <div
+                  className="fixed z-[80] bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[15rem] text-xs overflow-y-auto"
+                  style={shellMenuRect ? { top: shellMenuRect.bottom + 4, left: Math.min(shellMenuRect.left, window.innerWidth - 260), maxHeight: window.innerHeight - shellMenuRect.bottom - 16 } : undefined}
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <div className="px-3 py-1 text-[0.625rem] uppercase tracking-wide text-slate-400">Terminal for this notebook</div>
                   <button
                     onClick={() => rebindShell('server')}
@@ -1071,7 +1080,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                 )}
                 <div className="relative flex-shrink-0">
                   <button
-                    onClick={() => setShowAgentMoreMenu((v) => !v)}
+                    onClick={(e) => { setMoreMenuRect(e.currentTarget.getBoundingClientRect()); setShowAgentMoreMenu((v) => !v); }}
                     disabled={!agentConnected && !agentParked}
                     className="px-1.5 py-0.5 rounded border border-purple-300 bg-white text-purple-700 font-medium hover:bg-purple-100 disabled:opacity-40 transition-colors"
                     title="More ways to start: fresh session, session picker, other agent"
@@ -1079,7 +1088,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                     more ▾
                   </button>
                   {showAgentMoreMenu && (
-                    <div className="absolute bottom-full mb-1 right-0 z-30 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[15rem] max-w-[20rem] text-xs max-h-[min(60vh,22rem)] overflow-y-auto">
+                    <div
+                      className="fixed z-[80] bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[15rem] max-w-[20rem] text-xs overflow-y-auto"
+                      style={moreMenuRect ? { bottom: window.innerHeight - moreMenuRect.top + 4, right: Math.max(8, window.innerWidth - moreMenuRect.right), maxHeight: Math.min(360, moreMenuRect.top - 16) } : undefined}
+                    >
                       <button onClick={() => startFresh('claude')} className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50">
                         New Claude session
                       </button>
@@ -1124,7 +1136,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           })()}
           <div className="relative flex-shrink-0">
             <button
-              onClick={() => setShowWorkdirMenu((v) => !v)}
+              onClick={(e) => { setWorkdirMenuRect(e.currentTarget.getBoundingClientRect()); setShowWorkdirMenu((v) => !v); }}
               className="px-1.5 py-0.5 rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-100 font-mono max-w-[6.5rem] md:max-w-[10rem] truncate flex-shrink-0"
               title={`Project scope: ${agentWorkdir} (the agent itself runs in a mirrored ~/.nebula/agent workspace${remoteAgentCfg ? ' on your machine' : ''}) — click to change`}
             >
@@ -1134,7 +1146,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                 : `in ${agentWorkdir.split('/').pop() || agentWorkdir} ▾`}
             </button>
             {showWorkdirMenu && (
-              <div className="absolute bottom-full mb-1 left-0 z-30 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[14rem] max-w-[22rem] text-xs max-h-[min(60vh,22rem)] overflow-y-auto">
+              <div
+                className="fixed z-[80] bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[14rem] max-w-[22rem] text-xs overflow-y-auto"
+                style={workdirMenuRect ? { bottom: window.innerHeight - workdirMenuRect.top + 4, left: Math.min(workdirMenuRect.left, window.innerWidth - 360), maxHeight: Math.min(360, workdirMenuRect.top - 16) } : undefined}
+              >
                 <div className="px-3 py-1 text-[0.625rem] uppercase tracking-wide text-slate-400">Agent scope</div>
                 <button onClick={() => rebindAgent('project')} className={`w-full text-left px-3 py-1 hover:bg-purple-50 ${agentScope === 'project' ? 'text-purple-700 font-medium' : 'text-slate-700'}`}>
                   This project{agentScope === 'project' ? ' ✓' : ''}
