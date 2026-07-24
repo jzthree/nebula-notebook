@@ -113,7 +113,7 @@ const FileListItemComponent: React.FC<FileListItemProps> = ({
   const isTextFile = view === 'text' && !isTabular;
   // pdf / video / audio (+ tabular) → open in the in-tab viewer modal.
   const isNewTabViewable = (view === 'newtab' && !isImageFile) || isTabular;
-  const isOpenableInTab = isNotebook || isHtml || isTextFile || view === 'newtab';
+  const isOpenableInTab = isNotebook || isHtml || isTextFile || isTabular || view === 'newtab';
   const isClickable = (item.isDirectory || isNotebook || isTextFile || isHtml
     || (isNewTabViewable && onOpenViewer)
     || (isImageFile && onOpenImageFile)) && !isEditing;
