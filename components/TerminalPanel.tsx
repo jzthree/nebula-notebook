@@ -992,8 +992,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       {tab === 'agent' && (agentTerm || agentParked) && agentState.status !== 'running' && !(remoteAgentCfg && reverseTunnelUp === false) && (
         <div className="flex items-center gap-2 px-2 py-1 bg-purple-50 border-b border-purple-100 flex-shrink-0 text-xs">
           <Bot className="w-3.5 h-3.5 text-purple-600 flex-shrink-0" />
-          <span className="text-purple-800 font-medium truncate">
-            Drive <span className="font-semibold">{notebookName}</span> with
+          <span className="text-purple-800 font-medium truncate min-w-0 max-w-[9rem] md:max-w-[14rem]" title={notebookName}>
+            <span className="hidden md:inline">Drive </span>
+            <span className="font-semibold">{notebookName}</span>
+            <span className="hidden md:inline"> with</span>
           </span>
           {(() => {
             // Primary-button state machine: ONE obvious action derived from
@@ -1023,7 +1025,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                 {hereRecord && hereRecord.state === 'live' && !hereRecord.idleShell ? (
                   <button
                     onClick={() => selectAgent(hereRecord.terminalId)}
-                    className="px-2 py-0.5 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 transition-colors"
+                    className="px-2 py-0.5 whitespace-nowrap flex-shrink-0 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 transition-colors"
                     title={`A ${hereRecord.kind} agent is already running for this project — attach to it`}
                   >
                     Attach agent
@@ -1032,7 +1034,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                   <button
                     onClick={() => continueAgentRecord(hereRecord)}
                     disabled={!agentConnected && !agentParked && activeAgentId === hereRecord.terminalId}
-                    className="px-2 py-0.5 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 disabled:opacity-40 transition-colors"
+                    className="px-2 py-0.5 whitespace-nowrap flex-shrink-0 rounded bg-purple-700 text-white font-medium hover:bg-purple-800 disabled:opacity-40 transition-colors"
                     title={hereRecord.kind === 'claude' && hereRecord.sessionId
                       ? 'Reopen this project’s conversation exactly where it left off (claude --resume <id>)'
                       : 'Reopen this project’s sessions (interactive picker)'}
@@ -1043,7 +1045,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                   <button
                     onClick={() => startFresh('claude')}
                     disabled={!agentConnected && !agentParked}
-                    className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
+                    className="px-2 py-0.5 whitespace-nowrap flex-shrink-0 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
                     title={remoteAgentCfg ? 'Start Claude Code on YOUR machine (over the reverse tunnel) and drive this notebook' : 'Start Claude Code in its agent workspace and drive this notebook'}
                   >
                     Claude Code
@@ -1053,7 +1055,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                   <button
                     onClick={() => startFresh('codex')}
                     disabled={!agentConnected && !agentParked}
-                    className="px-2 py-0.5 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
+                    className="px-2 py-0.5 whitespace-nowrap flex-shrink-0 rounded bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40 transition-colors"
                     title={remoteAgentCfg ? 'Start Codex on YOUR machine (over the reverse tunnel)' : 'Start Codex in its agent workspace'}
                   >
                     Codex
@@ -1077,7 +1079,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                     more ▾
                   </button>
                   {showAgentMoreMenu && (
-                    <div className="absolute bottom-full mb-1 left-0 z-20 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[14rem] text-xs">
+                    <div className="absolute bottom-full mb-1 right-0 z-30 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[15rem] max-w-[20rem] text-xs max-h-[min(60vh,22rem)] overflow-y-auto">
                       <button onClick={() => startFresh('claude')} className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50">
                         New Claude session
                       </button>
@@ -1091,6 +1093,29 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                       <button onClick={() => pickSession('codex')} className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50">
                         Pick a Codex session…
                       </button>
+                      <div className="border-t border-slate-100 my-1" />
+                      <button
+                        onClick={() => { setShowAgentMoreMenu(false); agentTerminalService.markRunning(); }}
+                        className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50"
+                        title="I already started an agent in this terminal myself"
+                      >
+                        Already running here
+                        <div className="text-[0.625rem] text-slate-400">Mark this terminal's agent as active</div>
+                      </button>
+                      <button
+                        onClick={async () => { setShowAgentMoreMenu(false); try { await navigator.clipboard.writeText(agentTerminalService.buildBootstrapPrompt()); } catch { /* clipboard optional */ } }}
+                        className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50"
+                        title="Copy the orientation prompt (server URL + notebook) for an agent running anywhere"
+                      >
+                        Copy context prompt
+                      </button>
+                      <button
+                        onClick={async () => { setShowAgentMoreMenu(false); try { await navigator.clipboard.writeText(agentTerminalService.buildSetupSkillCommand()); } catch { /* clipboard optional */ } }}
+                        className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-purple-50"
+                        title={`Drive Nebula from an agent on another machine — copies the CLI skill setup command. Prefer MCP? ${agentTerminalService.buildSetupMcpCommand()}`}
+                      >
+                        Copy CLI setup (other machine)
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1100,7 +1125,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           <div className="relative flex-shrink-0">
             <button
               onClick={() => setShowWorkdirMenu((v) => !v)}
-              className="px-1.5 py-0.5 rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-100 font-mono max-w-[10rem] truncate"
+              className="px-1.5 py-0.5 rounded border border-purple-200 bg-white text-purple-700 hover:bg-purple-100 font-mono max-w-[6.5rem] md:max-w-[10rem] truncate flex-shrink-0"
               title={`Project scope: ${agentWorkdir} (the agent itself runs in a mirrored ~/.nebula/agent workspace${remoteAgentCfg ? ' on your machine' : ''}) — click to change`}
             >
               {agentScope === 'server' ? 'shared agent ▾'
@@ -1109,7 +1134,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                 : `in ${agentWorkdir.split('/').pop() || agentWorkdir} ▾`}
             </button>
             {showWorkdirMenu && (
-              <div className="absolute bottom-full mb-1 left-0 z-20 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[14rem] max-w-[22rem] text-xs">
+              <div className="absolute bottom-full mb-1 left-0 z-30 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[14rem] max-w-[22rem] text-xs max-h-[min(60vh,22rem)] overflow-y-auto">
                 <div className="px-3 py-1 text-[0.625rem] uppercase tracking-wide text-slate-400">Agent scope</div>
                 <button onClick={() => rebindAgent('project')} className={`w-full text-left px-3 py-1 hover:bg-purple-50 ${agentScope === 'project' ? 'text-purple-700 font-medium' : 'text-slate-700'}`}>
                   This project{agentScope === 'project' ? ' ✓' : ''}
@@ -1189,7 +1214,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               On a local install the server IS your machine — no selector. */}
           {serverRemote && (
             <>
-              <span className="text-purple-600 flex-shrink-0">on</span>
+              <span className="text-purple-600 flex-shrink-0 hidden md:inline">on</span>
               <select
                 value={remoteAgentCfg ? 'mine' : 'server'}
                 onChange={(e) => {
@@ -1220,39 +1245,13 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           {remoteAgentCfg && reverseTunnelUp && (
             <button
               onClick={() => setShowRemoteSetup(true)}
-              className="text-green-600 hover:text-green-800 flex-shrink-0"
+              className="flex items-center gap-1 flex-shrink-0 text-green-600 hover:text-green-800"
               title={`Reverse tunnel connected (port ${remoteAgentCfg.port}) — click for setup details`}
             >
-              ✓ tunnel
+              <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+              <span className="hidden lg:inline">tunnel</span>
             </button>
           )}
-          <button
-            onClick={async () => {
-              try { await navigator.clipboard.writeText(agentTerminalService.buildSetupSkillCommand()); } catch { /* clipboard optional */ }
-            }}
-            className="text-purple-400 hover:text-purple-600 hidden sm:inline underline decoration-dotted"
-            title={`Drive Nebula from an agent on another machine. Recommended — the nebula CLI as a Claude Code skill (lighter than MCP, per-notebook, no server process). Click to copy:\n${agentTerminalService.buildSetupSkillCommand()}\n\nPrefer MCP? ${agentTerminalService.buildSetupMcpCommand()}`}
-          >
-            agent on another machine? copy CLI skill setup
-          </button>
-          <span className="ml-auto flex items-center gap-2 flex-shrink-0">
-            <button
-              onClick={async () => {
-                try { await navigator.clipboard.writeText(agentTerminalService.buildBootstrapPrompt()); } catch { /* clipboard optional */ }
-              }}
-              className="text-purple-500 hover:text-purple-700 underline decoration-dotted"
-              title="Copy the orientation prompt (server URL + notebook) to paste into a Claude Code / Codex session running anywhere — e.g. your own terminal on another machine"
-            >
-              copy context
-            </button>
-            <button
-              onClick={() => agentTerminalService.markRunning()}
-              className="text-purple-500 hover:text-purple-700 underline decoration-dotted"
-              title="I already started an agent in this terminal myself"
-            >
-              already running
-            </button>
-          </span>
         </div>
       )}
       {tab === 'agent' && agentTerm && agentState.status === 'running' && (
